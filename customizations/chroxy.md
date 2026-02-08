@@ -11,6 +11,11 @@
 - Issue labels: `enhancement`, `from-review` (no complexity/testing labels yet)
 - Server style: no semicolons, single quotes — common false positive from Copilot
 - Evidence pattern: "per CLAUDE.md: no semicolons, single quotes"
+- Reply headers: **FIX** / **FALSE POSITIVE** / **FOLLOW-UP ISSUE** (bolder than generic)
+- Branch protection requires conversation resolution — inline replies are mandatory for merge
+
+### Lessons Learned
+- **2026-02-08:** Agent posted summary review but skipped all 7 inline replies on PR #116. Root cause: skill said "reply inline" but agent batched mentally and only did the summary. Fix: (1) added verification step that counts root comments vs replied threads, (2) reworded critical rules to make inline replies the PRIMARY output, (3) enforced one-at-a-time processing order.
 
 ## agent-review Customizations
 
