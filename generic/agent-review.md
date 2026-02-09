@@ -143,13 +143,29 @@ EOF
 
 Include created issue URLs in the review summary table.
 
-### 6. Report to User
+### 6. Reconcile Issues Resolved in This PR
+
+After all fixes are committed, check whether any issues created during this review — or pre-existing `from-review` issues — were already addressed by fixes in this PR.
+
+```bash
+# List open from-review issues
+gh issue list --label "from-review" --json number,title,body
+
+# For each issue resolved by a fix in this PR:
+gh issue comment ${ISSUE_NUM} --body "Addressed in PR #${PR_NUM} — ${DESCRIPTION}."
+gh issue close ${ISSUE_NUM}
+```
+
+**RULE: Every closed issue MUST reference a PR.** The comment is the paper trail. No silent closes.
+
+### 7. Report to User
 
 Output:
 - Review verdict
 - Critical issues count
 - Suggestions count
 - Follow-up issues created (with URLs)
+- Issues closed as already resolved (with URLs)
 - Link to posted review
 
 ## Agent Persona

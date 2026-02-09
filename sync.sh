@@ -54,12 +54,14 @@ check_repo() {
             grep -q "FOLLOW-UP ISSUE" "$local_skill" 2>/dev/null || missing="${missing} mandatory-issues"
             grep -q "commit.*SHA\|COMMIT_SHA\|commit hash" "$local_skill" 2>/dev/null || missing="${missing} commit-links"
             grep -q "THREE.*valid\|ONLY THREE\|3 valid" "$local_skill" 2>/dev/null || missing="${missing} 3-outcomes"
+            grep -q "from-review.*issue\|Cross-Reference\|cross-reference\|Reconcile" "$local_skill" 2>/dev/null || missing="${missing} issue-reconciliation"
         fi
 
         # agent-review patterns
         if [ "$skill" = "agent-review.md" ]; then
             grep -q "MANDATORY\|mandatory\|MUST.*issue" "$local_skill" 2>/dev/null || missing="${missing} mandatory-issues"
             grep -q "issue create" "$local_skill" 2>/dev/null || missing="${missing} issue-creation-code"
+            grep -q "from-review.*issue\|Reconcile\|reconcile\|cross-reference" "$local_skill" 2>/dev/null || missing="${missing} issue-reconciliation"
         fi
 
         # swarm-audit patterns
