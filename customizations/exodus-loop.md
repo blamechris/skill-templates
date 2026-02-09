@@ -7,6 +7,11 @@
 - **CI:** Attribution check + Godot export pipeline
 - **Commercial:** Intended for sale — asset licensing critical
 
+## Merge Gate
+- **Enabled:** Yes — branch protection requires conversation resolution
+- See `generic/merge-gate.md` for the CLAUDE.md snippet
+- Already added to exodus-loop CLAUDE.md (2026-02-09)
+
 ## check-pr Customizations
 - Issue labels: `complexity:low/medium/high`, `smoke-test:low/medium/high`
 - Add Copilot polling (Section 0 from generic template)

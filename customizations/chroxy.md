@@ -6,6 +6,11 @@
 - **Main branch:** main
 - **CI:** Copilot review + CodeQL ruleset
 
+## Merge Gate
+- **Enabled:** Yes — branch protection requires conversation resolution (noted in check-pr line 15)
+- See `generic/merge-gate.md` for the CLAUDE.md snippet
+- **TODO:** Add merge-gate snippet to chroxy CLAUDE.md
+
 ## check-pr Customizations
 - No Copilot polling needed (reviews complete fast, can add later)
 - Issue labels: `enhancement`, `from-review` (no complexity/testing labels yet)
