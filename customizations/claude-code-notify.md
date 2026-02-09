@@ -19,6 +19,8 @@
 - Discord API: "per Discord webhook docs: embed field limits"
 - Architecture: "per existing pattern: config hierarchy is env var > .env > defaults"
 
+**Attribution:** Zero Attribution Policy enforced via CLAUDE.md (same as all other repos)
+
 **Copilot polling:** Include Section 0 (standard)
 
 **Notes:**
