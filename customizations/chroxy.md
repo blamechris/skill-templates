@@ -45,3 +45,17 @@ Mindset: "Will this code work reliably over a cellular connection through a tunn
 - Touch targets min 44pt
 - Keyboard handling for Android suggestion bar
 - Safe area insets, Expo Go compatibility
+
+## swarm-audit Customizations
+
+### Domain-Specific Extended Agents
+
+| Agent | Nickname | Lens | When to Include |
+|-------|----------|------|-----------------|
+| Expo Expert | "Expo Expert" | Expo SDK lifecycle, React Native constraints, OTA updates, dev client vs Expo Go | Target involves mobile app architecture, updates, or Expo-specific features |
+| Tunneler | "Tunneler" | Cloudflare tunnels, DNS, TLS, WebSocket proxying, network reliability | Target involves tunnel configuration, connectivity, or networking |
+
+### Grading Criteria
+- Operator should weight mobile UX: touch targets, offline behavior, reconnect experience
+- Guardian should weight WebSocket edge cases: stale sockets, tunnel drops, concurrent writes
+- Expert agents should verify claims against actual Cloudflare/Expo documentation

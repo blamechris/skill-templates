@@ -12,7 +12,7 @@ REPOS_DIR="$HOME/Projects"
 REPO_NAMES=("chroxy" "exodus-loop" "archery-apprentice" "repo-relay")
 SKILLS_DIR=".claude/commands"
 
-SKILLS=("check-pr.md" "agent-review.md")
+SKILLS=("check-pr.md" "agent-review.md" "swarm-audit.md")
 
 check_repo() {
     local repo="$1"
@@ -60,6 +60,14 @@ check_repo() {
         if [ "$skill" = "agent-review.md" ]; then
             grep -q "MANDATORY\|mandatory\|MUST.*issue" "$local_skill" 2>/dev/null || missing="${missing} mandatory-issues"
             grep -q "issue create" "$local_skill" 2>/dev/null || missing="${missing} issue-creation-code"
+        fi
+
+        # swarm-audit patterns
+        if [ "$skill" = "swarm-audit.md" ]; then
+            grep -q "Core Panel" "$local_skill" 2>/dev/null || missing="${missing} core-panel"
+            grep -q "master-assessment" "$local_skill" 2>/dev/null || missing="${missing} master-assessment"
+            grep -q "file:line" "$local_skill" 2>/dev/null || missing="${missing} file-line-refs"
+            grep -q "Consensus Findings" "$local_skill" 2>/dev/null || missing="${missing} consensus-section"
         fi
 
         if [ -z "$missing" ]; then

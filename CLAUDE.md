@@ -38,7 +38,7 @@ skill-templates/
 
 | Repo | Tech Stack | Skills |
 |------|-----------|--------|
-| chroxy | Node.js + React Native/Expo | check-pr, agent-review, commit, create-pr, qa-update |
+| chroxy | Node.js + React Native/Expo | check-pr, agent-review, swarm-audit, commit, create-pr, qa-update |
 | exodus-loop | Godot 4.5, GDScript | check-pr, agent-review, commit, create-pr, qa-update, tdd-feature |
 | archery-apprentice | Kotlin/KMP, Android/iOS | check-pr, agent-review, consolidate-dependabot, qa-update |
 | repo-relay | Node.js, TypeScript, discord.js | check-pr, agent-review |
