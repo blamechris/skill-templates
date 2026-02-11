@@ -7,8 +7,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GENERIC_DIR="$SCRIPT_DIR/generic"
-REPOS_DIR="$HOME/Projects"
 
+# Repo paths — most live in ~/Projects, exceptions listed here
+repo_path() {
+    case "$1" in
+        archery-apprentice) echo "$HOME/StudioProjects/archery-apprentice" ;;
+        *)                  echo "$HOME/Projects/$1" ;;
+    esac
+}
 REPO_NAMES=("chroxy" "exodus-loop" "archery-apprentice" "repo-relay")
 SKILLS_DIR=".claude/commands"
 
@@ -17,7 +23,7 @@ SKILLS=("check-pr.md" "agent-review.md" "swarm-audit.md" "full-review.md")
 check_repo() {
     local repo="$1"
     local skills_dir="$SKILLS_DIR"
-    local repo_path="$REPOS_DIR/$repo"
+    local repo_path=$(repo_path "$repo")
 
     if [ ! -d "$repo_path" ]; then
         echo "  ⚠️  Not cloned locally: $repo_path"
