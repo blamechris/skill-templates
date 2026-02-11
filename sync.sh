@@ -12,7 +12,7 @@ REPOS_DIR="$HOME/Projects"
 REPO_NAMES=("chroxy" "exodus-loop" "archery-apprentice" "repo-relay")
 SKILLS_DIR=".claude/commands"
 
-SKILLS=("check-pr.md" "agent-review.md" "swarm-audit.md")
+SKILLS=("check-pr.md" "agent-review.md" "swarm-audit.md" "full-review.md")
 
 check_repo() {
     local repo="$1"
@@ -70,6 +70,14 @@ check_repo() {
             grep -q "master-assessment" "$local_skill" 2>/dev/null || missing="${missing} master-assessment"
             grep -q "file:line" "$local_skill" 2>/dev/null || missing="${missing} file-line-refs"
             grep -q "Consensus Findings" "$local_skill" 2>/dev/null || missing="${missing} consensus-section"
+        fi
+
+        # full-review patterns
+        if [ "$skill" = "full-review.md" ]; then
+            grep -q "Phase 1.*Agent Review\|agent-review" "$local_skill" 2>/dev/null || missing="${missing} agent-review-phase"
+            grep -q "Phase 2.*Check-PR\|check-pr" "$local_skill" 2>/dev/null || missing="${missing} check-pr-phase"
+            grep -q "Combined Summary\|combined.*table\|summary table" "$local_skill" 2>/dev/null || missing="${missing} combined-summary"
+            grep -q "Sequential.*not parallel\|MUST complete before" "$local_skill" 2>/dev/null || missing="${missing} sequential-execution"
         fi
 
         if [ -z "$missing" ]; then

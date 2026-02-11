@@ -52,6 +52,12 @@ Mindset: "Will this code work reliably over a cellular connection through a tunn
 - Keyboard handling for Android suggestion bar
 - Safe area insets, Expo Go compatibility
 
+## full-review Customizations
+- Composes agent-review (Chroxy Inspector persona) + check-pr sequentially
+- Agent-review takes ~2-3 min, which covers most of the Copilot review delay (~4 min)
+- Combined summary table is the primary output — matches the format used in batch PR reviews
+- Same attribution policy applies: no AI mentions anywhere
+
 ## swarm-audit Customizations
 
 ### Domain-Specific Extended Agents
