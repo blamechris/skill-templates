@@ -10,23 +10,41 @@ Address all PR review comments systematically and respond inline.
 
 ### 0. Wait for Automated Reviews
 
-Before processing comments, check if Copilot review has completed:
+Copilot review typically takes **3–5 minutes** after PR creation to even begin. If you run `/check-pr` immediately after creating the PR, the review won't exist yet.
+
+**IMPORTANT:** Do NOT skip this step. If no Copilot review exists and the PR was created recently (within 5 min), you MUST wait — otherwise you'll process zero comments and miss the entire review.
 
 ```bash
 PR_NUM=${1:-$(gh pr view --json number -q .number)}
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 
+# Check how old the PR is
+PR_AGE_SECONDS=$(gh pr view ${PR_NUM} --json createdAt \
+  --jq "((now - (.createdAt | fromdateiso8601)))")
+
 # Check Copilot review status
 COPILOT_STATUS=$(gh api repos/${REPO}/pulls/${PR_NUM}/reviews \
-  --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | if length == 0 then "NOT_REQUESTED" elif (.[0].state == "PENDING") then "IN_PROGRESS" else "COMPLETED" end')
+  --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | if length == 0 then "NOT_FOUND" elif (.[0].state == "PENDING") then "IN_PROGRESS" else "COMPLETED" end')
 
+# If no review exists yet AND PR is less than 5 min old, wait for it to appear
+if [ "$COPILOT_STATUS" = "NOT_FOUND" ] && [ "${PR_AGE_SECONDS%.*}" -lt 300 ]; then
+  echo "PR is ${PR_AGE_SECONDS%.*}s old. Copilot review not yet started. Waiting (polls every 30s, max 5 min)..."
+  for i in $(seq 1 10); do
+    sleep 30
+    COPILOT_STATUS=$(gh api repos/${REPO}/pulls/${PR_NUM}/reviews \
+      --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | if length == 0 then "NOT_FOUND" elif (.[0].state == "PENDING") then "IN_PROGRESS" else "COMPLETED" end')
+    [ "$COPILOT_STATUS" != "NOT_FOUND" ] && echo "Copilot review detected (status: $COPILOT_STATUS)" && break
+  done
+fi
+
+# If review is in progress, wait for it to complete
 if [ "$COPILOT_STATUS" = "IN_PROGRESS" ]; then
   echo "Copilot review in progress. Polling every 30s (max 5 min)..."
   for i in $(seq 1 10); do
     sleep 30
-    STATUS=$(gh api repos/${REPO}/pulls/${PR_NUM}/reviews \
+    COPILOT_STATUS=$(gh api repos/${REPO}/pulls/${PR_NUM}/reviews \
       --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | if (.[0].state == "PENDING") then "IN_PROGRESS" else "COMPLETED" end')
-    [ "$STATUS" != "IN_PROGRESS" ] && break
+    [ "$COPILOT_STATUS" != "IN_PROGRESS" ] && break
   done
 fi
 ```

@@ -12,7 +12,7 @@
 - **TODO:** Add merge-gate snippet to chroxy CLAUDE.md
 
 ## check-pr Customizations
-- No Copilot polling needed (reviews complete fast, can add later)
+- Copilot polling IS needed — reviews take ~4 min to start after PR creation. Use Step 0 from generic template.
 - Issue labels: `enhancement`, `from-review` (no complexity/testing labels yet)
 - Server style: no semicolons, single quotes — common false positive from Copilot
 - Evidence pattern: "per CLAUDE.md: no semicolons, single quotes"
@@ -21,6 +21,7 @@
 
 ### Lessons Learned
 - **2026-02-08:** Agent posted summary review but skipped all 7 inline replies on PR #116. Root cause: skill said "reply inline" but agent batched mentally and only did the summary. Fix: (1) added verification step that counts root comments vs replied threads, (2) reworded critical rules to make inline replies the PRIMARY output, (3) enforced one-at-a-time processing order.
+- **2026-02-10:** check-pr ran immediately after PR #423 was created and found 0 comments because Copilot review hadn't started yet (~4 min delay). Root cause: local skill was missing Step 0 (Copilot polling) from generic template, and generic template only waited for IN_PROGRESS→COMPLETED, not NOT_FOUND→appeared. Fix: (1) updated generic template to also wait for review to appear when PR is <5 min old, (2) synced Step 0 into chroxy local skill.
 
 ## agent-review Customizations
 
