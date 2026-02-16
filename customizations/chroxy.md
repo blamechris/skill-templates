@@ -16,7 +16,8 @@
 - Issue labels: `enhancement`, `from-review` (no complexity/testing labels yet)
 - Server style: no semicolons, single quotes — common false positive from Copilot
 - Evidence pattern: "per CLAUDE.md: no semicolons, single quotes"
-- Reply headers: **FIX** / **FALSE POSITIVE** / **FOLLOW-UP ISSUE** (bolder than generic)
+- Reply headers: **FIX** / **FALSE POSITIVE** / **FOLLOW-UP ISSUE** (now synced to generic as of 2026-02-16)
+- Reply Format Examples section with detailed examples (now synced to generic as of 2026-02-16)
 - Branch protection requires conversation resolution — inline replies are mandatory for merge
 
 ### Lessons Learned
@@ -57,6 +58,17 @@ Mindset: "Will this code work reliably over a cellular connection through a tunn
 - Agent-review takes ~2-3 min, which covers most of the Copilot review delay (~4 min)
 - Combined summary table is the primary output — matches the format used in batch PR reviews
 - Same attribution policy applies: no AI mentions anywhere
+
+## create-pr Customizations
+- Test plan should include: server tests pass, app type-checks clean, manual smoke test
+- Batch-fix PRs are common (from-review batches) — use batch template when closing 3+ issues
+- Issue labels to scan: `from-review`, `enhancement`
+- Branch naming: `feat/`, `fix/`, `refactor/`, `test/` prefixes with issue numbers in name
+
+## create-issue Customizations
+- Labels available: `enhancement`, `from-review` (no `complexity:` or `testing:` labels yet)
+- If complexity/testing labels are added later, update this note
+- Review comment URLs follow GitHub format: `https://github.com/blamechris/chroxy/pull/N/files#r<comment_id>`
 
 ## swarm-audit Customizations
 
