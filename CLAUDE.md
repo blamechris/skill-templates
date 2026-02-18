@@ -42,4 +42,4 @@ skill-templates/
 | exodus-loop | Godot 4.5, GDScript | check-pr, agent-review, commit, create-pr, qa-update, tdd-feature, learn |
 | archery-apprentice | Kotlin/KMP, Android/iOS | check-pr, agent-review, consolidate-dependabot, qa-update, learn |
 | repo-relay | Node.js, TypeScript, discord.js | check-pr, agent-review, learn |
-| claude-code-notify | Bash, jq, curl, Discord webhooks | check-pr, agent-review, learn |
+| claude-code-notify | Bash, jq, curl, Discord webhooks | check-pr, agent-review, project-audit, learn |
