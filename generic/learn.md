@@ -61,8 +61,9 @@ For each surviving candidate, check all memory sources for existing coverage BEF
 # Check project instructions
 cat CLAUDE.md 2>/dev/null
 
-# Check existing rules
-ls .claude/rules/ 2>/dev/null && for f in .claude/rules/*.md; do echo "=== $f ==="; cat "$f"; done 2>/dev/null
+# Check existing rules — list filenames, then read only those relevant to candidate topics
+ls .claude/rules/*.md 2>/dev/null
+# Then read rules whose names relate to the candidate insights
 
 # Check local notes
 cat CLAUDE.local.md 2>/dev/null
@@ -219,8 +220,8 @@ User: /learn
    Evidence: OBSERVED -- saw it during debugging, did not isolate root cause
 
 Persisted 1 of 2 insights.
-  1. Zustand selector stability --> .claude/rules/zustand.md -- awaiting approval
-  2. /health 503 behavior --> skipped (already in CLAUDE.md line 84)
+1. Zustand selector stability --> .claude/rules/zustand.md -- awaiting approval
+2. /health 503 behavior --> skipped (already in CLAUDE.md line 84)
 
 + - Zustand selectors must return stable references (not new object spreads). Use `useShallow` or select atomic values to avoid per-tick re-renders.
 
@@ -248,6 +249,7 @@ User: /learn
    Evidence: VERIFIED -- packet capture showed Cloudflare closing at 55s with 60s keepalive
    Before/After: Use 60s keepalive --> Use 30s keepalive to stay within CF idle window
 
+Persisted 0 of 1 insights (conflict found).
 1. WS keepalive interval --> CONFLICTS with .claude/rules/websocket.md line 3
    Existing: "Set WebSocket keepalive to 60s to balance overhead and liveness"
    Found:    "60s exceeds Cloudflare's idle timeout; use 30s"
