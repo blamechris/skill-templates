@@ -5,8 +5,8 @@
 - **Repo:** blamechris/claude-code-notify
 - **Tech:** Bash scripts, jq, curl, Discord webhook API
 - **Main branch:** main
-- **CI:** None currently (shell test suite planned)
-- **Purpose:** Discord notification hooks for Claude Code agent status (idle, permission, subagent tracking)
+- **CI:** GitHub Actions (ubuntu-latest, bash test suite)
+- **Purpose:** Discord notification hooks for Claude Code agent status (idle, permission, subagent tracking, bg bash tracking, heartbeat/stale detection)
 
 ## check-pr Customizations
 
@@ -61,3 +61,18 @@
 
 ### Issue Labels
 - `enhancement`, `from-review` (basic label set)
+
+## project-audit Customizations
+
+**Issue labels:**
+- `enhancement`, `from-audit` for recommendations
+- `bug`, `from-audit` for bugs/security findings
+
+**Evidence patterns:**
+- Same as check-pr (shell scripting, jq, Discord API, architecture patterns)
+
+**Notes:**
+- Auto-discovery will detect: Bash project, has tests (13 files, 289 assertions), has CI, no frontend, no dependencies beyond jq/curl
+- Competitive Analysis (Scout) agent is relevant — this is a public product with 15+ competitors
+- DevOps (Deployer) agent is relevant — has CI workflow
+- UX/DX (Advocate) agent is relevant — this is a CLI/hooks tool with developer experience surface
