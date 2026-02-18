@@ -18,9 +18,9 @@ Examples:
 ```
 /project-audit
 /project-audit agents=8 focus=security,performance
-/project-audit output=audits/2024-q4 verbosity=detailed
-/project-audit agents=10 include=devops,dependencies
-/project-audit focus=testing skip=competitive
+/project-audit output=audits/pre-release verbosity=detailed
+/project-audit agents=10 include=deployer,auditor
+/project-audit focus=testing skip=scout
 ```
 
 ## Instructions
@@ -129,10 +129,10 @@ Choose AGENT_COUNT agents. Always include all 5 core agents. Fill remaining slot
 ### 4. Create Output Directory
 
 ```bash
-mkdir -p ${OUTPUT_DIR}
+mkdir -p "${OUTPUT_DIR}"
 ```
 
-If the directory already contains a previous audit, warn the user and ask whether to overwrite or create a timestamped subdirectory (e.g., `docs/project-audit/2024-12-15/`).
+If the directory already contains a previous audit, warn the user and ask whether to overwrite or create a timestamped subdirectory (e.g., `docs/project-audit/YYYY-MM-DD/`).
 
 ### 5. Launch Agent Swarm
 
@@ -391,7 +391,7 @@ EOF
 Stage and commit all audit files:
 
 ```bash
-git add ${OUTPUT_DIR}/
+git add "${OUTPUT_DIR}/"
 git commit -m "docs: project audit (${AGENT_COUNT} agents, aggregate ${AGGREGATE_RATING}/5)
 
 Agents: ${AGENT_NICKNAMES_COMMA_SEPARATED}
@@ -496,8 +496,8 @@ Create `.claude/audit-config.json` to set defaults for this project:
   "default_agents": 8,
   "default_focus": ["security", "performance"],
   "default_verbosity": "detailed",
-  "always_include": ["devops", "dependencies"],
-  "always_skip": ["competitive"],
+  "always_include": ["deployer", "auditor"],
+  "always_skip": ["scout"],
   "output_dir": "docs/audits/"
 }
 ```
@@ -510,6 +510,6 @@ Create `.claude/audit-config.json` to set defaults for this project:
 /project-audit focus=security
 /project-audit agents=10 focus=security,performance verbosity=detailed
 /project-audit output=audits/pre-launch agents=12
-/project-audit skip=competitive,documentation
-/project-audit include=devops verbosity=brief
+/project-audit skip=scout,chronicler
+/project-audit include=deployer verbosity=brief
 ```

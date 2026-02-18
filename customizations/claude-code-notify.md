@@ -25,7 +25,7 @@
 
 **Notes:**
 - Small codebase (2 scripts, ~380 lines total)
-- No CI to wait for currently
+- CI runs automatically but is fast — no need to poll/wait during check-pr
 - Reviews likely focused on shell safety, input validation, Discord API compliance
 
 ## learn Customizations
