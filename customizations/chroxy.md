@@ -71,6 +71,12 @@ Mindset: "Will this code work reliably over a cellular connection through a tunn
 - If complexity/testing labels are added later, update this note
 - Review comment URLs follow GitHub format: `https://github.com/blamechris/chroxy/pull/N/files#r<comment_id>`
 
+## learn Customizations
+- **CLAUDE.md sections:** `## Server Conventions`, `## App Conventions`, `## Debugging`
+- **Rules naming:** kebab-case (e.g., `react-native.md`, `websocket.md`)
+- **Domain quality bar:** React Native platform constraints, WebSocket protocol quirks, tunnel reliability patterns qualify as durable insights
+- **Common paths:** `app/**/*.tsx`, `server/**/*.js`
+
 ## swarm-audit Customizations
 
 ### Domain-Specific Extended Agents
