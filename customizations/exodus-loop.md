@@ -17,6 +17,12 @@
 - Add Copilot polling (Section 0 from generic template)
 - Asset licensing awareness: flag any new assets without CREDITS.md entry
 
+## learn Customizations
+- **CLAUDE.md sections:** `## GDScript Patterns`, `## Architecture`, `## Testing`
+- **Rules naming:** kebab-case (e.g., `gdscript.md`, `combat-system.md`)
+- **Domain quality bar:** GDScript engine quirks, game balance insights (e.g., "enemy HP formula breaks at wave 15+"), Godot lifecycle gotchas qualify as durable insights
+- **Common paths:** `scripts/**/*.gd`, `scenes/**/*.tscn`
+
 ## agent-review Customizations
 
 ### Persona
