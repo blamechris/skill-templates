@@ -13,6 +13,13 @@
 - Add mandatory issue creation (currently missing entirely)
 - Preserve multi-agent coordination references
 
+## learn Customizations
+- **CLAUDE.md sections:** `## Kotlin/KMP Patterns`, `## Architecture`, `## Testing`
+- **Rules naming:** kebab-case (e.g., `compose.md`, `kmp-shared.md`)
+- **Domain quality bar:** KMP shared/platform boundary quirks, Compose recomposition gotchas, Firebase auth timing issues qualify as durable insights
+- **Common paths:** `shared/src/**/*.kt`, `androidApp/src/**/*.kt`, `iosApp/**/*.swift`
+- **Note:** Only Orchestrator may modify CLAUDE.md — learn proposals targeting CLAUDE.md should note this constraint
+
 ## agent-review Customizations
 
 ### Persona

@@ -28,6 +28,12 @@
 - No CI to wait for currently
 - Reviews likely focused on shell safety, input validation, Discord API compliance
 
+## learn Customizations
+- **CLAUDE.md sections:** `## Architecture`, `## Shell Conventions`
+- **Rules naming:** kebab-case (e.g., `discord-webhooks.md`, `hook-events.md`)
+- **Domain quality bar:** Shell portability gotchas, jq edge cases, Discord webhook limits, Claude Code hook event quirks qualify as durable insights
+- **Common paths:** `*.sh`
+
 ## agent-review Customizations
 
 **Persona:** Notify Inspector — expert in Bash scripting, shell utilities (jq, curl), Discord webhook API, Claude Code hooks system

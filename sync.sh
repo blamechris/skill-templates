@@ -15,10 +15,10 @@ repo_path() {
         *)                  echo "$HOME/Projects/$1" ;;
     esac
 }
-REPO_NAMES=("chroxy" "exodus-loop" "archery-apprentice" "repo-relay")
+REPO_NAMES=("chroxy" "exodus-loop" "archery-apprentice" "repo-relay" "claude-code-notify")
 SKILLS_DIR=".claude/commands"
 
-SKILLS=("check-pr.md" "agent-review.md" "swarm-audit.md" "full-review.md")
+SKILLS=("check-pr.md" "agent-review.md" "swarm-audit.md" "full-review.md" "learn.md")
 
 check_repo() {
     local repo="$1"
@@ -84,6 +84,16 @@ check_repo() {
             grep -q "Phase 2.*Check-PR\|check-pr" "$local_skill" 2>/dev/null || missing="${missing} check-pr-phase"
             grep -q "Combined Summary\|combined.*table\|summary table" "$local_skill" 2>/dev/null || missing="${missing} combined-summary"
             grep -q "Sequential.*not parallel\|MUST complete before" "$local_skill" 2>/dev/null || missing="${missing} sequential-execution"
+        fi
+
+        # learn patterns
+        if [ "$skill" = "learn.md" ]; then
+            grep -q "Gate Check\|gate check\|Nothing to persist" "$local_skill" 2>/dev/null || missing="${missing} gate-check"
+            grep -q "Behavioral Test\|do X instead of Y" "$local_skill" 2>/dev/null || missing="${missing} behavioral-test"
+            grep -q "Deduplicate\|dedup" "$local_skill" 2>/dev/null || missing="${missing} deduplication"
+            grep -q "CLAUDE.md.*approval\|do NOT write without approval" "$local_skill" 2>/dev/null || missing="${missing} approval-gate"
+            grep -q "3 entries max\|max 3\|at most 3" "$local_skill" 2>/dev/null || missing="${missing} entry-cap"
+            grep -q "self-referential\|Self-referential" "$local_skill" 2>/dev/null || missing="${missing} self-ref-guard"
         fi
 
         if [ -z "$missing" ]; then

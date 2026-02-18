@@ -14,6 +14,12 @@
 - Already has mandatory issue creation
 - Minor: could add the "3 outcomes only" constraint language from chroxy
 
+## learn Customizations
+- **CLAUDE.md sections:** `## Architecture`, `## Discord Integration`, `## GitHub Integration`
+- **Rules naming:** kebab-case (e.g., `discord-embeds.md`, `webhook-handling.md`)
+- **Domain quality bar:** Discord API limits, GitHub webhook payload quirks, SQLite concurrency patterns qualify as durable insights
+- **Common paths:** `src/**/*.ts`
+
 ## agent-review Customizations
 
 ### Persona
