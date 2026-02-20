@@ -248,6 +248,11 @@ if [ "$LOCAL_MODE" = false ] && ! command -v gh &>/dev/null; then
     exit 1
 fi
 
+# Set GH_TOKEN so gh CLI uses the same PAT as git operations
+if [ "$LOCAL_MODE" = false ] && [ -n "${DEPLOY_PAT:-}" ]; then
+    export GH_TOKEN="$DEPLOY_PAT"
+fi
+
 # --- Claude API call ---
 call_claude() {
     local template_content="$1"
