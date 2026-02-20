@@ -7,23 +7,56 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GENERIC_DIR="$SCRIPT_DIR/generic"
-
-# Repo paths — most live in ~/Projects, exceptions listed here
-repo_path() {
-    case "$1" in
-        archery-apprentice) echo "$HOME/StudioProjects/archery-apprentice" ;;
-        *)                  echo "$HOME/Projects/$1" ;;
-    esac
-}
-REPO_NAMES=("chroxy" "exodus-loop" "archery-apprentice" "repo-relay" "claude-code-notify")
+DEPLOY_CONF="$SCRIPT_DIR/deploy.conf"
 SKILLS_DIR=".claude/commands"
 
-SKILLS=("check-pr.md" "agent-review.md" "swarm-audit.md" "full-review.md" "learn.md")
+# --- Config loader ---
+# Reads deploy.conf into parallel arrays
+declare -a CONF_NAMES=()
+declare -a CONF_PATHS=()
+declare -a CONF_SKILLS=()
+
+load_config() {
+    if [ ! -f "$DEPLOY_CONF" ]; then
+        echo "ERROR: deploy.conf not found at $DEPLOY_CONF" >&2
+        exit 1
+    fi
+
+    while IFS='|' read -r name _github_slug local_suffix skills; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        CONF_NAMES+=("$name")
+        CONF_PATHS+=("$HOME/$local_suffix")
+        CONF_SKILLS+=("$skills")
+    done < "$DEPLOY_CONF"
+}
+
+# Look up index for a repo name
+conf_index() {
+    local target="$1"
+    for i in "${!CONF_NAMES[@]}"; do
+        if [ "${CONF_NAMES[$i]}" = "$target" ]; then
+            echo "$i"
+            return
+        fi
+    done
+    echo "-1"
+}
+
+load_config
 
 check_repo() {
     local repo="$1"
     local skills_dir="$SKILLS_DIR"
-    local repo_path=$(repo_path "$repo")
+    local idx
+    idx=$(conf_index "$repo")
+
+    if [ "$idx" = "-1" ]; then
+        echo "  ⚠️  $repo not found in deploy.conf"
+        return
+    fi
+
+    local repo_path="${CONF_PATHS[$idx]}"
+    local skills_csv="${CONF_SKILLS[$idx]}"
 
     if [ ! -d "$repo_path" ]; then
         echo "  ⚠️  Not cloned locally: $repo_path"
@@ -33,7 +66,9 @@ check_repo() {
     echo "📦 $repo ($skills_dir/)"
     echo "   ──────────────────────────"
 
-    for skill in "${SKILLS[@]}"; do
+    IFS=',' read -ra skill_names <<< "$skills_csv"
+    for skill_name in "${skill_names[@]}"; do
+        local skill="${skill_name}.md"
         local generic="$GENERIC_DIR/$skill"
         local local_skill="$repo_path/$skills_dir/$skill"
 
@@ -114,7 +149,7 @@ echo ""
 if [ $# -gt 0 ]; then
     check_repo "$1"
 else
-    for repo in "${REPO_NAMES[@]}"; do
+    for repo in "${CONF_NAMES[@]}"; do
         check_repo "$repo"
     done
 fi

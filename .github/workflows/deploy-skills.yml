@@ -1,0 +1,53 @@
+name: Deploy Skills
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'generic/**'
+      - 'customizations/**'
+      - 'deploy.conf'
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need HEAD~1 for diff
+
+      - name: Detect changes
+        id: changes
+        run: |
+          TEMPLATES_CHANGED=$(git diff HEAD~1 --name-only -- 'generic/*.md' | wc -l | tr -d ' ')
+          CUSTOMS_CHANGED=$(git diff HEAD~1 --name-only -- 'customizations/*.md' | wc -l | tr -d ' ')
+          CONF_CHANGED=$(git diff HEAD~1 --name-only -- 'deploy.conf' | wc -l | tr -d ' ')
+
+          echo "templates=$TEMPLATES_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "customs=$CUSTOMS_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "conf=$CONF_CHANGED" >> "$GITHUB_OUTPUT"
+
+          echo "Changed templates: $TEMPLATES_CHANGED"
+          echo "Changed customs: $CUSTOMS_CHANGED"
+          echo "Changed conf: $CONF_CHANGED"
+
+      - name: Deploy changed templates
+        if: steps.changes.outputs.templates > 0
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEPLOY_PAT: ${{ secrets.DEPLOY_PAT }}
+        run: bash deploy.sh --changed-templates
+
+      - name: Deploy changed customizations
+        if: steps.changes.outputs.customs > 0
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEPLOY_PAT: ${{ secrets.DEPLOY_PAT }}
+        run: bash deploy.sh --changed-customs
+
+      - name: Deploy all (config changed)
+        if: steps.changes.outputs.conf > 0
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEPLOY_PAT: ${{ secrets.DEPLOY_PAT }}
+        run: bash deploy.sh

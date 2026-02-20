@@ -10,13 +10,23 @@
 skill-templates/
 ├── generic/           # Gold standard templates (repo-agnostic)
 ├── customizations/    # Per-repo adaptation notes
-└── sync.sh           # Diff local repo skills against templates
+├── deploy.conf        # Repo-to-skill mapping (authoritative source)
+├── deploy.sh          # Claude API-powered skill deployment
+├── sync.sh            # Drift checker (reads deploy.conf)
+└── .github/workflows/ # CI: auto-deploy on push to main
 ```
+
+**Configuration:** `deploy.conf` is the single source of truth for which repos get which skills. Both `sync.sh` and `deploy.sh` read from it. Format: `REPO|GITHUB_SLUG|LOCAL_PATH_SUFFIX|SKILL1,SKILL2,...`
+
+**Deployment:** `deploy.sh` calls the Claude API (Sonnet, temperature 0) to customize generic templates using per-repo customization notes. It replaces `{{CUSTOMIZE: ...}}` markers with repo-specific content.
+- **Local mode:** `./deploy.sh --local --repo chroxy --skill agent-review` — writes directly to local repo clone
+- **CI mode:** Triggered by GitHub Actions on push to main when `generic/`, `customizations/`, or `deploy.conf` change. Clones target repos, creates PRs with customized skills.
+- **Drift check:** `./sync.sh [repo]` — compares deployed skills against templates using pattern checks
 
 **Workflow:**
 1. Skills are refined here when failure modes are discovered
-2. `sync.sh` shows which repos have drifted from the template
-3. Agents receive prompts referencing the template + repo-specific customization notes
+2. Push to main auto-deploys changed templates/customizations to managed repos via PR
+3. `sync.sh` checks for drift between deployed skills and templates
 4. Each repo's `.claude/commands/` contains the customized version
 
 ## Critical: Attribution Policy
