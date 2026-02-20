@@ -143,7 +143,17 @@ build_pairs() {
     # If --repo and/or --skill specified (manual mode)
     if [ -n "$FILTER_REPO" ] || [ -n "$FILTER_SKILL" ]; then
         if [ -n "$FILTER_REPO" ] && [ -n "$FILTER_SKILL" ]; then
-            # Specific repo + skill
+            # Specific repo + skill — validate combination
+            local idx
+            idx=$(conf_index "$FILTER_REPO")
+            if [ "$idx" = "-1" ]; then
+                echo "ERROR: repo '$FILTER_REPO' not in deploy.conf" >&2
+                exit 1
+            fi
+            if ! repo_has_skill "$idx" "$FILTER_SKILL"; then
+                echo "ERROR: repo '$FILTER_REPO' does not have skill '$FILTER_SKILL' in deploy.conf" >&2
+                exit 1
+            fi
             DEPLOY_PAIRS+=("${FILTER_REPO}:${FILTER_SKILL}")
         elif [ -n "$FILTER_REPO" ]; then
             # All skills for one repo
@@ -317,11 +327,19 @@ Output the fully customized skill markdown now."
         fi
     fi
 
+    # Check for error response before extracting content
+    if jq -e '.error' "$tmpfile" >/dev/null 2>&1; then
+        echo "    ❌ API returned error:" >&2
+        jq -r '.error.message' "$tmpfile" >&2
+        rm -f "$tmpfile"
+        return 1
+    fi
+
     # Extract text content from response
-    response=$(jq -r '.content[0].text' "$tmpfile")
+    response=$(jq -r '.content[0].text // empty' "$tmpfile")
     rm -f "$tmpfile"
 
-    if [ -z "$response" ] || [ "$response" = "null" ]; then
+    if [ -z "$response" ]; then
         echo "    ❌ Empty response from API" >&2
         return 1
     fi
@@ -461,7 +479,12 @@ ci_push_and_pr() {
 
 Automated deployment from skill-templates on ${BRANCH_DATE}." 2>/dev/null
 
-    git push -u origin "$BRANCH_NAME" 2>/dev/null
+    if ! git push -u origin "$BRANCH_NAME" 2>&1; then
+        echo "    ❌ Failed to push $BRANCH_NAME to $slug"
+        FAILURES+=("${repo}: git push failed")
+        cd "$SCRIPT_DIR"
+        return
+    fi
     echo "    📤 Pushed $BRANCH_NAME to $slug"
 
     # Check for existing PR on this branch
@@ -472,7 +495,7 @@ Automated deployment from skill-templates on ${BRANCH_DATE}." 2>/dev/null
         echo "    ℹ️  PR #${existing_pr} already exists — updated with new commits"
     else
         local pr_url
-        pr_url=$(gh pr create --repo "$slug" \
+        if ! pr_url=$(gh pr create --repo "$slug" \
             --title "chore(skills): update skill templates (${BRANCH_DATE})" \
             --body "Automated skill template deployment from \`skill-templates\`.
 
@@ -481,7 +504,12 @@ $(git log origin/main..HEAD --format="" --name-only | sort -u | sed 's/^/- /')
 
 ## Review
 These skills were customized from generic templates using the Claude API. Please review the customized content before merging." \
-            --head "$BRANCH_NAME" 2>/dev/null)
+            --head "$BRANCH_NAME" 2>&1); then
+            echo "    ❌ Failed to create PR for $slug"
+            FAILURES+=("${repo}: gh pr create failed")
+            cd "$SCRIPT_DIR"
+            return
+        fi
         echo "    🔗 Created PR: $pr_url"
     fi
 

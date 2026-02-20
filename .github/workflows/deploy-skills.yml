@@ -32,21 +32,21 @@ jobs:
           echo "Changed conf: $CONF_CHANGED"
 
       - name: Deploy changed templates
-        if: steps.changes.outputs.templates > 0
+        if: steps.changes.outputs.templates != '0'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEPLOY_PAT: ${{ secrets.DEPLOY_PAT }}
         run: bash deploy.sh --changed-templates
 
       - name: Deploy changed customizations
-        if: steps.changes.outputs.customs > 0
+        if: steps.changes.outputs.customs != '0'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEPLOY_PAT: ${{ secrets.DEPLOY_PAT }}
         run: bash deploy.sh --changed-customs
 
       - name: Deploy all (config changed)
-        if: steps.changes.outputs.conf > 0
+        if: steps.changes.outputs.conf != '0'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEPLOY_PAT: ${{ secrets.DEPLOY_PAT }}
