@@ -246,7 +246,7 @@ call_claude() {
     local skill_name="$4"
 
     local system_prompt
-    system_prompt=$(cat <<'SYSPROMPT'
+    read -r -d '' system_prompt <<'SYSPROMPT' || true
 You are a skill template customizer. Your ONLY job is to take a generic skill template and a repo's customization notes, then output the final customized skill markdown.
 
 Rules:
@@ -258,7 +258,6 @@ Rules:
 6. Never add attribution (no "Generated with", no "Co-Authored-By", no AI mentions).
 7. Preserve all code blocks, bash examples, and formatting exactly as they appear in the template.
 SYSPROMPT
-    )
 
     local user_prompt
     user_prompt="Customize this skill template for the ${repo_name} repository.
