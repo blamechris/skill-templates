@@ -306,17 +306,11 @@ Output the fully customized skill markdown now."
     local tmpfile
     tmpfile=$(mktemp)
 
-    # First attempt
-    http_code=$(curl -s -w "%{http_code}" -o "$tmpfile" \
-        "https://api.anthropic.com/v1/messages" \
-        -H "content-type: application/json" \
-        -H "x-api-key: ${ANTHROPIC_API_KEY}" \
-        -H "anthropic-version: 2023-06-01" \
-        -d "$payload")
+    local max_retries=3
+    local attempt=1
+    local backoff=5
 
-    if [ "$http_code" != "200" ]; then
-        echo "    ⚠️  API returned $http_code, retrying in 5s..." >&2
-        sleep 5
+    while [ "$attempt" -le "$max_retries" ]; do
         http_code=$(curl -s -w "%{http_code}" -o "$tmpfile" \
             "https://api.anthropic.com/v1/messages" \
             -H "content-type: application/json" \
@@ -324,13 +318,33 @@ Output the fully customized skill markdown now."
             -H "anthropic-version: 2023-06-01" \
             -d "$payload")
 
-        if [ "$http_code" != "200" ]; then
-            echo "    ❌ API failed with $http_code after retry" >&2
+        if [ "$http_code" = "200" ]; then
+            break
+        fi
+
+        # Permanent errors — fail immediately, no retry
+        case "$http_code" in
+            400|401|403|404)
+                echo "    ❌ API returned $http_code (permanent error, not retrying)" >&2
+                cat "$tmpfile" >&2
+                rm -f "$tmpfile"
+                return 1
+                ;;
+        esac
+
+        # Transient errors (429, 500, 502, 503, etc.) — retry with backoff
+        if [ "$attempt" -lt "$max_retries" ]; then
+            echo "    ⚠️  API returned $http_code, retrying in ${backoff}s (attempt $attempt/$max_retries)..." >&2
+            sleep "$backoff"
+            backoff=$((backoff * 3))
+            attempt=$((attempt + 1))
+        else
+            echo "    ❌ API failed with $http_code after $max_retries attempts" >&2
             cat "$tmpfile" >&2
             rm -f "$tmpfile"
             return 1
         fi
-    fi
+    done
 
     # Check for error response before extracting content
     if jq -e '.error' "$tmpfile" >/dev/null 2>&1; then
