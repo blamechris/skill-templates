@@ -52,6 +52,6 @@ When `gh pr merge` fails with "base branch policy prohibits the merge":
 |------|------------------|----------------------------|
 | exodus-loop | Yes | Yes |
 | chroxy | Yes | Yes |
-| archery-apprentice | TBD | TBD |
-| repo-relay | TBD | TBD |
-| claude-code-notify | TBD | TBD |
+| archery-apprentice | Yes | Yes |
+| repo-relay | Yes | Yes |
+| claude-code-notify | Yes | Yes |
