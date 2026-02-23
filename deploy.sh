@@ -410,7 +410,7 @@ deploy_pair() {
 
     # Append version stamp so sync.sh can detect outdated deployments
     local template_hash
-    template_hash=$(git log -1 --format=%h -- "$template")
+    template_hash=$(git -C "$SCRIPT_DIR" log -1 --format=%h -- "generic/${skill}.md")
     local stamp="<!-- skill-templates: ${skill} ${template_hash} $(date '+%Y-%m-%d') -->"
     result="${result}
 ${stamp}"

@@ -135,7 +135,7 @@ check_repo() {
         local deployed_hash current_hash version_info=""
         deployed_hash=$(grep -o 'skill-templates: [^ ]* [a-f0-9]*' "$local_skill" 2>/dev/null | awk '{print $3}' || true)
         if [ -n "$deployed_hash" ]; then
-            current_hash=$(git -C "$SCRIPT_DIR" log -1 --format=%h -- "$generic")
+            current_hash=$(git -C "$SCRIPT_DIR" log -1 --format=%h -- "generic/$skill")
             if [ "$deployed_hash" = "$current_hash" ]; then
                 version_info=" [v:${deployed_hash}]"
             else
