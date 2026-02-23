@@ -131,10 +131,25 @@ check_repo() {
             grep -q "self-referential\|Self-referential" "$local_skill" 2>/dev/null || missing="${missing} self-ref-guard"
         fi
 
-        if [ -z "$missing" ]; then
-            echo "   ✅ $skill — OK (${local_lines}L vs ${generic_lines}L template)"
+        # Check version stamp against current template hash
+        local deployed_hash current_hash version_info=""
+        deployed_hash=$(grep -o 'skill-templates: [^ ]* [a-f0-9]*' "$local_skill" 2>/dev/null | awk '{print $3}' || true)
+        if [ -n "$deployed_hash" ]; then
+            current_hash=$(git -C "$SCRIPT_DIR" log -1 --format=%h -- "$generic")
+            if [ "$deployed_hash" = "$current_hash" ]; then
+                version_info=" [v:${deployed_hash}]"
+            else
+                version_info=" [v:${deployed_hash}→${current_hash}]"
+                missing="${missing} outdated-template"
+            fi
         else
-            echo "   🔧 $skill — DRIFT (${local_lines}L) — missing:${missing}"
+            version_info=" [no stamp]"
+        fi
+
+        if [ -z "$missing" ]; then
+            echo "   ✅ $skill — OK (${local_lines}L vs ${generic_lines}L template)${version_info}"
+        else
+            echo "   🔧 $skill — DRIFT (${local_lines}L) — missing:${missing}${version_info}"
         fi
     done
     echo ""
