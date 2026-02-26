@@ -61,7 +61,7 @@ Mindset: "Does this maintain game feel while being performant on mobile?"
 
 ### Branch Naming
 - Use `feat/`, `fix/`, `test/`, `refactor/` prefixes (per commit type) instead of generic `auto/`
-- Format: `feat/description-#123`
+- Format: `feat/${ISSUE_NUM}-description` (number first, matching generic template pattern)
 
 ### Test Runner
 - Command: `godot --headless res://test/test_runner.tscn` (MUST use scene, not `--script`)
