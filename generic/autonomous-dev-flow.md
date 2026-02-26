@@ -160,7 +160,7 @@ cat CLAUDE.md 2>/dev/null
 Based on the issue's acceptance criteria, write tests that describe the desired behavior. Tests MUST fail before any implementation.
 
 ```bash
-# {{CUSTOMIZE: Test runner command — e.g., npm test, pytest, godot --headless --script}}
+# {{CUSTOMIZE: Test runner command — e.g., npm test, pytest, godot --headless res://test/test_runner.tscn}}
 # {{CUSTOMIZE: Test file conventions — e.g., __tests__/*.test.ts, *_test.gd, *.spec.js}}
 
 # Run tests to confirm they fail
