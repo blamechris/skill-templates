@@ -245,6 +245,17 @@ git checkout ${BRANCH}
 # Detect closable issues (same logic as /create-pr step 2)
 # Scan commits for #NNN references, check branch name for issue numbers
 
+# Construct PR title: conventional commit format referencing the issue
+# Infer type from issue labels (bug→fix, enhancement→feat, etc.)
+ISSUE_LABELS=$(gh issue view "${ISSUE_NUM}" --json labels -q '[.labels[].name] | join(",")')
+case "${ISSUE_LABELS}" in
+  *bug*) PR_TYPE="fix" ;;
+  *test*) PR_TYPE="test" ;;
+  *refactor*) PR_TYPE="refactor" ;;
+  *) PR_TYPE="feat" ;;
+esac
+PR_TITLE="${PR_TYPE}: ${ISSUE_TITLE} (#${ISSUE_NUM})"
+
 PR_URL=$(gh pr create \
   --title "${PR_TITLE}" \
   --body "$(cat <<'EOF'
