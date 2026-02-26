@@ -92,8 +92,17 @@ gh pr checks ${PR_NUM} --json name,state --jq '[.[] | select(.state != "SUCCESS"
 Scan for planning documents in common locations:
 
 ```bash
-# {{CUSTOMIZE: Roadmap file locations — add repo-specific paths. Default scan locations:}}
-# Common roadmap/planning file patterns
+# Check for common planning files (don't fail on missing)
+for f in ROADMAP.md TODO.md CHANGELOG.md; do
+  test -f "$f" && echo "Found: $f"
+done
+
+# Check common planning directories
+for d in docs/roadmap docs/planning docs/TODO; do
+  test -d "$d" && echo "Found: $d/" && ls "$d"
+done
+
+# {{CUSTOMIZE: Roadmap file locations — add repo-specific paths beyond the defaults above}}
 ```
 
 Search for these files (check existence, don't fail if missing):
@@ -267,7 +276,7 @@ When the queue is truly empty, perform a lightweight codebase scan to surface po
 #### 4a. Test Coverage Gaps
 
 ```bash
-# {{CUSTOMIZE: Test runner command for coverage report, or skip if not available}}
+# {{CUSTOMIZE: Test runner command for a quick pass/fail check, or skip if not available}}
 ```
 
 - Check which source directories have corresponding test files
