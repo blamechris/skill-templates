@@ -68,7 +68,7 @@ For each high-complexity issue:
    - Labels: appropriate complexity and category labels
    - Reference: `Part of #parent` in body
 4. Insert sub-issues at FRONT of queue (context is fresh from reading the parent)
-5. Comment on parent issue: `gh issue comment ${PARENT} --body "Decomposed into #A, #B, #C"`
+5. Comment on parent issue: `gh issue comment ${ISSUE_NUM} --body "Decomposed into #A, #B, #C"`
 6. Parent stays open until all sub-issues merge — do NOT close it
 7. After decomposition, if the total queue exceeds 15, truncate to 15 with a message: "Queue expanded to N issues after decomposition. Processing first 15."
 
