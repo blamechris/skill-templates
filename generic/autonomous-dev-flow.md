@@ -1,19 +1,20 @@
 # /autonomous-dev-flow
 
-Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, and continue to the next issue. The user checks in to merge completed PRs while work continues.
+Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, and continue to the next issue. The user reviews and merges PRs asynchronously while work continues.
 
 ## Arguments
 
 - `$ARGUMENTS` - Issue source and options. Examples:
   - `label:ready-to-build` (all open issues with this label)
   - `milestone:"v1.2"` (all open issues in milestone)
-  - `#12 #15 #18` (specific issues by number)
+  - `#12 #15 #18` or `12 15 18` (specific issues by number)
   - `label:ready-to-build max:5 sort:created-asc` (with options)
+  - If empty, auto-detect: scan open issues sorted by complexity (low first, then medium, skip high)
   - Options: `max:N` (default 10, hard cap 15), `sort:created-asc` (default) or `sort:created-desc`
 
 ## Instructions
 
-### 0. Parse Arguments and Build Work Queue
+### Phase 0: Queue Setup
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
@@ -24,9 +25,10 @@ BRANCH_PREFIX="auto/"
 
 Parse `$ARGUMENTS` to determine the issue source:
 
+- **Explicit list**: Strip `#` prefixes, run `gh issue view ${NUM} --json number,title,state,labels,body,assignees` for each
 - **Label**: `gh issue list --label "${LABEL}" --state open --json number,title,labels,assignees --limit ${MAX}`
 - **Milestone**: `gh issue list --milestone "${MILESTONE}" --state open --json number,title,labels,assignees --limit ${MAX}`
-- **Explicit list**: `gh issue view ${NUM} --json number,title,state,assignees` for each `#N`
+- **Auto-detect** (empty args): `gh issue list --state open --json number,title,labels,assignees --limit 30` then sort by complexity label (low first, then medium, skip high)
 
 Apply sort order and cap to `max` (hard cap 15 — sessions beyond this rarely maintain quality). Recommended: 3-5 issues for first use; sessions of 10+ work best with well-specified, low-complexity issues.
 
@@ -41,36 +43,67 @@ Apply sort order and cap to `max` (hard cap 15 — sessions beyond this rarely m
 ```markdown
 ## Work Queue ({N} issues, {M} skipped as assigned)
 
-| # | Issue | Labels | Status |
+| # | Issue | Labels | Action |
 |---|-------|--------|--------|
-| 1 | #12 — Add retry logic to API client | enhancement | Ready |
-| 2 | #15 — Fix race condition in session cleanup | bug | Ready |
+| 1 | #12 — Add retry logic to API client | enhancement | Implement |
+| 2 | #15 — Add leaderboard system | complexity:high | Decompose → sub-issues |
 | — | #16 — Refactor auth module | enhancement | Assigned to @user (skipped) |
-| 3 | #18 — Add integration tests for auth flow | testing | Ready |
+| 3 | #18 — Add integration tests for auth flow | testing | Implement |
 
 Start autonomous dev session?
 ```
 
-Wait for user confirmation. This is the ONLY confirmation point — everything after is autonomous.
+Wait for user confirmation. **This is the ONLY confirmation point** — everything after runs autonomously.
 
-### 0.5. Auto-Decompose High-Complexity Issues
+After confirmation, create task list tracking:
+```
+For each issue in work queue:
+  TaskCreate: "Issue #N — <title>" with status pending
+```
+
+### Phase 0.5: Auto-Decompose High-Complexity Issues
 
 When the queue contains issues that are too large to implement directly (e.g., labeled {{CUSTOMIZE: Decomposition trigger label — e.g., `complexity:high`}} or equivalent), decompose them into smaller, independently implementable sub-issues BEFORE entering the core loop.
 
 For each high-complexity issue:
 
 0. Check for prior decomposition — scan the issue's comments for an existing "Decomposed into #A, #B, #C" comment. If found, use those existing sub-issues instead of creating new ones.
-1. Read the full issue body and understand the complete scope
-2. Break into 2-5 sub-issues, each low or medium complexity
-3. Create sub-issues via `gh issue create` with:
-   - Title: `type(scope): Sub-task description`
-   - Body: implementation plan, files to modify, test strategy
-   - Labels: appropriate complexity and category labels
-   - Reference: `Part of #parent` in body
-4. Insert sub-issues at FRONT of queue (context is fresh from reading the parent)
-5. Comment on parent issue: `gh issue comment ${ISSUE_NUM} --body "Decomposed into #A, #B, #C"`
-6. Parent stays open until all sub-issues merge — do NOT close it
-7. After decomposition, if the total queue exceeds 15, truncate to 15 with a message: "Queue expanded to N issues after decomposition. Processing first 15."
+1. Read the full issue body: `gh issue view ${ISSUE_NUM} --json body,comments -q .`
+2. Understand the full scope — files involved, systems affected, testing needs
+3. Break into 2-5 sub-issues, each low or medium complexity
+4. Create sub-issues via `gh issue create`:
+
+```bash
+SUB_URL=$(gh issue create \
+  --title "type(scope): Sub-task description" \
+  --label "enhancement" \
+  --body "$(cat <<'EOF'
+## Summary
+
+Specific sub-task description.
+
+Part of #${ISSUE_NUM}
+
+## Implementation Plan
+
+- Files to modify: `src/path/to/file`
+- Test strategy: Add tests for X behavior
+- Approach: [specific implementation details]
+
+## Acceptance Criteria
+
+- [ ] Criterion 1
+- [ ] Criterion 2
+EOF
+)")
+
+SUB_NUM=$(basename "$SUB_URL")
+```
+
+5. Insert sub-issues at FRONT of queue (context is fresh from reading the parent)
+6. Comment on parent issue: `gh issue comment ${ISSUE_NUM} --body "Decomposed into #A, #B, #C — each independently implementable with TDD."`
+7. Parent stays open until all sub-issues merge — do NOT close it
+8. After decomposition, if the total queue exceeds 15, truncate to 15 with a message: "Queue expanded to N issues after decomposition. Processing first 15."
 
 **Skip criteria** — auto-skip these issues (log reason in progress table):
 - Empty issue body or no identifiable acceptance criteria — needs requirements before implementation
@@ -80,67 +113,54 @@ For each high-complexity issue:
 - Issues labeled `blocked` or `wontfix`
 - Issues requiring design decisions with multiple valid approaches not specified
 
-If skipping, comment on the issue: `gh issue comment ${NUM} --body "Skipped during autonomous dev session — [reason]. Needs manual attention."`
-
-### 1. Session Setup
-
-Create a task list to track progress across the session:
-
-```
-For each issue in the work queue:
-  TaskCreate: "Issue #N — <title>" with status pending
-```
-
-Check for any existing session branches or open PRs from a previous session:
+If skipping, comment on the issue:
 
 ```bash
-# Check for existing session branches with open PRs
-gh pr list --json number,title,headRefName --limit 50 \
-  | jq --arg prefix "${BRANCH_PREFIX}" '[.[] | select(.headRefName | startswith($prefix))]'
-
-# Check for local session branches
-git branch --list "${BRANCH_PREFIX}*"
+gh issue comment ${ISSUE_NUM} --body "Skipped during autonomous dev session — [reason]. Needs manual attention."
 ```
 
-If previous session PRs exist:
-- Already merged → note as completed, skip those issues
-- Still open → note their status, skip those issues (user can re-queue if needed)
-- No PR yet but branch exists → delete stale branch, re-process the issue
-
-### 2. Core Loop — For Each Issue
-
-Process each issue sequentially. For each issue:
-
-#### 2a. Prepare Branch
+### Phase 1: Sync Check (before EACH issue)
 
 ```bash
-# Always start from latest main
 git checkout main
 git pull origin main
-
-# Generate slug from issue title: lowercase, hyphens, no special chars, max 40 chars
-ISSUE_TITLE=$(gh issue view "${ISSUE_NUM}" --json title -q '.title')
-SLUG=$(printf '%s' "${ISSUE_TITLE}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40)
-
-# Create branch from issue number + slug
-# {{CUSTOMIZE: Branch naming convention — e.g., auto/<number>-<slug> vs feat/<number>-<slug>}}
-BRANCH="${BRANCH_PREFIX}${ISSUE_NUM}-${SLUG}"
-git checkout -b "${BRANCH}"
 ```
 
-**CRITICAL: Always branch from main, never from a previous issue's branch.** This ensures PRs are independently mergeable in any order — no cascade rebases.
-
-#### 2b. Understand the Issue
+Check for any PRs merged by the user since last check:
 
 ```bash
-# Read full issue details
+gh pr list --state merged --json number,headRefName,mergedAt --limit 20 \
+  | jq --arg prefix "${BRANCH_PREFIX}" '[.[] | select(.headRefName | startswith($prefix))]'
+```
+
+Note any merged PRs in the progress table. If on a stale branch, switch back to main.
+
+Check for existing branches/PRs from a previous session for the current issue:
+
+```bash
+# Check if issue already has a PR (search by title reference)
+gh pr list --json number,title,headRefName,state --limit 50 \
+  | jq --arg num "${ISSUE_NUM}" '[.[] | select(.title | contains("#" + $num))]'
+
+# Also check by branch prefix
+gh pr list --json number,title,headRefName,state --limit 50 \
+  | jq --arg prefix "${BRANCH_PREFIX}" '[.[] | select(.headRefName | startswith($prefix))]'
+```
+
+- Already merged → mark as done, skip
+- Open PR exists → skip (user can re-queue if needed)
+- Stale branch, no PR → delete branch, re-process
+
+### Phase 2: Issue Understanding
+
+```bash
 gh issue view ${ISSUE_NUM} --json title,body,labels,comments
 ```
 
-Read the issue body, comments, and acceptance criteria. Identify:
-- What needs to change
-- Which files are likely involved
-- What the acceptance criteria are
+Read the full issue. Identify:
+- **Files to modify** — use Glob/Grep to find relevant code
+- **Test strategy** — what behavior to test, where tests go
+- **Implementation approach** — minimal path to satisfy acceptance criteria
 
 Explore the codebase to understand the relevant code before writing anything:
 
@@ -151,11 +171,26 @@ cat CLAUDE.md 2>/dev/null
 # Explore relevant files based on issue description
 ```
 
-#### 2c. TDD Cycle: RED → GREEN → REFACTOR
+If the issue body is empty or has no actionable requirements, apply skip criteria from Phase 0.5.
 
-**This is the core development methodology. Follow it strictly.**
+### Phase 3: Implementation (TDD)
 
-##### RED — Write Failing Tests First
+Create branch following project conventions:
+
+```bash
+# Generate slug from issue title: lowercase, hyphens, no special chars, max 40 chars
+ISSUE_TITLE=$(gh issue view "${ISSUE_NUM}" --json title -q '.title')
+SLUG=$(printf '%s' "${ISSUE_TITLE}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40)
+
+# Create branch from issue number + slug
+# {{CUSTOMIZE: Branch naming convention — e.g., auto/<number>-<slug> vs feat/<number>-<slug>}}
+BRANCH="${BRANCH_PREFIX}${ISSUE_NUM}-${SLUG}"
+git checkout -b "${BRANCH}"
+```
+
+**CRITICAL: Always branch from main.** Never stack branches — each PR must be independently mergeable in any order.
+
+#### RED — Write Failing Tests First
 
 Based on the issue's acceptance criteria, write tests that describe the desired behavior. Tests MUST fail before any implementation.
 
@@ -169,7 +204,7 @@ ${TEST_COMMAND}
 
 If tests pass immediately, the behavior already exists — investigate before proceeding. Either the issue is already resolved or the tests don't capture the right behavior.
 
-##### GREEN — Make Tests Pass
+#### GREEN — Make Tests Pass
 
 Write the minimum implementation to make all new tests pass. Don't over-engineer — just satisfy the tests.
 
@@ -180,7 +215,7 @@ ${TEST_COMMAND}
 
 If tests still fail, iterate on the implementation until they pass. Do NOT move to REFACTOR until all tests are green.
 
-##### REFACTOR — Clean Up
+#### REFACTOR — Clean Up
 
 With green tests as a safety net:
 - Remove duplication
@@ -196,9 +231,9 @@ ${TEST_COMMAND}
 ${LINT_COMMAND}
 ```
 
-#### 2d. Commit and Push
+### Phase 4: Commit and PR Creation
 
-Commit with a conventional commit message referencing the issue:
+Stage and commit with conventional format:
 
 ```bash
 # Stage relevant files (never git add -A)
@@ -219,32 +254,9 @@ EOF
 git push -u origin ${BRANCH}
 ```
 
-#### 2e. Check for Merged PRs Mid-Session
-
-Before creating the next PR, check if the user has merged any PRs from this session:
+Create PR autonomously (NO user confirmation — PRs are the async checkpoints):
 
 ```bash
-# Check which session PRs have been merged since session start
-gh pr list --state merged --json number,headRefName,mergedAt --limit 20 \
-  | jq --arg prefix "${BRANCH_PREFIX}" '[.[] | select(.headRefName | startswith($prefix))]'
-```
-
-If PRs were merged, update main awareness:
-```bash
-git checkout main
-git pull origin main
-git checkout ${BRANCH}
-# Only rebase if main moved AND it affects this branch's files
-```
-
-#### 2f. Create PR (Autonomous — No Confirmation)
-
-**This is an intentional departure from /create-pr which requires user confirmation.** In autonomous mode, PRs ARE the checkpoints — the user reviews and merges them asynchronously.
-
-```bash
-# Detect closable issues (same logic as /create-pr step 2)
-# Scan commits for #NNN references, check branch name for issue numbers
-
 # Construct PR title: conventional commit format referencing the issue
 # Infer type from issue labels (bug→fix, enhancement→feat, etc.)
 ISSUE_LABELS=$(gh issue view "${ISSUE_NUM}" --json labels -q '[.labels[].name] | join(",")')
@@ -277,36 +289,39 @@ EOF
 PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
 ```
 
-#### 2g. Run /full-review
+### Phase 5: Full Review
 
-Execute the full review pipeline on the newly created PR:
+**Pre-Skill Checkpoint** (MANDATORY — prevents context drift in long sessions):
+1. Re-read CLAUDE.md for project conventions
+2. Re-read the skill files for /full-review, /agent-review, and /check-pr
 
-1. **Agent review** — deep expert review against project standards
-2. **Check-PR** — process all review comments (Copilot + agent-review findings)
+Run `/full-review ${PR_NUM}`:
+- Phase 1: Agent review — deep expert review against project standards
+- Phase 2: Check-PR — process all review comments (Copilot + agent-review findings)
 
-Capture the results: verdict, findings counts, fixes committed, issues created/closed.
+Capture results: verdict, findings counts, fixes committed, issues created/closed.
 
-#### 2h. Assess and Record Outcome
+**If critical findings exist:** Fix them (standard /full-review behavior handles this). Two fix attempts max — after that, flag the PR as "Needs attention" and move on.
 
-Based on the /full-review results, classify the PR:
+**Do NOT merge.** PRs accumulate for user review. The agent keeps working.
+
+### Phase 6: Assess, Report, and Continue
+
+Based on /full-review results, classify the PR:
 
 | Verdict | Meaning | Action |
 |---------|---------|--------|
 | Clean | No critical findings, all comments addressed | Edit PR body: `Refs` → `Closes`. Mark issue done, continue |
-| Needs attention | Critical findings or unresolved comments | Keep `Refs` (don't auto-close). Flag for user, continue to next issue |
-| Broken | Tests failing after review fixes, or fundamental problems | Keep `Refs` (don't auto-close). Flag for user, continue to next issue |
+| Needs attention | Critical findings or unresolved comments | Keep `Refs` (don't auto-close). Flag for user, continue |
+| Broken | Tests failing after review fixes | Keep `Refs` (don't auto-close). Flag for user, continue |
 
-**CRITICAL: Never block the session on a flagged PR.** The whole point of autonomous mode is continuous progress. The user addresses flagged PRs during check-ins.
-
-Update the task list:
+Update task tracking:
 
 ```
 TaskUpdate: "Issue #N" → completed (or flagged)
 ```
 
-#### 2i. Output Progress Table
-
-After each issue, output a cumulative progress table. This is what the user sees during check-ins.
+Output cumulative progress table:
 
 ```markdown
 ## Session Progress ({completed}/{total})
@@ -314,37 +329,49 @@ After each issue, output a cumulative progress table. This is what the user sees
 | # | Issue | Branch | PR | Review | Status |
 |---|-------|--------|----|--------|--------|
 | 1 | #12 — Add retry logic | 12-add-retry | #45 | Approve (0 critical) | Done |
-| 2 | #15 — Fix race condition | 15-fix-race | #46 | Request Changes (1 critical) | Needs attention |
-| 3 | #18 — Add auth tests | — | — | — | In progress |
-| 4 | #22 — Update error handling | — | — | — | Queued |
+| 2 | #15 — Add leaderboard | — | — | — | Decomposed → #20, #21 |
+| 3 | #20 — Leaderboard data model | 20-lb-model | #46 | Approve (1 suggestion) | Done |
+| 4 | #18 — Add auth tests | — | — | — | In progress |
+| 5 | #22 — Update error handling | — | — | — | Queued |
 ```
 
-### 3. Session Summary
+**CRITICAL: Never block the session on a flagged PR.** Flag and move on. The user handles flagged PRs during check-ins.
 
-After all issues are processed (or the queue is exhausted), output a final session summary:
+Return to Phase 1 for next issue.
+
+### Phase 7: Session Summary
+
+After all issues are processed (or the queue is exhausted), output final summary:
 
 ```markdown
 ## Autonomous Dev Session Complete
 
-**Duration:** {N} issues processed
-**Queue:** {source description}
+**Issues processed:** {N}
+**Queue source:** {description}
 
 ### Results
 
 | # | Issue | PR | Review Verdict | Status |
 |---|-------|----|---------------|--------|
 | 1 | #12 — Add retry logic | [#45](url) | Approve | Ready to merge |
-| 2 | #15 — Fix race condition | [#46](url) | Request Changes | Needs attention |
-| 3 | #18 — Add auth tests | [#47](url) | Approve | Ready to merge |
+| 2 | #15 — Add leaderboard | — | — | Decomposed → #20, #21, #22 |
+| 3 | #20 — Leaderboard data model | [#46](url) | Approve | Ready to merge |
+| 4 | #18 — Add auth tests | [#47](url) | Request Changes | Needs attention |
 
 ### Summary
 - **Ready to merge:** N PRs
 - **Needs attention:** M PRs (details below)
+- **Decomposed:** K issues → L sub-issues created
+- **Skipped:** J issues (reasons below)
 - **Issues created during reviews:** #A, #B, #C
 - **PRs merged by user during session:** #X, #Y
 
 ### Needs Attention
-- **PR #46** (#15 — Fix race condition): 1 critical finding — race condition in cleanup handler not fully addressed. See review comment.
+- **PR #47** (#18 — Add auth tests): 1 critical finding — auth token not validated before use. See review comment.
+
+### Skipped Issues
+- **#25**: Requires deployment setup — not automatable
+- **#30**: Needs user decision on provider choice
 
 ### Next Steps
 - Merge ready PRs
@@ -356,29 +383,31 @@ After all issues are processed (or the queue is exhausted), output a final sessi
 
 This skill uses **GitHub state** for resume — no local state files.
 
-If a session is interrupted (crash, timeout, user stops it), re-running the skill with the same arguments will:
+If a session is interrupted (crash, timeout, user stops it), re-running with the same arguments will:
 
-1. Query GitHub for existing session branches (matching `BRANCH_PREFIX`) and PRs
+1. Query GitHub for existing session branches (matching `BRANCH_PREFIX`) and PRs referencing each issue
 2. Skip issues that already have merged or open PRs
 3. Resume from the first issue without a PR
 
-This means the skill is **idempotent** — safe to re-run without duplicating work.
+This makes the skill **idempotent** — safe to re-run without duplicating work.
 
 ## Critical Rules
 
-1. **NO attribution** — No Co-Authored-By, no "Generated with Claude", no AI mentions. Zero Attribution Policy.
-2. **TDD is mandatory** — RED → GREEN → REFACTOR for every issue. No skipping tests. If the issue is pure docs or config, tests may be N/A — note why.
-3. **Branch from main every time** — Never stack branches. Each PR must be independently mergeable.
-4. **One confirmation point** — The initial queue approval. Everything after is autonomous.
-5. **Never block on review findings** — Flag and move on. The user handles flagged PRs.
-6. **Progress table after every issue** — The user may check in at any time. The table must be current.
-7. **Respect the hard cap** — Max 15 issues per session. Refuse larger queues.
-8. **Resume from GitHub state** — No local state files. Query branches matching `BRANCH_PREFIX` to detect prior work.
-9. **Clean up on skip** — If an issue is already done (merged PR exists), note it and move on. Don't recreate work.
-10. **Compose existing skills** — /full-review is called as-is (which chains /agent-review → /check-pr). Don't reinvent their logic.
-11. **Decompose, don't skip** — High-complexity issues get broken into sub-issues, not skipped. Only skip truly non-automatable work.
-12. **Comment on skips** — Every skipped issue gets a GitHub comment explaining why. The user sees the reason.
-13. **Pre-Skill Checkpoint** — Re-read CLAUDE.md before running /full-review to prevent context drift in long sessions.
+1. **NO attribution** — No Co-Authored-By, no "Generated with Claude", no AI mentions anywhere. Zero Attribution Policy.
+2. **TDD is mandatory** — RED → GREEN → REFACTOR for every issue. No skipping tests. If pure docs/config, note why tests are N/A.
+3. **Branch from main every time** — Never stack branches. Each PR is independently mergeable in any order.
+4. **One confirmation point** — The initial queue approval. Everything after is fully autonomous.
+5. **Never merge** — PRs accumulate for user review. The agent keeps working.
+6. **Never block on review findings** — Flag and move on. The user handles flagged PRs during check-ins.
+7. **Two fix attempts max** — If /full-review finds critical issues, fix them. If a second attempt still fails, flag and move on.
+8. **Progress table after every issue** — The user may check in at any time. The table must be current.
+9. **Respect the hard cap** — Max 15 issues per session. Refuse larger queues.
+10. **Resume from GitHub state** — No local state files. Query branches matching `BRANCH_PREFIX` and PR titles to detect prior work.
+11. **Compose existing skills** — /full-review is called as-is (chains /agent-review → /check-pr). Don't reinvent their logic.
+12. **Decompose, don't skip** — High-complexity issues get broken into sub-issues, not skipped. Only skip truly non-automatable work.
+13. **Comment on skips** — Every skipped issue gets a GitHub comment explaining why. The user sees the reason.
+14. **Pre-Skill Checkpoint** — Re-read CLAUDE.md and skill files before running /full-review to prevent context drift.
+15. **Sync before branching** — Always `git checkout main && git pull` before starting each issue. Check for merged PRs first.
 
 ## Customization Points
 
@@ -388,7 +417,7 @@ Lines and sections marked with `{{CUSTOMIZE}}` need repo-specific adaptation:
 - **Branch prefix** for session branches and resume detection (e.g., `auto/` or `feat/`, `fix/`, etc.)
 - **Branch naming convention** (e.g., `auto/<number>-<slug>` vs `feat/<number>-<slug>`)
 - **Decomposition trigger label** (e.g., `complexity:high`)
-- **Test runner command** (e.g., `npm test`, `pytest`, `godot --headless --script`)
+- **Test runner command** (e.g., `npm test`, `pytest`, `godot --headless res://test/test_runner.tscn`)
 - **Test file conventions** (e.g., `__tests__/*.test.ts`, `*_test.gd`, `*.spec.js`)
 - **Lint/typecheck commands** (e.g., `npm run lint && npm run typecheck`, `mypy .`)
 - **PR test plan items** (e.g., "App type-checks clean", "Manual smoke test")
