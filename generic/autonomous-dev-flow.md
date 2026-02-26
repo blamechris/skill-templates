@@ -9,7 +9,7 @@ Orchestrate long-running autonomous dev sessions — work through GitHub issues 
   - `milestone:"v1.2"` (all open issues in milestone)
   - `#12 #15 #18` (specific issues by number)
   - `label:ready-to-build max:5 sort:created-asc` (with options)
-  - Options: `max:N` (default 10, hard cap 15), `sort:created-asc` (default) or `sort:priority`
+  - Options: `max:N` (default 10, hard cap 15), `sort:created-asc` (default) or `sort:created-desc`
 
 ## Instructions
 
@@ -17,29 +17,36 @@ Orchestrate long-running autonomous dev sessions — work through GitHub issues 
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+
+# {{CUSTOMIZE: Branch prefix for autonomous session branches — e.g., "auto/" or multiple prefixes for repos that use feat/, fix/, etc.}}
+BRANCH_PREFIX="auto/"
 ```
 
 Parse `$ARGUMENTS` to determine the issue source:
 
-- **Label**: `gh issue list --label "${LABEL}" --state open --json number,title,labels --limit ${MAX}`
-- **Milestone**: `gh issue list --milestone "${MILESTONE}" --state open --json number,title,labels --limit ${MAX}`
-- **Explicit list**: `gh issue view ${NUM} --json number,title,state` for each `#N`
+- **Label**: `gh issue list --label "${LABEL}" --state open --json number,title,labels,assignees --limit ${MAX}`
+- **Milestone**: `gh issue list --milestone "${MILESTONE}" --state open --json number,title,labels,assignees --limit ${MAX}`
+- **Explicit list**: `gh issue view ${NUM} --json number,title,state,assignees` for each `#N`
 
-Apply sort order and cap to `max` (hard cap 15 — sessions beyond this rarely maintain quality).
+Apply sort order and cap to `max` (hard cap 15 — sessions beyond this rarely maintain quality). Recommended: 3-5 issues for first use; sessions of 10+ work best with well-specified, low-complexity issues.
+
+**Filter out assigned issues** — exclude issues with assignees from the working queue. Show them in the queue table as informational but don't process them.
 
 **Validate the queue before starting:**
 - At least 1 issue must be open and unassigned
+- If all matching issues are assigned, report "All N matching issues are assigned — nothing to process" and stop
 - If 0 issues match, report and stop — don't start an empty session
 - Show the user the queue and get confirmation before entering the loop
 
 ```markdown
-## Work Queue ({N} issues)
+## Work Queue ({N} issues, {M} skipped as assigned)
 
-| # | Issue | Labels |
-|---|-------|--------|
-| 1 | #12 — Add retry logic to API client | enhancement |
-| 2 | #15 — Fix race condition in session cleanup | bug |
-| 3 | #18 — Add integration tests for auth flow | testing |
+| # | Issue | Labels | Status |
+|---|-------|--------|--------|
+| 1 | #12 — Add retry logic to API client | enhancement | Ready |
+| 2 | #15 — Fix race condition in session cleanup | bug | Ready |
+| — | #16 — Refactor auth module | enhancement | Assigned to @user (skipped) |
+| 3 | #18 — Add integration tests for auth flow | testing | Ready |
 
 Start autonomous dev session?
 ```
@@ -48,10 +55,11 @@ Wait for user confirmation. This is the ONLY confirmation point — everything a
 
 ### 0.5. Auto-Decompose High-Complexity Issues
 
-When the queue contains issues that are too large to implement directly (e.g., labeled `complexity: high` or equivalent), decompose them into smaller, independently implementable sub-issues BEFORE entering the core loop.
+When the queue contains issues that are too large to implement directly (e.g., labeled {{CUSTOMIZE: Decomposition trigger label — e.g., `complexity:high`}} or equivalent), decompose them into smaller, independently implementable sub-issues BEFORE entering the core loop.
 
 For each high-complexity issue:
 
+0. Check for prior decomposition — scan the issue's comments for an existing "Decomposed into #A, #B, #C" comment. If found, use those existing sub-issues instead of creating new ones.
 1. Read the full issue body and understand the complete scope
 2. Break into 2-5 sub-issues, each low or medium complexity
 3. Create sub-issues via `gh issue create` with:
@@ -62,8 +70,10 @@ For each high-complexity issue:
 4. Insert sub-issues at FRONT of queue (context is fresh from reading the parent)
 5. Comment on parent issue: `gh issue comment ${PARENT} --body "Decomposed into #A, #B, #C"`
 6. Parent stays open until all sub-issues merge — do NOT close it
+7. After decomposition, if the total queue exceeds 15, truncate to 15 with a message: "Queue expanded to N issues after decomposition. Processing first 15."
 
 **Skip criteria** — auto-skip these issues (log reason in progress table):
+- Empty issue body or no identifiable acceptance criteria — needs requirements before implementation
 - No code path (manual testing, design docs, decisions needed)
 - Requires user input not present in the description
 - Deployment/release tasks
@@ -81,15 +91,15 @@ For each issue in the work queue:
   TaskCreate: "Issue #N — <title>" with status pending
 ```
 
-Check for any existing `auto/*` branches or open PRs from a previous session:
+Check for any existing session branches or open PRs from a previous session:
 
 ```bash
-# Check for existing auto/ branches with open PRs
+# Check for existing session branches with open PRs
 gh pr list --json number,title,headRefName --limit 50 \
-  | jq '[.[] | select(.headRefName | startswith("auto/"))]'
+  | jq --arg prefix "${BRANCH_PREFIX}" '[.[] | select(.headRefName | startswith($prefix))]'
 
-# Check for local auto/ branches
-git branch --list "auto/*"
+# Check for local session branches
+git branch --list "${BRANCH_PREFIX}*"
 ```
 
 If previous session PRs exist:
@@ -210,9 +220,9 @@ git push -u origin ${BRANCH}
 Before creating the next PR, check if the user has merged any PRs from this session:
 
 ```bash
-# Check which auto/ PRs have been merged since session start
+# Check which session PRs have been merged since session start
 gh pr list --state merged --json number,headRefName,mergedAt --limit 20 \
-  | jq '[.[] | select(.headRefName | startswith("auto/"))]'
+  | jq --arg prefix "${BRANCH_PREFIX}" '[.[] | select(.headRefName | startswith($prefix))]'
 ```
 
 If PRs were merged, update main awareness:
@@ -239,7 +249,7 @@ PR_URL=$(gh pr create \
 - Change 1
 - Change 2
 
-Closes #${ISSUE_NUM}
+Refs #${ISSUE_NUM}
 
 ## Test Plan
 
@@ -267,9 +277,9 @@ Based on the /full-review results, classify the PR:
 
 | Verdict | Meaning | Action |
 |---------|---------|--------|
-| Clean | No critical findings, all comments addressed | Mark issue done, continue |
-| Needs attention | Critical findings or unresolved comments | Flag for user, continue to next issue |
-| Broken | Tests failing after review fixes, or fundamental problems | Flag for user, continue to next issue |
+| Clean | No critical findings, all comments addressed | Edit PR body: `Refs` → `Closes`. Mark issue done, continue |
+| Needs attention | Critical findings or unresolved comments | Keep `Refs` (don't auto-close). Flag for user, continue to next issue |
+| Broken | Tests failing after review fixes, or fundamental problems | Keep `Refs` (don't auto-close). Flag for user, continue to next issue |
 
 **CRITICAL: Never block the session on a flagged PR.** The whole point of autonomous mode is continuous progress. The user addresses flagged PRs during check-ins.
 
@@ -288,8 +298,8 @@ After each issue, output a cumulative progress table. This is what the user sees
 
 | # | Issue | Branch | PR | Review | Status |
 |---|-------|--------|----|--------|--------|
-| 1 | #12 — Add retry logic | auto/12-add-retry | #45 | Approve (0 critical) | Done |
-| 2 | #15 — Fix race condition | auto/15-fix-race | #46 | Request Changes (1 critical) | Needs attention |
+| 1 | #12 — Add retry logic | 12-add-retry | #45 | Approve (0 critical) | Done |
+| 2 | #15 — Fix race condition | 15-fix-race | #46 | Request Changes (1 critical) | Needs attention |
 | 3 | #18 — Add auth tests | — | — | — | In progress |
 | 4 | #22 — Update error handling | — | — | — | Queued |
 ```
@@ -333,7 +343,7 @@ This skill uses **GitHub state** for resume — no local state files.
 
 If a session is interrupted (crash, timeout, user stops it), re-running the skill with the same arguments will:
 
-1. Query GitHub for existing `auto/*` branches and PRs
+1. Query GitHub for existing session branches (matching `BRANCH_PREFIX`) and PRs
 2. Skip issues that already have merged or open PRs
 3. Resume from the first issue without a PR
 
@@ -348,7 +358,7 @@ This means the skill is **idempotent** — safe to re-run without duplicating wo
 5. **Never block on review findings** — Flag and move on. The user handles flagged PRs.
 6. **Progress table after every issue** — The user may check in at any time. The table must be current.
 7. **Respect the hard cap** — Max 15 issues per session. Refuse larger queues.
-8. **Resume from GitHub state** — No local state files. Query `auto/*` branches/PRs to detect prior work.
+8. **Resume from GitHub state** — No local state files. Query branches matching `BRANCH_PREFIX` to detect prior work.
 9. **Clean up on skip** — If an issue is already done (merged PR exists), note it and move on. Don't recreate work.
 10. **Compose existing skills** — /full-review is called as-is (which chains /agent-review → /check-pr). Don't reinvent their logic.
 11. **Decompose, don't skip** — High-complexity issues get broken into sub-issues, not skipped. Only skip truly non-automatable work.
@@ -360,7 +370,9 @@ This means the skill is **idempotent** — safe to re-run without duplicating wo
 Lines and sections marked with `{{CUSTOMIZE}}` need repo-specific adaptation:
 
 - **Default issue label** for work queue (e.g., `ready-to-build`, `ready`, `accepted`)
+- **Branch prefix** for session branches and resume detection (e.g., `auto/` or `feat/`, `fix/`, etc.)
 - **Branch naming convention** (e.g., `auto/<number>-<slug>` vs `feat/<number>-<slug>`)
+- **Decomposition trigger label** (e.g., `complexity:high`)
 - **Test runner command** (e.g., `npm test`, `pytest`, `godot --headless --script`)
 - **Test file conventions** (e.g., `__tests__/*.test.ts`, `*_test.gd`, `*.spec.js`)
 - **Lint/typecheck commands** (e.g., `npm run lint && npm run typecheck`, `mypy .`)
