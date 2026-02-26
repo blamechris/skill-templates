@@ -118,9 +118,13 @@ Process each issue sequentially. For each issue:
 git checkout main
 git pull origin main
 
-# Create branch from issue number + slugified title
+# Generate slug from issue title: lowercase, hyphens, no special chars, max 40 chars
+ISSUE_TITLE=$(gh issue view "${ISSUE_NUM}" --json title -q '.title')
+SLUG=$(printf '%s' "${ISSUE_TITLE}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40)
+
+# Create branch from issue number + slug
 # {{CUSTOMIZE: Branch naming convention — e.g., auto/<number>-<slug> vs feat/<number>-<slug>}}
-BRANCH="auto/${ISSUE_NUM}-${SLUG}"
+BRANCH="${BRANCH_PREFIX}${ISSUE_NUM}-${SLUG}"
 git checkout -b "${BRANCH}"
 ```
 
