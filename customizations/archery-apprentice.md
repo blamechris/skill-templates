@@ -7,6 +7,43 @@
 - **CI:** ktlintCheck + detekt + testDebugUnitTest
 - **Multi-agent:** AAP, AAM, AAA, Agent-D, Orchestrator
 
+## start-working Customizations
+
+### Ready-to-Work Labels
+- No formal `ready-to-build` label — treat unblocked, unassigned issues as ready
+- Issues with acceptance criteria rank higher
+
+### Blocked Labels
+- `blocked`, `wontfix`, `needs-design`
+
+### Roadmap File Locations
+- `TDD_MODUS_OPERANDI.md` (testing methodology doc — may contain planned testing work)
+- Default scan locations (`ROADMAP.md`, `TODO.md`, `docs/`)
+- Multi-agent coordination files on `agent-coordination` branch (informational only)
+
+### Source File Patterns for TODOs
+- `shared/src/**/*.kt`
+- `androidApp/src/**/*.kt`
+- `iosApp/**/*.swift`
+
+### Priority Signals
+- Multi-agent coordination: check `orchestrator-current.md` on `agent-coordination` branch for session context
+- Firebase auth issues → P0 (auth is critical path)
+- Platform parity issues → P1 (features must work on both Android and iOS)
+
+### Dependency Check
+- `./gradlew dependencyUpdates` (if Gradle Versions Plugin is configured)
+- `./gradlew ktlintCheck detekt` for code quality
+
+### Test Runner
+- `./gradlew testDebugUnitTest`
+
+### Audit Focus Areas
+- KMP shared vs platform-specific boundary
+- Compose recomposition performance
+- Firebase auth timing issues
+- Platform parity (Android vs iOS feature coverage)
+
 ## check-pr Customizations
 - Issue labels: match existing label system (needs audit — currently no required labels)
 - Add Copilot polling (Section 0 from generic template)

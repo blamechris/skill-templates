@@ -77,6 +77,39 @@ Mindset: "Will this code work reliably over a cellular connection through a tunn
 - **Domain quality bar:** React Native platform constraints, WebSocket protocol quirks, tunnel reliability patterns qualify as durable insights
 - **Common paths:** `app/**/*.tsx`, `server/**/*.js`
 
+## start-working Customizations
+
+### Ready-to-Work Labels
+- No explicit `ready-to-build` label — treat unblocked, unassigned `enhancement` and `from-review` issues as ready
+- `from-review` issues are higher priority (deferred PR feedback should be addressed promptly)
+
+### Blocked Labels
+- `blocked`, `wontfix`, `needs-design`
+
+### Roadmap File Locations
+- Default scan only (`ROADMAP.md`, `TODO.md`, `docs/`) — no custom planning docs
+
+### Source File Patterns for TODOs
+- Server: `server/**/*.js`
+- App: `app/**/*.tsx`, `app/**/*.ts`
+
+### Priority Signals
+- `from-review` → P1 (deferred review feedback)
+- `bug` → P0
+- No milestones currently in use
+
+### Dependency Check
+- `npm outdated` and `npm audit`
+
+### Test Runner
+- Server: `npm test`
+- App: `npx jest` (TypeScript)
+
+### Audit Focus Areas
+- Mobile connectivity reliability (WebSocket, tunnels)
+- React Native platform-specific edge cases
+- Server event handler cleanup patterns
+
 ## swarm-audit Customizations
 
 ### Domain-Specific Extended Agents

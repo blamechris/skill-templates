@@ -7,6 +7,38 @@
 - **CI:** npm test + npm run typecheck
 - **Status:** Skills already hardened — gold standard reference
 
+## start-working Customizations
+
+### Ready-to-Work Labels
+- `complexity:low` and `complexity:medium` with `testing:low` or `testing:medium` are ready
+- Issues with both complexity and testing labels have been triaged
+
+### Blocked Labels
+- `blocked`, `wontfix`
+
+### Roadmap File Locations
+- Default scan only (`ROADMAP.md`, `TODO.md`, `docs/`)
+
+### Source File Patterns for TODOs
+- `src/**/*.ts`
+
+### Priority Signals
+- `complexity:low` + `testing:low` → quickest wins, prioritize
+- `testing:high` (full GitHub Actions integration testing) → deprioritize (hard to automate)
+- Discord API rate limiting issues → P0
+
+### Dependency Check
+- `npm outdated` and `npm audit`
+
+### Test Runner
+- `npm test` and `npm run typecheck`
+
+### Audit Focus Areas
+- Discord embed limits compliance (title 256, desc 4096, fields 25)
+- GitHub webhook payload handling robustness
+- SQLite concurrency patterns (better-sqlite3)
+- Thread management and stale message handling
+
 ## check-pr Customizations
 - Issue labels: `complexity:low/medium/high`, `testing:low/medium/high`
 - Already has Copilot polling (Section 0)

@@ -57,6 +57,42 @@ Mindset: "Does this maintain game feel while being performant on mobile?"
 - NO CC-BY-NC, CC-BY-SA, or personal-use-only
 - New assets need CREDITS.md entry
 
+## start-working Customizations
+
+### Ready-to-Work Labels
+- `complexity:low` and `complexity:medium` issues with acceptance criteria are ready
+- Issues with `smoke-test:` labels have been triaged and are ready
+
+### Blocked Labels
+- `blocked`, `wontfix`
+- Phase 5 store/deployment tasks — not automatable
+
+### Roadmap File Locations
+- `GDD.md` (Game Design Document — source of truth for planned features and mechanics)
+- Default scan locations (`ROADMAP.md`, `TODO.md`, `docs/`)
+
+### Source File Patterns for TODOs
+- `scripts/**/*.gd`
+- `scenes/**/*.tscn` (less common but possible)
+
+### Priority Signals
+- `complexity:low` → prioritize (quick wins)
+- `complexity:high` → note for decomposition, not direct work
+- GDD sections marked "Planned" or "TODO" indicate upcoming features
+
+### Dependency Check
+- No package manager — Godot addons checked manually
+- GUT test framework updates checked via `addons/gut/`
+
+### Test Runner
+- `timeout 60 godot --headless res://test/test_runner.tscn`
+
+### Audit Focus Areas
+- Game balance and GDD alignment
+- Asset licensing (all assets must be CC0 or permissive)
+- GDScript performance in _process/_physics_process
+- Scene tree organization and signal patterns
+
 ## autonomous-dev-flow Customizations
 
 ### Branch Naming
