@@ -68,6 +68,39 @@
 ### Issue Labels
 - `enhancement`, `from-review` (basic label set)
 
+## start-working Customizations
+
+### Ready-to-Work Labels
+- No explicit `ready-to-build` label — treat unblocked, unassigned `enhancement` and `from-review` issues as ready
+- Small codebase — most issues are directly actionable
+
+### Blocked Labels
+- `blocked`, `wontfix`
+
+### Roadmap File Locations
+- Default scan only (`ROADMAP.md`, `TODO.md`, `docs/`)
+
+### Source File Patterns for TODOs
+- `*.sh` (only 2 main scripts)
+
+### Priority Signals
+- `from-review` → P1
+- `bug` → P0
+- `from-audit` → P2
+
+### Dependency Check
+- No package manager — dependencies are system tools (jq, curl, bash)
+- Check jq version compatibility if relevant
+
+### Test Runner
+- Shell test suite (bash-based)
+
+### Audit Focus Areas
+- Shell safety (quoting, set -euo pipefail, input validation)
+- Discord webhook API compliance and rate limits
+- Hook event handling edge cases (malformed JSON, missing fields)
+- Script execution speed (runs on every hook event)
+
 ## project-audit Customizations
 
 **Issue labels:**
