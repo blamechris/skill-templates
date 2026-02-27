@@ -68,12 +68,12 @@ Mindset: "Does this maintain game feel while being performant on mobile?"
 - Phase 5 store/deployment tasks — not automatable
 
 ### Roadmap File Locations
-- `GDD.md` (Game Design Document — source of truth for planned features and mechanics)
+- `docs/GDD_ORIGINAL.md` (Game Design Document — source of truth for planned features and mechanics)
 - Default scan locations (`ROADMAP.md`, `TODO.md`, `docs/`)
 
 ### Source File Patterns for TODOs
-- `scripts/**/*.gd`
-- `scenes/**/*.tscn` (less common but possible)
+- `src/**/*.gd`
+- `src/**/*.tscn` (less common but possible)
 
 ### Priority Signals
 - `complexity:low` → prioritize (quick wins)
