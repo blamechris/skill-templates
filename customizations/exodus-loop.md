@@ -131,3 +131,35 @@ Mindset: "Does this maintain game feel while being performant on mobile?"
 ### Resume Strategy
 - Branch prefix detection: `feat/`, `fix/`, `test/`, `refactor/` (not `auto/`)
 - Check for PRs referencing issue numbers in title
+
+## fix-ci Customizations
+
+### CI Workflow
+- Name: `CI` (single workflow in `.github/workflows/ci.yml`)
+- Runner: self-hosted (fast, ~2 min)
+- Concurrency: `${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: true`
+
+### Event Mapping
+- `pull_request` → full CI suite (Check Skip, Attribution, Lint, Debug Flags, Validate, Run Tests)
+- `pull_request_review` → `notify` job only (NOT full CI)
+- `workflow_dispatch` → full CI suite
+
+This matters for cancellation diagnosis: when review-agent pushes fix commits, the new `pull_request` event cancels the in-progress run. If the replacement event is `pull_request_review` (only `notify`), the full suite never re-runs.
+
+### Known Failure Patterns
+| Job | Pattern | Outcome | Fix |
+|-----|---------|---------|-----|
+| Run Tests | No output + timeout (>60s) | ESCALATE | Parse error in `test_runner.gd` — needs manual investigation |
+| Run Tests | `N failed` in output | ESCALATE | Actual test failure — report failing test names |
+| Check Debug Flags | Flags enabled | FIX | Set flags to `false` in `src/autoload/debug_config.gd` |
+| Check Attribution | Policy violation | ESCALATE | Can't rewrite pushed history — requires force push or new commits |
+| Lint GDScript | Style errors | ESCALATE | Varied fixes, needs case-by-case review |
+
+### Re-trigger Preference
+1. `gh run rerun <id> --failed` (preferred — fast, targeted, re-runs only failed/cancelled jobs)
+2. Close/reopen PR (fallback if `gh run rerun` doesn't work)
+3. Avoid empty commits (project has strict commit history conventions)
+
+### CI Timeout
+- 3 minutes (self-hosted runner is fast)
+- Use `MAX_WAIT=180` and `INTERVAL=30`
