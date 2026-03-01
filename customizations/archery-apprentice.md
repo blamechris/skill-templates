@@ -90,3 +90,21 @@ Scoring: Code quality (0-2), Architecture (0-2), Testing (0-2), Security (0-2), 
 - Update agent-3-current.md on agent-coordination branch
 - Check orchestrator-current.md for session context
 - Only Orchestrator may modify CLAUDE.md
+
+## fetch-docs Customizations
+
+### Companion Repo
+- **Repo:** `blamechris/archery-apprentice-docs`
+- **Local path:** `~/StudioProjects/archery-apprentice-docs`
+- **Type:** Obsidian vault (markdown notes)
+
+### Key Docs
+| Doc | Path | Description |
+|-----|------|-------------|
+| Architecture | `Architecture/` | KMP module structure, platform boundaries, data flow |
+| Multi-Agent | `Agents/` | Agent coordination protocol, role definitions, session logs |
+| UI/UX | `Design/` | Screen flows, Compose component patterns, accessibility |
+| Session Logs | `Sessions/` | Development session summaries and decisions |
+
+### Search Patterns
+- `*.md` (Obsidian markdown)

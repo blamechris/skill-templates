@@ -163,3 +163,21 @@ This matters for cancellation diagnosis: when review-agent pushes fix commits, t
 ### CI Timeout
 - 3 minutes (self-hosted runner is fast)
 - Use `MAX_WAIT=180` and `INTERVAL=30`
+
+## fetch-docs Customizations
+
+### Companion Repo
+- **Repo:** `blamechris/exodus-loop-docs`
+- **Local path:** `~/Projects/exodus-loop-docs`
+- **Type:** Obsidian vault (markdown notes)
+
+### Key Docs
+| Doc | Path | Description |
+|-----|------|-------------|
+| Game Design Document | `GDD/` | Source of truth for game mechanics, balance, combat system |
+| Architecture Notes | `Architecture/` | System design, scene tree organization, state machines |
+| Art Direction | `Art/` | Visual style guide, asset requirements, palette |
+| Session Logs | `Sessions/` | Development session summaries and decisions |
+
+### Search Patterns
+- `*.md` (Obsidian markdown)
