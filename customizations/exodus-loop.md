@@ -8,9 +8,10 @@
 - **Commercial:** Intended for sale — asset licensing critical
 
 ## Merge Gate
-- **Enabled:** Yes — branch protection requires conversation resolution
-- See `generic/merge-gate.md` for the CLAUDE.md snippet
-- Already added to exodus-loop CLAUDE.md (2026-02-09)
+- **Enabled:** Partial — `required_conversation_resolution` removed (2026-03-01)
+- Branch protection still enforces CI and stale review dismissal
+- Merge gate pattern in CLAUDE.md updated to reflect new behavior
+- See `generic/merge-gate.md` for history
 
 ## check-pr Customizations
 - Issue labels: `complexity:low/medium/high`, `smoke-test:low/medium/high`
@@ -181,3 +182,37 @@ This matters for cancellation diagnosis: when review-agent pushes fix commits, t
 
 ### Search Patterns
 - `*.md` (Obsidian markdown)
+
+## batch-merge Customizations
+
+### Required CI Checks
+- `Run Tests`, `Validate Project` (from branch protection rules)
+
+### Merge Strategy
+- `--squash` (per CLAUDE.md convention)
+
+### CI Timing
+- Self-hosted runner — CI completes in ~90s
+- `MAX_WAIT=180`, `INTERVAL=30`
+
+### Copilot Wait
+- 8 minutes max (matching check-pr timeout)
+- Copilot typically arrives in 3-5 min
+
+### Concurrency
+- CI uses `cancel-in-progress: true` per branch
+- After update-branch, wait for the NEW run (not the cancelled one)
+
+### Stale Reviews
+- `dismiss_stale_reviews: true` — pushing fix commits invalidates Copilot review
+- Must wait for fresh Copilot review cycle after any push
+
+### Branch Protection (as of 2026-03-01)
+- `required_conversation_resolution: false` — removed to enable batch-merge without human thread resolution
+- CI checks still required (`strict: true`)
+- Stale reviews still dismissed on push
+
+### Fix Commits
+- Zero Attribution Policy applies
+- Pre-commit hook validates author
+- Use `from-review` label on any follow-up issues created

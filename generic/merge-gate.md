@@ -50,7 +50,7 @@ When `gh pr merge` fails with "base branch policy prohibits the merge":
 
 | Repo | Branch Protection | Comment Resolution Required |
 |------|------------------|----------------------------|
-| exodus-loop | Yes | Yes |
+| exodus-loop | Yes | No (removed 2026-03-01, replaced by `/batch-merge` quality gate) |
 | chroxy | Yes | Yes |
 | archery-apprentice | Yes | Yes |
 | repo-relay | Yes | Yes |
