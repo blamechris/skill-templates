@@ -131,6 +131,16 @@ check_repo() {
             grep -q "self-referential\|Self-referential" "$local_skill" 2>/dev/null || missing="${missing} self-ref-guard"
         fi
 
+        # tackle-issues patterns
+        if [ "$skill" = "tackle-issues.md" ]; then
+            grep -q "Wave Model\|multi-wave\|wave.*retry" "$local_skill" 2>/dev/null || missing="${missing} wave-model"
+            grep -q "Convergence\|convergence.*check\|zero.*completions" "$local_skill" 2>/dev/null || missing="${missing} convergence-detection"
+            grep -q "Morning Summary\|marathon.*complete\|Session Complete" "$local_skill" 2>/dev/null || missing="${missing} morning-summary"
+            grep -q "Escalat\|alternative.*approach\|Alt.*Strategy" "$local_skill" 2>/dev/null || missing="${missing} strategy-escalation"
+            grep -q "Replenish\|replenish.*queue\|Queue Replenishment" "$local_skill" 2>/dev/null || missing="${missing} queue-replenishment"
+            grep -q "batch-merge\|merge:true" "$local_skill" 2>/dev/null || missing="${missing} batch-merge-option"
+        fi
+
         # Check version stamp against current template hash
         local deployed_hash current_hash version_info=""
         deployed_hash=$(grep -o 'skill-templates: [^ ]* [a-f0-9]*' "$local_skill" 2>/dev/null | awk '{print $3}' || true)

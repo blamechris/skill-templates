@@ -133,6 +133,17 @@ Mindset: "Does this maintain game feel while being performant on mobile?"
 - Branch prefix detection: `feat/`, `fix/`, `test/`, `refactor/` (not `auto/`)
 - Check for PRs referencing issue numbers in title
 
+## tackle-issues Customizations
+
+Shares all customization points with `autonomous-dev-flow` above (branch naming, test runner, decomposition, skip labels, PR test plan, commit scopes, pre-skill checkpoint, resume strategy).
+
+### Additional Marathon-Specific Settings
+- **Default max:** 15 (exodus-loop issues tend to be interconnected — smaller batches reduce cross-issue conflicts)
+- **Default waves:** 3
+- **merge:true safe:** Yes — CI is fast (self-hosted, ~90s) and branch protection handles safety
+- **Wave 2 focus:** Re-read GDD for context on retry — game mechanics issues often fail because the first approach misses a GDD constraint
+- **Wave 3 simplification:** For game mechanics issues, prefer implementing the "minimum playable version" over full spec — create follow-up issues for polish/edge cases
+
 ## fix-ci Customizations
 
 ### CI Workflow
