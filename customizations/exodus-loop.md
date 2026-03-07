@@ -144,6 +144,14 @@ Shares all customization points with `autonomous-dev-flow` above (branch naming,
 - **Wave 2 focus:** Re-read GDD for context on retry — game mechanics issues often fail because the first approach misses a GDD constraint
 - **Wave 3 simplification:** For game mechanics issues, prefer implementing the "minimum playable version" over full spec — create follow-up issues for polish/edge cases
 
+## parallel-dev Customizations
+
+Shares all customization points with `autonomous-dev-flow` above (branch naming, test runner, decomposition threshold, skip labels, PR test plan, commit scopes, pre-skill checkpoint, resume strategy).
+
+### Parallel-Specific Settings
+- **Default concurrency:** 3
+- **Dependency setup in worktree:** None (Godot project — no package manager install step)
+
 ## fix-ci Customizations
 
 ### CI Workflow

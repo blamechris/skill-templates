@@ -110,6 +110,14 @@ Mindset: "Will this code work reliably over a cellular connection through a tunn
 - React Native platform-specific edge cases
 - Server event handler cleanup patterns
 
+## parallel-dev Customizations
+
+Shares all customization points with autonomous-dev-flow (when those sections are added to this file: branch prefix, test runners, lint/typecheck, decomposition trigger, commit scopes, PR test plan).
+
+### Parallel-Specific Settings
+- **Default concurrency:** 3
+- **Dependency setup in worktree:** `npm install` (monorepo — each worktree needs its own node_modules)
+
 ## swarm-audit Customizations
 
 ### Domain-Specific Extended Agents

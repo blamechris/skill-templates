@@ -91,6 +91,14 @@ Scoring: Code quality (0-2), Architecture (0-2), Testing (0-2), Security (0-2), 
 - Check orchestrator-current.md for session context
 - Only Orchestrator may modify CLAUDE.md
 
+## parallel-dev Customizations
+
+Shares all customization points with autonomous-dev-flow (uses autonomous-dev-flow/tackle-issues customizations from start-working and agent-review sections: test runner, commit scopes, platform parity, multi-agent coordination).
+
+### Parallel-Specific Settings
+- **Default concurrency:** 2 (Gradle builds are heavy — limit resource usage)
+- **Dependency setup in worktree:** `./gradlew assemble` (downloads dependencies and compiles shared module)
+
 ## fetch-docs Customizations
 
 ### Companion Repo
