@@ -101,6 +101,14 @@
 - Hook event handling edge cases (malformed JSON, missing fields)
 - Script execution speed (runs on every hook event)
 
+## parallel-dev Customizations
+
+Shares all customization points with autonomous-dev-flow (branch prefix, test runner, commit scopes from agent-review/start-working sections).
+
+### Parallel-Specific Settings
+- **Default concurrency:** 3
+- **Dependency setup in worktree:** None (Bash project — no package manager install step)
+
 ## project-audit Customizations
 
 **Issue labels:**

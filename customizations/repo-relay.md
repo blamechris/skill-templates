@@ -52,6 +52,14 @@
 - **Domain quality bar:** Discord API limits, GitHub webhook payload quirks, SQLite concurrency patterns qualify as durable insights
 - **Common paths:** `src/**/*.ts`
 
+## parallel-dev Customizations
+
+Shares all customization points with autonomous-dev-flow (branch prefix, test runner, decomposition, commit scopes from agent-review/start-working sections).
+
+### Parallel-Specific Settings
+- **Default concurrency:** 3
+- **Dependency setup in worktree:** `npm install`
+
 ## agent-review Customizations
 
 ### Persona

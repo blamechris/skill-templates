@@ -48,8 +48,8 @@ skill-templates/
 
 | Repo | Tech Stack | Skills |
 |------|-----------|--------|
-| chroxy | Node.js + React Native/Expo | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, commit, qa-update |
-| exodus-loop | Godot 4.5, GDScript | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, commit, tdd-feature, qa-update |
-| archery-apprentice | Kotlin/KMP, Android/iOS | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, consolidate-dependabot, qa-update |
-| repo-relay | Node.js, TypeScript, discord.js | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working |
-| claude-code-notify | Bash, jq, curl, Discord webhooks | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, project-audit, learn, start-working |
+| chroxy | Node.js + React Native/Expo | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, commit, qa-update, parallel-dev |
+| exodus-loop | Godot 4.5, GDScript | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, commit, tdd-feature, qa-update, parallel-dev |
+| archery-apprentice | Kotlin/KMP, Android/iOS | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, consolidate-dependabot, qa-update, parallel-dev |
+| repo-relay | Node.js, TypeScript, discord.js | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, parallel-dev |
+| claude-code-notify | Bash, jq, curl, Discord webhooks | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, project-audit, learn, start-working, parallel-dev |
