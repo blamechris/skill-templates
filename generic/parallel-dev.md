@@ -43,6 +43,8 @@ Apply sort order and cap to `max` (hard cap 10 — parallel sessions should be f
 
 **Validate the queue before starting:**
 - At least 1 issue must be open, unassigned, and without an existing PR
+- If all matching issues are assigned, report "All N matching issues are assigned — nothing to process" and stop
+- If 0 issues match, report and stop — don't start an empty session
 - Show the user the queue and get confirmation
 
 ```markdown
@@ -80,8 +82,9 @@ For each high-complexity issue:
 1. Read the full issue body: `gh issue view ${ISSUE_NUM} --json body,comments -q .`
 2. Break into 2-5 sub-issues, each independently implementable
 3. Create sub-issues via `gh issue create` (same format as autonomous-dev-flow)
-4. Insert sub-issues into queue, remove parent
+4. Insert sub-issues at FRONT of queue (context is fresh from reading the parent)
 5. Comment on parent: "Decomposed into #A, #B, #C — each independently implementable with TDD."
+6. Parent stays open until all sub-issues merge — do NOT close it
 
 After decomposition, if total queue exceeds 10, truncate to 10.
 
@@ -105,12 +108,10 @@ git checkout main
 git pull origin main
 ```
 
-3. **Fetch each issue's full details:**
+3. **Fetch each issue's full details** — for each issue in the queue:
 
 ```bash
-for ISSUE_NUM in ${QUEUE[@]}; do
-  gh issue view ${ISSUE_NUM} --json title,body,labels,comments
-done
+gh issue view ${ISSUE_NUM} --json title,body,labels,comments
 ```
 
 4. **Build a self-contained prompt for each agent** using the Agent Prompt Template below. Each prompt must include everything the agent needs — it cannot access the coordinator's memory or other agents' state.
@@ -173,6 +174,8 @@ If more than half the agents failed, output a recommendation:
 ```
 
 ### Phase 4: Sequential Review Pipeline
+
+**Note:** Smoke tests (autonomous-dev-flow Phase 4.5) are NOT run during the parallel implementation phase. If a PR touches UI files, the reviewer should run smoke tests during /full-review. This avoids the complexity of running smoke tests across multiple worktrees and keeps the parallel phase focused on implementation.
 
 For each successfully created PR (one at a time, sequentially):
 
@@ -245,12 +248,12 @@ Each agent receives a fully self-contained prompt. The coordinator builds this b
 You are an autonomous implementation agent working in an isolated worktree.
 
 ## Your Assignment
-- **Issue:** #{ISSUE_NUM} — {ISSUE_TITLE}
-- **Repository:** {REPO}
+- **Issue:** #<issue_number> — <issue_title>
+- **Repository:** <repo>
 
 ## Issue Details
 
-{ISSUE_BODY}
+<full issue body from gh issue view>
 
 ## Setup
 
@@ -260,16 +263,17 @@ Install dependencies in this worktree:
 
 ## Project Conventions
 
-{CLAUDE_MD_CONTENT}
+<CLAUDE.md content embedded here by coordinator>
 
 ## Implementation (TDD)
 
 ### Create Branch
 
-ISSUE_TITLE="{ISSUE_TITLE}"
-SLUG=$(printf '%s' "${ISSUE_TITLE}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40)
+Generate a branch name from the issue title:
+
+SLUG=$(printf '%s' "<issue title>" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40)
 # {{CUSTOMIZE: Branch naming convention — e.g., auto/<number>-<slug> vs feat/<number>-<slug>}}
-BRANCH="{BRANCH_PREFIX}{ISSUE_NUM}-${SLUG}"
+BRANCH="<branch_prefix><issue_number>-${SLUG}"
 git checkout -b "${BRANCH}"
 
 ### RED — Write Failing Tests
@@ -302,7 +306,7 @@ type(scope): description
 
 Implements the core change.
 
-Refs #{ISSUE_NUM}
+Refs #<issue_number>
 EOF
 )"
 
@@ -313,14 +317,14 @@ Infer type from issue labels: bug→fix, enhancement→feat, test→test, refact
 git push -u origin ${BRANCH}
 
 PR_URL=$(gh pr create \
-  --title "{PR_TYPE}: {ISSUE_TITLE} (#{ISSUE_NUM})" \
+  --title "<type>: <issue title> (#<issue_number>)" \
   --body "$(cat <<'EOF'
 ## Summary
 
 - Change 1
 - Change 2
 
-Refs #{ISSUE_NUM}
+Refs #<issue_number>
 
 ## Test Plan
 
@@ -345,18 +349,18 @@ EOF
 When complete, output your result clearly:
 
 RESULT: implemented
-ISSUE: {ISSUE_NUM}
-BRANCH: {branch_name}
-PR: {pr_number}
-PR_URL: {pr_url}
-FILES_CHANGED: {count}
-TESTS_ADDED: {count}
+ISSUE: <issue_number>
+BRANCH: <branch_name>
+PR: <pr_number>
+PR_URL: <pr_url>
+FILES_CHANGED: <count>
+TESTS_ADDED: <count>
 
 Or if failed:
 
 RESULT: failed
-ISSUE: {ISSUE_NUM}
-REASON: {why it failed}
+ISSUE: <issue_number>
+REASON: <why it failed>
 ```
 
 ## Resume Strategy
