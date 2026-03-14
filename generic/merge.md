@@ -111,42 +111,33 @@ Run `/batch-merge ${PR_NUMS}` — it handles sequential merge with update-branch
 
 ### Phase 2b: Version Verification
 
-{{CUSTOMIZE: Version verification — adapt to your repo's version bump mechanism.
-Some repos use auto-version CI workflows that bump on every merge to main.
-Some use manual version bumps. Some don't version at all.
-If your repo has no auto-version, delete this entire phase.}}
+{{CUSTOMIZE: Version bump mechanism — adapt to your repo's versioning approach.
+Options: manual bump script, auto-version CI workflow, tag-based, or no versioning.
+If your repo has no versioning, delete this entire phase.}}
 
-After merging, wait for the post-merge CI workflow that bumps versions:
+After merging, ask the user if they want to bump the version:
 
-```bash
-# Wait 15s for the workflow to trigger
-sleep 15
-
-# {{CUSTOMIZE: Auto-version workflow filename}}
-WORKFLOW="auto-version.yml"
-
-# Poll for completion (every 15s, max 3 min)
-for i in $(seq 1 12); do
-  STATUS=$(gh run list --workflow "$WORKFLOW" --branch main --limit 1 --json status,conclusion,headSha --jq '.[0]')
-  CONCLUSION=$(echo "$STATUS" | jq -r '.conclusion // empty')
-  if [ "$CONCLUSION" = "success" ]; then
-    break
-  fi
-  sleep 15
-done
+```
+Current version: vX.Y.Z
+Bump version? (patch → vX.Y.(Z+1), or skip)
 ```
 
-Once complete, fetch the new version:
+If yes:
 
 ```bash
-# {{CUSTOMIZE: Path to version source of truth and how to extract version}}
-NEW_VERSION=$(gh api repos/${REPO}/contents/packages/server/package.json --jq '.content' | base64 -d | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version")
-echo "Version bumped to: v${NEW_VERSION}"
+# {{CUSTOMIZE: Version bump command and files to commit}}
+bash scripts/bump-version.sh
+git checkout -b chore/bump-version main
+git add [version files]
+NEXT=[read new version]
+git commit -m "chore: bump version to v${NEXT}"
+git push -u origin chore/bump-version
+gh pr create --title "chore: bump version to v${NEXT}" --body "Patch version bump."
 ```
 
-Report the version change. If the workflow doesn't complete in 3 min, warn and continue — never block post-merge actions on version verification.
+Merge after CI passes (version-only change, review gate exception).
 
-If `--skip-version-check` is set, skip this phase entirely.
+If `--skip-version-check` is set, skip this phase.
 
 ### Phase 3: Post-Merge Actions
 
