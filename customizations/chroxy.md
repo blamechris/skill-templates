@@ -202,6 +202,40 @@ Shares all customization points with `autonomous-dev-flow` above (branch prefix,
 - **Default concurrency:** 3
 - **Dependency setup in worktree:** `npm install` (monorepo — each worktree needs its own node_modules)
 
+## merge Customizations
+
+### Merge Strategy
+- Always `--squash --delete-branch`
+
+### Auto-Version
+- Workflow: `.github/workflows/auto-version.yml`
+- Bumps patch version on every merge to main (skips commits starting with `chore: bump version`)
+- Version source of truth: `packages/server/package.json`
+- Version synced across 6 files by `scripts/bump-version.sh`: server, app, desktop, root package.json + tauri.conf.json + Cargo.toml
+
+### Post-Merge: Tauri Desktop Rebuild
+- **Build order:** dashboard → bundle-server.sh → cargo build → cargo tauri bundle → ad-hoc codesign → install to /Applications
+- **TAURI_ENV_PLATFORM=darwin required** — without it, Vite uses `/dashboard/` base path → white screen in Tauri webview
+- **touch src-tauri/src/lib.rs** before cargo build — forces binary relink to pick up new resources
+- **rm -rf target/release/bundle** before cargo tauri bundle — clears aggressively cached bundles
+- **Ad-hoc signing:** `codesign --force --deep --sign -` (no Apple signing identity on dev machine)
+- **Node 22 required** for all npm commands: `PATH="/opt/homebrew/opt/node@22/bin:$PATH"`
+- **Full PATH required** for npm to find `sh`: include `/usr/bin:/bin:/usr/sbin:/sbin`
+- **Verify after install:** `grep 'src=' .../dist/index.html` must show `/assets/` not `/dashboard/assets/`
+
+### Skip Logic
+- **Skip rebuild** when merged PRs only touch: `docs/`, `.github/`, `packages/app/`, `scripts/`, `*.md`
+- **Always rebuild** when touching: `packages/server/`, `packages/desktop/`, `packages/protocol/`, `dashboard-next/`
+
+### Flags
+- Skip flag: `--no-build`
+- Post-merge only flag: `--build-only`
+
+### Lessons Learned
+- **2026-03-14:** Dashboard built without `TAURI_ENV_PLATFORM` → white screen. Root cause: Vite config checks `process.env.TAURI_ENV_PLATFORM` to set base path (`/` for Tauri, `/dashboard/` for web). The `beforeBuildCommand` in `tauri.conf.json` sets it, but manual builds from CLI don't. Fix: always set `TAURI_ENV_PLATFORM=darwin` explicitly.
+- **2026-03-14:** Installed .app had stale dashboard even after rebuild. Root cause: `cargo tauri bundle` skips re-bundling when binary hasn't changed. Fix: `touch src-tauri/src/lib.rs` forces relink, `rm -rf target/release/bundle` clears cached bundles.
+- **2026-03-14:** `npm run dashboard:build` failed with `ENOENT spawn sh`. Root cause: sandbox PATH didn't include `/usr/bin:/bin`. Fix: use full PATH in all npm commands.
+
 ## swarm-audit Customizations
 
 ### Domain-Specific Extended Agents
