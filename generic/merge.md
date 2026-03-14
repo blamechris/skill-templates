@@ -13,6 +13,21 @@ Merge PRs, verify post-merge version bump, and run post-merge actions (build, de
 
 ## Instructions
 
+### Phase 0: Mandatory Review Gate
+
+**CRITICAL: Every PR MUST be reviewed before merging. No exceptions for "obvious" fixes.**
+
+For each PR to be merged, check if `/full-review` has already been run:
+
+```bash
+# Check for existing review comments (agent-review posts a structured review)
+gh api repos/${REPO}/issues/${PR_NUM}/comments --jq '[.[] | select(.body | test("Code Review|Review Comments Addressed"))] | length'
+```
+
+If no review exists, run `/full-review ${PR_NUM}` **before proceeding to merge**. For multiple PRs, run reviews in parallel (background agents), then merge sequentially after all reviews complete.
+
+{{CUSTOMIZE: Review skip exceptions — e.g., "Pure documentation/skill file changes (.md files) with zero code changes may skip review." Adjust based on your repo's review requirements.}}
+
 ### Phase 1: Pre-Merge Preparation
 
 ```bash
@@ -200,8 +215,9 @@ _Replace with your repo's post-merge workflow._
 
 ## Critical Rules
 
-1. **For 3+ PRs, delegate to /batch-merge** — don't reinvent sequential merge logic
-2. **Version verification is informational** — never block post-merge actions on it
+1. **NEVER merge without /full-review** — every PR must be reviewed before merging. This is a hard gate. Run Phase 0 first.
+2. **For 3+ PRs, delegate to /batch-merge** — don't reinvent sequential merge logic
+3. **Version verification is informational** — never block post-merge actions on it
 3. **GraphQL resolveReviewThread must use Python** — bash corrupts Base64 thread IDs
 4. **Never use --admin** — respect branch protections
 5. **Idempotent** — safe to re-run; already-merged PRs detected and skipped
@@ -219,4 +235,5 @@ _Replace with your repo's post-merge workflow._
 | Post-merge only flag | `--build-only` | Flag name to run post-merge only (skip merging) |
 | Post-merge actions | _(none)_ | Build, deploy, or other post-merge steps |
 | Skip logic | _(none)_ | File paths that trigger/skip post-merge actions |
+| Review skip exceptions | Pure `.md` doc/skill files | File patterns that may skip `/full-review` |
 | Repo-specific rules | _(none)_ | Additional critical rules |

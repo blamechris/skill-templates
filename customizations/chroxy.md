@@ -204,6 +204,11 @@ Shares all customization points with `autonomous-dev-flow` above (branch prefix,
 
 ## merge Customizations
 
+### Review Gate
+- /full-review is MANDATORY before every merge — hard gate, no exceptions for "obvious" fixes
+- Review skip exception: pure .md skill/doc files with zero code changes
+- Lesson (2026-03-14): Skipped review on PRs #2248, #2251 during fast iteration — user caught it and mandated the gate
+
 ### Merge Strategy
 - Always `--squash --delete-branch`
 
