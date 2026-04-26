@@ -44,6 +44,10 @@ skill-templates/
 - Commit format: `type(scope): description`
 - Types: feat, fix, refactor, docs, chore
 
+## Repo Memory MCP
+
+The `repo-memory` MCP is available. Prefer `get_file_summary` over `Read` when exploring code you won't edit — it returns cached summaries and saves tokens. Also available: `get_project_map`, `get_related_files`, `search_by_purpose`. Use `Read` when you need exact lines or plan to edit. When launching subagents, tell them repo-memory tools are available.
+
 ## Managed Repos
 
 | Repo | Tech Stack | Skills |

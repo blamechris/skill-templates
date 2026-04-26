@@ -29,7 +29,7 @@ FILTER_REPO=""
 FILTER_SKILL=""
 CHANGED_TEMPLATES=false
 CHANGED_CUSTOMS=false
-API_MODEL="claude-sonnet-4-20250514"
+API_MODEL="claude-haiku-4-5-20251001"
 BRANCH_DATE=$(date '+%Y-%m-%d')
 BRANCH_NAME="skill-deploy/${BRANCH_DATE}"
 
