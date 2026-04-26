@@ -18,7 +18,7 @@ skill-templates/
 
 **Configuration:** `deploy.conf` is the single source of truth for which repos get which skills. Both `sync.sh` and `deploy.sh` read from it. Format: `REPO|GITHUB_SLUG|LOCAL_PATH_SUFFIX|SKILL1,SKILL2,...`
 
-**Deployment:** `deploy.sh` calls the Claude API (Sonnet, temperature 0) to customize generic templates using per-repo customization notes. It replaces `{{CUSTOMIZE: ...}}` markers with repo-specific content.
+**Deployment:** `deploy.sh` calls the Claude API (Haiku 4.5, temperature 0) to customize generic templates using per-repo customization notes. It replaces `{{CUSTOMIZE: ...}}` markers with repo-specific content.
 - **Local mode:** `./deploy.sh --local --repo chroxy --skill agent-review` — writes directly to local repo clone
 - **CI mode:** Triggered by GitHub Actions on push to main when `generic/`, `customizations/`, or `deploy.conf` change. Clones target repos, creates PRs with customized skills.
 - **Drift check:** `./sync.sh [repo]` — compares deployed skills against templates using pattern checks
@@ -43,6 +43,10 @@ skill-templates/
 - Direct commits OK for template refinements
 - Commit format: `type(scope): description`
 - Types: feat, fix, refactor, docs, chore
+
+## Repo Memory MCP
+
+The `repo-memory` MCP is available. Prefer `get_file_summary` over `Read` when exploring code you won't edit — it returns cached summaries and saves tokens. Also available: `get_project_map`, `get_related_files`, `search_by_purpose`. Use `Read` when you need exact lines or plan to edit. When launching subagents, tell them repo-memory tools are available.
 
 ## Managed Repos
 
