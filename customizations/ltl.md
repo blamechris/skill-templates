@@ -1,25 +1,25 @@
 # LTL Skill Customizations
 
 ## Project Context
-- **Tech:** React Native + Expo (SDK 52+, TypeScript strict), Supabase (Postgres, Auth, Storage, Realtime, Edge Functions), expo-sqlite + SQLCipher for offline, Zustand + TanStack Query, NativeWind, RevenueCat for billing, Sentry, self-hosted PostHog
+- **Tech:** React Native + Expo (SDK 54+, TypeScript strict), Supabase (Postgres, Auth, Storage, Realtime, Edge Functions), `@op-engineering/op-sqlite` + SQLCipher for at-rest encryption (migrated from expo-sqlite per PR #123/#197), Zustand + TanStack Query, NativeWind. Future: RevenueCat for billing, Sentry, self-hosted PostHog.
 - **Repo:** blamechris/ltl
 - **Main branch:** main
-- **CI:** None yet (Phase 0). Planned: GitHub Actions for lint + type-check + test on PR once Phase 1 scaffolding lands.
+- **CI:** GitHub Actions — `.github/workflows/ci.yml` runs the required "Typecheck + Lint" check on every PR (matches branch-protection rule exactly); `.github/workflows/supabase-tests.yml` runs pgTAP against migrations on DB-relevant PRs (not yet required, see #134).
 - **Authoritative spec:** `docs/LTL_Design_Document.md` — source of truth for product, data model, death transition, permissions, pricing, and roadmap. Open questions live in §14.
 
 ## Zero Attribution Policy
 **Critical:** Never add `Co-Authored-By: Claude`, "Generated with Claude Code", or any AI attribution in commits, PRs, issues, or file contents. The user is sole author.
 
 ## Merge Gate
-- **Enabled:** Not yet. Phase 0 is solo; merge gate to be reconsidered in Phase 1 when code lands.
-- Exception (once enabled): pure `.md` skill/doc files with zero code changes can skip review.
+- **Enabled:** Yes — `/full-review` is MANDATORY before every merge (no shortcuts, no XS exceptions). Documented in user's auto-memory.
+- Exception: pure `.md` skill/doc files with zero code changes can skip review.
 
 ## Branch Protection
 - `main` is protected: PR required, conversation resolution required, no force pushes, no deletions.
-- No required status checks until CI exists (Phase 1).
+- Required status check: "Typecheck + Lint" (the exact name is pinned by branch protection — renaming the CI job breaks merge even when CI passes).
 
 ## check-pr Customizations
-- Copilot polling NOT needed — no Copilot review configured.
+- Copilot review IS active — keep the Step 0 polling loop. Do not assume Copilot is absent.
 - Issue labels: `enhancement`, `bug`, `from-review`, `design`, `data-model`, `death-transition`, `privacy`, `ui`, `prompts`, `memorial`, `offline-sync`.
 - Code style: TypeScript strict, functional components with hooks only, ESM, no `any` in new code.
 - Evidence pattern: "per CLAUDE.md: TypeScript strict, functional components only, no `any`" and "per design doc §N: …"
@@ -67,10 +67,10 @@ Mindset: *"Does this code respect the grieving user? Is the deceased's authored 
 - Warm dark theme as default (design doc §10.1)
 - Touch targets min 48dp
 - Offline behavior tested with airplane mode on every flow
-- Expo config: SDK 52+, dev build expected (not Expo Go)
+- Expo config: SDK 54+, dev build expected (not Expo Go) — `@op-engineering/op-sqlite` is a third-party native module that won't load in Expo Go.
 
 ## create-pr Customizations
-- Test plan should include (once CI/tests exist): `npx tsc --noEmit` passes, `npx vitest run` passes, manual offline test (airplane mode), dark theme check, 48dp tap targets
+- Test plan should include: `npm run typecheck` passes, `npm run lint` passes, `npm run format:check` passes (all three are local mirrors of CI's "Typecheck + Lint" job), `npm test -w @ltl/mobile` for jest suites, manual offline test (airplane mode) when DB/sync touched, dark theme check, 48dp tap targets.
 - Issue labels to scan: `from-review`, `enhancement`, `bug`
 - Branch naming: `feat/`, `fix/`, `refactor/`, `docs/`, `chore/` prefixes
 
@@ -89,31 +89,33 @@ Mindset: *"Does this code respect the grieving user? Is the deceased's authored 
 - Blocked labels: `blocked`, `needs-design`
 - Roadmap: `docs/LTL_Design_Document.md` §13 (phased roadmap) and §14 (open questions)
 - Source file patterns: `*.ts`, `*.tsx`, `*.sql`
-- Test runner (Phase 1+): `npx vitest run`
-- Type check: `npx tsc --noEmit`
+- Test runner: `npm test -w @ltl/mobile` (jest 29 + jest-expo). Tests live under `apps/mobile/lib/**/__tests__/*.test.ts`.
+- Type check: `npm run typecheck` (runs `tsc --noEmit` across all four workspaces).
 
 ## autonomous-dev-flow Customizations
-- Test command (Phase 1+): `npx vitest run`
-- Type check: `npx tsc --noEmit`
+- Test command: `npm test -w @ltl/mobile` (jest). Filter to one suite via `npx jest <path-pattern>` from `apps/mobile/`.
+- Type check: `npm run typecheck` (root) — runs `tsc --noEmit` across `@ltl/mobile`, `@ltl/shared`, `@ltl/ui`, `@ltl/prompts`.
+- Lint + format: `npm run lint` (eslint 9 flat config at root) and `npm run format:check` (prettier).
 - Source directories: `apps/mobile/`, `packages/`, `supabase/`
 - Test pattern: `**/*.test.ts`, `**/*.test.tsx`
-- Phase 0: no automated tests yet; rely on design-doc alignment + manual review
+- pgTAP DB tests: `supabase test db` against the local stack (run when migrations or RLS change).
 
 ## tackle-issues Customizations
 - Max concurrent: 1 (solo-dev phase; test on device)
 - Priority labels: `death-transition` > `privacy` > `bug` > `from-review` > `enhancement`
-- Test gate (Phase 1+): `npx vitest run && npx tsc --noEmit`
+- Test gate: `npm test -w @ltl/mobile && npm run typecheck && npm run lint`. Add `supabase test db` when migrations are touched.
 
 ## full-review Customizations
-- Composes agent-review (LTL Inspector persona) + check-pr sequentially
-- No Copilot delay concern (not configured)
+- Composes agent-review (LTL Inspector persona) + check-pr sequentially.
+- Copilot review IS active here — keep the check-pr Step 0 polling loop. Agent-review's ~minute-or-two run naturally fills most of the Copilot delay.
 
 ## parallel-dev Customizations
 - Worktree-based isolation works well for this repo
 - Each worktree needs its own `node_modules` (`npm install` in worktree) once scaffolded
 
 ## smoke-test Customizations
-- Check (Phase 1+): `npx tsc --noEmit` (type check)
-- Check (Phase 1+): `npx vitest run` (unit tests)
+- Check: `npm run typecheck` (type check across all workspaces)
+- Check: `npm test -w @ltl/mobile` (jest unit suites)
+- Check: `npm run lint && npm run format:check`
 - Check: design-doc alignment (any drift from `docs/LTL_Design_Document.md`?)
-- Check: Supabase migrations apply cleanly against a fresh DB (Phase 1+)
+- Check: Supabase migrations apply cleanly against a fresh DB — `supabase db reset` then `supabase test db`.
