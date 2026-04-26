@@ -301,7 +301,9 @@ If `REPLIED_COUNT < ROOT_COUNT`, you have UNREPLIED comments. Go back to step 3 
 
 ### 6b. Resolve Conversation Threads
 
-**This step is MANDATORY whenever branch protection requires conversation resolution before merge.** Posting an inline reply does NOT auto-resolve the thread on GitHub — the REST `/replies` endpoint only adds a comment, leaving the thread state as `isResolved: false`. If you skip this step, the PR sits blocked at merge time even when every comment has a reply, every check is green, and the summary comment claims success. The user has to click "Resolve conversation" three times to unblock you. Don't make them.
+**This step is MANDATORY whenever branch protection requires conversation resolution before merge.** Posting an inline reply does NOT auto-resolve the thread on GitHub — the REST `/replies` endpoint only adds a comment, leaving the thread state as `isResolved: false`. If you skip this step, the PR sits blocked at merge time even when every comment has a reply, every check is green, and the summary comment claims success. The user has to click "Resolve conversation" once per unresolved thread to unblock the merge. Don't make them.
+
+GraphQL is required here — REST doesn't expose thread state. Threads are GraphQL-only objects (`PRRT_*` IDs); the `resolveReviewThread` mutation needs the GraphQL node ID, not the REST `databaseId`.
 
 ```bash
 # Fetch all review threads (GraphQL — REST API doesn't expose thread state)
@@ -316,14 +318,16 @@ THREADS=$(gh api graphql -f query="
     }
   }" --jq '.data.repository.pullRequest.reviewThreads.nodes')
 
-# Resolve each unresolved thread
+# Resolve each unresolved thread; surface any single-thread failure
+# instead of swallowing it (a 401/403 on one thread shouldn't be silent).
 echo "$THREADS" | jq -r '.[] | select(.isResolved == false) | .id' | while read -r tid; do
   gh api graphql -f query="
     mutation {
       resolveReviewThread(input: {threadId: \"$tid\"}) {
         thread { isResolved }
       }
-    }" --jq '.data.resolveReviewThread.thread | "  resolved: \(.isResolved)"'
+    }" --jq '.data.resolveReviewThread.thread | "  resolved: \(.isResolved)"' \
+    || echo "  FAILED to resolve: $tid"
 done
 
 # Verify zero unresolved threads remain
