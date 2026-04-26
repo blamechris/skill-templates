@@ -9,7 +9,7 @@
 ## check-pr Customizations
 - Copilot review IS active — keep the Step 0 polling loop. Verified via `gh api repos/blamechris/medlens/pulls/<n>/reviews` showing copilot-pull-request-reviewer[bot] on recent PRs.
 - Issue labels: `enhancement`, `bug`, `from-review`, `export`, `ocr`, `ui`, `privacy`, `db`, `camera`, `trends`
-- Code style: TypeScript strict, no semicolons exceptions, double quotes
+- Code style: TypeScript strict, semicolons, single quotes (verified against `app/_layout.tsx` and friends).
 - Evidence pattern: "per CLAUDE.md: TypeScript strict, functional components only"
 - Branch protection: not configured yet — no merge gate needed
 

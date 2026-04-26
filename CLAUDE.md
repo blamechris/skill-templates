@@ -18,7 +18,7 @@ skill-templates/
 
 **Configuration:** `deploy.conf` is the single source of truth for which repos get which skills. Both `sync.sh` and `deploy.sh` read from it. Format: `REPO|GITHUB_SLUG|LOCAL_PATH_SUFFIX|SKILL1,SKILL2,...`
 
-**Deployment:** `deploy.sh` calls the Claude API (Sonnet, temperature 0) to customize generic templates using per-repo customization notes. It replaces `{{CUSTOMIZE: ...}}` markers with repo-specific content.
+**Deployment:** `deploy.sh` calls the Claude API (Haiku 4.5, temperature 0) to customize generic templates using per-repo customization notes. It replaces `{{CUSTOMIZE: ...}}` markers with repo-specific content.
 - **Local mode:** `./deploy.sh --local --repo chroxy --skill agent-review` — writes directly to local repo clone
 - **CI mode:** Triggered by GitHub Actions on push to main when `generic/`, `customizations/`, or `deploy.conf` change. Clones target repos, creates PRs with customized skills.
 - **Drift check:** `./sync.sh [repo]` — compares deployed skills against templates using pattern checks
