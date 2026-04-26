@@ -11,7 +11,7 @@
 - Exception: pure `.md` skill/doc files with zero code changes can skip review
 
 ## check-pr Customizations
-- Copilot polling NOT needed — no Copilot review configured
+- Copilot review IS active — keep the Step 0 polling loop. Verified via `gh api repos/blamechris/carebridge/pulls/<n>/reviews` showing copilot-pull-request-reviewer[bot] on recent PRs.
 - Issue labels: `enhancement`, `bug`, `from-review`
 - Code style: TypeScript strict, ESM with `.js` extensions in imports, functional style, no classes
 - Evidence pattern: "per CLAUDE.md: TypeScript strict, ESM, functional style"
@@ -58,7 +58,7 @@ Mindset: "Is this type-safe end-to-end? Does it handle clinical data correctly, 
 
 ## full-review Customizations
 - Composes agent-review (CareBridge Inspector persona) + check-pr sequentially
-- No Copilot delay concern (not configured)
+- Copilot review IS active — agent-review's run naturally fills most of the ~4-min Copilot review delay so check-pr starts with comments waiting.
 - Combined summary table is primary output
 
 ## create-pr Customizations
