@@ -455,16 +455,38 @@ ci_setup_repo() {
 
     echo "    📥 Cloning $slug..."
     rm -rf "$clone_dir"
-    git clone --depth 1 "https://x-access-token:${DEPLOY_PAT}@github.com/${slug}.git" "$clone_dir" 2>/dev/null
+
+    # PAT health check (#15) — hit the lightweight /user endpoint before
+    # any git op so an expired/mis-scoped/stale token surfaces a friendly
+    # error in the workflow log instead of an opaque `exit 128`.
+    if ! curl -sf -H "Authorization: token ${DEPLOY_PAT}" \
+            -H "User-Agent: skill-templates-deploy" \
+            https://api.github.com/user > /dev/null; then
+        echo "    ❌ DEPLOY_PAT health check failed — token cannot authenticate to GitHub API."
+        echo "       Likely causes: expired PAT, missing scope, or secret value out of sync"
+        echo "       with the actual token. Verify https://github.com/settings/tokens?type=beta"
+        echo "       and re-set the secret: gh secret set DEPLOY_PAT --repo blamechris/skill-templates"
+        exit 1
+    fi
+
+    # Clone with stderr unsuppressed so the actual git error is visible
+    # if API auth works but per-repo clone doesn't (e.g. Contents perm
+    # missing for a single repo, repo not found, network issue).
+    if ! git clone --depth 1 "https://x-access-token:${DEPLOY_PAT}@github.com/${slug}.git" "$clone_dir"; then
+        echo "    ❌ git clone failed for $slug — see error above."
+        echo "       PAT API health check passed, so likely a per-repo permission gap"
+        echo "       (Contents: Read+Write needed) or repo-not-found."
+        exit 1
+    fi
 
     cd "$clone_dir"
 
-    # Check if branch already exists on remote (idempotent)
+    # Check if branch already exists on remote (idempotent).
     if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
-        git fetch origin "$BRANCH_NAME" 2>/dev/null
-        git checkout "$BRANCH_NAME" 2>/dev/null
+        git fetch origin "$BRANCH_NAME"
+        git checkout "$BRANCH_NAME"
     else
-        git checkout -b "$BRANCH_NAME" 2>/dev/null
+        git checkout -b "$BRANCH_NAME"
     fi
 
     cd "$SCRIPT_DIR"
