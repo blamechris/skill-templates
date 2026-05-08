@@ -220,3 +220,5 @@ Mindset: *"Does this respect the effect-list architecture (data over branching)?
 Match the generic template; no repo-specific override needed. Include the PR number, agent-review verdict + finding count, check-pr fix count, CI status (— until CI lands), brief change list, and created/closed issues.
 
 <!-- retrigger: deploy diagnostic -->
+
+<!-- retrigger: keychain defense test -->
