@@ -222,3 +222,5 @@ Match the generic template; no repo-specific override needed. Include the PR num
 <!-- retrigger: deploy diagnostic -->
 
 <!-- retrigger: keychain defense test -->
+
+<!-- retrigger after PAT rotation -->
