@@ -469,17 +469,35 @@ ci_setup_repo() {
         exit 1
     fi
 
-    # Clone with stderr unsuppressed so the actual git error is visible
-    # if API auth works but per-repo clone doesn't (e.g. Contents perm
-    # missing for a single repo, repo not found, network issue).
-    if ! git clone --depth 1 "https://x-access-token:${DEPLOY_PAT}@github.com/${slug}.git" "$clone_dir"; then
+    # Clone with two defenses against macOS keychain interference (#15):
+    #   1. -c credential.helper="" — disable any inherited credential
+    #      helpers on the runner (osxkeychain in particular intercepts
+    #      x-access-token:... URLs and substitutes cached user creds).
+    #   2. GIT_TERMINAL_PROMPT=0 — fail rather than prompt if creds
+    #      somehow miss; we always want fail-fast in CI.
+    # stderr unsuppressed so the actual git error is visible.
+    if ! GIT_TERMINAL_PROMPT=0 \
+            git -c credential.helper="" \
+                clone --depth 1 \
+                "https://x-access-token:${DEPLOY_PAT}@github.com/${slug}.git" \
+                "$clone_dir"; then
         echo "    ❌ git clone failed for $slug — see error above."
-        echo "       PAT API health check passed, so likely a per-repo permission gap"
-        echo "       (Contents: Read+Write needed) or repo-not-found."
+        echo "       PAT API health check passed (token authenticates to /user) but"
+        echo "       this repo's clone returned non-zero. Common causes:"
+        echo "       • The secret value is an older/different PAT than what's in"
+        echo "         your settings page. Re-set with the current PAT:"
+        echo "           gh secret set DEPLOY_PAT --repo blamechris/skill-templates"
+        echo "       • Self-hosted runner credential helper interference (mitigated"
+        echo "         by -c credential.helper above; if you still see 403, the PAT"
+        echo "         genuinely lacks Contents:R/W on this repo)."
         exit 1
     fi
 
     cd "$clone_dir"
+
+    # Same credential-helper defense for fetch/push operations downstream
+    # via a per-repo git config that pins the helper to empty.
+    git config --local credential.helper ""
 
     # Check if branch already exists on remote (idempotent).
     if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
