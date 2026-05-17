@@ -57,3 +57,4 @@ The `repo-memory` MCP is available. Prefer `get_file_summary` over `Read` when e
 | archery-apprentice | Kotlin/KMP, Android/iOS | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, consolidate-dependabot, qa-update, parallel-dev |
 | repo-relay | Node.js, TypeScript, discord.js | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, parallel-dev |
 | claude-code-notify | Bash, jq, curl, Discord webhooks | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, project-audit, learn, start-working, parallel-dev |
+| explAIn | Expo + RN-Web, TypeScript, Supabase, Vercel AI SDK + DeepSeek | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev, smoke-test, fetch-docs |
