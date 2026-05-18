@@ -60,7 +60,7 @@ Always include the first two. Add more from the extended roster based on the tar
 | Risk Spotter | "Bloodhound" | High-churn files (git log), large/complex files, code smell concentrations — where bugs are most likely to live | Always useful unless `depth=quick`. Surfaces the hotspots that feed into `/bug-hunt` later. |
 | Convention Reader | "Scribe" | Code style, test conventions, CI setup, attribution policies in CLAUDE.md, commit-message format, branching rules | Include when the repo will be edited by future agents. Captures the implicit rules so they aren't violated. |
 | Domain Sniffer | "Native" | Domain vocabulary, key data models, business logic location | Include when target is a feature area rather than the whole repo, or when domain terminology is heavy. |
-| Template Critic | "Auditor" | Generic template structure, `{{CUSTOMIZE: ...}}` markers, customization file coverage, deploy.sh integration, skill output correctness across managed repos | Include when reconning `generic/` templates or `deploy.sh`/`sync.sh`. Checks that templates produce correct deployed skills. |
+| Template Critic | "Auditor" | Generic template structure, `{{CUSTOMIZE: ...}}` markers, customization file coverage, deployed skill correctness across managed repos | Include when reconning `generic/` templates or `deploy.sh`/`sync.sh`. Checks that templates produce correct output in all 12 managed repos with varied tech stacks. |
 
 #### Selection Algorithm
 
@@ -106,11 +106,13 @@ You MUST read actual files. Do not infer from filenames alone.
 ### One-Line Summary
 A single sentence answering: from your lens, what is the most important thing to know about this target?
 
-### Key Findings (3-7 bullets)
+### Key Findings (5-10 bullets)
 Each bullet:
 - One concise statement (what you found)
 - File:line reference where applicable
 - Why it matters in one phrase
+
+If a scout has more than 10 genuinely-distinct findings, return the strongest 10 and note the surplus under Open Questions. Caps are soft — quality beats count, but artificial trimming hurts the synthesis step.
 
 ### Worth Reading First
 2-4 files a new contributor should open before touching anything, with one-line justification each.
@@ -122,7 +124,7 @@ Things you could not determine from the code — gaps that need a human or furth
 - Be descriptive, not evaluative. Do NOT rate, grade, or recommend fixes. This is recon, not audit.
 - Be specific. "It uses some kind of router" is useless. "src/router.ts:24 — express router mounted at /api/v1, registers 12 routes" is useful.
 - Stay in your lens. If you stray into other scouts' territory, you waste tokens.
-- Depth = {DEPTH}: quick = ~5 files read; standard = ~10-15; deep = ~20-30 across modules.
+- Depth = {DEPTH}: quick = ~5 files read; standard = ~15-25 (or ~10-15 for small/single-package repos); deep = ~30-50 across modules. For Pathfinder specifically: a single major flow in a god-class can consume 10+ reads on its own — adjust the file count budget toward flow completeness rather than file count. If you hit budget mid-flow, finish the current step then list the remaining trace under Open Questions rather than producing partial steps.
 ```
 
 **Run scouts as foreground Agent calls.** If SCOUT_COUNT > 4, batch: first 4 in parallel, then the rest.
@@ -163,7 +165,7 @@ Table of the 3-7 files that matter most, in reading order. Pulled from Cartograp
 **e. Major Flows**
 Walkthroughs of 2-3 important flows (from Pathfinder). For each:
 - **Flow name**
-- 4-8 numbered steps: `file:line — what happens`
+- 4-12 numbered steps: `file:line — what happens` (long flows in god-classes legitimately need more steps; don't truncate a real flow to hit the lower bound)
 - Pitfalls or non-obvious behavior worth knowing
 
 **f. Hotspots**
@@ -234,8 +236,10 @@ Output a concise summary:
 | Level | Files Read per Scout | Use When |
 |:------|:--------------------:|:---------|
 | quick | ~5 | Just need a quick orientation; large repo, short on time |
-| standard | ~10-15 | Default; entering a new repo or feature area |
-| deep | ~20-30 | Preparing for a major change; will run `/project-audit` next |
+| standard | ~15-25 (large/monorepo) or ~10-15 (small/single-package) | Default; entering a new repo or feature area |
+| deep | ~30-50 across modules | Preparing for a major change; will run `/project-audit` next |
+
+**Budget guidance:** these are per-scout file-read budgets, not hard caps. Pathfinder in particular may legitimately spend 10+ reads on a single major flow when the codebase has god-classes (e.g., a 6000-line server room). When budget runs out mid-flow, scouts should finish the current step and list the remaining trace under Open Questions rather than producing partial step descriptions.
 
 ### Scout Behavior Rules
 
@@ -243,7 +247,7 @@ Output a concise summary:
 - Scouts MUST cite `file:line` for any concrete claim.
 - Scouts MUST stay in their lens — if Cartographer starts tracing flows, you'll get duplicate work.
 - Scouts SHOULD list open questions rather than guess. Better to flag a gap than fabricate.
-- For monorepos or template repos, Cartographer should produce a per-package or per-template summary, not just a root summary.
+- For monorepos or multi-package repos, Cartographer should produce a per-package summary in addition to the root summary, so future agents understand the module boundaries.
 
 ## Why Not Use /project-audit Instead?
 
