@@ -100,10 +100,14 @@ with open('/path/to/screenshot.png','rb') as f:
 BLOB=$(gh api -X POST /repos/{OWNER}/{REPO}/git/blobs --input /tmp/blob.json -q '.sha')
 
 # 2. First-time-only: orphan branch (no parent, no base_tree).
-# Subsequent times: pass -f "parents[]=$PARENT" to the commit AND -f "base_tree=$PARENT" to the tree.
+# Subsequent times: pass -f "parents[]=$PARENT" to the commit AND -f "base_tree=$PARENT_TREE" to the tree.
+# NOTE: base_tree wants a *tree* SHA, not a commit SHA. The ref gives you the commit; you must
+# look up that commit's tree separately.
 PARENT=$(gh api /repos/{OWNER}/{REPO}/git/refs/heads/screenshots -q '.object.sha' 2>/dev/null || echo "")
+PARENT_TREE=""
+[ -n "$PARENT" ] && PARENT_TREE=$(gh api /repos/{OWNER}/{REPO}/git/commits/$PARENT -q '.tree.sha')
 TREE_ARGS=( -f "tree[][path]=$SLUG" -f "tree[][mode]=100644" -f "tree[][type]=blob" -f "tree[][sha]=$BLOB" )
-[ -n "$PARENT" ] && TREE_ARGS=( -f "base_tree=$PARENT" "${TREE_ARGS[@]}" )
+[ -n "$PARENT_TREE" ] && TREE_ARGS=( -f "base_tree=$PARENT_TREE" "${TREE_ARGS[@]}" )
 TREE=$(gh api -X POST /repos/{OWNER}/{REPO}/git/trees "${TREE_ARGS[@]}" -q '.sha')
 
 COMMIT_ARGS=( -f "message=screenshots: add $SLUG" -f "tree=$TREE" )
