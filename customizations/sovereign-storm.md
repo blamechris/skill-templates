@@ -1,84 +1,226 @@
-# sovereign-storm Skill Customizations
+# Sovereign Storm Skill Customizations
 
 ## Project Context
-- **Tech:** pnpm monorepo (3 packages) — `shared/` (schemas + types, source-only), `server/` (Colyseus 0.16 + Express 5 + TypeScript), `client/` (Phaser 3 + Vite + TypeScript)
-- **Repo:** blamechris/sovereign-storm (**private** — placeholder art in use, no public deploys)
+- **Tech:** TypeScript (strict), Phaser 3 (client), Colyseus 0.16 + @colyseus/schema 3.0.76 (server), Vite (client bundler), tsx (server dev), pnpm + monorepo (`packages/{shared,client,server}`).
+- **Repo:** blamechris/sovereign-storm
 - **Main branch:** main
-- **What it is:** browser-first, turn-based multiplayer naval blockade game with 5 match modes (`blockade`, `voyage`, `hunt`, `ffa`, `odyssey`) dispatched via strategy pattern
-- **Hosting:** `pnpm host` builds client + spawns server + opens Cloudflare quick tunnel (`scripts/host.mjs`)
-- **CI: None yet.** `.github/workflows/` does not exist. Tests run via `pnpm test` per package locally. **Do not assume merge gates exist** — `/check-pr` should skip the "wait for CI" loop here.
+- **CI:** Not yet set up (planned: GitHub Actions running `pnpm -r typecheck`).
+- **Status:** Step 6 milestone in progress — Voyage mode foundation (hotspot system + cargo + economy refactor + cannon/vessel asymmetry). PvE expedition modes (#47, #51) and procedural generation (#52) are the next major arcs.
+- **Genre:** TypeScript/Phaser/Colyseus port of Obsidio (a libGDX Puzzle Pirates blockade simulator).
 
-## Attribution Policy
-This repo follows the user's project-wide **zero-attribution** policy. NEVER add `Co-Authored-By: Claude` or `Generated with Claude` to commits, PRs, or any output.
+## Inspiration / Source Material
+- **Obsidio**: 4-slot move planning (forward / left / right / stall), L-shape movement, wind tiles, whirlpools, flag capture scoring.
+- **Puzzle Pirates**: Atlantis (citadel timed events), Haunted Seas (depth-zone scaling, sink-loses-the-map), Cursed Isles (captain-decides-when-to-extract). The PP puzzle layer is intentionally NOT ported — the navigation board itself is the puzzle.
 
-## Architectural Gotchas (CRITICAL — read before any change to server/shared)
+## Critical: Schema Sync Workaround
+**Colyseus 0.16 + schema 3.0.76 does not propagate primitive Schema field mutations to clients.** Confirmed empirically: `state.greenScore += 1` reaches 30+ on the server while the client still reads 0.
 
-### Colyseus schema is vestigial — MSG_* is the real protocol
-Despite using Colyseus, **only `BattleState.phase` is schema-synced** (see `packages/shared/src/index.ts:158`). Comment at L128 explains: "primitive schema fields don't reliably propagate in Colyseus 0.16 + schema 3.0." Everything else — `hostSessionId`, scores, round number, mode, players list — routes through custom `MSG_*` messages via `room.send` / `room.onMessage`. Do not add fields to `BattleState` expecting they'll auto-sync; add a new `MSG_*` and broadcast manually.
+**Pattern:** Broadcast a custom typed message instead of relying on `room.onStateChange`. See `MSG_SCORE`, `MSG_FLAGS`, `MSG_HOTSPOTS`, `MSG_EVENTS` in `packages/shared/src/index.ts` and the corresponding `broadcastScore()` / `broadcastPlayers()` helpers in `BattleRoom.ts`. Schema-defined fields can stay in place (server resolver reads naturally) — they're just not the wire format.
 
-### Server-authoritative with full-replay model
-Round resolution is **fully simulated on the server** in `packages/server/src/rooms/BattleRoom.ts:1927` (`resolveRound`), then shipped as a `ticks[]` array via `MSG_ROUND_RESULT`. **The client does NOT re-simulate; it only animates.** This guarantees no outcome drift, but means every round's wire payload contains full per-slot, per-ship state. Do not add client-side prediction without explicit design — it would diverge from the authoritative replay.
+**What NOT to do:** Don't reach for `setState()` or assume schema sync will work for any new primitive. Always use a custom broadcast.
 
-### `BattleRoom.ts` is a 6,048-line god-class
-The entire server gameplay loop — onCreate, 26 onMessage handlers, the resolver pipeline, mode dispatch, broadcast helpers — lives in one file. Behavior-sliced tests (`BattleRoom.<feature>.test.ts`, ~35 of them) cover specific paths, but the class itself is monolithic. When editing here, run the **full test set** for the package, not just the file you think you touched.
+## Hotspot Effect-List Architecture (#50)
+The hotspot system is the load-bearing flexibility surface: every dockable interaction is data, not code paths.
+
+- `Hotspot.effects: Effect[]` — declarative list applied in order on each successful Dock action.
+- `Effect` variants: `log / heal / damage / score / buff / cargo / extract`. Adding a new variant = one new case in server `applyEffect`.
+- `HOTSPOT_REGISTRY` in `packages/shared/src/map.ts` — maps each `HotspotKind` to label + charges + default effects.
+- New hotspot kinds (e.g., "speed-shrine", "kraken-portal") are pure data: register in `HOTSPOT_REGISTRY` + add a tile constant + add a case in `hotspotKindForTile` + add a draw case in `renderHotspotOverlay`. No resolver changes required for kinds that compose existing effects.
+
+**When adding a new mechanic that affects ships:** prefer a new Effect variant + applyEffect case over per-feature server logic. The dispatcher is the single point of mutation.
+
+## Per-Player Buff System (#50)
+- `PlayerInfo.buffs: ActiveBuff[]` — timed magnitude stacks (e.g., damage-bonus +1 for 3 turns).
+- Tick at top of `resolveTurn` (`tickBuffs`); cleared on sink + match start (clean break).
+- Cannon damage reads via `buffMagnitude(p, "damage-bonus")` + base from `VESSEL_CANNON_DAMAGE`.
+- Adding a new buff kind: extend `BuffKind` union, add a reader (e.g., `cannonRangeFor(p)` reads "range-bonus" stack), wire into the system that consumes it.
+
+## Token Pool Economy (#42)
+- `PlayerInfo.tokenPool: { forward, left, right }` regenerates progressively each `resolveTurn`.
+- Order: `tickBuffs → deductPlanCosts → applyRespawns → regenTokenPools`.
+- Per-vessel `VESSEL_TOKEN_START / REGEN / MAX` tables — sloops weave (high lateral regen), frigates plow forward but turning is rare.
+- Plans validated server-side via `poolCovers(pool, planTokenCost(moves))` in `MSG_SET_MOVES`.
+
+## Cannon Reload Model (Step 6e)
+- **Infinite ammo, per-side reload.** Each side reloads independently for `VESSEL_RELOAD_SLOTS[vessel]` slots after firing.
+- `simulateCannonPlan(vessel, cannons)` is the single legality check, used by client toggle-disable, server validation, and bot planner.
+- Cannon damage = `VESSEL_CANNON_DAMAGE[vessel] + buffMagnitude(p, "damage-bonus")`.
+- Reload state resets between turns (within-turn discipline only — keep this; cross-turn would require additional state machinery).
+
+## Vessel Asymmetry (#48)
+- Three roles: **Sloop "Runner"** / **Brigantine "Balanced"** / **Frigate "Escort"**.
+- Differentiated stats: HP (6/10/16), Hold (3/6/10), Range (3/4/5), Cannon dmg (1/2/3), Reload (0/1/2 slots), Token pools.
+- `VESSEL_ROLE` label surfaces in lobby picker, in-match captain card, and Help-modal Legend.
+- Deferred: `dockTurns` (multi-turn docking for frigates) — was scoped out of the initial #48 commit. Add as a follow-up if procedural / Voyage mode needs it.
+
+## Repo Conventions
+
+### No Emoji in Code or UI
+**Per existing convention:** UI strings, commit messages, and code comments avoid emoji. The captain card uses text labels (e.g., "Cargo 3/5", not "📦 3/5"). Move glyphs use unicode arrows (↑ ↖ ↗ ·) — these are text, not emoji.
+
+The one exception is `⚓` for the Dock action glyph (already shipped in Step 6a). Don't add new emoji to UI text without checking with the user.
+
+### Attribution Policy
+**OK to include `Co-Authored-By: Claude` in commits** for this repo. (Differs from explAIn/skill-templates where attribution is forbidden.) Keep the commit footer line in this format:
+```
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+```
+
+### Commit Message Style
+- Subject line: `Step Nx: short description (#issue-or-pr-ref)` where `Nx` is the milestone step letter.
+- Body: explain *what* changed, *why*, and any deferred follow-ups.
+- Example: `Step 6f: vessel asymmetry — cargo + token pools + role labels (#48)`.
+
+### Branch Naming
+- `feature/<short-slug>` for feature branches (e.g., `feature/hotspot-system`).
+- `fix/<short-slug>` for bug fixes.
+- Direct commits to `main` only for trivial doc/config tweaks.
+
+## start-working Customizations
+
+### Ready-to-Work Labels
+- No formal `ready-to-build` label — treat unblocked, unassigned issues as ready.
+- `priority:high` are next-up; `priority:med` and `priority:low` queue after.
+- Open epic: #31 (roadmap umbrella) + #49 (Voyage mode epic).
+
+### Blocked Labels
+- `wontfix` (e.g., #40 mid-match team change — parked).
+- `epic` (umbrella issues — don't tackle directly; pick a sub-issue instead).
+
+### Roadmap File Locations
+- Issue #31 — Sovereign Storm Roadmap & Tracking (the live source of truth).
+- Issue #49 — Voyage mode epic.
+- `ASSETS.md` — Kenney pack license + per-asset provenance.
+- `packages/client/public/assets/LICENSE.md` — asset attributions.
+
+### Source File Patterns for TODOs
+- `packages/shared/src/**/*.ts`
+- `packages/server/src/**/*.ts`
+- `packages/client/src/**/*.ts`
+
+### Priority Signals
+- `priority:high` first. Within tier, prefer issues that unblock others (architecture / substrate before features).
+- Voyage-mode sub-issues (#45–48) build on each other in order; respect the build order from the epic.
+
+### Dependency Check
+- `pnpm install` after pulling. Workspace deps in `pnpm-workspace.yaml`.
+- TypeScript strict mode across all three packages — run `pnpm -r typecheck` before declaring work complete.
+
+### Test Runner
+- No automated test suite yet. Manual verification on the dev server (`pnpm dev` from repo root) is the current gate.
+- "Test path" in the PR description should list the manual flow to verify the change.
 
 ## check-pr Customizations
-- **Skip Copilot polling.** Copilot reviews are NOT configured on this repo. Step 0 (poll for Copilot) should short-circuit — there's no review to wait for. Process whatever inline comments humans/agent-review left.
-- Issue labels: verify with `gh label list` before applying. Repo is young; assume only `bug` and `enhancement` exist unless found otherwise.
-- Reply headers: **FIX** / **FALSE POSITIVE** / **FOLLOW-UP ISSUE** (standard).
-- No branch protection configured yet — inline replies are useful for traceability but not gated by CI.
+
+### Issue Labels
+- Areas: `area:gameplay` / `area:ai` / `area:visual` / `area:audio` / `area:ui` / `area:lobby` / `area:infra`.
+- Priority: `priority:high` / `priority:med` / `priority:low`.
+- Special: `epic` (umbrella tracking), `wontfix`, `bug`, `documentation`.
+
+### Code Style
+- TypeScript strict, ESM, no `any` in new code.
+- Functional helpers preferred over class methods for pure data transforms (see `simulateCannonPlan`, `planTokenCost` in shared).
+- Comments explain *why*, not *what* — well-named identifiers handle the *what*.
+
+### Evidence Patterns
+- "per CLAUDE.md / customizations/sovereign-storm.md: <constraint>"
+- "per the schema sync gap memory: use a custom broadcast, not state mutation"
+- "per the effect-list architecture: prefer a new Effect variant over an inline branch"
+
+### Manual Test Plan
+- New mechanics need a "how to test" section in the PR body — exact map / vessel / steps to verify the change.
+- Voyage Test map (`voyage-test`) is the canonical hotspot/cargo testbed. Use it for any change touching the hotspot, cargo, buff, or token-pool systems.
+
+## learn Customizations
+
+### CLAUDE.md Sections to Update
+The repo doesn't have a CLAUDE.md yet — durable insights go into the customizations file (this one) directly under the relevant section. When CLAUDE.md is added, mirror the section structure: Project Context, Tech Stack, Critical Patterns, Architecture, Conventions.
+
+### Rules Naming
+kebab-case (e.g., `colyseus-schema-sync.md`, `hotspot-effects.md`, `vessel-asymmetry.md`).
+
+### Domain Quality Bar
+Insights worth recording:
+- Colyseus / @colyseus/schema interaction quirks (the schema-sync gap is the canonical example)
+- Phaser depth ordering for layered sprites/graphics (terrain 0 / hotspots 4 / flags 5 / ships 10 / VFX 15)
+- Plan-resolution ordering (the `tickBuffs → deductPlanCosts → applyRespawns → regenTokenPools` sequence is load-bearing)
+- Per-vessel tuning numbers when they're tweaked from the current defaults
+
+### Common Paths
+- `packages/shared/src/index.ts` — schema, message types, vessel constants, helpers
+- `packages/shared/src/map.ts` — tile constants, hotspot registry, map definitions
+- `packages/server/src/rooms/BattleRoom.ts` — the resolver + room state machine (single ~2000 line file)
+- `packages/client/src/scenes/BattleScene.ts` — Phaser scene + HUD rendering (single ~2200 line file)
+- `packages/client/src/styles.css` — UI styles
 
 ## agent-review Customizations
 
 ### Persona
-**Multiplayer Reliability Engineer** — expert in Colyseus 0.16 state-sync caveats, server-authoritative multiplayer architectures, Phaser 3 scene lifecycle, and the wire-protocol attack surface.
+**Sovereign Storm Inspector** — expert in TypeScript-strict monorepos, Phaser 3 scene graphs / depth ordering, Colyseus 0.16 room lifecycle + schema sync quirks, multiplayer turn-based simulation, push-your-luck game loops, and the Obsidio / PP blockade-nav lineage.
 
-Mindset: *"This is the authoritative game state. Will the change desync the client from the server? Does this validator catch every malformed payload a malicious client could send? Will this change to lazy-init / save logic corrupt mid-match state for active rooms?"*
+Mindset: *"Does this respect the effect-list architecture (data over branching)? Does any new state need a custom broadcast (the schema sync gap)? Does the resolveTurn ordering still hold? Does the manual test path exercise the change end-to-end? Are vessel asymmetry knobs being added or just tuned?"*
 
-### Code Quality — Server (`packages/server/`)
-- Module resolution is `NodeNext` (server) vs `Bundler` (shared/client) — import paths matter.
-- Every `onMessage` handler must validate via a `sanitize*` function from `shared/` BEFORE mutating state. Direct `this.state.x = payload.y` without sanitize is a bug.
-- `BattleRoom`'s recursion-guarded scheduler uses `setImmediate` deferral around `tryResolveRound` / `armPlanningPhase` — touching this pipeline is high-risk for desyncs.
-- Mode-specific behavior lives in `packages/server/src/rooms/modes/*.ts` implementing `MatchModeStrategy` — changes to the interface in `types.ts` silently break every mode unless every implementation is updated.
+### Code Quality
+- TypeScript strict, ESM, no `any` in new code; prefer typed unions over enum strings.
+- Pure functions in shared (no side effects); stateful resolution in server only.
+- Phaser display objects need explicit `setDepth()` — depth ordering is load-bearing (Step 4 had a regression where ships rendered under terrain because the depth wasn't set).
+- Cannon / move / hotspot legality checks live in shared helpers (`simulateCannonPlan`, `poolCovers`, etc.) so client preview and server validation read the same source.
 
-### Code Quality — Client (`packages/client/`)
-- Module resolution is `Bundler`; adds DOM lib (`packages/client/tsconfig.json:6`).
-- `BattleScene.ts` (8,689 LOC) is the second god-file. Has no direct scene-class test — auxiliary helpers under `scenes/__tests__/` are partial coverage.
-- Round replay player at `BattleScene.ts:6671+` walks server-shipped `ticks[]` via `runTick(idx)` recursion. Tween-callback bugs here cause animation desync, not state desync.
-- `BootScene` constructs the Colyseus `Client` and stashes it in `registry`. Other scenes pull it via `this.registry.get("colyseus")`. Do not construct a second `Client`.
+### Architecture
+- **Authoritative server, optimistic client.** Server is source of truth; client predicts only what's safe (slot cycle filtering, cannon button disable). Server always re-validates and silently no-ops illegal plans.
+- **Custom broadcasts for any state that reaches the client.** Schema-defined fields are fine for server-internal reads but never trust them for client sync.
+- **Effect-list dispatch over branching.** New hotspot interactions = new Effect variant + new applyEffect case + registry entry. Don't add per-kind branches to resolveActionsForStep.
+- **Plan-resolution ordering is load-bearing.** Changes to `tickBuffs → deductPlanCosts → applyRespawns → regenTokenPools` need a deliberate justification — the order encodes whether buffs/respawns/regen apply to the *current* turn or the *next*.
 
-### Code Quality — Shared (`packages/shared/`)
-- **Source-only** — package consumes `src/index.ts` directly via `exports`. `tsc --noEmit` is the build. Do not add `outDir` or expect compiled artifacts.
-- `shared/src/index.ts` is the **single source of legality**: schemas, MSG types, validators, gameplay constants, sanitize/coerce functions. Any breaking change radiates to both client and server.
-- Validators (`sanitizeCreateMatchOptionsVerbose`, `sanitizeMatchSettingsVerbose`, `sanitizeMoves`, `sanitizeCannons`, `sanitizeBotProfile`, `sanitizeFfaConfig`, `sanitizeChatPayload`) — these are the documented edge — server's defense-in-depth assumes they cover every case.
+### Testing
+- No automated tests yet. Manual verification on the dev server is the gate.
+- For any new mechanic: PR description must include a "Test path" section with map / vessel / step-by-step verification.
+- Type checking (`pnpm -r typecheck`) must pass before declaring work complete.
 
-## swarm-audit / recon / bug-hunt Customizations
+### Phaser-Specific Constraints
+- Don't create graphics in render functions called per-frame; cache and re-render on state change only.
+- TileSprite + setTint is the canonical pattern for tinted-tile water (see `mapGraphics`).
+- Depth assignments: terrain=0, decoration overlay=2, hotspots=4, flags=5, ships=10, effects=15+.
 
-### Domain Agents
-For audits and recon of this repo, useful extra agents:
-- **WireProtocolist** — checks every `MSG_*` handler for: sanitize-before-mutate ordering, type-narrowing on optional payload fields, rate-limit gaps, payload-size unbounded growth.
-- **DesyncHunter** — looks for places where client and server might diverge: lazy-init paths that overwrite state, client-side caches that aren't invalidated on round reset, unhandled `onLeave` cases mid-round.
+## parallel-dev Customizations
 
-### Hotspot Guidance
-The three god-files dominate by churn and size; bias hunters here:
-1. `packages/server/src/rooms/BattleRoom.ts` — 6,048 LOC, ~107 commits/90d. Authoritative state class. 26 onMessage handlers at L694–1345. Resolver pipeline at L1810-2350. **Highest-value target.**
-2. `packages/client/src/scenes/BattleScene.ts` — 8,689 LOC, ~135 commits/90d. No direct scene-class test.
-3. `packages/shared/src/index.ts` — 3,784 LOC, ~85 commits/90d. Wire contract + validators.
+### Default Concurrency
+- 2 (TypeScript builds + tsx watch are reasonably parallel; Vite hot-reload is fast).
 
-Highest-churn mode strategies: `packages/server/src/rooms/modes/ffa.ts` and `odyssey.ts` — they have prior bug history clustered around mode interactions (see `BattleRoom.odysseyMidJoin.test.ts`, `BattleRoom.voyageRespawnCap.test.ts`).
+### Dependency Setup in Worktree
+- Run `pnpm install` after creating worktree (workspace symlinks recreate per-worktree).
+- Don't re-run if `pnpm-lock.yaml` hasn't changed — the install is no-op.
 
-## create-issue / bug-hunt Customizations
-- Default labels: `bug` for defects, `enhancement` for features. Skip `complexity:*` and `from-review` unless they exist (`gh label list` to verify).
-- Repro steps for any multiplayer bug must specify: mode (blockade/voyage/hunt/ffa/odyssey), player count, and whether the bug is observed by host vs joiner. Single-player repros are insufficient for round-resolver bugs.
+## tackle-issues Customizations
 
-## tackle-issues / autonomous-dev-flow Customizations
-- Test command: `pnpm test` per package, or `pnpm -r typecheck && pnpm -r test` from root.
-- No CI gate, so the agent must run tests locally and report explicit pass/fail before declaring a fix done.
-- Marathons are unusual for this repo (small, single-developer); prefer surgical single-PR work over batch flows.
+### Branch Prefix
+- `feature/<slug>` for new features (e.g., `feature/voyage-rules`, `feature/procedural-hotspots`).
+- `fix/<slug>` for bugs.
+- `chore/<slug>` for refactors / tooling / docs.
 
-## smoke-test Customizations
-- Start with `pnpm dev` (concurrent server + client) — opens `http://localhost:5173` for client and `:2567` for server.
-- For tunnel smoke: `pnpm host` and look for the `https://<random>.trycloudflare.com` line in stderr. Quick tunnels live ~24h.
+### Skip Labels
+- `wontfix`, `epic` (don't pick the umbrella; pick a sub-issue).
 
-## Lessons Learned
-- **2026-05-17:** First substantive customization written using output of `/recon` on the repo. Recon document at `docs/recon/sovereign-storm-20260517.md`. Re-run recon and refresh this file when major architectural changes land (especially anything that breaks the Colyseus-schema-is-vestigial invariant).
+### Decomposition Trigger
+- Issues spanning multiple packages (`shared` + `server` + `client`) — fine if cohesive, but each package change should be a coherent commit within the same PR.
+- "All maps", "all vessels", "all hotspot kinds" scope — break into per-axis sub-issues unless it's a uniform refactor.
+
+### Commit Scopes
+- Match issue-area labels where possible: `gameplay`, `ai`, `visual`, `audio`, `ui`, `lobby`, `infra`.
+- Step prefix is the milestone tracking convention: `Step 6f: vessel asymmetry — cargo + token pools + role labels (#48)`.
+
+### PR Test Plan Items
+- "Switch map to <map-id> in the lobby"
+- "Add a bot, start match, and verify <expected behavior>"
+- "Run `pnpm -r typecheck` — all three packages green"
+- "Open the Help modal and verify the Legend reflects new mechanics"
+- "Sink + respawn (use the host debug-sink button) — verify state cleanup"
+
+## full-review Summary Table Format
+Match the generic template; no repo-specific override needed. Include the PR number, agent-review verdict + finding count, check-pr fix count, CI status (— until CI lands), brief change list, and created/closed issues.
+
+<!-- retrigger: deploy diagnostic -->
+
+<!-- retrigger: keychain defense test -->
+
+<!-- retrigger after PAT rotation -->
