@@ -241,6 +241,43 @@ Shares all customization points with `autonomous-dev-flow` above (branch prefix,
 - **2026-03-14:** Installed .app had stale dashboard even after rebuild. Root cause: `cargo tauri bundle` skips re-bundling when binary hasn't changed. Fix: `touch src-tauri/src/lib.rs` forces relink, `rm -rf target/release/bundle` clears cached bundles.
 - **2026-03-14:** `npm run dashboard:build` failed with `ENOENT spawn sh`. Root cause: sandbox PATH didn't include `/usr/bin:/bin`. Fix: use full PATH in all npm commands.
 
+## manual-testing-mode Customizations
+
+### Version Source-of-Truth
+- **File:** `packages/server/package.json` (`.version` field)
+- All other version files mirror it: `package.json` (root), `packages/{app,desktop,protocol,dashboard,store-core}/package.json`, `packages/desktop/src-tauri/Cargo.toml`, `packages/desktop/src-tauri/tauri.conf.json` — 9 files total.
+- Bump verification command:
+  ```bash
+  grep '"version":' package.json packages/*/package.json packages/desktop/src-tauri/tauri.conf.json && grep '^version' packages/desktop/src-tauri/Cargo.toml
+  ```
+
+### Surface Labels
+Use one severity (`bug` / `enhancement` / `ux`) plus surface(s):
+- `desktop` — Tauri tray app + bundled web dashboard
+- `app` — React Native mobile app
+- `server` — Node.js daemon, CLI, WS protocol
+- `tunnel` — Cloudflare named/quick tunnels
+- `dashboard` — web dashboard React/Vite UI (when distinct from desktop bundling)
+
+### Rebuild Reminder for Visual Bugs
+When the user reports a UI bug on the desktop app, remind them after the issue is filed that the Tauri bundle is **aggressively cached**. To verify a fix locally:
+1. `cd packages/dashboard && TAURI_ENV_PLATFORM=darwin npm run build`
+2. `cd packages/desktop && bash scripts/bundle-server.sh`
+3. `touch src-tauri/src/lib.rs && cd src-tauri && cargo build --release`
+4. `rm -rf target/release/bundle && cargo tauri bundle`
+5. `pkill Chroxy 2>/dev/null; rm -rf /Applications/Chroxy.app && cp -R target/release/bundle/macos/Chroxy.app /Applications/`
+
+This is in `merge` customization too — same trap applies during dogfooding.
+
+### Smoke Test Reference
+- Repo's smoke skill: `/smoke-test`
+- After a fix-mode commit on the manual-testing branch, prompt the user: *"Want me to run /smoke-test before we move on?"* — only for desktop/dashboard surface fixes.
+
+### Wrap-up PR Conventions
+- PR title: `chore(release): manual-testing v{N} — {N} fixes from dogfooding`
+- Squash merge with auto-version disabled (we already bumped); commit message should start with `chore: bump version` so the auto-version workflow on main skips re-bumping.
+- Issue cross-links: every fix PR section gets `Closes #N` for inline-fixed issues; pure-filed issues stay open for triage.
+
 ## swarm-audit Customizations
 
 ### Domain-Specific Extended Agents

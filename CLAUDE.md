@@ -50,10 +50,21 @@ The `repo-memory` MCP is available. Prefer `get_file_summary` over `Read` when e
 
 ## Managed Repos
 
-| Repo | Tech Stack | Skills |
+This table is **derived from `deploy.conf`** — it lists each managed repo and the skills currently deployed to it. Repos can also have **repo-only skills** (`commit`, `qa-update`, `tdd-feature`, `consolidate-dependabot`) maintained directly in their `.claude/commands/` — those aren't in `deploy.conf` and aren't listed here. **`deploy.conf` is the authoritative source; this table is documentation.** If they drift, trust `deploy.conf`.
+
+| Repo | Tech Stack | Skills (from `deploy.conf`) |
 |------|-----------|--------|
-| chroxy | Node.js + React Native/Expo | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, commit, qa-update, parallel-dev |
-| exodus-loop | Godot 4.5, GDScript | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, commit, tdd-feature, qa-update, parallel-dev |
-| archery-apprentice | Kotlin/KMP, Android/iOS | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, consolidate-dependabot, qa-update, parallel-dev |
-| repo-relay | Node.js, TypeScript, discord.js | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, start-working, parallel-dev |
-| claude-code-notify | Bash, jq, curl, Discord webhooks | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, project-audit, learn, start-working, parallel-dev |
+| chroxy | Node.js + React Native/Expo + Tauri | check-pr, agent-review, swarm-audit, recon, bug-hunt, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev, smoke-test, manual-testing-mode |
+| exodus-loop | Godot 4.5, GDScript | check-pr, agent-review, swarm-audit, recon, bug-hunt, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, fetch-docs, agentic-audit, batch-merge, merge, parallel-dev |
+| archery-apprentice | Kotlin/KMP, Android/iOS | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, fetch-docs, batch-merge, merge, parallel-dev |
+| repo-relay | Node.js, TypeScript, discord.js | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev |
+| claude-code-notify | Bash, jq, curl, Discord webhooks | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, project-audit, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev |
+| repo-memory | TypeScript, MCP server | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, smoke-test, parallel-dev |
+| medlens | Expo + RN, TypeScript | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, smoke-test, parallel-dev |
+| carebridge | TypeScript fullstack (Turborepo, Fastify+tRPC, Next.js 15, Drizzle, BullMQ) | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev |
+| marchborne | Multiplayer game (MarchBorne) | check-pr, agent-review, swarm-audit, recon, bug-hunt, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev |
+| ltl | Expo + RN, TypeScript, op-sqlite + SQLCipher, Jest 29 | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev, smoke-test, agentic-audit, fetch-docs, project-audit |
+| explAIn | Expo + RN-Web, TypeScript, Supabase, Vercel AI SDK + DeepSeek | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev, smoke-test, fetch-docs |
+| readitation | Flutter (Dart), iOS-only v0.1 | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev, smoke-test |
+| sovereign-storm | TypeScript pnpm monorepo (Colyseus + Phaser 3 + Vite) | check-pr, agent-review, swarm-audit, full-review, create-pr, create-issue, learn, autonomous-dev-flow, tackle-issues, start-working, fix-ci, batch-merge, merge, parallel-dev, smoke-test |
+| skill-templates | Bash, GitHub Actions, Markdown templates | agent-review, full-review, check-pr, create-pr, create-issue, learn, start-working, swarm-audit, recon, bug-hunt |
