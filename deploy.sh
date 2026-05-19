@@ -500,9 +500,14 @@ ci_setup_repo() {
     git config --local credential.helper ""
 
     # Check if branch already exists on remote (idempotent).
+    # `git fetch origin <branch>` only updates FETCH_HEAD — it does not create a
+    # local branch or remote-tracking ref, so a plain `git checkout <branch>`
+    # afterward fails with "pathspec did not match". Use `checkout -B <branch>
+    # FETCH_HEAD` to (re)create the local branch pointing at what we just
+    # fetched. This is idempotent across reruns of the same day.
     if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
         git fetch origin "$BRANCH_NAME"
-        git checkout "$BRANCH_NAME"
+        git checkout -B "$BRANCH_NAME" FETCH_HEAD
     else
         git checkout -b "$BRANCH_NAME"
     fi
