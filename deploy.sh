@@ -388,9 +388,14 @@ validate_output() {
     local errors=()
 
     # 1. Residual {{CUSTOMIZE markers — Haiku failed to fill or remove.
-    if printf '%s' "$output" | grep -q '{{CUSTOMIZE'; then
+    # Match {{CUSTOMIZE that is at line start OR preceded by a non-backtick
+    # character. Excludes inline-code prose mentions like `{{CUSTOMIZE: ...}}`
+    # (the backtick before the marker disqualifies it) without missing real
+    # markers that follow markdown prefixes such as `# {{CUSTOMIZE: ...}}`
+    # (batch-merge.md:54) or appear mid-sentence (autonomous-dev-flow.md:66).
+    if printf '%s' "$output" | grep -qE '(^|[^`])\{\{CUSTOMIZE'; then
         local marker_count
-        marker_count=$(printf '%s' "$output" | grep -c '{{CUSTOMIZE' || true)
+        marker_count=$(printf '%s' "$output" | grep -cE '(^|[^`])\{\{CUSTOMIZE' || true)
         errors+=("Residual {{CUSTOMIZE marker(s) ($marker_count) — Haiku left them unfilled")
     fi
 
