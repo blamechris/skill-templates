@@ -45,24 +45,60 @@ Mindset: *"Will this template still produce correct customized output when Haiku
 - Read config from `deploy.conf` (single source of truth — never duplicate the mapping).
 - Always quote variable expansions.
 
-## swarm-audit / project-audit / recon / bug-hunt Customizations
+## swarm-audit Customizations
 
-### Domain Agents
-For audits and recon of this repo, useful extra agents:
-- **TemplateCritic** — checks that generic templates produce correct deployed skills across all 12 managed repos with their varied tech stacks (Node, Tauri, Godot, Kotlin, Bash, etc.).
-- **DeployPathologist** — focuses on deploy.sh/sync.sh failure modes (missing customization files, Haiku API errors, GH Actions auth, bash 3.2 incompatibilities).
+### Domain-Specific Extended Agents
 
-### Hotspot Guidance
-- High-churn: `generic/*.md` (every skill template). Templates that change often: `check-pr`, `agent-review`, `tackle-issues`.
-- Critical path: `deploy.sh` (any bug here breaks deploys to all 12 repos at once).
+| Agent | Nickname | Lens | When to Include |
+|-------|----------|------|-----------------|
+| Template Critic | "Auditor" | Generic template structure, `{{CUSTOMIZE: ...}}` marker hygiene, customization file coverage, deployed skill correctness across the 12 managed repos with varied tech stacks | Target includes `generic/*.md` files or `deploy.sh` / `sync.sh` |
+| Deploy Pathologist | "Deployer" | `deploy.sh` / `sync.sh` failure modes, missing customization files, Haiku API errors, GH Actions runner auth, bash 3.2 incompatibilities | Target includes `deploy.sh`, `sync.sh`, or `deploy.conf` |
 
-## create-issue / bug-hunt Customizations
-- Default labels: `enhancement` or `bug`, `from-review` if review-sourced, `from-bug-hunt` if from bug-hunt.
+### Grading Criteria
+- Auditor should weight whether deployed output still reads as a coherent skill after `{{CUSTOMIZE}}` substitution
+- Deployer should weight self-hosted-runner-specific gotchas (no inherited `gh` auth, macOS launchd OnDemand culling)
+
+## project-audit Customizations
+
+### Domain-Specific Extended Agents
+
+| Agent | Nickname | Lens | When to Include |
+|-------|----------|------|-----------------|
+| Template Critic | "Auditor" | Generic template structure, `{{CUSTOMIZE: ...}}` marker hygiene, customization file coverage, deployed skill correctness across the 12 managed repos with varied tech stacks | Auto-include — this is the project's primary surface |
+| Deploy Pathologist | "Deployer" | `deploy.sh` / `sync.sh` failure modes, missing customization files, Haiku API errors, GH Actions runner auth, bash 3.2 incompatibilities | Auto-include — this is the deploy path's primary surface |
+
+## recon Customizations
+
+### Domain-Specific Extended Scouts
+
+| Scout | Nickname | Lens | When to Include |
+|-------|----------|------|-----------------|
+| Template Critic | "Auditor" | Generic template structure, `{{CUSTOMIZE: ...}}` marker placement and density across `generic/*.md` files | Reconning `generic/`, `deploy.sh`, or `sync.sh` |
+
+## bug-hunt Customizations
+
+### Domain-Specific Extended Hunters
+
+| Hunter | Nickname | Lens | Include When |
+|--------|----------|------|--------------|
+| Template Critic | "Auditor" | Generic templates that produce defective customized output (residual markers, attribution leaks, heading drift, length runaway, hallucinated examples) | Target is `generic/*.md` |
+| Deploy Pathologist | "Deployer" | `deploy.sh` / `sync.sh` failure modes — missing customization files, Haiku API errors (4xx, 5xx, 529 overload), GH Actions runner offline, bash 3.2 incompatibilities, FETCH_HEAD vs local-branch checkout bugs | Target is `deploy.sh`, `sync.sh`, or `deploy.conf` |
+
+### Mandatory Checks
+- Guardian must verify that any new `{{CUSTOMIZE: ...}}` marker added to a generic template will not let Haiku invent specifics — markers must either be closed ("copy ONLY X from notes") or substitution-shaped (named field). Open-ended "Add X if relevant" markers are the documented defect class (see `docs/audit-results/customization-pipeline`).
+
+## create-issue Customizations
+- Default labels: `enhancement` for features, `bug` for defects, `from-review` if review-sourced, `from-bug-hunt` if from `/bug-hunt`.
 - This repo doesn't use complexity labels — skip them.
 
-## tackle-issues / autonomous-dev-flow Customizations
+## tackle-issues Customizations
 - This is a low-velocity meta-repo. Marathons are unusual. Most changes are surgical edits to a single template plus a customization-file note.
 - Always re-run `./sync.sh` after deploying a skill change to verify drift is resolved.
 
+## autonomous-dev-flow Customizations
+- Branch prefix: `feat/` for features, `fix/` for bug fixes, `chore/` for routine maintenance, `docs/` for documentation-only.
+- Test runner: `bash -n` for shell-syntax smoke tests on `deploy.sh` / `sync.sh`. No formal test framework — manual verification via `./deploy.sh --dry-run` and `./sync.sh` is the established pattern.
+- Commit scopes: `(deploy)`, `(sync)`, `(generic)`, `(customizations)`, `(workflow)`, `(docs)`.
+
 ## Lessons Learned
-- (None yet — file new lessons here as they are discovered, with date prefix.)
+- **2026-05-19:** First substantive customization written. PR #17 produced 4 Copilot-caught defects (hallucinated `deploy.sh:47` bug example, inconsistent rules, hardcoded labels, cross-section drift). Root cause traced via `/swarm-audit` to the customization-pipeline design — see `docs/audit-results/customization-pipeline/`. Phase 1 hardening landed in PR (this commit's branch).
