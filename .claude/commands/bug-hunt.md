@@ -16,7 +16,7 @@ This is the issue-filing flavor of `/swarm-audit`. Use it when your goal is "pop
 Examples:
 ```
 /bug-hunt deploy.sh
-/bug-hunt "the template customization flow" hunters=5
+/bug-hunt "the template customization logic" hunters=5
 /bug-hunt generic/ severity-floor=major auto-file=critical
 /bug-hunt . hunters=6 output=docs/audit/pre-release
 ```
@@ -67,15 +67,15 @@ For this repo (skill-templates), Guardian must specifically hunt for deploy.sh/s
 | Security | "Adversary" | Injection, auth bypass, SSRF, path traversal, secret leakage, attack surface | Target touches auth, network code, user input, external APIs, file operations |
 | UX | "Operator" | User-facing regressions, broken error messages, accessibility, confusing states, broken links/buttons | Target touches UI, output formatting, user-facing strings, error flows |
 | Perf | "Profiler" | N+1 queries, accidental quadratic loops, missing indexes, unbounded growth, memory leaks, sync-in-async | Target touches data access, hot paths, request handling, large collections |
-| TemplateCritic | "Validator" | Generic templates that produce incorrect deployed skills across different tech stacks (Node, Tauri, Godot, Kotlin, Bash, etc.), {{CUSTOMIZE}} marker stripping that breaks readability, skill header/section structure violations | Target is a generic template file in `generic/` |
-| DeployPathologist | "Deployer" | deploy.sh/sync.sh failure modes, missing customization files, Haiku API errors, GH Actions auth, bash 3.2 incompatibilities | Target is deploy.sh, sync.sh, or deploy.conf |
+| TemplateCritic | "Architect" | Generic template correctness, {{CUSTOMIZE}} marker hygiene, cross-repo deployment consistency, skill output quality across varied tech stacks | Target is a generic template or deploy.sh/sync.sh |
+| DeployPathologist | "Deployer" | deploy.sh/sync.sh failure modes, config drift, Haiku API errors, GH Actions runner auth, bash 3.2 portability | Target is deploy.sh, sync.sh, or deploy.conf |
 
 #### Selection Algorithm
 
 ```
 1. Start with 3 core hunters (Skeptic, Guardian, Tester)
 2. For each remaining slot up to HUNTER_COUNT:
-   - TemplateCritic if target is in generic/
+   - TemplateCritic if target is generic/*.md or deploy.sh/sync.sh
    - DeployPathologist if target is deploy.sh, sync.sh, or deploy.conf
    - Adversary if target touches auth/network/input/external IO
    - Operator if target touches UI/output/user-facing strings
@@ -172,7 +172,7 @@ Unless `output=-`, write to `${OUTPUT_DIR}/<slugified-target>-<YYYYMMDD>.md`:
 
 | # | Severity | Title | Location | Hunters | Possible Dupes |
 |---|----------|-------|----------|---------|----------------|
-| 1 | critical | bug(deploy): missing customization file causes silent skip | deploy.sh:47 | Skeptic, Guardian | — |
+| 1 | critical | bug(deploy): missing GH_TOKEN export breaks gh pr calls | deploy.sh:47 | Deployer, Guardian | — |
 | 2 | major | ... | ... | ... | #1834 |
 | ... | ... | ... | ... | ... | ... |
 
@@ -238,7 +238,7 @@ EOF
 )"
 ```
 
-**Verify labels exist** before using them. Skip missing labels rather than failing. For this repo, use labels: `bug`, `from-bug-hunt` (verify with `gh label list` before using).
+**Verify labels exist** before using them. Skip missing labels rather than failing. For this repo, use `bug` and `from-bug-hunt` (verify with `gh label list`).
 
 ### 8. Commit Candidate List (only if files were written)
 
@@ -292,11 +292,13 @@ Output a final summary:
 - Hunters MUST stay in their lens. Strays cost tokens and produce dedup noise.
 - Hunters SHOULD return empty if their lens finds nothing — empty is a valid result.
 
+For this repo, Guardian and DeployPathologist must specifically hunt for: deploy.sh/sync.sh failure modes (missing customization files, Haiku API errors, GH Actions auth failures), bash 3.2 incompatibilities (no associative arrays, unquoted expansions, heredoc edge cases), and template deployment consistency across all 12 managed repos.
+
 ## Examples
 
 ```
 /bug-hunt deploy.sh
-/bug-hunt "the template customization flow" hunters=5
+/bug-hunt "the template customization logic" hunters=5
 /bug-hunt generic/ severity-floor=major
 /bug-hunt . hunters=6 auto-file=critical
 /bug-hunt sync.sh hunters=3 output=-
@@ -312,5 +314,5 @@ Output a final summary:
 | "Audit a design doc / RFC" | `/swarm-audit` |
 | "Review this PR before merge" | `/agentic-audit` |
 
-A typical pipeline: `/recon deploy.sh` → `/bug-hunt deploy.sh` → `/tackle-issues` on the newly-filed issues.
-<!-- skill-templates: bug-hunt 7293fea 2026-05-17 -->
+A typical pipeline: `/recon generic/` → `/bug-hunt generic/` → `/tackle-issues` on the newly-filed issues.
+<!-- skill-templates: bug-hunt a696a37 2026-05-18 -->
