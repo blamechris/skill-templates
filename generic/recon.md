@@ -61,7 +61,7 @@ Always include the first two. Add more from the extended roster based on the tar
 | Convention Reader | "Scribe" | Code style, test conventions, CI setup, attribution policies in CLAUDE.md, commit-message format, branching rules | Include when the repo will be edited by future agents. Captures the implicit rules so they aren't violated. |
 | Domain Sniffer | "Native" | Domain vocabulary, key data models, business logic location | Include when target is a feature area rather than the whole repo, or when domain terminology is heavy. |
 
-{{CUSTOMIZE: Add a domain-specific scout for this repo if relevant. Example: "GodotProbe" for Godot game projects (scenes, autoloads, signals), "ExpoScout" for Expo apps (router layout, native modules). Each needs Nickname, Lens, When to Include.}}
+{{CUSTOMIZE: Domain-specific scouts — copy ONLY scouts that the customization notes explicitly name as a row in a 4-column table (Scout / Nickname / Lens / When to Include). If the notes do not name any, remove this marker entirely. Do NOT invent scouts from the repo's tech stack — "GodotProbe" and "ExpoScout" are illustrations of FORMAT, not content to fabricate.}}
 
 #### Selection Algorithm
 
