@@ -272,6 +272,12 @@ Rules:
 5. Output ONLY the final markdown. No preamble, no explanation, no code fences wrapping the output.
 6. Never add attribution (no "Generated with", no "Co-Authored-By", no AI mentions).
 7. Preserve all code blocks, bash examples, and formatting exactly as they appear in the template.
+8. Do NOT invent example content. If a {{CUSTOMIZE: ...}} marker asks for examples (bug rows, agent rosters, label sets, command snippets, file:line citations) and the customization notes do not explicitly provide them, use placeholder syntax instead of fabricating specifics:
+   - Bug examples: `bug(scope): concise title` for the title and `path/to/file:<line>` for the location. Never guess a real file or line number — placeholders are better than fabricated specifics.
+   - Agent rosters: include ONLY agents the customization notes name. Do not invent nicknames, lenses, or when-to-include rules.
+   - Label sets: use only labels the customization notes provide. Do not invent label names.
+   - Command examples: copy the shape from the template; do not synthesize new commands with parameters the notes did not specify.
+   - When uncertain whether something is real or invented, prefer omitting it over fabricating it.
 SYSPROMPT
 
     local user_prompt
