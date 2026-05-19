@@ -15,9 +15,9 @@ This is the issue-filing flavor of `/swarm-audit`. Use it when your goal is "pop
 
 Examples:
 ```
-/bug-hunt deploy.sh
-/bug-hunt "the template customization logic" hunters=5
-/bug-hunt generic/ severity-floor=major auto-file=critical
+/bug-hunt src/payments
+/bug-hunt "the websocket reconnection logic" hunters=5
+/bug-hunt src/auth severity-floor=major auto-file=critical
 /bug-hunt . hunters=6 output=docs/audit/pre-release
 ```
 
@@ -58,8 +58,6 @@ All hunters share the same job (find bugs) but bring different lenses. Always in
 | Reliability | "Guardian" | Race conditions, data integrity, persistence corruption, error handling gaps, recovery paths, lazy-init that overwrites state | Paranoid SRE who has watched production data disappear. Specifically hunts the class of bug where a fix silently destroys persisted state (e.g., default-then-save instead of load-then-merge). |
 | Edge Cases | "Tester" | Untested branches, boundary conditions (empty/null/max/zero/negative/unicode/concurrent), error paths, what happens when the happy path doesn't | QA engineer who believes every untested branch is a latent bug. Names specific inputs that would break each function. |
 
-For this repo (skill-templates), Guardian must specifically hunt for deploy.sh/sync.sh failure modes: missing customization files, Haiku API errors, GH Actions auth failures, and bash 3.2 incompatibilities (no associative arrays, quoting issues, heredoc edge cases).
-
 #### Extended Roster (pick by relevance to target)
 
 | Hunter | Nickname | Lens | Include When |
@@ -67,19 +65,19 @@ For this repo (skill-templates), Guardian must specifically hunt for deploy.sh/s
 | Security | "Adversary" | Injection, auth bypass, SSRF, path traversal, secret leakage, attack surface | Target touches auth, network code, user input, external APIs, file operations |
 | UX | "Operator" | User-facing regressions, broken error messages, accessibility, confusing states, broken links/buttons | Target touches UI, output formatting, user-facing strings, error flows |
 | Perf | "Profiler" | N+1 queries, accidental quadratic loops, missing indexes, unbounded growth, memory leaks, sync-in-async | Target touches data access, hot paths, request handling, large collections |
-| TemplateCritic | "Architect" | Generic template correctness, {{CUSTOMIZE}} marker hygiene, cross-repo deployment consistency, skill output quality across varied tech stacks | Target is a generic template or deploy.sh/sync.sh |
-| DeployPathologist | "Deployer" | deploy.sh/sync.sh failure modes, config drift, Haiku API errors, GH Actions runner auth, bash 3.2 portability | Target is deploy.sh, sync.sh, or deploy.conf |
+| Template Critic | "Auditor" | Generic templates that produce defective customized output (residual markers, attribution leaks, heading drift, length runaway, hallucinated examples) | Target is `generic/*.md` |
+| Deploy Pathologist | "Deployer" | `deploy.sh` / `sync.sh` failure modes — missing customization files, Haiku API errors (4xx, 5xx, 529 overload), GH Actions runner offline, bash 3.2 incompatibilities, FETCH_HEAD vs local-branch checkout bugs | Target is `deploy.sh`, `sync.sh`, or `deploy.conf` |
 
 #### Selection Algorithm
 
 ```
 1. Start with 3 core hunters (Skeptic, Guardian, Tester)
 2. For each remaining slot up to HUNTER_COUNT:
-   - TemplateCritic if target is the `generic/` directory, any `generic/*.md` file, `deploy.sh`, or `sync.sh`
-   - DeployPathologist if target is deploy.sh, sync.sh, or deploy.conf
    - Adversary if target touches auth/network/input/external IO
    - Operator if target touches UI/output/user-facing strings
    - Profiler if target touches data/hot paths/large collections
+   - Auditor if target is generic/*.md
+   - Deployer if target is deploy.sh, sync.sh, or deploy.conf
 3. Stop when slots are full
 ```
 
@@ -172,7 +170,7 @@ Unless `output=-`, write to `${OUTPUT_DIR}/<slugified-target>-<YYYYMMDD>.md`:
 
 | # | Severity | Title | Location | Hunters | Possible Dupes |
 |---|----------|-------|----------|---------|----------------|
-| 1 | critical | bug(scope): concise issue title | path/to/file:<line> | Hunter1, Hunter2 | — |
+| 1 | critical | bug(payments): charge handler null-derefs on missing currency | src/payments/charge.ts:47 | Skeptic, Guardian | — |
 | 2 | major | ... | ... | ... | #1834 |
 | ... | ... | ... | ... | ... | ... |
 
@@ -213,16 +211,9 @@ Present the summary table to the user. Then, depending on `AUTO_FILE`:
 For each candidate the user accepts, file an issue using the same shape as `/create-issue`:
 
 ```bash
-# Build label list dynamically: include only labels that exist in this repo.
-DESIRED_LABELS=(bug from-bug-hunt)
-EXISTING=$(gh label list --json name -q '.[].name')
-LABELS=$(printf '%s\n' "${DESIRED_LABELS[@]}" | while read -r l; do
-  printf '%s\n' "$EXISTING" | grep -qx "$l" && printf '%s,' "$l"
-done | sed 's/,$//')
-
 gh issue create \
   --title "${TITLE}" \
-  ${LABELS:+--label "$LABELS"} \
+  --label "bug,from-bug-hunt" \
   --body "$(cat <<EOF
 ## Symptom
 ${SYMPTOM}
@@ -245,7 +236,7 @@ EOF
 )"
 ```
 
-The `DESIRED_LABELS` array is the set you want; `gh label list` is the source of truth for what exists; only the intersection ships to `--label`. If the intersection is empty, `${LABELS:+...}` omits the flag entirely so `gh issue create` doesn't fail. For this repo the desired set is `bug` and `from-bug-hunt`; adjust the array if the project uses different conventions.
+**Verify labels exist** before using them. Skip missing labels rather than failing.
 
 ### 8. Commit Candidate List (only if files were written)
 
@@ -298,17 +289,16 @@ Output a final summary:
 - Hunters MUST cap findings at 6. Quality over noise.
 - Hunters MUST stay in their lens. Strays cost tokens and produce dedup noise.
 - Hunters SHOULD return empty if their lens finds nothing — empty is a valid result.
-
-For this repo, Guardian and DeployPathologist must specifically hunt for: deploy.sh/sync.sh failure modes (missing customization files, Haiku API errors, GH Actions auth failures), bash 3.2 incompatibilities (no associative arrays, unquoted expansions, heredoc edge cases), and template deployment consistency across all 12 managed repos.
+- Guardian must verify that any new `{{CUSTOMIZE: ...}}` marker added to a generic template will not let Haiku invent specifics — markers must either be closed ("copy ONLY X from notes") or substitution-shaped (named field). Open-ended "Add X if relevant" markers are the documented defect class (see `docs/audit-results/customization-pipeline`).
 
 ## Examples
 
 ```
-/bug-hunt deploy.sh
-/bug-hunt "the template customization logic" hunters=5
-/bug-hunt generic/ severity-floor=major
+/bug-hunt src/payments
+/bug-hunt "the websocket reconnection logic" hunters=5
+/bug-hunt src/auth severity-floor=major
 /bug-hunt . hunters=6 auto-file=critical
-/bug-hunt sync.sh hunters=3 output=-
+/bug-hunt src/storage hunters=3 output=-
 ```
 
 ## Comparison to Sister Skills
@@ -321,5 +311,5 @@ For this repo, Guardian and DeployPathologist must specifically hunt for: deploy
 | "Audit a design doc / RFC" | `/swarm-audit` |
 | "Review this PR before merge" | `/agentic-audit` |
 
-A typical pipeline: `/recon generic/` → `/bug-hunt generic/` → `/tackle-issues` on the newly-filed issues.
-<!-- skill-templates: bug-hunt a696a37 2026-05-18 -->
+A typical pipeline: `/recon src/payments` → `/bug-hunt src/payments` → `/tackle-issues` on the newly-filed issues.
+<!-- skill-templates: bug-hunt 7f5fa28 2026-05-19 -->
