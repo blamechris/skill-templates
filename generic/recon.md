@@ -272,4 +272,5 @@ Output a concise summary:
 /recon "the websocket protocol" scouts=4 depth=deep
 /recon scouts=2 depth=quick output=-    # print-only quick sweep
 /recon . scouts=5                       # full panel including Native + Scribe
+/recon packages/server scouts=4         # monorepo subpackage with extra scout for size
 ```
