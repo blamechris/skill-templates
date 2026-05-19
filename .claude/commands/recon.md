@@ -60,7 +60,7 @@ Always include the first two. Add more from the extended roster based on the tar
 | Risk Spotter | "Bloodhound" | High-churn files (git log), large/complex files, code smell concentrations — where bugs are most likely to live | Always useful unless `depth=quick`. Surfaces the hotspots that feed into `/bug-hunt` later. |
 | Convention Reader | "Scribe" | Code style, test conventions, CI setup, attribution policies in CLAUDE.md, commit-message format, branching rules | Include when the repo will be edited by future agents. Captures the implicit rules so they aren't violated. |
 | Domain Sniffer | "Native" | Domain vocabulary, key data models, business logic location | Include when target is a feature area rather than the whole repo, or when domain terminology is heavy. |
-| Template Critic | "Auditor" | Generic template structure, `{{CUSTOMIZE: ...}}` markers, customization file coverage, deployed skill correctness across managed repos | Include when reconning `generic/*.md` or customization files. Ensures templates produce correct output in all 12 managed repos. |
+| Template Critic | "Auditor" | Generic template structure, `{{CUSTOMIZE: ...}}` markers, customization file coverage, deployed skill correctness across managed repos | Include when reconning `generic/*.md` or `deploy.sh`/`sync.sh`. Ensures templates produce correct output in all 12 managed repos with varied tech stacks. |
 
 #### Selection Algorithm
 
@@ -69,7 +69,7 @@ Always include the first two. Add more from the extended roster based on the tar
 2. If SCOUT_COUNT >= 3 and DEPTH != quick: add Bloodhound
 3. If SCOUT_COUNT >= 4: add Scribe
 4. If SCOUT_COUNT >= 5 OR target is a specific area: add Native
-5. If target includes generic templates or deploy.sh: add Auditor (may replace Native)
+5. If target includes generic/*.md or deploy.sh or sync.sh: add Auditor (may replace another)
 6. Clamp to SCOUT_COUNT
 ```
 
@@ -271,5 +271,6 @@ Output a concise summary:
 /recon "the websocket protocol" scouts=4 depth=deep
 /recon scouts=2 depth=quick output=-    # print-only quick sweep
 /recon . scouts=5                       # full panel including Native + Scribe
+/recon packages/server scouts=4         # monorepo subpackage with extra scout for size
 ```
-<!-- skill-templates: recon a696a37 2026-05-18 -->
+<!-- skill-templates: recon d4d2115 2026-05-18 -->
