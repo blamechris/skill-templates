@@ -388,9 +388,13 @@ validate_output() {
     local errors=()
 
     # 1. Residual {{CUSTOMIZE markers — Haiku failed to fill or remove.
-    if printf '%s' "$output" | grep -q '{{CUSTOMIZE'; then
+    # Match only markers that start a line (with optional leading whitespace) —
+    # this distinguishes real unfilled markers from legitimate prose mentions
+    # of the {{CUSTOMIZE}} syntax inside inline-code (`{{CUSTOMIZE: ...}}`) or
+    # table cells. Generic templates always place real markers on their own line.
+    if printf '%s' "$output" | grep -qE '^[[:space:]]*\{\{CUSTOMIZE'; then
         local marker_count
-        marker_count=$(printf '%s' "$output" | grep -c '{{CUSTOMIZE' || true)
+        marker_count=$(printf '%s' "$output" | grep -cE '^[[:space:]]*\{\{CUSTOMIZE' || true)
         errors+=("Residual {{CUSTOMIZE marker(s) ($marker_count) — Haiku left them unfilled")
     fi
 
