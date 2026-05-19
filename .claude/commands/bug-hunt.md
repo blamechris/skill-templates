@@ -75,7 +75,7 @@ For this repo (skill-templates), Guardian must specifically hunt for deploy.sh/s
 ```
 1. Start with 3 core hunters (Skeptic, Guardian, Tester)
 2. For each remaining slot up to HUNTER_COUNT:
-   - TemplateCritic if target is generic/*.md or deploy.sh/sync.sh
+   - TemplateCritic if target is the `generic/` directory, any `generic/*.md` file, `deploy.sh`, or `sync.sh`
    - DeployPathologist if target is deploy.sh, sync.sh, or deploy.conf
    - Adversary if target touches auth/network/input/external IO
    - Operator if target touches UI/output/user-facing strings
@@ -172,7 +172,7 @@ Unless `output=-`, write to `${OUTPUT_DIR}/<slugified-target>-<YYYYMMDD>.md`:
 
 | # | Severity | Title | Location | Hunters | Possible Dupes |
 |---|----------|-------|----------|---------|----------------|
-| 1 | critical | bug(deploy): missing GH_TOKEN export breaks gh pr calls | deploy.sh:47 | Deployer, Guardian | — |
+| 1 | critical | bug(scope): concise issue title | path/to/file:<line> | Hunter1, Hunter2 | — |
 | 2 | major | ... | ... | ... | #1834 |
 | ... | ... | ... | ... | ... | ... |
 
@@ -213,9 +213,16 @@ Present the summary table to the user. Then, depending on `AUTO_FILE`:
 For each candidate the user accepts, file an issue using the same shape as `/create-issue`:
 
 ```bash
+# Build label list dynamically: include only labels that exist in this repo.
+DESIRED_LABELS=(bug from-bug-hunt)
+EXISTING=$(gh label list --json name -q '.[].name')
+LABELS=$(printf '%s\n' "${DESIRED_LABELS[@]}" | while read -r l; do
+  printf '%s\n' "$EXISTING" | grep -qx "$l" && printf '%s,' "$l"
+done | sed 's/,$//')
+
 gh issue create \
   --title "${TITLE}" \
-  --label "bug,from-bug-hunt" \
+  ${LABELS:+--label "$LABELS"} \
   --body "$(cat <<EOF
 ## Symptom
 ${SYMPTOM}
@@ -238,7 +245,7 @@ EOF
 )"
 ```
 
-**Verify labels exist** before using them. Skip missing labels rather than failing. For this repo, use `bug` and `from-bug-hunt` (verify with `gh label list`).
+The `DESIRED_LABELS` array is the set you want; `gh label list` is the source of truth for what exists; only the intersection ships to `--label`. If the intersection is empty, `${LABELS:+...}` omits the flag entirely so `gh issue create` doesn't fail. For this repo the desired set is `bug` and `from-bug-hunt`; adjust the array if the project uses different conventions.
 
 ### 8. Commit Candidate List (only if files were written)
 
