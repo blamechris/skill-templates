@@ -67,8 +67,7 @@ All hunters share the same job (find bugs) but bring different lenses. Always in
 | Security | "Adversary" | Injection, auth bypass, SSRF, path traversal, secret leakage, attack surface | Target touches auth, network code, user input, external APIs, file operations |
 | UX | "Operator" | User-facing regressions, broken error messages, accessibility, confusing states, broken links/buttons | Target touches UI, output formatting, user-facing strings, error flows |
 | Perf | "Profiler" | N+1 queries, accidental quadratic loops, missing indexes, unbounded growth, memory leaks, sync-in-async | Target touches data access, hot paths, request handling, large collections |
-
-{{CUSTOMIZE: Domain-specific hunters — copy ONLY hunters that the customization notes explicitly name with all four columns (Hunter / Nickname / Lens / Include When). If the notes do not name any, remove this marker entirely. Do NOT invent hunters from the repo's tech stack — "GameFeel" and "NetworkPathology" are illustrations of FORMAT, not content to fabricate.}}
+{{CUSTOMIZE: Domain-specific hunter rows — copy ONLY hunters that the customization notes explicitly name. Each row must follow the same 4-column pipe-delimited format as the rows above (Hunter | Nickname | Lens | Include When). If the notes do not name any hunters, REMOVE THIS MARKER LINE ENTIRELY so the table ends cleanly. Do NOT insert a blank line before any row you add. Do NOT invent hunters from the repo's tech stack — "GameFeel" and "NetworkPathology" are illustrations of FORMAT, not content to fabricate.}}
 
 #### Selection Algorithm
 

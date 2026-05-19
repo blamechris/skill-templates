@@ -101,4 +101,4 @@ Mindset: *"Will this template still produce correct customized output when Haiku
 - Commit scopes: `(deploy)`, `(sync)`, `(generic)`, `(customizations)`, `(workflow)`, `(docs)`.
 
 ## Lessons Learned
-- **2026-05-19:** First substantive customization written. PR #17 produced 4 Copilot-caught defects (hallucinated `deploy.sh:47` bug example, inconsistent rules, hardcoded labels, cross-section drift). Root cause traced via `/swarm-audit` to the customization-pipeline design — see `docs/audit-results/customization-pipeline/`. Phase 1 hardening landed in PR (this commit's branch).
+- **2026-05-19:** First substantive customization written. PR #17 produced 4 Copilot-caught defects (a hallucinated `deploy.sh:<line>` bug example, inconsistent rules, hardcoded labels, cross-section drift). Root cause traced via `/swarm-audit` to the customization-pipeline design — see `docs/audit-results/customization-pipeline/`. Phase 1 hardening landed in PR (this commit's branch).

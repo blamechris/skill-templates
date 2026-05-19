@@ -60,8 +60,7 @@ Always include the first two. Add more from the extended roster based on the tar
 | Risk Spotter | "Bloodhound" | High-churn files (git log), large/complex files, code smell concentrations — where bugs are most likely to live | Always useful unless `depth=quick`. Surfaces the hotspots that feed into `/bug-hunt` later. |
 | Convention Reader | "Scribe" | Code style, test conventions, CI setup, attribution policies in CLAUDE.md, commit-message format, branching rules | Include when the repo will be edited by future agents. Captures the implicit rules so they aren't violated. |
 | Domain Sniffer | "Native" | Domain vocabulary, key data models, business logic location | Include when target is a feature area rather than the whole repo, or when domain terminology is heavy. |
-
-{{CUSTOMIZE: Domain-specific scouts — copy ONLY scouts that the customization notes explicitly name as a row in a 4-column table (Scout / Nickname / Lens / When to Include). If the notes do not name any, remove this marker entirely. Do NOT invent scouts from the repo's tech stack — "GodotProbe" and "ExpoScout" are illustrations of FORMAT, not content to fabricate.}}
+{{CUSTOMIZE: Domain-specific scout rows — copy ONLY scouts that the customization notes explicitly name. Each row must follow the same 4-column pipe-delimited format as the rows above (Scout | Nickname | Lens | When to Include). If the notes do not name any scouts, REMOVE THIS MARKER LINE ENTIRELY so the table ends cleanly. Do NOT insert a blank line before any row you add. Do NOT invent scouts from the repo's tech stack — "GodotProbe" and "ExpoScout" are illustrations of FORMAT, not content to fabricate.}}
 
 #### Selection Algorithm
 
