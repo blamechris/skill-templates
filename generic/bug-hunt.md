@@ -58,7 +58,7 @@ All hunters share the same job (find bugs) but bring different lenses. Always in
 | Reliability | "Guardian" | Race conditions, data integrity, persistence corruption, error handling gaps, recovery paths, lazy-init that overwrites state | Paranoid SRE who has watched production data disappear. Specifically hunts the class of bug where a fix silently destroys persisted state (e.g., default-then-save instead of load-then-merge). |
 | Edge Cases | "Tester" | Untested branches, boundary conditions (empty/null/max/zero/negative/unicode/concurrent), error paths, what happens when the happy path doesn't | QA engineer who believes every untested branch is a latent bug. Names specific inputs that would break each function. |
 
-{{CUSTOMIZE: For projects with existing post-mortem patterns (e.g., a known class of bug that has bitten this repo before — TOCTOU, data-loss on lazy-init, attribution-footer regressions), bias Guardian or Tester to specifically hunt for that pattern. Example: "Guardian must check every save/load path for default-then-save data loss — this repo has been bitten by it before."}}
+{{CUSTOMIZE: Per-repo post-mortem patterns — copy ONLY pattern-bias instructions that the customization notes explicitly state ("Guardian must check X for Y because Z"). If the notes do not name a specific pattern with a stated reason, remove this marker entirely. Do NOT infer patterns from the repo's tech stack.}}
 
 #### Extended Roster (pick by relevance to target)
 
@@ -67,8 +67,7 @@ All hunters share the same job (find bugs) but bring different lenses. Always in
 | Security | "Adversary" | Injection, auth bypass, SSRF, path traversal, secret leakage, attack surface | Target touches auth, network code, user input, external APIs, file operations |
 | UX | "Operator" | User-facing regressions, broken error messages, accessibility, confusing states, broken links/buttons | Target touches UI, output formatting, user-facing strings, error flows |
 | Perf | "Profiler" | N+1 queries, accidental quadratic loops, missing indexes, unbounded growth, memory leaks, sync-in-async | Target touches data access, hot paths, request handling, large collections |
-
-{{CUSTOMIZE: Add a domain-specific hunter if it pays off. Example: "GameFeel" for game projects (frame-rate spikes, input lag, save-game corruption); "NetworkPathology" for networking projects (silent drops, reconnect storms).}}
+{{CUSTOMIZE: Domain-specific hunter rows — copy ONLY hunters that the customization notes explicitly name. Each row must follow the same 4-column pipe-delimited format as the rows above (Hunter | Nickname | Lens | Include When). If the notes do not name any hunters, REMOVE THIS MARKER LINE ENTIRELY so the table ends cleanly. Do NOT insert a blank line before any row you add. Do NOT invent hunters from the repo's tech stack — "GameFeel" and "NetworkPathology" are illustrations of FORMAT, not content to fabricate.}}
 
 #### Selection Algorithm
 
@@ -292,7 +291,7 @@ Output a final summary:
 - Hunters MUST stay in their lens. Strays cost tokens and produce dedup noise.
 - Hunters SHOULD return empty if their lens finds nothing — empty is a valid result.
 
-{{CUSTOMIZE: If this repo has a known class of bug that should always be hunted (e.g., persistence safety in a game; attribution policy in a public repo; rate-limit bypass in an API), encode it here as a mandatory check for Guardian or Adversary.}}
+{{CUSTOMIZE: Mandatory checks — copy ONLY the mandatory-check rules that the customization notes explicitly state. If the notes do not encode a specific must-hunt class with a hunter assignment, remove this marker entirely.}}
 
 ## Examples
 

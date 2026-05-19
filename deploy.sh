@@ -272,6 +272,12 @@ Rules:
 5. Output ONLY the final markdown. No preamble, no explanation, no code fences wrapping the output.
 6. Never add attribution (no "Generated with", no "Co-Authored-By", no AI mentions).
 7. Preserve all code blocks, bash examples, and formatting exactly as they appear in the template.
+8. Do NOT invent example content. If a {{CUSTOMIZE: ...}} marker asks for examples (bug rows, agent rosters, label sets, command snippets, file:line citations) and the customization notes do not explicitly provide them, use placeholder syntax instead of fabricating specifics:
+   - Bug examples: `bug(scope): concise title` for the title and `path/to/file:<line>` for the location. Never guess a real file or line number — placeholders are better than fabricated specifics.
+   - Agent rosters: include ONLY agents the customization notes name. Do not invent nicknames, lenses, or when-to-include rules.
+   - Label sets: use only labels the customization notes provide. Do not invent label names.
+   - Command examples: copy the shape from the template; do not synthesize new commands with parameters the notes did not specify.
+   - When uncertain whether something is real or invented, prefer omitting it over fabricating it.
 SYSPROMPT
 
     local user_prompt
@@ -366,6 +372,71 @@ Output the fully customized skill markdown now."
     echo "$response"
 }
 
+# --- Validate Haiku's output before writing to disk ---
+# Catches the four PR #17 defect classes (see docs/audit-results/customization-pipeline):
+#   - residual {{CUSTOMIZE markers (Haiku didn't fill or remove)
+#   - attribution footers (zero-attribution policy violation)
+#   - heading-count drift (major section dropped or hallucinated)
+#   - length bounds (truncation or runaway expansion)
+# Returns 0 if output passes, 1 with diagnostics on stderr if it fails.
+# Arguments: output_text template_text skill_name repo_name
+validate_output() {
+    local output="$1"
+    local template="$2"
+    local skill="$3"
+    local repo="$4"
+    local errors=()
+
+    # 1. Residual {{CUSTOMIZE markers — Haiku failed to fill or remove.
+    if printf '%s' "$output" | grep -q '{{CUSTOMIZE'; then
+        local marker_count
+        marker_count=$(printf '%s' "$output" | grep -c '{{CUSTOMIZE' || true)
+        errors+=("Residual {{CUSTOMIZE marker(s) ($marker_count) — Haiku left them unfilled")
+    fi
+
+    # 2. Attribution footer — violates zero-attribution policy across all repos
+    # except where customization explicitly allows. Conservative: always flag,
+    # let the per-repo customization override by overriding this validator if needed.
+    if printf '%s' "$output" | grep -qE 'Co-Authored-By:?[[:space:]]*Claude|Generated with[[:space:]]+Claude'; then
+        errors+=("Attribution footer detected (Co-Authored-By: Claude or Generated with Claude)")
+    fi
+
+    # 3. Heading-count parity — coarse check that no major section was dropped
+    # or hallucinated. Tolerance is ±5: Rule 4 strips the Customization Points
+    # section and customizations may add a couple of headings legitimately.
+    local tmpl_headings out_headings diff
+    tmpl_headings=$(printf '%s' "$template" | grep -cE '^#{1,6}[[:space:]]' || true)
+    out_headings=$(printf '%s' "$output" | grep -cE '^#{1,6}[[:space:]]' || true)
+    diff=$((tmpl_headings - out_headings))
+    if [ "$diff" -gt 5 ] || [ "$diff" -lt -5 ]; then
+        errors+=("Heading count drift: template=$tmpl_headings output=$out_headings (diff $diff, expected ±5)")
+    fi
+
+    # 4. Length bounds — output should be 50%-200% of template length.
+    # Tighter than this would false-positive on heavy customization;
+    # looser would miss truncation or runaway.
+    local tmpl_len out_len
+    tmpl_len=${#template}
+    out_len=${#output}
+    if [ "$out_len" -lt $((tmpl_len / 2)) ]; then
+        errors+=("Output length $out_len < 50% of template $tmpl_len — likely truncated")
+    fi
+    if [ "$out_len" -gt $((tmpl_len * 2)) ]; then
+        errors+=("Output length $out_len > 200% of template $tmpl_len — likely runaway expansion")
+    fi
+
+    if [ "${#errors[@]}" -gt 0 ]; then
+        echo "    ❌ Output validation failed for ${repo} ← ${skill}.md:" >&2
+        local e
+        for e in "${errors[@]}"; do
+            echo "       - $e" >&2
+        done
+        return 1
+    fi
+
+    return 0
+}
+
 # --- Deploy a single pair ---
 declare -a FAILURES=()
 
@@ -405,6 +476,13 @@ deploy_pair() {
     local result
     if ! result=$(call_claude "$template_content" "$custom_content" "$repo" "$skill"); then
         FAILURES+=("${repo}:${skill} — API error")
+        return
+    fi
+
+    # Validate Haiku's output before writing to disk.
+    # Failure here is a hard stop for this pair — never write defective customization.
+    if ! validate_output "$result" "$template_content" "$skill" "$repo"; then
+        FAILURES+=("${repo}:${skill} — output validation failed")
         return
     fi
 
