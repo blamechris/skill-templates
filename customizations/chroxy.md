@@ -194,12 +194,6 @@ Run `/smoke-test` skill — it handles server auto-start/stop, auth token, and s
 - Server must be running for WS connection — smoke test auto-starts one if none found
 - Always rebuild dashboard before testing (provider picker CSS was invisible without rebuild)
 
-## decompose-issue Customizations
-- Default sub-issue labels: `enhancement`, plus `from-review` if the parent has it. No `complexity:*` labels in chroxy yet — if added later, update this note.
-- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme.
-- Parent-marker label: none currently. If a `decomposed` label is added later, the skill will pick it up via the existence check.
-- Same heuristic as `autonomous-dev-flow` decomposition trigger above — treat issues spanning multiple systems or 3+ files as candidates. Use commit scopes (`server`, `app`, `desktop`, `tunnel`, `ws`, `cli`, `dashboard`) to find natural seams when proposing sub-issues.
-
 ## parallel-dev Customizations
 
 Shares all customization points with `autonomous-dev-flow` above (branch prefix, test runners, lint/typecheck, decomposition trigger, commit scopes, PR test plan, smoke test integration).

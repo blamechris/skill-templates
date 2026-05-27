@@ -133,13 +133,6 @@ Mindset: "Does this maintain game feel while being performant on mobile?"
 - Branch prefix detection: `feat/`, `fix/`, `test/`, `refactor/` (not `auto/`)
 - Check for PRs referencing issue numbers in title
 
-## decompose-issue Customizations
-- Default sub-issue labels: `enhancement`, plus the parent's `complexity:` and `smoke-test:` labels remapped to lower tiers (e.g., parent `complexity:high` → sub `complexity:medium` or `complexity:low`). Both label families are required by project policy.
-- Parent-link convention: body line "Part of #N" only — no `parent:#N` label.
-- Parent-marker label: none currently. Parent stays open until all sub-issues merge per generic rules.
-- Use commit scopes (`battle`, `combat`, `ui`, `core`, `node-map`, `carrier`, `replay`, `audio`, `polish`) to find natural seams when proposing sub-issues.
-- Sub-issue acceptance criteria should reference GDD sections when applicable — exodus-loop relies on the GDD as the spec.
-
 ## tackle-issues Customizations
 
 Shares all customization points with `autonomous-dev-flow` above (branch naming, test runner, decomposition, skip labels, PR test plan, commit scopes, pre-skill checkpoint, resume strategy).
