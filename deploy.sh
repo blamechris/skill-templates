@@ -741,6 +741,20 @@ These skills were customized from generic templates using the Claude API. Please
                 printf '%s\n' "$pr_stderr" | sed 's/^/       /'
                 sleep 8
             else
+                # Partial-success recovery: attempt 1 may have created the PR
+                # server-side but lost the response (TCP reset, proxy 502, etc.).
+                # In that case attempt 2 returns "a pull request for branch ...
+                # already exists". Re-query the PR list — if it's there, treat
+                # the deploy as successful instead of double-counting it.
+                if printf '%s' "$pr_stderr" | grep -qE 'already exists|a pull request for branch'; then
+                    local recovered_url
+                    recovered_url=$(gh pr list --repo "$slug" --head "$BRANCH_NAME" --json url -q '.[0].url // empty' 2>/dev/null || true)
+                    if [ -n "$recovered_url" ]; then
+                        echo "    🔗 PR existed after retry: $recovered_url (recovered from attempt 1 partial success)"
+                        rm -f "$pr_stderr_file"
+                        break
+                    fi
+                fi
                 echo "    ❌ Failed to create PR for $slug after 2 attempts. Error:"
                 printf '%s\n' "$pr_stderr" | sed 's/^/       /'
                 rm -f "$pr_stderr_file"
