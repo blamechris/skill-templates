@@ -401,10 +401,16 @@ validate_output() {
         errors+=("Residual {{CUSTOMIZE marker(s) ($marker_count) — Haiku left them unfilled")
     fi
 
-    # 2. Attribution footer — violates zero-attribution policy across all repos
-    # except where customization explicitly allows. Conservative: always flag,
-    # let the per-repo customization override by overriding this validator if needed.
-    if printf '%s' "$output" | grep -qE 'Co-Authored-By:?[[:space:]]*Claude|Generated with[[:space:]]+Claude'; then
+    # 2. Attribution footer — violates zero-attribution policy across all repos.
+    # Match only at LINE START in the LAST 15 LINES of output. Real attribution
+    # footers always live at the bottom on their own lines (the standard
+    # `🤖 Generated with [Claude Code](...)` + `Co-Authored-By: Claude <email>`
+    # block). Without the line-start anchor + tail bound, this false-positives
+    # on rule text inside templates that *describes* what NOT to do — e.g.,
+    # autonomous-dev-flow.md:423 says `No Co-Authored-By, no "Generated with
+    # Claude"`, which Haiku faithfully preserves per system-prompt rule #3,
+    # and the unfiltered regex would then reject the legit preserved rule.
+    if printf '%s' "$output" | tail -n 15 | grep -qE '^(🤖[[:space:]]+)?Generated with[[:space:]]+(\[?Claude|Claude Code)|^Co-Authored-By:[[:space:]]+Claude'; then
         errors+=("Attribution footer detected (Co-Authored-By: Claude or Generated with Claude)")
     fi
 
