@@ -84,6 +84,14 @@ Mindset: "Will this code work reliably offline with sensitive medical data on a 
 - Composes agent-review (MedLens Inspector persona) + check-pr sequentially
 - Copilot review IS active — agent-review's run naturally fills most of the ~4-min Copilot review delay so check-pr starts with comments waiting.
 
+## decompose-issue Customizations
+- Default sub-issue labels: `enhancement` or `bug` plus the area label that still applies after the split — `export`, `ocr`, `ui`, `privacy`, `db`, `camera`, `trends`. `from-review` inherited only if the parent has it. No `complexity:*` labels yet — skip them.
+- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme.
+- Parent-marker label: none currently. Skip the parent-marker step.
+- Natural seams follow the area labels — each area is a candidate sub-issue boundary. OCR pipeline splits along its 3 tiers (local regex / API text / API vision) when changes touch all three. Export system splits along selection vs structured-markdown vs LLM-consumption flow.
+- Code-structure seams: `src/db/repositories/` (DB access), `src/` (general), `app/` (Expo Router screens). DB-schema or repository changes always need a sub-issue separate from the consuming UI to make the migration review-able in isolation.
+- Privacy-touching sub-issues (`privacy` label) must include in the acceptance criteria that no PII leaves the device unless user opts into an API tier — the merge-gate question, not a nice-to-have.
+
 ## parallel-dev Customizations
 - Worktree-based isolation works well for this repo
 - Each worktree needs its own `node_modules` (`npm install` in worktree)

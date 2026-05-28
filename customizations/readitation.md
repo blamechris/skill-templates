@@ -58,6 +58,15 @@
 - **Domain quality bar:** Insights about RSVP timing perception, ORP positioning, iOS gesture quirks, Flutter performance on iOS, drift/sqflite schema choices qualify as durable. Generic Flutter tips do not.
 - **Common paths:** `lib/**/*.dart`, `prototype/**`, `SPEC.md`
 
+## decompose-issue Customizations
+- Default sub-issue labels: `enhancement` or `bug` to match the parent. Pre-Flutter phase has no complexity/testing labels — keep the small set.
+- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme.
+- Parent-marker label: none currently. Skip the parent-marker step.
+- `decision` labels do NOT propagate to sub-issues automatically — sub-issues are implementation; an unresolved `decision` should block the parent or be split into its own decision-only sub-issue with the chosen option recorded in a comment before closing.
+- Natural seams follow SPEC sections: timing math (§4.2), ORP rendering (§4.1), tokenization (§8.1), position tracking (§6), gestures (§5), content schema (§8.1). The RSVP engine boundaries are pure-Dart units the UI consumes — split engine work from UI work when both are in scope.
+- Pre-Flutter phase: most decomposition lands across `SPEC.md` (spec edit) + `prototype/` (validation) + future `lib/**/*.dart` (implementation). Sub-issue acceptance criteria should reference the SPEC section the change implements.
+- iOS-only is a hard boundary for v0.1 — sub-issues that introduce Android-specific work should be marked `wontfix` or deferred, not implemented.
+
 ## parallel-dev Customizations
 
 Shares all customization points with autonomous-dev-flow (branch prefix, test runner, decomposition, commit scopes from agent-review/start-working sections).
