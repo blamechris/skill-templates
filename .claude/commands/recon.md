@@ -272,4 +272,4 @@ Output a concise summary:
 /recon . scouts=5                       # full panel including Native + Scribe
 /recon packages/server scouts=4         # monorepo subpackage with extra scout for size
 ```
-<!-- skill-templates: recon 7f5fa28 2026-05-19 -->
+<!-- skill-templates: recon 57ceacc 2026-05-27 -->
