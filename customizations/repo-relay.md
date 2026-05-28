@@ -52,12 +52,6 @@
 - **Domain quality bar:** Discord API limits, GitHub webhook payload quirks, SQLite concurrency patterns qualify as durable insights
 - **Common paths:** `src/**/*.ts`
 
-## decompose-issue Customizations
-- Default sub-issue labels: ALWAYS apply both `complexity:` and `testing:` labels — required by triage policy in this repo. Aim for `complexity:low|medium` per sub-issue.
-- `testing:high` (full GitHub Actions integration testing) is deprioritized — when proposing sub-issues, prefer seams that allow `testing:low` (pure logic) or `testing:medium` (Discord bot setup).
-- Parent-link convention: body line "Part of #N" only — no separate `parent:#N` label.
-- Sub-issues should align with subsystems: Discord webhook handling, GitHub event ingestion, SQLite persistence, embed rendering — these are the natural seams.
-
 ## parallel-dev Customizations
 
 Shares all customization points with autonomous-dev-flow (branch prefix, test runner, decomposition, commit scopes from agent-review/start-working sections).

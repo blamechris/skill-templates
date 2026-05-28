@@ -106,13 +106,6 @@ Shares all customization points with autonomous-dev-flow (branch prefix, test ru
 - Apply milestone (`V1`, `V2`, `V3`, or `Hardening`) when clear
 - Apply epic label when applicable (e.g., `epic:mcp-server`, `epic:cache-engine`, `epic:indexer`, `epic:task-memory`, `epic:telemetry`, `epic:infra`)
 
-## decompose-issue Customizations
-- Default sub-issue labels: ALWAYS apply both `complexity:` and `testing:` labels (mandatory in this repo). Default to `complexity:low` or `complexity:medium` for sub-issues — if any sub-issue still warrants `complexity:high`, split further.
-- Inherit the parent's milestone (`V1` / `V2` / `V3` / `Hardening`) on every sub-issue.
-- Inherit any `epic:*` label from the parent (e.g., `epic:mcp-server`, `epic:cache-engine`, `epic:indexer`, `epic:task-memory`, `epic:telemetry`, `epic:infra`).
-- Parent-link convention: body line "Part of #N" only — no separate `parent:#N` label.
-- Sub-issues should align with module boundaries (cache engine vs. indexer vs. MCP protocol surface) when proposing seams.
-
 ## create-pr Customizations
 - Reference related issue(s)
 - Include test plan

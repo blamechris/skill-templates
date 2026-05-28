@@ -91,12 +91,6 @@ Mindset: *"Will this template still produce correct customized output when Haiku
 - Default labels: `enhancement` for features, `bug` for defects, `from-review` if review-sourced, `from-bug-hunt` if from `/bug-hunt`.
 - This repo doesn't use complexity labels — skip them.
 
-## decompose-issue Customizations
-- Default sub-issue labels: `enhancement` only. No `complexity:*` labels in this repo.
-- Parent-link convention: rely on the body line "Part of #N" — no `parent:#N` label scheme.
-- Parent-marker label: none (this repo doesn't use `decomposed` / `epic`). Skip that step.
-- Sub-issue scope hints: most decomposition here splits across `generic/<skill>.md`, `customizations/<repo>.md`, and `deploy.sh` / `sync.sh` — name the files concretely in the proposed sub-issue table.
-
 ## tackle-issues Customizations
 - This is a low-velocity meta-repo. Marathons are unusual. Most changes are surgical edits to a single template plus a customization-file note.
 - Always re-run `./sync.sh` after deploying a skill change to verify drift is resolved.
