@@ -574,6 +574,14 @@ declare -a CI_CLONED_REPOS=()
 
 ci_setup_repo() {
     local repo="$1" idx="$2"
+    # Defense in depth: deploy_pair already validates idx via conf_index, but
+    # an unguarded ${CONF_SLUGS[-1]} would crash with "bad array subscript"
+    # under bash 3.2 + set -u if a future caller bypasses the upstream check.
+    # Matches the pattern used in ci_push_and_pr.
+    if [ "$idx" = "-1" ]; then
+        echo "    ⚠️  Skipping ci_setup_repo for unknown repo: '$repo'"
+        return
+    fi
     local slug="${CONF_SLUGS[$idx]}"
     local clone_dir="/tmp/skill-deploy/${repo}"
 
@@ -783,11 +791,17 @@ These skills were customized from generic templates using the Claude API. Please
 echo "Deploying..."
 echo ""
 
-for pair in "${DEPLOY_PAIRS[@]}"; do
-    repo="${pair%%:*}"
-    skill="${pair##*:}"
-    deploy_pair "$repo" "$skill"
-done
+# Defense in depth: the early-exit guard at line 206 already prevents reaching
+# here with empty DEPLOY_PAIRS, but a co-located length check makes the local
+# safety story explicit and lets static analysis verify it without reasoning
+# about a 500-line interval. Matches the pattern at line 191.
+if [ ${#DEPLOY_PAIRS[@]} -gt 0 ]; then
+    for pair in "${DEPLOY_PAIRS[@]}"; do
+        repo="${pair%%:*}"
+        skill="${pair##*:}"
+        deploy_pair "$repo" "$skill"
+    done
+fi
 
 # CI mode: push and create PRs for each repo that had changes
 if [ "$LOCAL_MODE" = false ] && [ ${#CI_CLONED_REPOS[@]} -gt 0 ]; then
