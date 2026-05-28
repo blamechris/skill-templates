@@ -507,6 +507,10 @@ deploy_pair() {
     local result
     local v_attempt
     for v_attempt in 1 2; do
+        # API errors: do NOT retry here — call_claude already has its own HTTP
+        # retry (3x exponential backoff on 429/5xx, fail-fast on 4xx). Re-trying
+        # here would double up on transients and obscure real auth/quota
+        # failures. This loop only re-samples on validation failure.
         if ! result=$(call_claude "$template_content" "$custom_content" "$repo" "$skill"); then
             FAILURES+=("${repo}:${skill} — API error")
             return
