@@ -417,9 +417,18 @@ validate_output() {
     # 3. Heading-count parity — coarse check that no major section was dropped
     # or hallucinated. Tolerance is ±5: Rule 4 strips the Customization Points
     # section and customizations may add a couple of headings legitimately.
+    #
+    # Count only REAL markdown headings, not bash comments inside fenced code
+    # blocks. Templates contain `# {{CUSTOMIZE: ...}}` comment lines inside
+    # ```bash blocks that look like headings to a naive `^#{1,6}` regex. When
+    # Haiku correctly strips unfilled markers (system-prompt rule #2), those
+    # code-block comments disappear too, producing a large false drift count.
+    # The awk script toggles state on ``` fences and only counts # lines while
+    # OUTSIDE a fenced block — which is where real markdown headings live.
+    local heading_awk='/^```/ { in_code = !in_code; next } !in_code && /^#{1,6}[[:space:]]/ { count++ } END { print count+0 }'
     local tmpl_headings out_headings diff
-    tmpl_headings=$(printf '%s' "$template" | grep -cE '^#{1,6}[[:space:]]' || true)
-    out_headings=$(printf '%s' "$output" | grep -cE '^#{1,6}[[:space:]]' || true)
+    tmpl_headings=$(printf '%s' "$template" | awk "$heading_awk")
+    out_headings=$(printf '%s' "$output" | awk "$heading_awk")
     diff=$((tmpl_headings - out_headings))
     if [ "$diff" -gt 5 ] || [ "$diff" -lt -5 ]; then
         errors+=("Heading count drift: template=$tmpl_headings output=$out_headings (diff $diff, expected ±5)")
