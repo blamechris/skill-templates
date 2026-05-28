@@ -644,6 +644,15 @@ ci_push_and_pr() {
     # time to a repo that never had it), causing the function to silently
     # no-op when the only change is a new file. Staging makes git see all
     # additions, modifications, and deletions in the staged tree.
+    #
+    # Guard the `git add`: if SKILLS_DIR doesn't exist in the clone (e.g., a
+    # repo that's never had a `.claude/commands/` dir), `git add` errors out
+    # under `set -e`. In that case there's nothing to deploy by definition.
+    if [ ! -d "$SKILLS_DIR" ]; then
+        echo "  ℹ️  $repo: no changes to deploy (no $SKILLS_DIR/ in clone)"
+        cd "$SCRIPT_DIR"
+        return
+    fi
     git add "$SKILLS_DIR/"
     if git diff --cached --quiet; then
         echo "  ℹ️  $repo: no changes to deploy"
