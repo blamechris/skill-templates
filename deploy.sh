@@ -718,24 +718,32 @@ These skills were customized from generic templates using the Claude API. Please
 
         # Retry once with backoff — `gh pr create` failures are usually transient
         # (GitHub API consistency window after the branch push, brief 5xx, etc.).
-        # Surface the captured stderr so future failures are self-diagnosing
-        # instead of requiring log archaeology.
+        # Capture stderr to a tempfile (bash 3.2 friendly) so the success log
+        # contains only the PR URL, while failure stderr is still available for
+        # diagnostics. 2>&1 would pollute the success URL line if gh emitted a
+        # deprecation or self-update notice.
         local attempt
+        local pr_stderr_file
+        pr_stderr_file=$(mktemp)
+        local pr_stderr=""
         for attempt in 1 2; do
             if pr_url=$(gh pr create --repo "$slug" \
                 --title "chore(skills): update skill templates (${BRANCH_DATE})" \
                 --body "$pr_body" \
-                --head "$BRANCH_NAME" 2>&1); then
+                --head "$BRANCH_NAME" 2>"$pr_stderr_file"); then
                 echo "    🔗 Created PR: $pr_url"
+                rm -f "$pr_stderr_file"
                 break
             fi
+            pr_stderr=$(cat "$pr_stderr_file")
             if [ "$attempt" = "1" ]; then
                 echo "    ⚠️  gh pr create failed (attempt 1/2) — retrying in 8s. Error:"
-                printf '%s\n' "$pr_url" | sed 's/^/       /'
+                printf '%s\n' "$pr_stderr" | sed 's/^/       /'
                 sleep 8
             else
                 echo "    ❌ Failed to create PR for $slug after 2 attempts. Error:"
-                printf '%s\n' "$pr_url" | sed 's/^/       /'
+                printf '%s\n' "$pr_stderr" | sed 's/^/       /'
+                rm -f "$pr_stderr_file"
                 FAILURES+=("${repo}: gh pr create failed")
                 cd "$SCRIPT_DIR"
                 return
