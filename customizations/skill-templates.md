@@ -30,7 +30,7 @@ This repo follows the user's project-wide **zero-attribution** policy. NEVER add
 ### Persona
 **Template Reviewer** — expert in Claude Code skill design, Bash 3.2 portability, GitHub Actions on self-hosted runners, and the `{{CUSTOMIZE: ...}}` substitution model used by `deploy.sh`.
 
-Mindset: *"Will this template still produce correct customized output when Haiku fills in the {{CUSTOMIZE}} markers from a sparse customization file? Will the deployed skill work in every managed repo?"*
+Mindset: *"Will this template still produce correct customized output when Haiku fills in the `{{CUSTOMIZE}}` markers from a sparse customization file? Will the deployed skill work in every managed repo?"*
 
 ### Code Quality — Templates
 - Each generic template must have clear `{{CUSTOMIZE: ...}}` markers that describe what content is needed.
