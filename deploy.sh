@@ -462,6 +462,13 @@ validate_output() {
 # --- Deploy a single pair ---
 declare -a FAILURES=()
 
+# Telemetry counters for Haiku validation-retry observability (#43). Tracks
+# how often the 1-shot retry in deploy_pair fires so chronic over-elaboration
+# (a borderline customization sneaking through via re-sample) is visible.
+PAIRS_ATTEMPTED=0
+PAIRS_RETRIED=0
+PAIRS_FAILED_AFTER_RETRY=0
+
 deploy_pair() {
     local repo="$1"
     local skill="$2"
@@ -490,6 +497,7 @@ deploy_pair() {
     fi
 
     echo "  🔄 ${repo} ← ${skill}.md"
+    PAIRS_ATTEMPTED=$((PAIRS_ATTEMPTED + 1))
 
     local template_content custom_content
     template_content=$(<"$template")
@@ -507,6 +515,11 @@ deploy_pair() {
     local result
     local v_attempt
     for v_attempt in 1 2; do
+        # API errors: do NOT retry here — call_claude already has its own HTTP
+        # retry (3x exponential backoff on 429/5xx, fail-fast on 400/401/403/404).
+        # Re-trying here would double up on transients and obscure the real
+        # 4xx auth/quota failures that should fail loudly. This loop only
+        # re-samples on validation failure.
         if ! result=$(call_claude "$template_content" "$custom_content" "$repo" "$skill"); then
             FAILURES+=("${repo}:${skill} — API error")
             return
@@ -516,7 +529,9 @@ deploy_pair() {
         fi
         if [ "$v_attempt" = "1" ]; then
             echo "    ↻  Validation failed on attempt 1 — re-sampling Haiku (output variance)" >&2
+            PAIRS_RETRIED=$((PAIRS_RETRIED + 1))
         else
+            PAIRS_FAILED_AFTER_RETRY=$((PAIRS_FAILED_AFTER_RETRY + 1))
             FAILURES+=("${repo}:${skill} — output validation failed after retry")
             return
         fi
@@ -714,24 +729,46 @@ These skills were customized from generic templates using the Claude API. Please
 
         # Retry once with backoff — `gh pr create` failures are usually transient
         # (GitHub API consistency window after the branch push, brief 5xx, etc.).
-        # Surface the captured stderr so future failures are self-diagnosing
-        # instead of requiring log archaeology.
+        # Capture stderr to a tempfile (bash 3.2 friendly) so the success log
+        # contains only the PR URL, while failure stderr is still available for
+        # diagnostics. 2>&1 would pollute the success URL line if gh emitted a
+        # deprecation or self-update notice.
         local attempt
+        local pr_stderr_file
+        pr_stderr_file=$(mktemp)
+        local pr_stderr=""
         for attempt in 1 2; do
             if pr_url=$(gh pr create --repo "$slug" \
                 --title "chore(skills): update skill templates (${BRANCH_DATE})" \
                 --body "$pr_body" \
-                --head "$BRANCH_NAME" 2>&1); then
+                --head "$BRANCH_NAME" 2>"$pr_stderr_file"); then
                 echo "    🔗 Created PR: $pr_url"
+                rm -f "$pr_stderr_file"
                 break
             fi
+            pr_stderr=$(cat "$pr_stderr_file")
             if [ "$attempt" = "1" ]; then
                 echo "    ⚠️  gh pr create failed (attempt 1/2) — retrying in 8s. Error:"
-                printf '%s\n' "$pr_url" | sed 's/^/       /'
+                printf '%s\n' "$pr_stderr" | sed 's/^/       /'
                 sleep 8
             else
+                # Partial-success recovery: attempt 1 may have created the PR
+                # server-side but lost the response (TCP reset, proxy 502, etc.).
+                # In that case attempt 2 returns "a pull request for branch ...
+                # already exists". Re-query the PR list — if it's there, treat
+                # the deploy as successful instead of double-counting it.
+                if printf '%s' "$pr_stderr" | grep -qE 'already exists|a pull request for branch'; then
+                    local recovered_url
+                    recovered_url=$(gh pr list --repo "$slug" --head "$BRANCH_NAME" --json url -q '.[0].url // empty' 2>/dev/null || true)
+                    if [ -n "$recovered_url" ]; then
+                        echo "    🔗 PR existed after retry: $recovered_url (recovered from attempt 1 partial success)"
+                        rm -f "$pr_stderr_file"
+                        break
+                    fi
+                fi
                 echo "    ❌ Failed to create PR for $slug after 2 attempts. Error:"
-                printf '%s\n' "$pr_url" | sed 's/^/       /'
+                printf '%s\n' "$pr_stderr" | sed 's/^/       /'
+                rm -f "$pr_stderr_file"
                 FAILURES+=("${repo}: gh pr create failed")
                 cd "$SCRIPT_DIR"
                 return
@@ -766,6 +803,20 @@ echo ""
 echo "=== Deployment Summary ==="
 echo "  Pairs attempted: ${#DEPLOY_PAIRS[@]}"
 echo "  Failures: ${#FAILURES[@]}"
+
+# Haiku validation-retry telemetry (#43). Surface the rate so chronic
+# borderline customizations are visible; warn above 3% sustained (the alarm
+# threshold from the issue) when the sample is large enough (>30 pairs) to
+# avoid noise on small filtered deploys.
+if [ "$PAIRS_RETRIED" -gt 0 ] || [ "$PAIRS_FAILED_AFTER_RETRY" -gt 0 ]; then
+    if [ "$PAIRS_ATTEMPTED" -gt 0 ]; then
+        retry_rate=$(awk "BEGIN { printf \"%.1f\", $PAIRS_RETRIED * 100 / $PAIRS_ATTEMPTED }")
+        echo "  Haiku validation retries: $PAIRS_RETRIED/$PAIRS_ATTEMPTED ($retry_rate%) — of which failed after retry: $PAIRS_FAILED_AFTER_RETRY"
+        if [ "$PAIRS_ATTEMPTED" -gt 30 ] && awk "BEGIN { exit !($PAIRS_RETRIED * 100 / $PAIRS_ATTEMPTED > 3) }"; then
+            echo "  ⚠️  Retry rate exceeds 3% — investigate (degraded Haiku output or over-elaborated customization)"
+        fi
+    fi
+fi
 
 if [ ${#FAILURES[@]} -gt 0 ]; then
     echo ""
