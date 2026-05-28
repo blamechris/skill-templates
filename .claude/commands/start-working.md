@@ -278,25 +278,24 @@ When the queue is truly empty, perform a lightweight codebase scan to surface po
 #### 4a. Test Coverage Gaps
 
 ```bash
-# Bash syntax check on deploy.sh and sync.sh
+# Smoke-test Bash syntax on deploy.sh and sync.sh
 bash -n deploy.sh
 bash -n sync.sh
 ```
 
-- Check which source files have corresponding test or validation coverage
-- Identify shell scripts that lack syntax validation
-- Look for untested edge cases in deploy logic
+- Check which source directories have corresponding test files
+- Identify source files with no test counterpart
+- Look for test files that are empty or minimal (< 5 assertions)
 
 #### 4b. Dependency Health
 
 ```bash
-# Check for outdated dependencies in deploy.conf and workflow files
-grep -E "^[A-Z_]+=" deploy.conf | head -20
+# Check for outdated dependencies (language-specific)
+# This repo uses Bash and GitHub Actions — no package manager to check
 ```
 
-- Review pinned versions in `deploy.conf`
-- Check for deprecated GitHub Actions or shell utilities
-- Verify self-hosted runner compatibility
+- Count outdated dependencies
+- Check for known vulnerabilities if tooling is available (`npm audit`, `pip-audit`, etc.)
 
 #### 4c. Code Quality Signals
 
@@ -309,8 +308,8 @@ Quick scan for potential issues:
 #### 4d. Documentation Gaps
 
 - README.md: is it up to date? Does it cover setup, usage, contributing?
-- CLAUDE.md: are project conventions documented?
-- `.claude/rules/`: are specialized rules (bash-compat, gh-actions) current?
+- API documentation: are public interfaces documented?
+- Architecture: any `docs/architecture/` or ADR files?
 
 #### 4e. Present Quick Audit Results
 
@@ -321,16 +320,16 @@ No actionable items found in the standard work sources. Here's what a quick code
 
 | Area | Status | Finding |
 |------|--------|---------|
-| Bash Syntax | ✅ | deploy.sh and sync.sh pass `-n` check |
-| Dependencies | ⚠️ | {N} pinned versions in deploy.conf may be outdated |
+| Test Coverage | ⚠️ | {N} source files have no test counterpart |
+| Dependencies | ✅ | All up to date |
 | Code Quality | ⚠️ | {N} files over 500 lines |
-| Documentation | ⚠️ | {N} `.claude/rules/` files need refresh |
+| Documentation | ⚠️ | README missing setup instructions |
 
 ### Suggested Investigations
 
-1. **Audit deploy.conf versions** — Review pinned versions against latest releases. Effort: S
+1. **Add tests for {module}** — {N} files in `src/{path}/` have no tests. Effort: M
 2. **Split {file}** — {file} is {N} lines. Consider extracting {concept}. Effort: S
-3. **Refresh `.claude/rules/`** — {N} rules files may be stale. Effort: S
+3. **Update README** — Missing: setup instructions, environment variables. Effort: S
 
 ### Want a Deep Audit?
 
@@ -347,4 +346,4 @@ Run `/project-audit` for a comprehensive multi-agent analysis with detailed reco
 6. **Respect blocked/assigned** — Show blocked and assigned items for context but clearly separate them from the actionable queue. Never recommend working on a blocked or assigned item.
 7. **Composable output** — The "Recommended Next Action" section should include copy-pasteable commands (e.g., `/autonomous-dev-flow #12 #18 #25`) so the user can immediately act on the findings.
 8. **No file writes** — The fallback audit in Phase 4 outputs to the conversation only. Unlike `/project-audit`, it does NOT write report files or create a `docs/` directory.
-<!-- skill-templates: start-working 57ceacc 2026-05-27 -->
+<!-- skill-templates: start-working 08288f2 2026-05-27 -->

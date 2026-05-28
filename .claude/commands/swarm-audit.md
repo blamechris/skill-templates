@@ -184,9 +184,9 @@ Output a concise summary:
 | 2/5 | Concerning. Significant issues that may cause failures. |
 | 1/5 | Fundamentally broken. Needs rethinking, not patching. |
 
-### Grading Criteria for skill-templates
+### Project-Specific Grading Criteria
 
-- **Auditor** should weight whether deployed output still reads as a coherent skill after `{{CUSTOMIZE}}` substitution, and whether the customization file coverage is sufficient to avoid residual markers in deployed repos.
+- **Auditor** should weight whether deployed output still reads as a coherent skill after `{{CUSTOMIZE}}` substitution, and whether markers are closed ("copy ONLY X from notes") or substitution-shaped (named field) — open-ended "Add X if relevant" markers are defects.
 - **Deployer** should weight self-hosted-runner-specific gotchas (no inherited `gh` auth, macOS launchd OnDemand culling, bash 3.2 incompatibilities).
 
 ### Agent Behavior Rules
@@ -205,4 +205,4 @@ Output a concise summary:
 /swarm-audit docs/rfc-push-notifications.md
 /swarm-audit "session management across server restart" 6
 ```
-<!-- skill-templates: swarm-audit 57ceacc 2026-05-27 -->
+<!-- skill-templates: swarm-audit 08288f2 2026-05-27 -->

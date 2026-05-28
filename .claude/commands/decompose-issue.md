@@ -97,9 +97,9 @@ Present the proposed breakdown to the user as a table and wait for confirmation:
 
 | # | Proposed Title | Scope | Complexity |
 |---|----------------|-------|------------|
-| 1 | type(scope): … | Files: generic/skill.md, customizations/repo.md | low |
-| 2 | type(scope): … | Files: deploy.sh; marker substitution logic | medium |
-| 3 | type(scope): … | Files: sync.sh; drift detection | medium |
+| 1 | type(scope): … | Files: src/a.ts, src/b.ts | low |
+| 2 | type(scope): … | Files: src/c.ts; new test surface | medium |
+| 3 | type(scope): … | Migration + backfill | medium |
 
 **Labels each sub-issue will receive:** enhancement
 
@@ -213,4 +213,4 @@ Next: `/autonomous-dev-flow #${SUB_1} #${SUB_2} #${SUB_3}` to implement them, or
 - The parent describes a single atomic operation (a migration, a one-line config change, a single test) → it doesn't decompose, it just gets done.
 - The parent already has a "Decomposed into" comment → use the existing sub-issues unless they're wrong.
 - The work spans multiple repos → that's a coordination problem, not a decomposition problem. Open issues in each repo separately.
-<!-- skill-templates: decompose-issue b4268c2 2026-05-27 -->
+<!-- skill-templates: decompose-issue 08288f2 2026-05-27 -->
