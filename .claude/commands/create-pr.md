@@ -126,12 +126,8 @@ Ask: "Ready to create this PR?" — wait for confirmation.
 # Push branch
 git push -u origin ${BRANCH}
 
-# Ensure GH_TOKEN is set for self-hosted runner
-export GH_TOKEN="${GH_TOKEN:-}"
-if [ -z "$GH_TOKEN" ]; then
-  echo "ERROR: GH_TOKEN not set. Cannot create PR on self-hosted runner."
-  exit 1
-fi
+# Export GH_TOKEN before gh pr create (required on self-hosted runner)
+export GH_TOKEN="${DEPLOY_PAT}"
 
 # Create PR with heredoc for body
 gh pr create --title "${PR_TITLE}" --body "$(cat <<'EOF'
@@ -177,5 +173,5 @@ Then below the table:
 5. **Verify after creation** — Check that `closingIssuesReferences` matches expected issues.
 6. **Target main** — Always create PRs against `main` unless the user specifies otherwise.
 7. **Don't fabricate** — Only add `Closes #N` for issues the PR's changes actually address. If unsure, ask.
-8. **Self-hosted runner auth** — Always `export GH_TOKEN` before any `gh pr` call. The runner has no inherited auth session.
-<!-- skill-templates: create-pr 08288f2 2026-05-27 -->
+8. **GH_TOKEN on self-hosted runner** — Always `export GH_TOKEN` from the deploy PAT before any `gh pr` call. The runner has no inherited auth session.
+<!-- skill-templates: create-pr 9652481 2026-05-27 -->

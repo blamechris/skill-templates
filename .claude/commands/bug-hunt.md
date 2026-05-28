@@ -170,7 +170,7 @@ Unless `output=-`, write to `${OUTPUT_DIR}/<slugified-target>-<YYYYMMDD>.md`:
 
 | # | Severity | Title | Location | Hunters | Possible Dupes |
 |---|----------|-------|----------|---------|----------------|
-| 1 | critical | bug(deploy): customization marker not stripped on missing notes | generic/example.md:42 | Auditor, Guardian | — |
+| 1 | critical | bug(deploy): residual marker in customized output | generic/example.md:42 | Auditor, Guardian | — |
 | 2 | major | ... | ... | ... | #1834 |
 | ... | ... | ... | ... | ... | ... |
 
@@ -296,7 +296,7 @@ Output a final summary:
 ```
 /bug-hunt generic/
 /bug-hunt deploy.sh
-/bug-hunt "the customization pipeline" hunters=5
+/bug-hunt "the customization pipeline" severity-floor=major
 /bug-hunt . hunters=6 auto-file=critical
 /bug-hunt sync.sh hunters=3 output=-
 ```
@@ -312,4 +312,4 @@ Output a final summary:
 | "Review this PR before merge" | `/agentic-audit` |
 
 A typical pipeline: `/recon generic/` → `/bug-hunt generic/` → `/tackle-issues` on the newly-filed issues.
-<!-- skill-templates: bug-hunt 08288f2 2026-05-27 -->
+<!-- skill-templates: bug-hunt 9652481 2026-05-27 -->

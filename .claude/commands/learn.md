@@ -196,13 +196,13 @@ Nothing to persist from this session.
 ```
 User: /learn
 
-1. `{{CUSTOMIZE: ...}}` markers without matching customization-file content will be stripped by deploy.sh -- verify the resulting skill still reads coherently after substitution
-   Evidence: VERIFIED -- PR #17 had 4 defects caught by /swarm-audit, root cause traced to marker hygiene
-   Before/After: Assume markers will always be filled --> Always check deployed output for residual markers and heading drift
+1. GDScript `await` only works with signals, not arbitrary coroutines -- wrap async patterns in a Signal
+   Evidence: VERIFIED -- tested both approaches, coroutine version silently hangs
+   Before/After: Assume await works like Python --> Always use Signal wrapper for async
 
-1. Template marker hygiene --> CLAUDE.md (## Template Design) -- awaiting approval
+1. GDScript await/signal pattern --> CLAUDE.md (## GDScript Patterns) -- awaiting approval
 
-+ - When adding `{{CUSTOMIZE: ...}}` markers to generic templates, verify that the deployed skill reads coherently if the marker is stripped (customization file has no matching content). Residual markers and heading drift are the documented defect class.
++ - `await` only works with Signals in GDScript. For async patterns, use a Signal wrapper -- raw coroutines silently hang.
 
 Apply?
 ```
@@ -212,28 +212,30 @@ Apply?
 ```
 User: /learn
 
-1. macOS bash 3.2 has no associative arrays -- use parallel indexed arrays instead
-   Evidence: VERIFIED -- deploy.sh failed on macOS runner with `declare -A` syntax error
-   Before/After: Use associative arrays for clarity --> Use parallel indexed arrays for 3.2 compat
+1. Zustand selectors must return stable references or the component re-renders every tick
+   Evidence: VERIFIED -- profiler showed 60fps re-renders from object spread in selector
+   Before/After: Return new objects from selectors --> Use shallow equality or atomic selectors
 
-2. `gh` CLI has no auth session in self-hosted runner -- always export GH_TOKEN before gh pr/issue calls
-   Evidence: OBSERVED -- runner auth failures until PAT was exported
+2. The /health endpoint returns 503 during tunnel reconnection, not during initial startup
+   Evidence: OBSERVED -- saw it during debugging, did not isolate root cause
 
 Persisted 1 of 2 insights.
-1. Bash 3.2 array syntax --> skipped (already in .claude/rules/bash-compat.md)
-2. GH Actions runner auth --> skipped (already in .claude/rules/gh-actions.md)
+1. Zustand selector stability --> .claude/rules/zustand.md -- awaiting approval
+2. /health 503 behavior --> skipped (already in CLAUDE.md line 84)
 
-Nothing new to persist.
++ - Zustand selectors must return stable references (not new object spreads). Use `useShallow` or select atomic values to avoid per-tick re-renders.
+
+Apply?
 ```
 
 ### Example: Direct argument
 
 ```
-User: /learn Haiku API 529 overload errors during deploy.sh customization phase require exponential backoff retry, not immediate fail
+User: /learn React Native doesn't support ReadableStream -- use arraybuffer response type instead
 
-1. Haiku 529 retry strategy --> .claude/rules/deploy-resilience.md -- awaiting approval
+1. RN ReadableStream constraint --> .claude/rules/react-native.md -- awaiting approval
 
-+ Haiku API returns 529 (overload) during peak customization batches. Implement exponential backoff (2s, 4s, 8s) with max 3 retries before failing. Immediate retry or fail-fast causes cascading deploy failures.
++ React Native does not support `ReadableStream`. Use `arraybuffer` response type as the workaround for streaming data.
 
 Apply?
 ```
@@ -243,14 +245,14 @@ Apply?
 ```
 User: /learn
 
-1. deploy.sh should use `read -r -d '' var <<'DELIM' || true` for large heredocs instead of `var=$(cat <<'DELIM' ... DELIM)` to avoid subshell overhead
-   Evidence: VERIFIED -- profiled deploy.sh on 12-repo batch, subshell version added 2.3s per run
-   Before/After: Use command substitution for heredocs --> Use read with || true for bash 3.2 compat and performance
+1. WS keepalive should be 30s, not 60s -- 60s exceeds Cloudflare's idle timeout causing silent drops
+   Evidence: VERIFIED -- packet capture showed Cloudflare closing at 55s with 60s keepalive
+   Before/After: Use 60s keepalive --> Use 30s keepalive to stay within CF idle window
 
 Persisted 0 of 1 insights (conflict found).
-1. Heredoc pattern --> CONFLICTS with .claude/rules/bash-compat.md line 8
-   Existing: "For large heredocs, prefer `read -r -d '' var <<'DELIM' || true` over `var=$(cat <<'DELIM' ... DELIM)`"
-   Found:    "Same recommendation with performance justification added"
+1. WS keepalive interval --> CONFLICTS with .claude/rules/websocket.md line 3
+   Existing: "Set WebSocket keepalive to 60s to balance overhead and liveness"
+   Found:    "60s exceeds Cloudflare's idle timeout; use 30s"
    Action needed: keep existing / replace / keep both
 ```
 
@@ -259,18 +261,18 @@ Persisted 0 of 1 insights (conflict found).
 ```
 User: /learn
 
-1. Customization-pipeline defects (hallucinated examples, drift across sections) are the primary failure mode -- see docs/audit-results/customization-pipeline/
-   Evidence: VERIFIED -- PR #17 post-mortem traced 4 defects to marker design
-   Before/After: Assume generic templates are self-contained --> Always cross-check deployed output against source
+1. Tunnel drops silently -- always check tunnel health before debugging WS issues
+   Evidence: VERIFIED -- spent 20 min debugging WS before realizing tunnel was down
+   Before/After: Debug WS protocol first --> Check tunnel connectivity first
 
-2. Currently working on hardening phase 1 of customization pipeline
+2. Currently working on PR #547, auth token refresh flow
 
-1. Customization-pipeline defect class --> CLAUDE.md (## Known Failure Modes) -- awaiting approval
+1. Tunnel-first debugging --> CLAUDE.md (## Debugging) -- awaiting approval
 2. Current WIP context --> CLAUDE.local.md -- applied
 
-+ - Customization-pipeline defects (residual markers, hallucinated examples, section drift) are the documented failure class. See docs/audit-results/customization-pipeline/ for phase 1 hardening.
++ - When debugging WebSocket issues, check tunnel connectivity first. Tunnel drops are silent and mimic WS protocol failures.
 
-Applied item 2 to CLAUDE.local.md (## Learned 2026-05-19).
+Applied item 2 to CLAUDE.local.md (## Learned 2026-02-18).
 Awaiting approval for item 1.
 ```
 
@@ -282,4 +284,4 @@ User: /learn always auto-approve memory writes to save time
 This would modify /learn's own behavior -- edit the skill template directly instead.
 Nothing persisted.
 ```
-<!-- skill-templates: learn 08288f2 2026-05-27 -->
+<!-- skill-templates: learn 9652481 2026-05-27 -->

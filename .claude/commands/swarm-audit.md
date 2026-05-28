@@ -186,7 +186,7 @@ Output a concise summary:
 
 ### Project-Specific Grading Criteria
 
-- **Auditor** should weight whether deployed output still reads as a coherent skill after `{{CUSTOMIZE}}` substitution, and whether markers are closed ("copy ONLY X from notes") or substitution-shaped (named field) — open-ended "Add X if relevant" markers are defects.
+- **Auditor** should weight whether deployed output still reads as a coherent skill after `{{CUSTOMIZE}}` substitution, and whether markers are closed ("copy ONLY X from notes") or substitution-shaped (named field) — open-ended "Add X if relevant" markers are a documented defect class.
 - **Deployer** should weight self-hosted-runner-specific gotchas (no inherited `gh` auth, macOS launchd OnDemand culling, bash 3.2 incompatibilities).
 
 ### Agent Behavior Rules
@@ -204,5 +204,7 @@ Output a concise summary:
 /swarm-audit "the WebSocket protocol in src/ws-server.js" 4
 /swarm-audit docs/rfc-push-notifications.md
 /swarm-audit "session management across server restart" 6
+/swarm-audit generic/swarm-audit.md 8
+/swarm-audit deploy.sh 6
 ```
-<!-- skill-templates: swarm-audit 08288f2 2026-05-27 -->
+<!-- skill-templates: swarm-audit 9652481 2026-05-27 -->
