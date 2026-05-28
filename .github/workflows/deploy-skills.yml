@@ -7,6 +7,17 @@ on:
       - 'generic/**'
       - 'customizations/**'
       - 'deploy.conf'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Deploy mode'
+        required: true
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - changed-templates
+          - changed-customs
 
 jobs:
   deploy:
@@ -19,9 +30,23 @@ jobs:
       - name: Detect changes
         id: changes
         run: |
-          TEMPLATES_CHANGED=$(git diff HEAD~1 --name-only -- 'generic/*.md' | wc -l | tr -d ' ')
-          CUSTOMS_CHANGED=$(git diff HEAD~1 --name-only -- 'customizations/*.md' | wc -l | tr -d ' ')
-          CONF_CHANGED=$(git diff HEAD~1 --name-only -- 'deploy.conf' | wc -l | tr -d ' ')
+          # For push events, use git diff to detect which paths changed.
+          # For workflow_dispatch, drive everything from the manual `mode` input
+          # (no diff to inspect — main hasn't moved).
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MODE="${{ github.event.inputs.mode }}"
+            case "$MODE" in
+              all)               TEMPLATES_CHANGED=0; CUSTOMS_CHANGED=0; CONF_CHANGED=1 ;;
+              changed-templates) TEMPLATES_CHANGED=1; CUSTOMS_CHANGED=0; CONF_CHANGED=0 ;;
+              changed-customs)   TEMPLATES_CHANGED=0; CUSTOMS_CHANGED=1; CONF_CHANGED=0 ;;
+              *)                 echo "Unknown mode: $MODE" >&2; exit 1 ;;
+            esac
+            echo "Manual dispatch — mode: $MODE"
+          else
+            TEMPLATES_CHANGED=$(git diff HEAD~1 --name-only -- 'generic/*.md' | wc -l | tr -d ' ')
+            CUSTOMS_CHANGED=$(git diff HEAD~1 --name-only -- 'customizations/*.md' | wc -l | tr -d ' ')
+            CONF_CHANGED=$(git diff HEAD~1 --name-only -- 'deploy.conf' | wc -l | tr -d ' ')
+          fi
 
           echo "templates=$TEMPLATES_CHANGED" >> "$GITHUB_OUTPUT"
           echo "customs=$CUSTOMS_CHANGED" >> "$GITHUB_OUTPUT"
