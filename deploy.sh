@@ -639,14 +639,18 @@ ci_push_and_pr() {
 
     cd "$clone_dir"
 
-    # Check if there are changes
-    if git diff --quiet && git diff --cached --quiet; then
+    # Stage first, then check the staged diff. `git diff --quiet` alone misses
+    # NEW untracked files (e.g., a brand-new skill being deployed for the first
+    # time to a repo that never had it), causing the function to silently
+    # no-op when the only change is a new file. Staging makes git see all
+    # additions, modifications, and deletions in the staged tree.
+    git add "$SKILLS_DIR/"
+    if git diff --cached --quiet; then
         echo "  ℹ️  $repo: no changes to deploy"
         cd "$SCRIPT_DIR"
         return
     fi
 
-    git add "$SKILLS_DIR/"
     git commit -m "chore(skills): update deployed skill templates
 
 Automated deployment from skill-templates on ${BRANCH_DATE}." 2>/dev/null
