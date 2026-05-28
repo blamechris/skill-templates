@@ -76,9 +76,19 @@ ${stderr}"
     rm -f "$tmp_out" "$tmp_err"
 
     # Banned patterns — any of these means deploy.sh hit a bash-internal
-    # crash that the array guards are supposed to prevent.
+    # crash, never acceptable regardless of exit code.
+    #   - bad array subscript:        indexing past bounds or with -1 (the
+    #                                 crash class #23 documented)
+    #   - unbound variable:           set -u violation (the other half of #23)
+    #   - syntax error:               malformed script content
+    #   - command not found:          missing tool / PATH issue at runtime
+    #   - division by 0:              arithmetic expansion fault (#51)
+    #   - unary operator expected:    unquoted empty test operand, common
+    #                                 under set -u interactions (#51)
+    #   - parameter null or not set:  ${VAR:?msg} explicit check failure (#51)
     local banned
-    for banned in 'bad array subscript' 'unbound variable' 'syntax error' 'command not found'; do
+    for banned in 'bad array subscript' 'unbound variable' 'syntax error' 'command not found' \
+                  'division by 0' 'unary operator expected' 'parameter null or not set'; do
         if printf '%s' "$combined" | grep -qi -- "$banned"; then
             fail_test "$test_name" "Output contains banned pattern: '$banned'
 exit=$exit_code
@@ -132,10 +142,16 @@ assert_guarded_iteration() {
         # "guard-and-iterate" pattern (`if [ ${#A[@]} -gt 0 ]; then for ... `)
         # and the "exit-if-empty" pattern (`if [ ${#A[@]} -eq 0 ]; then exit;
         # fi; for ...`) are safe — the lossy regex catches both.
-        if ! sed -n "${from},${ln}p" "$DEPLOY_SH" | grep -qE "\\\$\\{#${array_name}\\[@\\]\\}"; then
+        #
+        # Strip comment-only lines before searching (#52). A `# Note: ${#FOO[@]}
+        # grows on each call` comment near an unguarded iteration would
+        # otherwise falsely satisfy the guard check. The filter matches lines
+        # whose first non-whitespace character is `#`.
+        if ! sed -n "${from},${ln}p" "$DEPLOY_SH" | grep -vE '^[[:space:]]*#' | grep -qE "\\\$\\{#${array_name}\\[@\\]\\}"; then
             fail_test "$test_name" "Unguarded iteration of $array_name at deploy.sh:$ln
 Expected a \${#${array_name}[@]} length check within 10 preceding lines
-(either '-gt 0' guard or '-eq 0' early-exit pattern)."
+(either '-gt 0' guard or '-eq 0' early-exit pattern). Comment lines do
+not count — the guard must be executable code."
             return
         fi
     done
@@ -151,10 +167,14 @@ assert_guarded_subscript() {
     local array_name="$1" test_name="$2"
     TESTS_RUN=$((TESTS_RUN + 1))
 
-    # Match `${ARRAY[$idx]}` or `${ARRAY[$var]}`. Exclude `${#ARRAY[...]}`
-    # (length expressions are safe; only value access can subscript-fault).
+    # Match `${ARRAY[$idx]}` specifically — narrowed from `${ARRAY[$var]}`
+    # per #50 so iteration-variable subscripts like `${ARRAY[$i]}` inside
+    # `for i in "${!CONF_NAMES[@]}"` aren't flagged as needing idx=-1 guards
+    # (i is always a valid index from that iteration). Exclude `${#ARRAY[...]}`
+    # length expressions (safe — only value access can subscript-fault).
+    # Comment lines are stripped before searching.
     local subscript_lines
-    subscript_lines=$(grep -nE "[^#]\\\$\\{${array_name}\\[\\\$" "$DEPLOY_SH" | grep -v '\${#' | cut -d: -f1)
+    subscript_lines=$(grep -nE "\\\$\\{${array_name}\\[\\\$idx\\]\\}" "$DEPLOY_SH" | grep -v '^[[:space:]]*#' | grep -v ':[[:space:]]*#' | cut -d: -f1)
 
     if [ -z "$subscript_lines" ]; then
         pass_test "$test_name (no \${${array_name}[\$...]} subscript found — guard not required)"
@@ -258,7 +278,12 @@ assert_guarded_iteration CONF_NAMES "CONF_NAMES array iterations are guarded"
 
 # Subscript guards — conf_index returns -1 for unknown repos; indexing
 # CONF_SLUGS/CONF_PATHS/CONF_SKILLS with -1 crashes under set -u + bash 3.2.
+# All three arrays use the same idx return so they share the same regression
+# class (#50). The analyzer checks `${ARRAY[$idx]}` accesses specifically,
+# letting valid `${ARRAY[$i]}` iteration accesses through.
 assert_guarded_subscript CONF_SLUGS "CONF_SLUGS subscripts are guarded against idx=-1"
+assert_guarded_subscript CONF_PATHS "CONF_PATHS subscripts are guarded against idx=-1"
+assert_guarded_subscript CONF_SKILLS "CONF_SKILLS subscripts are guarded against idx=-1"
 
 # ---- Summary ----
 

@@ -81,6 +81,11 @@ conf_index() {
 
 repo_has_skill() {
     local idx="$1" skill="$2"
+    # Defense in depth: every current caller passes a validated idx, but a
+    # future caller bypassing the upstream check would crash on
+    # ${CONF_SKILLS[-1]} under bash 3.2 + set -u. Returning 1 (skill not in
+    # repo) is the right semantic for an unknown repo.
+    [ "$idx" = "-1" ] && return 1
     local skills_csv="${CONF_SKILLS[$idx]}"
     [[ ",$skills_csv," == *",$skill,"* ]]
 }
@@ -553,6 +558,14 @@ ${stamp}"
 
 deploy_local() {
     local repo="$1" skill="$2" content="$3" idx="$4"
+    # Defense in depth: caller validates idx upstream, but ${CONF_PATHS[-1]}
+    # under bash 3.2 + set -u would crash. Matches the pattern in
+    # ci_setup_repo and ci_push_and_pr.
+    if [ "$idx" = "-1" ]; then
+        echo "    ⚠️  Skipping deploy_local for unknown repo: '$repo'"
+        FAILURES+=("${repo}:${skill} — unknown repo (idx=-1)")
+        return
+    fi
     local repo_path="${CONF_PATHS[$idx]}"
     local target_dir="$repo_path/$SKILLS_DIR"
     local target_file="$target_dir/${skill}.md"
