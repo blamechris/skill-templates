@@ -462,6 +462,13 @@ validate_output() {
 # --- Deploy a single pair ---
 declare -a FAILURES=()
 
+# Telemetry counters for Haiku validation-retry observability (#43). Tracks
+# how often the 1-shot retry in deploy_pair fires so chronic over-elaboration
+# (a borderline customization sneaking through via re-sample) is visible.
+PAIRS_ATTEMPTED=0
+PAIRS_RETRIED=0
+PAIRS_FAILED_AFTER_RETRY=0
+
 deploy_pair() {
     local repo="$1"
     local skill="$2"
@@ -490,6 +497,7 @@ deploy_pair() {
     fi
 
     echo "  🔄 ${repo} ← ${skill}.md"
+    PAIRS_ATTEMPTED=$((PAIRS_ATTEMPTED + 1))
 
     local template_content custom_content
     template_content=$(<"$template")
@@ -520,7 +528,9 @@ deploy_pair() {
         fi
         if [ "$v_attempt" = "1" ]; then
             echo "    ↻  Validation failed on attempt 1 — re-sampling Haiku (output variance)" >&2
+            PAIRS_RETRIED=$((PAIRS_RETRIED + 1))
         else
+            PAIRS_FAILED_AFTER_RETRY=$((PAIRS_FAILED_AFTER_RETRY + 1))
             FAILURES+=("${repo}:${skill} — output validation failed after retry")
             return
         fi
@@ -792,6 +802,20 @@ echo ""
 echo "=== Deployment Summary ==="
 echo "  Pairs attempted: ${#DEPLOY_PAIRS[@]}"
 echo "  Failures: ${#FAILURES[@]}"
+
+# Haiku validation-retry telemetry (#43). Surface the rate so chronic
+# borderline customizations are visible; warn above 3% sustained (the alarm
+# threshold from the issue) when the sample is large enough (>30 pairs) to
+# avoid noise on small filtered deploys.
+if [ "$PAIRS_RETRIED" -gt 0 ] || [ "$PAIRS_FAILED_AFTER_RETRY" -gt 0 ]; then
+    if [ "$PAIRS_ATTEMPTED" -gt 0 ]; then
+        retry_rate=$(awk "BEGIN { printf \"%.1f\", $PAIRS_RETRIED * 100 / $PAIRS_ATTEMPTED }")
+        echo "  Haiku validation retries: $PAIRS_RETRIED/$PAIRS_ATTEMPTED ($retry_rate%) — of which failed after retry: $PAIRS_FAILED_AFTER_RETRY"
+        if [ "$PAIRS_ATTEMPTED" -gt 30 ] && awk "BEGIN { exit !($PAIRS_RETRIED * 100 / $PAIRS_ATTEMPTED > 3) }"; then
+            echo "  ⚠️  Retry rate exceeds 3% — investigate (degraded Haiku output or over-elaborated customization)"
+        fi
+    fi
+fi
 
 if [ ${#FAILURES[@]} -gt 0 ]; then
     echo ""
