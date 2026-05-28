@@ -101,6 +101,13 @@
 - Hook event handling edge cases (malformed JSON, missing fields)
 - Script execution speed (runs on every hook event)
 
+## decompose-issue Customizations
+- Default sub-issue labels: `enhancement` or `from-review`. No `complexity:*`/`testing:*` labels — keep the small-project label set.
+- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme.
+- Parent-marker label: none currently. Skip the parent-marker step.
+- Decomposition is rare here — the codebase is two scripts (~380 lines). Most issues are directly actionable in a single PR. Only decompose if the change spans both `notify.sh` and the hook event handler dispatch, OR introduces a new persistent-state mechanism that needs schema + reader + writer split apart.
+- Natural seams when decomposition is justified: one sub-issue per hook-event type (idle, permission, subagent, bg-bash, heartbeat), or split config/state/transport (env-var > .env > defaults hierarchy → state files in `/tmp` and `~/.claude-notify` → Discord webhook call).
+
 ## parallel-dev Customizations
 
 Shares all customization points with autonomous-dev-flow (branch prefix, test runner, commit scopes from agent-review/start-working sections).

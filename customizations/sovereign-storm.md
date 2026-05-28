@@ -182,6 +182,14 @@ Mindset: *"Does this respect the effect-list architecture (data over branching)?
 - TileSprite + setTint is the canonical pattern for tinted-tile water (see `mapGraphics`).
 - Depth assignments: terrain=0, decoration overlay=2, hotspots=4, flags=5, ships=10, effects=15+.
 
+## decompose-issue Customizations
+- Default sub-issue labels: inherit the parent's `area:*` (gameplay/ai/visual/audio/ui/lobby/infra), `priority:*` (high/med/low), and `bug` if applicable. Skip `epic` on sub-issues — that label is reserved for umbrella tracking issues like #31 and #49.
+- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme. The Step prefix in commit subjects (`Step Nx: short description (#issue-or-pr-ref)`) is the milestone tracking convention, separate from sub-issue linkage.
+- Parent-marker label: if the parent is an open epic (#31 / #49 or future), keep the `epic` label on the parent — that's the existing convention. Otherwise skip.
+- Decomposition trigger (already in `tackle-issues` customizations): issues spanning multiple packages (`shared` + `server` + `client`), OR scoped to "all maps" / "all vessels" / "all hotspot kinds" unless it's a uniform refactor.
+- Natural seams follow the package boundary: `packages/shared/src/**/*.ts` (schema, message types, constants, pure helpers) → `packages/server/src/rooms/BattleRoom.ts` (resolver + state) → `packages/client/src/scenes/BattleScene.ts` (Phaser scene + HUD). Schema-sync workarounds (`MSG_*` custom broadcasts) typically need shared + server changes in the same sub-issue; the client read can be a separate sub-issue.
+- Other axes: per Effect variant when adding hotspot mechanics, per vessel role when tuning asymmetry, per hotspot kind in `HOTSPOT_REGISTRY`. Sub-issue acceptance criteria must include a "Test path" (map / vessel / step-by-step verification) — manual verification is the current gate.
+
 ## parallel-dev Customizations
 
 ### Default Concurrency

@@ -131,6 +131,13 @@ Mindset: "Is this type-safe end-to-end? Does it handle clinical data correctly, 
 - `- [ ] pnpm lint passes`
 - `- [ ] Affected service tested locally`
 
+## decompose-issue Customizations
+- Default sub-issue labels: `enhancement`, `bug`, or `from-review` matching the parent's primary label. No `complexity:*` labels in this repo yet — skip them.
+- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme.
+- Parent-marker label: none currently. Skip the parent-marker step.
+- Natural seams follow the Turborepo build order: `packages/*` (shared types, validators, medical-logic, ai-prompts, db-schema) → `services/*` (api-gateway, ai-oversight, clinical workers) → `apps/*` (clinician-portal). Prefer one sub-issue per layer when an issue spans two or more.
+- Other axes: commit scopes (`db`, `ai`, `notes`, `clinical`, `auth`, `gateway`, `portal`, `infra`) — each is a candidate sub-issue boundary. Clinical-data event-emission changes always need a sub-issue separate from the producer and consumer to make the contract review-able in isolation.
+
 ## parallel-dev Customizations
 
 Shares all customization points with `autonomous-dev-flow` above.

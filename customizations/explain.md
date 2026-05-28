@@ -113,6 +113,14 @@ Mindset: *"Does this preserve the transparency contract? Are RLS boundaries resp
 - Composes agent-review (explAIn Inspector persona) + check-pr sequentially.
 - Copilot polling: keep the loop but tolerate absent reviews (project is private and small).
 
+## decompose-issue Customizations
+- Default sub-issue labels: `enhancement`, `bug`, `documentation`, or `question` to match the parent. `from-review` is not yet a repo label — skip it gracefully or create it when the first review-derived sub-issue lands (the skill should fall back cleanly).
+- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme.
+- Parent-marker label: none currently. Skip the parent-marker step.
+- Natural seams follow the monorepo: `apps/mobile/` (Expo client) vs `packages/{ui,db,llm,personas,shared}` (shared libs) vs `supabase/{migrations,functions}/` (DB schema + edge functions). Edge-function changes are usually their own sub-issue because they ship + deploy independently and have a separate trust boundary.
+- Other axes: per persona (Moderator is v0.1; DM/Arbiter/Judge/Chronicler are deferred), per `Effect` / `mediator_action` variant when adding new transparency-contract surface, and per edge function when adding RLS-protected write paths.
+- If the parent touches the transparency contract (`original_draft` / `advisor_suggestion` / `sent_text` / `mediator_output` columns), every sub-issue body must restate that the contract is preserved — splits often miss UI surfacing on one side.
+
 ## parallel-dev Customizations
 - Worktree-based isolation works for this repo
 - Each worktree needs its own `node_modules` (`pnpm install` in worktree) once scaffolded

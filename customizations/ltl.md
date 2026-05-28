@@ -109,6 +109,14 @@ Mindset: *"Does this code respect the grieving user? Is the deceased's authored 
 - Composes agent-review (LTL Inspector persona) + check-pr sequentially.
 - Copilot review IS active here — keep the check-pr Step 0 polling loop. Agent-review's ~minute-or-two run naturally fills most of the Copilot delay.
 
+## decompose-issue Customizations
+- Default sub-issue labels: `enhancement` or `bug` plus any area label that still applies after the split — `data-model`, `death-transition`, `privacy`, `ui`, `prompts`, `memorial`, `offline-sync`. The `privacy` and `death-transition` labels are *load-bearing* — propagate them to every sub-issue that touches those surfaces, even tangentially. `from-review` inherited only if the parent has it.
+- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme.
+- Parent-marker label: none currently. Skip the parent-marker step.
+- Natural seams follow the monorepo: `apps/mobile/` (Expo client) vs `packages/` (shared libs) vs `supabase/migrations/*.sql` + `supabase/functions/**/*.ts` (DB + edge functions). Death-transition and audit-log mutations are edge-function-only — those sub-issues must reference design doc §6.
+- Other axes: per design-doc section (data model §7, death transition §6, memorial §10, privacy §8) when the parent maps to one. SQLite offline-sync changes are usually their own sub-issue because they need airplane-mode verification.
+- If the parent touches RLS, every sub-issue body must include "RLS verified via pgTAP" in the acceptance criteria — design doc §8.2 + the `supabase test db` gate.
+
 ## parallel-dev Customizations
 - Worktree-based isolation works well for this repo
 - Each worktree needs its own `node_modules` (`npm install` in worktree) once scaffolded

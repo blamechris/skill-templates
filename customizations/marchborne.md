@@ -87,6 +87,14 @@
 - Focus agent work on: C# scripts, ScriptableObject definitions, editor tooling, build configurations
 - CLAUDE.md must be updated when architectural decisions change
 
+## decompose-issue Customizations
+- Default sub-issue labels: inherit the parent's `phase:*` label (sub-issues belong to the same phase), `system:*` label per the actual system the sub-issue targets, and `type:gameplay` / `type:architecture` per scope. Skip `type:design-gap` on sub-issues — that's reserved for unanswered design questions, not implementation tasks.
+- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme.
+- Parent-marker label: none currently. Skip the parent-marker step.
+- Decomposition trigger (already in `tackle-issues` customizations): issues spanning multiple `system:*` axes, or scoped to "300+ nodes" / "all 6 biomes" / "all modes". Treat the system labels (`system:units|gates|combat|procedural|meta|ui|audio`) as the natural seam — one sub-issue per system axis.
+- Natural seams in code: `Assets/Scripts/Marchborne.<Namespace>/` per system (Core, Units, Gates, Combat, Procedural, Meta), `Assets/ScriptableObjects/**/*.asset` per data axis (UnitConfig, GateConfig, BiomeConfig, SegmentConfig, CombatMatrix). Foundation/manager classes always split before gameplay features that consume them.
+- Architecture sub-issues (`type:architecture`) must land before gameplay sub-issues in the same phase — encode that in the proposed sub-issue order.
+
 ## parallel-dev Customizations
 - **Default concurrency:** 2 (Unity builds are heavy, especially URP shader compilation)
 - **Dependency setup in worktree:** Open Unity once to resolve packages, then close

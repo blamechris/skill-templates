@@ -91,6 +91,13 @@ Scoring: Code quality (0-2), Architecture (0-2), Testing (0-2), Security (0-2), 
 - Check orchestrator-current.md for session context
 - Only Orchestrator may modify CLAUDE.md
 
+## decompose-issue Customizations
+- Default sub-issue labels: `enhancement` (the repo has no formal complexity/testing label families per the start-working note). Inherit any `blocked`/`wontfix`/`needs-design` from the parent only if it still applies after the split.
+- Parent-link convention: body line "Part of #N" only — no `parent:#N` label scheme.
+- Parent-marker label: none currently. Skip the parent-marker step until a `decomposed` / `epic` label is added repo-wide.
+- Natural seams follow the KMP module boundary: `shared/src/**/*.kt` (business logic) vs `androidApp/src/**/*.kt` and `iosApp/**/*.swift` (platform UI). Prefer one sub-issue per side of that boundary when an issue touches both. Other axes: Firebase auth (P0 lane), Compose UI, multi-agent coordination flows.
+- If the parent affects Orchestrator coordination, note in the sub-issue body that CLAUDE.md edits are Orchestrator-only.
+
 ## parallel-dev Customizations
 
 Shares all customization points with autonomous-dev-flow (uses autonomous-dev-flow/tackle-issues customizations from start-working and agent-review sections: test runner, commit scopes, platform parity, multi-agent coordination).
