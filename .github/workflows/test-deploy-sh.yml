@@ -1,0 +1,36 @@
+name: Test deploy.sh
+# Runs the bash 3.2 regression harness from tests/ whenever deploy.sh, the
+# tests themselves, or this workflow change. Self-hosted macOS runner is
+# preferred so the test environment matches production CI (bash 3.2).
+# See #25 for motivation; #23 for the original crash classes the harness
+# protects against.
+
+on:
+  pull_request:
+    paths:
+      - 'deploy.sh'
+      - 'tests/**'
+      - '.github/workflows/test-deploy-sh.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy.sh'
+      - 'tests/**'
+      - '.github/workflows/test-deploy-sh.yml'
+
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tests use `git diff HEAD~1` against generic/ and customizations/
+          # to exercise the --changed-* code paths. fetch-depth: 2 makes
+          # HEAD~1 resolvable; matches deploy-skills.yml.
+          fetch-depth: 2
+
+      - name: Confirm bash version
+        run: bash --version
+
+      - name: Run bash 3.2 regression harness
+        run: bash tests/test_deploy_bash_compat.sh
