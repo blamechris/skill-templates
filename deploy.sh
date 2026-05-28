@@ -495,18 +495,32 @@ deploy_pair() {
     template_content=$(<"$template")
     custom_content=$(<"$custom")
 
+    # Call Claude and validate the output before writing to disk. Validation
+    # failure is a hard stop — never write defective customization.
+    #
+    # Retry once on validation failure: Haiku produces stochastic outputs even
+    # at temperature=0 (sovereign-storm:check-pr in run 26554429712 produced
+    # 32 headings on a 23-heading template, then 22 headings on the very next
+    # local re-run — same inputs, same model). Re-sampling typically clears
+    # transient drift without changing the customization or relaxing the
+    # validator bounds.
     local result
-    if ! result=$(call_claude "$template_content" "$custom_content" "$repo" "$skill"); then
-        FAILURES+=("${repo}:${skill} — API error")
-        return
-    fi
-
-    # Validate Haiku's output before writing to disk.
-    # Failure here is a hard stop for this pair — never write defective customization.
-    if ! validate_output "$result" "$template_content" "$skill" "$repo"; then
-        FAILURES+=("${repo}:${skill} — output validation failed")
-        return
-    fi
+    local v_attempt
+    for v_attempt in 1 2; do
+        if ! result=$(call_claude "$template_content" "$custom_content" "$repo" "$skill"); then
+            FAILURES+=("${repo}:${skill} — API error")
+            return
+        fi
+        if validate_output "$result" "$template_content" "$skill" "$repo"; then
+            break
+        fi
+        if [ "$v_attempt" = "1" ]; then
+            echo "    ↻  Validation failed on attempt 1 — re-sampling Haiku (output variance)" >&2
+        else
+            FAILURES+=("${repo}:${skill} — output validation failed after retry")
+            return
+        fi
+    done
 
     # Append version stamp so sync.sh can detect outdated deployments
     local template_hash
