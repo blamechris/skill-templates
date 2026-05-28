@@ -187,16 +187,18 @@ build_pairs() {
         done
     fi
 
-    # Deduplicate
-    local -a unique=()
-    local seen=""
-    for pair in "${DEPLOY_PAIRS[@]}"; do
-        if [[ "$seen" != *"|$pair|"* ]]; then
-            unique+=("$pair")
-            seen="${seen}|$pair|"
-        fi
-    done
-    DEPLOY_PAIRS=("${unique[@]}")
+    # Deduplicate (skip when empty — bash 3.2 set -u crashes on "${EMPTY[@]}")
+    if [ ${#DEPLOY_PAIRS[@]} -gt 0 ]; then
+        local -a unique=()
+        local seen=""
+        for pair in "${DEPLOY_PAIRS[@]}"; do
+            if [[ "$seen" != *"|$pair|"* ]]; then
+                unique+=("$pair")
+                seen="${seen}|$pair|"
+            fi
+        done
+        DEPLOY_PAIRS=("${unique[@]}")
+    fi
 }
 
 build_pairs
@@ -531,10 +533,14 @@ ci_setup_repo() {
     local slug="${CONF_SLUGS[$idx]}"
     local clone_dir="/tmp/skill-deploy/${repo}"
 
-    # Skip if already set up
-    for r in "${CI_CLONED_REPOS[@]:-}"; do
-        [ "$r" = "$repo" ] && return 0
-    done
+    # Skip if already set up. Note: ${arr[@]:-} on bash 3.2 expands an empty
+    # array to a single empty-string element, causing a spurious loop iteration.
+    # Guard with the array length instead.
+    if [ ${#CI_CLONED_REPOS[@]} -gt 0 ]; then
+        for r in "${CI_CLONED_REPOS[@]}"; do
+            [ "$r" = "$repo" ] && return 0
+        done
+    fi
 
     echo "    📥 Cloning $slug..."
     rm -rf "$clone_dir"
@@ -616,6 +622,12 @@ ci_push_and_pr() {
     local repo="$1"
     local idx
     idx=$(conf_index "$repo")
+    # Defensive: empty/unknown repo (e.g., from a bad caller) would index
+    # CONF_SLUGS[-1] and bash errors with "bad array subscript".
+    if [ "$idx" = "-1" ]; then
+        echo "    ⚠️  Skipping ci_push_and_pr for unknown repo: '$repo'"
+        return
+    fi
     local slug="${CONF_SLUGS[$idx]}"
     local clone_dir="/tmp/skill-deploy/${repo}"
 
@@ -681,10 +693,10 @@ for pair in "${DEPLOY_PAIRS[@]}"; do
 done
 
 # CI mode: push and create PRs for each repo that had changes
-if [ "$LOCAL_MODE" = false ]; then
+if [ "$LOCAL_MODE" = false ] && [ ${#CI_CLONED_REPOS[@]} -gt 0 ]; then
     echo ""
     echo "Pushing and creating PRs..."
-    for repo in "${CI_CLONED_REPOS[@]:-}"; do
+    for repo in "${CI_CLONED_REPOS[@]}"; do
         ci_push_and_pr "$repo"
     done
 fi
