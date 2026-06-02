@@ -15,9 +15,9 @@ This is the issue-filing flavor of `/swarm-audit`. Use it when your goal is "pop
 
 Examples:
 ```
-/bug-hunt src/payments
-/bug-hunt "the websocket reconnection logic" hunters=5
-/bug-hunt src/auth severity-floor=major auto-file=critical
+/bug-hunt generic/
+/bug-hunt deploy.sh hunters=5
+/bug-hunt "the customization pipeline" severity-floor=major auto-file=critical
 /bug-hunt . hunters=6 output=docs/audit/pre-release
 ```
 
@@ -170,7 +170,7 @@ Unless `output=-`, write to `${OUTPUT_DIR}/<slugified-target>-<YYYYMMDD>.md`:
 
 | # | Severity | Title | Location | Hunters | Possible Dupes |
 |---|----------|-------|----------|---------|----------------|
-| 1 | critical | bug(payments): charge handler null-derefs on missing currency | src/payments/charge.ts:47 | Skeptic, Guardian | — |
+| 1 | critical | bug(deploy): customization marker not stripped on empty notes | generic/example.md:42 | Auditor, Guardian | — |
 | 2 | major | ... | ... | ... | #1834 |
 | ... | ... | ... | ... | ... | ... |
 
@@ -294,11 +294,11 @@ Output a final summary:
 ## Examples
 
 ```
-/bug-hunt src/payments
-/bug-hunt "the websocket reconnection logic" hunters=5
-/bug-hunt src/auth severity-floor=major
+/bug-hunt generic/
+/bug-hunt deploy.sh
+/bug-hunt "the customization pipeline" severity-floor=major
 /bug-hunt . hunters=6 auto-file=critical
-/bug-hunt src/storage hunters=3 output=-
+/bug-hunt sync.sh hunters=3 output=-
 ```
 
 ## Comparison to Sister Skills
@@ -311,5 +311,5 @@ Output a final summary:
 | "Audit a design doc / RFC" | `/swarm-audit` |
 | "Review this PR before merge" | `/agentic-audit` |
 
-A typical pipeline: `/recon src/payments` → `/bug-hunt src/payments` → `/tackle-issues` on the newly-filed issues.
-<!-- skill-templates: bug-hunt 7f5fa28 2026-05-19 -->
+A typical pipeline: `/recon generic/` → `/bug-hunt generic/` → `/tackle-issues` on the newly-filed issues.
+<!-- skill-templates: bug-hunt ebdb14e 2026-06-02 -->
