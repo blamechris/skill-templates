@@ -127,3 +127,4 @@ Mindset: *"Does this code respect the grieving user? Is the deceased's authored 
 - Check: `npm run lint && npm run format:check`
 - Check: design-doc alignment (any drift from `docs/LTL_Design_Document.md`?)
 - Check: Supabase migrations apply cleanly against a fresh DB — `supabase db reset` then `supabase test db`.
+- Start/detect the app (for the "How to detect and start the application" marker): the Expo dev server runs on port 8081. Start it with `npm start -w @ltl/mobile` (which runs `expo start`). The mobile workspace has **no** `dev` script — its scripts are `start`, `ios`, `android`, `web`, `test`, `typecheck`. Do not emit `npm run dev`. Guard with `lsof -i :8081` so an already-running server isn't double-started.
