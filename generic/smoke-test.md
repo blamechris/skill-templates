@@ -37,8 +37,24 @@ The smoke test connects to a running application instance. Check if one is alrea
 
 ### 2. Run the Smoke Test
 
+**Do NOT forward `$ARGUMENTS` verbatim to `playwright test`.** Only `--headed` is a real
+Playwright flag; `--keep-screenshots` is a skill-level flag handled by this skill's
+cleanup step (5), not Playwright. Parse the two out separately:
+
 ```bash
-{{CUSTOMIZE: Command to run the smoke test script}}
+PW_FLAGS=""
+KEEP_SCREENSHOTS=false
+for arg in $ARGUMENTS; do
+  case "$arg" in
+    --headed) PW_FLAGS="$PW_FLAGS --headed" ;;
+    --keep-screenshots) KEEP_SCREENSHOTS=true ;;  # skill-level, NOT passed to Playwright
+    *) ;;  # ignore unknown flags rather than forwarding them
+  esac
+done
+
+# {{CUSTOMIZE: Command to run the smoke test script — append only $PW_FLAGS, e.g.
+#   npx playwright test smoke.spec.ts $PW_FLAGS
+# Never append $ARGUMENTS or $KEEP_SCREENSHOTS here.}}
 ```
 
 The test script should:
@@ -84,8 +100,11 @@ Output a summary table:
 ### 5. Cleanup
 
 ```bash
-# Remove screenshots unless --keep-screenshots was passed
-{{CUSTOMIZE: Cleanup command}}
+# Remove screenshots unless --keep-screenshots was passed (parsed in step 2, NOT
+# forwarded to Playwright). $KEEP_SCREENSHOTS is the skill's own flag.
+if [ "$KEEP_SCREENSHOTS" != "true" ]; then
+  {{CUSTOMIZE: Cleanup command — e.g., rm -rf "$SCREENSHOT_DIR"}}
+fi
 ```
 
 If the application was started by this skill (not already running), stop it.
