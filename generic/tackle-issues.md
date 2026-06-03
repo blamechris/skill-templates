@@ -41,8 +41,16 @@ REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 REPO_NAME=$(basename "$REPO")
 SESSION_START=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-# {{CUSTOMIZE: Branch prefix for session branches — e.g., "auto/" or multiple prefixes for repos that use feat/, fix/, etc.}}
+# {{CUSTOMIZE: Branch prefix for NEW session branches this skill creates — a single
+# prefix, e.g. "auto/". This skill always builds branches as
+# "${BRANCH_PREFIX}${ISSUE_NUM}-${SLUG}", so it only ever creates one prefix.}}
 BRANCH_PREFIX="auto/"
+
+# {{CUSTOMIZE: Regex of EVERY prefix a session branch might carry, for the
+# merge/resume SCANS below. If the repo's convention emits multiple prefixes
+# (feat/, fix/, refactor/, docs/, chore/), list them all as an alternation so the
+# scans don't miss merged branches. Defaults to just BRANCH_PREFIX.}}
+BRANCH_PREFIX_RE="^auto/"
 ```
 
 Parse `$ARGUMENTS` — same as `/autonomous-dev-flow` but with higher defaults:
@@ -153,8 +161,8 @@ Add new unassigned issues to the queue if they match the original filter criteri
 
 ```bash
 gh pr list --state merged --json number,headRefName,mergedAt --limit 30 \
-  | jq --arg start "$SESSION_START" --arg prefix "$BRANCH_PREFIX" \
-    '[.[] | select(.mergedAt > $start) | select(.headRefName | startswith($prefix))]'
+  | jq --arg start "$SESSION_START" --arg prefix "$BRANCH_PREFIX_RE" \
+    '[.[] | select(.mergedAt > $start) | select(.headRefName | test($prefix))]'
 ```
 
 Note merged PRs. If a merged PR's issue is in the retry queue, remove it — the user handled it.
@@ -353,7 +361,7 @@ This skill uses **GitHub state** for resume — no local state files. Same as `/
 
 If a marathon session is interrupted (crash, timeout, user stops it), re-running with the same arguments will:
 
-1. Query GitHub for existing session branches (matching `BRANCH_PREFIX`) and PRs referencing each issue
+1. Query GitHub for existing session branches (matching `BRANCH_PREFIX_RE`) and PRs referencing each issue
 2. Detect which wave the session was in by counting attempts per issue
 3. Skip issues that already have merged or clean open PRs
 4. Resume from the first unfinished issue in the current wave
@@ -390,7 +398,8 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 
 Lines and sections marked with `{{CUSTOMIZE}}` need repo-specific adaptation. These mirror `/autonomous-dev-flow` customizations:
 
-- **Branch prefix** for session branches and resume detection
+- **Branch prefix** for NEW session branches (`BRANCH_PREFIX`, single prefix)
+- **Branch prefix regex** for merge/resume scans (`BRANCH_PREFIX_RE`) — list every prefix a session branch can carry so multi-prefix repos aren't missed
 - **Branch naming convention**
 - **Decomposition trigger label**
 - **Test runner command**
