@@ -4,8 +4,8 @@
 - **Tech:** Node + TypeScript (strict), npm workspaces (`engine` / `server` / `client`). Engine is a pure reducer (no I/O). Server: Express + ws + Postgres (`pg`). Client: React + Vite. Tests: Vitest in every workspace.
 - **Repo:** blamechris/rah6 (private, MIT)
 - **Main branch:** main
-- **CI:** Not yet set up (planned: GitHub Actions running `npm test --workspaces` + typecheck).
-- **Status:** Phase 0 — engine MVP complete (56 tests green: seeded RNG, pass + odds + place 6/8 at real payouts, shooter/bettor chip contracts, purist test enforced). Next: wire engine into server over HTTP+WS, render a bare table client, save-on-every-action to Postgres.
+- **CI:** GitHub Actions — workflow **`CI`** (`.github/workflows/ci.yml`), single job **`Build, lint, test`**: install workspaces → build engine → lint all workspaces (`tsc --noEmit`) → `npm test --workspaces` → build server + client. The required-check name for merge gating is the job name, **`Build, lint, test`**.
+- **Status:** A1 shipped (pure engine reducer + full bet catalog + chip registry; Express+ws server with Postgres-optional persistence; React+Vite client). A2 roguelike primitives in place (run/antes, chip shop, shooter rotation, bet leveling). Client has the drag-flick dice shooter, the Phase-4 skill training panel, and multi-bettor binding. All three workspaces' tests run green under CI.
 - **Genre:** Balatro-leaning roguelike co-op craps. Real-casino bet fidelity is a hard pillar — the "purist test" (disabling all chips must leave a faithful real-money table) is enforced by the chip-contract surface in code, not just convention.
 
 ## Critical: The Purist Test
@@ -61,7 +61,7 @@ Engine knows nothing about server/client. Server knows nothing about React. One-
 
 ## check-pr Customizations
 - Issue labels: TBD — none yet defined.
-- CI not yet configured — focus on: `npm run build --workspaces`, `npm test --workspaces`, type checks clean.
+- CI: workflow **`CI`**, required job **`Build, lint, test`** (build engine, lint all workspaces, `npm test --workspaces`, build server + client). Wait on that check before declaring a PR mergeable.
 - Engine purist test (`resolver.test.ts`, `chips.test.ts`) must remain green — these are the load-bearing assertions about casino fidelity.
 
 ## learn Customizations
@@ -143,7 +143,25 @@ Mindset: *"Does this respect the purist test? Does the reducer stay pure (no I/O
 - "Manual: open client, place pass + odds, roll — payouts at real-casino numbers"
 
 ## full-review Summary Table Format
-Match the generic template. CI status column is "—" until CI lands.
+Match the generic template. The CI status column reflects the **`Build, lint, test`** check on the workflow **`CI`**.
+
+## smoke-test Customizations
+- **Ports / URLs:** server on `http://localhost:6336` (HTTP + WS), client dev server on `http://localhost:5173` (Vite, proxies `/api` + `/ws` → 6336). The smoke test drives the **client** URL.
+- **Health endpoint:** `GET /api/health` (server). Use it to detect the server is up.
+- **Detect & start:** readiness = `curl -s http://localhost:6336/api/health` (server) and `curl -s http://localhost:5173` (client). Start with `npm run dev:server` and `npm run dev:client` as two background processes. Postgres is optional — the server boots in memory-only mode when `DATABASE_URL` is unset, which is the right mode for a smoke test.
+- **Smoke test script path:** `client/scripts/smoke-test.mjs` (create it if absent — ESM, `import { chromium } from 'playwright'`). There is **no** `smoke-test` npm script, so run it directly: `node client/scripts/smoke-test.mjs $PW_FLAGS` (never append `$ARGUMENTS`/`$KEEP_SCREENSHOTS`).
+- **Readiness check:** the table only renders after the WS delivers the initial `TableState`. There is **no `window.__appReady` global** — wait on a real element: `await page.waitForSelector('[data-testid="dice-shooter"]')`.
+- **Screenshot directory:** `client/.smoke-screenshots/` (add to `.gitignore`) or `/tmp/rah6-smoke`. Clean up unless `--keep-screenshots`.
+- **Stable selectors:** `[data-testid="dice-shooter"]` (the dice shooter container), `getByRole("button", { name: /^field$/i })` and other `.bet-button`s (bet picker), `label.training-toggle input` (training-mode toggle), `[aria-label="Bettors"]` + `[aria-label="Bettor p1"]` (multi-bettor roster), `[aria-label="Bankroll"]` (header).
+- **Test categories:** (1) app loads & connects (dice render, no console errors); (2) place a Field bet → it appears in the bet list with the right amount; (3) roll (Quick-roll button or a gesture) → a settlement line appears; (4) open the Chips drawer and toggle a chip; (5) "New 2-player game" → roster shows two bettors + an invite link.
+- **Never:** rolling/betting is local and cheap, but don't spam ROLL in a loop or create persistent rooms that leak across runs (memory-only mode resets on server restart).
+
+## fix-ci Customizations
+- **Workflow name:** **`CI`** (`.github/workflows/ci.yml`). Use `--workflow "CI"` in every `gh run list` call.
+- Single job **`Build, lint, test`**. Failures are almost always one of: a workspace typecheck error (`tsc --noEmit`), a Vitest failure, or a stale **engine build** — server and client import `engine/dist`, so a broken engine build cascades. When debugging locally, rebuild the engine first: `npm run build --workspace engine`.
+
+## batch-merge Customizations
+- **Required check names:** `REQUIRED_CHECKS=("Build, lint, test")` — this is the CI **job** name (what `gh pr checks` returns under `.name`), *not* a shell command. There is exactly one job, so one entry.
 
 ## Attribution Policy
-TBD — defer until convention is set. Default to **including** `Co-Authored-By: Claude` until told otherwise.
+**Include** `Co-Authored-By: Claude` — the repo's own `CLAUDE.md` explicitly permits the Co-Authored-By footer. Commit format: `type(scope): subject`, scopes `engine` / `server` / `client` / `docs` / `chore`. No emoji unless asked.
