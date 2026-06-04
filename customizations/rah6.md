@@ -164,4 +164,4 @@ Match the generic template. The CI status column reflects the **`Build, lint, te
 - **Required check names:** `REQUIRED_CHECKS=("Build, lint, test")` — this is the CI **job** name (what `gh pr checks` returns under `.name`), *not* a shell command. There is exactly one job, so one entry.
 
 ## Attribution Policy
-**Include** `Co-Authored-By: Claude` — the repo's own `CLAUDE.md` explicitly permits the Co-Authored-By footer. Commit format: `type(scope): subject`, scopes `engine` / `server` / `client` / `docs` / `chore`. No emoji unless asked.
+**Include** the standard co-author trailer — `Co-authored-by: Claude <noreply@anthropic.com>` (the repo's own `CLAUDE.md` specifies the footer). Commit format: `type(scope): subject`, scopes `engine` / `server` / `client` / `docs` / `ci` / `chore` (matches the Commit Scopes list above). No emoji unless asked.
