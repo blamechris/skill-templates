@@ -36,12 +36,18 @@ for i, ln in enumerate(lines, 1):
     for m in re.finditer(r'\{\{CUSTOMIZE', ln):
         before = ln[m.start() - 1] if m.start() > 0 else ''
         if before != '`':
-            fails.append(f"residual {{{{CUSTOMIZE marker at line {i}: {ln.strip()[:70]}")
+            # %-format avoids confusion over the literal "{{" in an f-string.
+            fails.append("residual {{CUSTOMIZE marker at line %d: %s" % (i, ln.strip()[:70]))
             break
 
-# 2) attribution footer in the last ~15 lines
+# 2) attribution footer in the last ~15 lines. Catches both the trailer
+#    ("Co-Authored-By: Claude …") and the Claude Code footer
+#    ("🤖 Generated with [Claude Code](…)"), anywhere on the line.
+attribution_re = re.compile(
+    r'(generated with[^\n]*claude|co-authored-by:[^\n]*claude|🤖[^\n]*generated)', re.I
+)
 for ln in lines[-15:]:
-    if re.match(r'(Generated with\s+Claude|Co-Authored-By:\s+Claude)', ln, re.I):
+    if attribution_re.search(ln):
         fails.append(f"attribution footer: {ln.strip()[:70]}")
 
 # 3) well-formed version stamp as the last non-empty line, naming this skill
@@ -56,17 +62,23 @@ if not m:
 elif m.group(1) != name:
     fails.append(f"stamp names '{m.group(1)}', expected '{name}'")
 
-# 4) registry guards — each guard passes if ANY of its anyOf regexes matches
-guards = []
+# 4) registry guards — each guard passes if ANY of its anyOf regexes matches.
+#    A missing registry or an unknown skill is an ENVIRONMENT error (exit 2), not a
+#    silent pass — otherwise the "deterministic gate" could green-light unchecked.
 try:
     with open(reg_path, encoding="utf-8") as f:
         reg = json.load(f)
-    for s in reg.get("skills", []):
-        if s.get("name") == name:
-            guards = s.get("guards", [])
-            break
 except FileNotFoundError:
-    print(f"WARN: registry not found at {reg_path} — skipping guard checks", file=sys.stderr)
+    print(f"ERROR: registry not found at {reg_path} — cannot verify guards. "
+          f"Pass the registry path or run scripts/build-index.sh.", file=sys.stderr)
+    sys.exit(2)
+
+entry = next((s for s in reg.get("skills", []) if s.get("name") == name), None)
+if entry is None:
+    print(f"ERROR: '{name}' is not in the registry index ({reg_path}) — "
+          f"stale index, or not a registry skill. Cannot verify guards.", file=sys.stderr)
+    sys.exit(2)
+guards = entry.get("guards", [])
 
 for g in guards:
     if not any(re.search(p, text) for p in g.get("anyOf", [])):
