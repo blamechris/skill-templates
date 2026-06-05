@@ -397,6 +397,54 @@ else
     fail_test "deterministic_functions_sourced" "could not source render_deterministic / validate_output"
 fi
 
+# ---- value-override tests (issue #64 phase 3) ----
+#
+# Per-repo value overrides (values/<repo>.values) substitute marker-governed
+# lines that genuinely vary per repo — notably batch-merge's REQUIRED_CHECKS —
+# so deterministic deploy doesn't clobber them with the template default.
+
+echo ""
+echo "${YELLOW}== value-override tests ==${RESET}"
+
+VAL_SRC=$(mktemp)
+awk '/^apply_value_overrides\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$DEPLOY_SH" > "$VAL_SRC"
+# shellcheck source=/dev/null
+. "$VAL_SRC"
+rm -f "$VAL_SRC"
+
+if type apply_value_overrides >/dev/null 2>&1 && type render_deterministic >/dev/null 2>&1; then
+    SCRIPT_DIR="$REPO_ROOT"   # apply_value_overrides reads $SCRIPT_DIR/values/<repo>.values
+    VAL_TMPL=$(cat "$REPO_ROOT/generic/batch-merge.md")
+    VAL_SKEL=$(render_deterministic "$VAL_TMPL")
+    VAL_OUT=$(apply_value_overrides "$VAL_SKEL" "sovereign-storm" "batch-merge")
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if printf '%s\n' "$VAL_OUT" | grep -qF 'REQUIRED_CHECKS=()' \
+        && ! printf '%s\n' "$VAL_OUT" | grep -qF 'REQUIRED_CHECKS=("Run Tests"'; then
+        pass_test "value_override_applied"
+    else
+        fail_test "value_override_applied" "expected REQUIRED_CHECKS=() (sovereign-storm), not the template default"
+    fi
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if validate_output "$VAL_OUT" "$VAL_TMPL" "batch-merge" "sovereign-storm" >/dev/null 2>&1; then
+        pass_test "value_override_passes_validate_output"
+    else
+        fail_test "value_override_passes_validate_output" "overridden render should still pass validate_output (within drift tolerance)"
+    fi
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    VAL_NOOP=$(apply_value_overrides "$VAL_SKEL" "no-such-repo-xyz" "batch-merge")
+    if [ "$VAL_NOOP" = "$VAL_SKEL" ]; then
+        pass_test "value_override_noop_without_file"
+    else
+        fail_test "value_override_noop_without_file" "a repo with no .values file should pass content through unchanged"
+    fi
+else
+    TESTS_RUN=$((TESTS_RUN + 1))
+    fail_test "value_override_functions_sourced" "could not source apply_value_overrides / render_deterministic"
+fi
+
 # ---- Summary ----
 
 echo ""
