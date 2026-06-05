@@ -42,9 +42,18 @@ Engine knows nothing about server/client. Server knows nothing about React. One-
 - Memory at `~/.claude/projects/-Users-blamechris-Projects-rah6/memory/project_rah6.md` (auto-memory; cross-session design context)
 
 ### Source File Patterns for TODOs
-- `engine/src/**/*.ts`
-- `server/src/**/*.ts`
-- `client/src/**/*.{ts,tsx}`
+Scan `engine/src`, `server/src`, `client/src` for `.ts`/`.tsx`.
+
+**Do NOT emit `**`/globstar globs** (e.g. `engine/src/**/*.ts`) in the generated bash — they don't expand without `shopt -s globstar` and don't compose with `--exclude-dir`. Use `grep -rn` with `--include` against the workspace roots instead, e.g.:
+
+```bash
+grep -rn -E 'TODO|FIXME|HACK|XXX|WORKAROUND' \
+  --include="*.ts" --include="*.tsx" \
+  --exclude-dir=node_modules --exclude-dir=build --exclude-dir=dist \
+  engine/src server/src client/src
+```
+
+Exclude `node_modules`, `build`, `dist` only. rah6 has **no** `.godot` (it is a TypeScript monorepo, not a Godot project) — never add `--exclude-dir=.godot`.
 
 ### Priority Signals
 - Engine layer changes block server/client work
@@ -60,7 +69,7 @@ Engine knows nothing about server/client. Server knows nothing about React. One-
 - Engine tests are the deepest — they prove casino-faithful payouts. Treat any engine test failure as P0.
 
 ## check-pr Customizations
-- Issue labels: TBD — none yet defined.
+- Issue labels: the repo defines `enhancement`, `bug`, and `from-review`. Follow-up issues created from a review **must** carry `--label "enhancement,from-review"` (deferred review work is created with `from-review` and the reconcile/close step queries by it). Do **not** strip the `from-review` label when generating — preserve the generic behavior.
 - CI: workflow **`CI`**, required job **`Build, lint, test`** (build engine, lint all workspaces, `npm test --workspaces`, build server + client). Wait on that check before declaring a PR mergeable.
 - Engine purist test (`resolver.test.ts`, `chips.test.ts`) must remain green — these are the load-bearing assertions about casino fidelity.
 
@@ -102,6 +111,9 @@ Mindset: *"Does this respect the purist test? Does the reducer stay pure (no I/O
 - Vitest. Engine tests are the deepest — casino-faithful payouts, phase transitions, determinism (incl. JSON round-trip), purist test, chip composition.
 - For any new bet: include a test asserting the real-casino payout (true odds or house odds, whichever the bet uses).
 - For any new chip: include a test that the chip's effect happens in the right slot (`onPostRoll` vs `onPostResolve`) and that disabling all chips still yields a casino-faithful resolution.
+
+### Follow-up Issue Labels
+- The repo defines `enhancement`, `bug`, `from-review`. Deferred review findings are filed with `--label "enhancement,from-review"` and the reconcile step queries open issues by `from-review`. Preserve this label on issue creation — do not strip it.
 
 ### Engine-Specific Constraints
 - Never import `engine/` from `client/`. Server is the only consumer.
@@ -152,8 +164,12 @@ Match the generic template. The CI status column reflects the **`Build, lint, te
 - **Smoke test script path:** `client/scripts/smoke-test.mjs` (create it if absent — ESM, `import { chromium } from 'playwright'`). There is **no** `smoke-test` npm script, so run it directly: `node client/scripts/smoke-test.mjs $PW_FLAGS` (never append `$ARGUMENTS`/`$KEEP_SCREENSHOTS`).
 - **Readiness check:** the table only renders after the WS delivers the initial `TableState`. There is **no `window.__appReady` global** — wait on a real element: `await page.waitForSelector('[data-testid="dice-shooter"]')`.
 - **Screenshot directory:** `client/.smoke-screenshots/` (add to `.gitignore`) or `/tmp/rah6-smoke`. Clean up unless `--keep-screenshots`.
-- **Stable selectors:** `[data-testid="dice-shooter"]` (the dice shooter container), `getByRole("button", { name: /^field$/i })` and other `.bet-button`s (bet picker), `label.training-toggle input` (training-mode toggle), `[aria-label="Bettors"]` + `[aria-label="Bettor p1"]` (multi-bettor roster), `[aria-label="Bankroll"]` (header).
-- **Test categories:** (1) app loads & connects (dice render, no console errors); (2) place a Field bet → it appears in the bet list with the right amount; (3) roll (Quick-roll button or a gesture) → a settlement line appears; (4) open the Chips drawer and toggle a chip; (5) "New 2-player game" → roster shows two bettors + an invite link.
+- **Stable selectors — NEVER invent `data-testid`s.** The client ships exactly these testids: `dice-shooter` (and children `dice-shooter-dice`, `-impacts`, `-indicator`, `-trail`, `-tumble`), `summary-marker`. There is **no** `field-bet-button`, `bet-amount-input`, `bet-field`, or any per-bet testid — do not write selectors for testids that aren't in this list. The aria-labels that exist: `Bankroll`, `Bettors`, `Bettor <id>` (e.g. `Bettor p1`), `Training mode`, `Flick power`, `Hold strength`, `Last gesture`, `Session stats`, `Invite links`. Use these as the canonical selectors:
+  - dice container: `[data-testid="dice-shooter"]`
+  - bet buttons: there is **no** bet testid — click by visible label, e.g. `page.getByRole("button", { name: /^field$/i })` (bet labels render inside `.bet-button-name`; bet rows live under `.bet-buttons`).
+  - training toggle: `label.training-toggle input`
+  - roster / bankroll: `[aria-label="Bettors"]`, `[aria-label="Bettor p1"]`, `[aria-label="Bankroll"]`
+- **Test categories:** (1) app loads & connects (dice render via `[data-testid="dice-shooter"]`, no console errors); (2) place a Field bet by clicking the `/^field$/i` button → it appears in the bet list; (3) roll (Quick-roll button or a gesture) → a settlement line appears; (4) open the Chips drawer and toggle a chip; (5) "New 2-player game" → roster (`[aria-label="Bettors"]`) shows two bettors + an invite link (`[aria-label="Invite links"]`). If a step needs an element not covered by the selectors above, confirm it exists in the current client before asserting on it — never assume a testid.
 - **Never:** rolling/betting is local and cheap, but don't spam ROLL in a loop or create persistent rooms that leak across runs (memory-only mode resets on server restart).
 
 ## fix-ci Customizations
