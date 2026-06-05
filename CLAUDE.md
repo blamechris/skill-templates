@@ -19,7 +19,7 @@ skill-templates/
 ├── skill-guards.json            # per-skill content guards (load-bearing markers)
 ├── scripts/build-index.sh       # regenerates registry.json
 ├── docs/skill-profile-schema.md # the .claude/skill-profile.md spec
-└── (legacy, pending removal #75): deploy.conf, deploy.sh, sync.sh, customizations/, values/
+└── (legacy, retained pending full rollout): deploy.conf, customizations/, values/, skill-check.sh
 ```
 
 **Using skills (consumer side)** — in any repo, run `/skill`:
@@ -40,12 +40,17 @@ skill-templates/
 profile drift (`.claude/skill-profile.md` changed), and corruption drift (a `guards`
 check fails).
 
-### Legacy (being retired — #68 / #75)
-`deploy.sh` (Haiku push-deploy), `deploy.conf` (repo→skill map), `sync.sh` (central drift
-scan), `customizations/<repo>.md` (replaced by per-repo `.claude/skill-profile.md`), and
-the `deploy-skills.yml` auto-deploy trigger (already removed in #69; `workflow_dispatch`
-remains only as a manual escape hatch). **Do not re-enable the push trigger or run a full
-`deploy.sh`.**
+### Legacy (#68 / #75)
+**Removed (#75):** `deploy.sh` (Haiku push-deploy), `sync.sh` (central drift scan), and the
+`deploy-skills.yml` / `test-deploy-sh.yml` workflows + `tests/test_deploy_bash_compat.sh` —
+the push-deploy execution machinery. The one-time migration tool
+`scripts/rollout-pull-model.sh` replaced it. **Do not recreate a push trigger or `deploy.sh`.**
+
+**Retained pending full rollout:** `customizations/<repo>.md`, `deploy.conf`, `values/` —
+still the profile source for repos not yet migrated (some had uncommitted trees at rollout
+time). Finish them by re-running `scripts/rollout-pull-model.sh`; these get removed once every
+repo carries its own `.claude/skill-profile.md`. `skill-check.sh` (SessionStart drift hook)
+stays.
 
 ## Critical: Attribution Policy
 
