@@ -465,13 +465,19 @@ validate_output() {
     # pattern file silently returns no matches on bash 3.2 / macOS (the runner),
     # which would make this check a no-op. Real files are reliable.
     #
-    # awk strips from the first "## Customization*" heading to EOF; grep drops
-    # marker lines; sed right-trims (the LLM may alter trailing whitespace).
-    local vo_skel vo_out vo_skel_h vo_out_h
-    vo_skel=$(mktemp); vo_out=$(mktemp); vo_skel_h=$(mktemp); vo_out_h=$(mktemp)
+    # One awk pass: stop at the first "## Customization*" heading (rule #4) and
+    # skip {{CUSTOMIZE}} marker lines (filled/removed by design); sed right-trims
+    # (the LLM may alter trailing whitespace). awk does the filtering — NOT
+    # `grep -v` — so an all-marker template still exits 0 under `set -euo
+    # pipefail`; grep returns 1 when it selects nothing, which pipefail would
+    # propagate and abort the deploy (Copilot #63).
+    local vo_skel vo_out vo_skel_h vo_out_h vo_body
+    vo_skel=$(mktemp); vo_out=$(mktemp); vo_skel_h=$(mktemp); vo_out_h=$(mktemp); vo_body=$(mktemp)
     printf '%s\n' "$template" \
-        | awk '/^#{2,}[[:space:]]+Customization([[:space:]]|$)/ {exit} {print}' \
-        | grep -vE '(^|[^`])\{\{CUSTOMIZE' \
+        | awk '
+            /^#{2,}[[:space:]]+Customization([[:space:]]|$)/ { exit }
+            /(^|[^`])[{][{]CUSTOMIZE/ { next }
+            { print }' \
         | sed 's/[[:space:]]*$//' > "$vo_skel"
     printf '%s\n' "$output" | sed 's/[[:space:]]*$//' > "$vo_out"
 
@@ -500,14 +506,17 @@ MH
     # absent from the output. Tolerance 8 absorbs the occasional legit removal of
     # a label/intro line left dangling when its marker is dropped, while still
     # catching a large body deletion (the gate-drop's body alone was ~70 lines).
+    # Body lines = skeleton minus blank and heading lines, via awk so an
+    # all-heading/all-blank skeleton still exits 0 (grep -v would return 1 and,
+    # under set -euo pipefail in this $(...), abort the deploy — Copilot #63).
     local missing_body n_body
-    missing_body=$(grep -vE '^$' "$vo_skel" | grep -vE '^#{1,6}[[:space:]]' \
-        | { grep -Fxvf "$vo_out" - || true; })
+    awk 'NF > 0 && $0 !~ /^#{1,6}[[:space:]]/ { print }' "$vo_skel" > "$vo_body"
+    missing_body=$(grep -Fxvf "$vo_out" "$vo_body" || true)
     n_body=$(printf '%s\n' "$missing_body" | grep -cE '.' || true)
     if [ "$n_body" -gt 8 ]; then
         errors+=("Body drift: $n_body non-marker template line(s) missing from output (>8) — content dropped or rewritten, not just customized")
     fi
-    rm -f "$vo_skel" "$vo_out" "$vo_skel_h" "$vo_out_h"
+    rm -f "$vo_skel" "$vo_out" "$vo_skel_h" "$vo_out_h" "$vo_body"
 
     if [ "${#errors[@]}" -gt 0 ]; then
         echo "    ❌ Output validation failed for ${repo} ← ${skill}.md:" >&2
