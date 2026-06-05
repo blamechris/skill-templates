@@ -31,8 +31,16 @@ LOCAL_MODE=false
 # working defaults, so running them through Haiku adds only non-determinism and
 # section-drop risk (batch-merge's entire Copilot gate was repeatably deleted).
 # render_deterministic emits the template skeleton; validate_output still runs
-# as a safety net. Space-delimited; override via env for rollout/testing.
-DETERMINISTIC_SKILLS="${DETERMINISTIC_SKILLS:-batch-merge}"
+# as a safety net.
+#
+# DORMANT by default (empty): emitting the skeleton uses TEMPLATE defaults for
+# every marker, but some markers are genuinely per-repo — notably batch-merge's
+# REQUIRED_CHECKS (rah6="Build, lint, test", sovereign-storm=()), which the
+# default ("Run Tests"/"Validate Project") would wrongly overwrite and mis-gate.
+# Enabling a skill here is safe only once Phase 3 (#64) substitutes those values
+# per repo. Until then, opt in explicitly via env (e.g. DETERMINISTIC_SKILLS=...)
+# for a repo you've checked. Space-delimited.
+DETERMINISTIC_SKILLS="${DETERMINISTIC_SKILLS:-}"
 FILTER_REPO=""
 FILTER_SKILL=""
 CHANGED_TEMPLATES=false
