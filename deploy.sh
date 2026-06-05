@@ -452,6 +452,72 @@ validate_output() {
         errors+=("Output length $out_len > 200% of template $tmpl_len — likely runaway expansion")
     fi
 
+    # 5. Skeleton preservation — EXACT guards for what checks 3 and 4 miss.
+    # Check 3 (heading count ±5) and 4 (length 50-200%) are fuzzy: a render once
+    # silently deleted batch-merge's entire Copilot review gate (Step 2b/2c, -81
+    # lines, -2 headings) for one repo and slipped through BOTH tolerances. Rule
+    # #3 of the system prompt requires every non-marker line be preserved
+    # verbatim — this enforces it. The "skeleton" is the template minus the
+    # trailing "## Customization*" section (stripped by rule #4) and minus
+    # {{CUSTOMIZE}} marker lines (filled or removed by design).
+    #
+    # Uses temp files, NOT `grep -f <(...)`: process substitution as a grep
+    # pattern file silently returns no matches on bash 3.2 / macOS (the runner),
+    # which would make this check a no-op. Real files are reliable.
+    #
+    # One awk pass: stop at the first "## Customization*" heading (rule #4) and
+    # skip {{CUSTOMIZE}} marker lines (filled/removed by design); sed right-trims
+    # (the LLM may alter trailing whitespace). awk does the filtering — NOT
+    # `grep -v` — so an all-marker template still exits 0 under `set -euo
+    # pipefail`; grep returns 1 when it selects nothing, which pipefail would
+    # propagate and abort the deploy (Copilot #63).
+    local vo_skel vo_out vo_skel_h vo_out_h vo_body
+    vo_skel=$(mktemp); vo_out=$(mktemp); vo_skel_h=$(mktemp); vo_out_h=$(mktemp); vo_body=$(mktemp)
+    printf '%s\n' "$template" \
+        | awk '
+            /^#{2,}[[:space:]]+Customization([[:space:]]|$)/ { exit }
+            /(^|[^`])[{][{]CUSTOMIZE/ { next }
+            { print }' \
+        | sed 's/[[:space:]]*$//' > "$vo_skel"
+    printf '%s\n' "$output" | sed 's/[[:space:]]*$//' > "$vo_out"
+
+    # 5a. Heading preservation — ZERO tolerance. Every real markdown heading
+    # (outside code fences) in the skeleton must appear verbatim in the output.
+    # Dropping a section means dropping its heading, so this pins section drops
+    # precisely without the false positives a full-body line match would hit on
+    # legitimate dangling-label cleanup. Reuses the fence-toggle from check 3.
+    local heading_extract='/^```/ { in_code = !in_code; next } !in_code && /^#{1,6}[[:space:]]/ { print }'
+    awk "$heading_extract" "$vo_skel" > "$vo_skel_h"
+    awk "$heading_extract" "$vo_out" > "$vo_out_h"
+    local missing_heads mh n_heads
+    missing_heads=$(grep -Fxvf "$vo_out_h" "$vo_skel_h" || true)
+    if [ -n "$missing_heads" ]; then
+        n_heads=$(printf '%s\n' "$missing_heads" | grep -cE '.' || true)
+        errors+=("Section drop: $n_heads template heading(s) missing from output — a section was deleted, not customized:")
+        while IFS= read -r mh; do
+            [ -n "$mh" ] || continue
+            errors+=("         missing heading: ${mh}")
+        done <<MH
+$(printf '%s\n' "$missing_heads" | head -8)
+MH
+    fi
+
+    # 5b. Body-line drift — bounded. Counts non-heading, non-blank skeleton lines
+    # absent from the output. Tolerance 8 absorbs the occasional legit removal of
+    # a label/intro line left dangling when its marker is dropped, while still
+    # catching a large body deletion (the gate-drop's body alone was ~70 lines).
+    # Body lines = skeleton minus blank and heading lines, via awk so an
+    # all-heading/all-blank skeleton still exits 0 (grep -v would return 1 and,
+    # under set -euo pipefail in this $(...), abort the deploy — Copilot #63).
+    local missing_body n_body
+    awk 'NF > 0 && $0 !~ /^#{1,6}[[:space:]]/ { print }' "$vo_skel" > "$vo_body"
+    missing_body=$(grep -Fxvf "$vo_out" "$vo_body" || true)
+    n_body=$(printf '%s\n' "$missing_body" | grep -cE '.' || true)
+    if [ "$n_body" -gt 8 ]; then
+        errors+=("Body drift: $n_body non-marker template line(s) missing from output (>8) — content dropped or rewritten, not just customized")
+    fi
+    rm -f "$vo_skel" "$vo_out" "$vo_skel_h" "$vo_out_h" "$vo_body"
+
     if [ "${#errors[@]}" -gt 0 ]; then
         echo "    ❌ Output validation failed for ${repo} ← ${skill}.md:" >&2
         local e
