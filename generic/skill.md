@@ -114,11 +114,17 @@ note in the report that hashes may be stale. Record which source you used.
    `<!-- skill-templates: … -->` lines from the body, then write to
    `.claude/commands/<name>.md` ending with exactly:
    `<!-- skill-templates: <name> <hash> <date> -->` (today's date, `YYYY-MM-DD`).
-6. **Record in the lockfile.** Create `.claude/skills.lock` (schema below) if absent,
+6. **Lint (deterministic gate).** Run the registry's mechanical linter on the file just
+   written — it re-checks markers, attribution, the stamp, and guards independently of
+   the agent's judgment: `"$REG/scripts/skill-lint.sh" <name> .claude/commands/<name>.md`
+   (where `$REG` is the resolved registry clone). If it exits non-zero, fix the reported
+   issues and re-lint before recording the lockfile — do not lock a skill that fails lint.
+   Consumers can run the same linter as a pre-commit hook or in CI.
+7. **Record in the lockfile.** Create `.claude/skills.lock` (schema below) if absent,
    then upsert `<name>` with the template `hash` and, when a `.claude/skill-profile.md`
    exists, its `profileHash` (so `update` can tell when the *profile* changed, not just
    the template).
-7. **Report.** State the skill, the hash installed, the registry source used, and any
+8. **Report.** State the skill, the hash installed, the registry source used, and any
    markers dropped for lack of repo context.
 
 ### `skill outdated`
