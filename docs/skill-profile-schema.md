@@ -9,7 +9,7 @@ centrally in `skill-templates`). It replaces the old `customizations/<repo>.md` 
 
 ## How it's used
 
-When you run `skill add <name>`, the invoking agent reads this profile (plus the repo's
+When you run `/skill add <name>`, the invoking agent reads this profile (plus the repo's
 `CLAUDE.md` and the code itself) and uses it to fill the template's `{{CUSTOMIZE: …}}`
 markers. The profile is **optional** — if absent, the agent infers what it can from
 `CLAUDE.md` and the repo layout, and notes in its report that adding a profile would
@@ -45,7 +45,8 @@ per skill that needs more than the generic template provides.
 ## <skill-name> Customizations
 <Anything that skill's {{CUSTOMIZE}} markers need: persona, labels, review
 criteria, audit focus, required-check names, test conventions, etc. One
-section per skill that needs it. Use the same heading text as the skill name.>
+section per skill that needs it. Head each `## <skill-name> Customizations` —
+the skill's exact name plus the literal ` Customizations` suffix.>
 ```
 
 ## Rules
@@ -53,9 +54,9 @@ section per skill that needs it. Use the same heading text as the skill name.>
 - **Use real values, never invent.** If you don't have a label set, a test command, or a
   persona, omit it — the agent will drop the corresponding marker rather than fabricate.
   Placeholders (`scope`, `path/to/file:<line>`) are fine; fabricated specifics are not.
-- **One section per skill** that needs customization, headed by the skill's exact name
-  (e.g. `## agent-review Customizations`). Skills with no section just use the generic
-  template.
+- **One section per skill** that needs customization, headed `## <skill-name> Customizations`
+  — the skill's exact name plus the literal ` Customizations` suffix (e.g.
+  `## agent-review Customizations`). Skills with no section just use the generic template.
 - **No secrets.** Profiles are committed to the repo. Keys and tokens never go here.
 - **Keep it current.** When conventions change (a new required check, a renamed scope),
   update the profile so future `skill add` / `skill update` installs stay accurate.
