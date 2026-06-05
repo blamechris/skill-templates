@@ -39,5 +39,19 @@
     { "label": "strategy-escalation", "anyOf": ["Escalat", "alternative.*approach", "Alt.*Strategy"] },
     { "label": "queue-replenishment", "anyOf": ["Replenish", "replenish.*queue", "Queue Replenishment"] },
     { "label": "batch-merge-option", "anyOf": ["batch-merge", "merge:true"] }
+  ],
+  "batch-merge": [
+    { "label": "copilot-gate", "anyOf": ["Copilot review \\*\\*must be present\\*\\*", "quality gate"] },
+    { "label": "stale-review-recheck", "anyOf": ["dismiss_stale_reviews", "re-enter Step 2b", "fresh Copilot review"] },
+    { "label": "update-branch-strict", "anyOf": ["update-branch", "not up to date"] },
+    { "label": "sequential-loop", "anyOf": ["Sequential Merge Loop", "Sequential only"] },
+    { "label": "merge-step", "anyOf": ["gh pr merge"] }
+  ],
+  "merge": [
+    { "label": "review-gate", "anyOf": ["Mandatory Review Gate", "Review Gate"] },
+    { "label": "resolve-threads", "anyOf": ["resolveReviewThread"] },
+    { "label": "graphql-python", "anyOf": ["bash corrupts Base64", "resolveReviewThread must use Python"] },
+    { "label": "no-admin", "anyOf": ["Never use `?--admin"] },
+    { "label": "mergestate-diagnosis", "anyOf": ["mergeStateStatus"] }
   ]
 }

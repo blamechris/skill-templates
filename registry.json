@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "71bb930",
+  "generatedFromCommit": "a9824dd",
   "skillCount": 25,
   "skills": [
     {
@@ -50,7 +50,44 @@
       "name": "batch-merge",
       "hash": "0a76684",
       "lines": 306,
-      "description": "Sequentially merge a set of reviewed PRs, handling branch protection's \"must be up-to-date\" requirement by updating each branch after the previous merge."
+      "description": "Sequentially merge a set of reviewed PRs, handling branch protection's \"must be up-to-date\" requirement by updating each branch after the previous merge.",
+      "guards": [
+        {
+          "label": "copilot-gate",
+          "anyOf": [
+            "Copilot review \\*\\*must be present\\*\\*",
+            "quality gate"
+          ]
+        },
+        {
+          "label": "stale-review-recheck",
+          "anyOf": [
+            "dismiss_stale_reviews",
+            "re-enter Step 2b",
+            "fresh Copilot review"
+          ]
+        },
+        {
+          "label": "update-branch-strict",
+          "anyOf": [
+            "update-branch",
+            "not up to date"
+          ]
+        },
+        {
+          "label": "sequential-loop",
+          "anyOf": [
+            "Sequential Merge Loop",
+            "Sequential only"
+          ]
+        },
+        {
+          "label": "merge-step",
+          "anyOf": [
+            "gh pr merge"
+          ]
+        }
+      ]
     },
     {
       "name": "bug-hunt",
@@ -238,7 +275,41 @@
       "name": "merge",
       "hash": "d34b05d",
       "lines": 230,
-      "description": "Merge PRs, verify post-merge version bump, and run post-merge actions (build, deploy, etc.)."
+      "description": "Merge PRs, verify post-merge version bump, and run post-merge actions (build, deploy, etc.).",
+      "guards": [
+        {
+          "label": "review-gate",
+          "anyOf": [
+            "Mandatory Review Gate",
+            "Review Gate"
+          ]
+        },
+        {
+          "label": "resolve-threads",
+          "anyOf": [
+            "resolveReviewThread"
+          ]
+        },
+        {
+          "label": "graphql-python",
+          "anyOf": [
+            "bash corrupts Base64",
+            "resolveReviewThread must use Python"
+          ]
+        },
+        {
+          "label": "no-admin",
+          "anyOf": [
+            "Never use `?--admin"
+          ]
+        },
+        {
+          "label": "mergestate-diagnosis",
+          "anyOf": [
+            "mergeStateStatus"
+          ]
+        }
+      ]
     },
     {
       "name": "parallel-dev",
@@ -260,7 +331,7 @@
     },
     {
       "name": "skill",
-      "hash": "71bb930",
+      "hash": "18b9f3e",
       "lines": 197,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs."
     },
