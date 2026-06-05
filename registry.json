@@ -1,13 +1,38 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "c5040e5",
+  "generatedFromCommit": "1926db1",
   "skillCount": 25,
   "skills": [
     {
       "name": "agent-review",
       "hash": "a10ef75",
       "lines": 202,
-      "description": "Launch an expert code reviewer agent with full project context."
+      "description": "Launch an expert code reviewer agent with full project context.",
+      "guards": [
+        {
+          "label": "mandatory-issues",
+          "anyOf": [
+            "MANDATORY",
+            "mandatory",
+            "MUST.*issue"
+          ]
+        },
+        {
+          "label": "issue-creation-code",
+          "anyOf": [
+            "issue create"
+          ]
+        },
+        {
+          "label": "issue-reconciliation",
+          "anyOf": [
+            "from-review.*issue",
+            "Reconcile",
+            "reconcile",
+            "cross-reference"
+          ]
+        }
+      ]
     },
     {
       "name": "agentic-audit",
@@ -37,7 +62,46 @@
       "name": "check-pr",
       "hash": "cc062bc",
       "lines": 470,
-      "description": "Address all PR review comments systematically and respond inline."
+      "description": "Address all PR review comments systematically and respond inline.",
+      "guards": [
+        {
+          "label": "idempotency",
+          "anyOf": [
+            "in_reply_to_id"
+          ]
+        },
+        {
+          "label": "mandatory-issues",
+          "anyOf": [
+            "FOLLOW-UP ISSUE"
+          ]
+        },
+        {
+          "label": "commit-links",
+          "anyOf": [
+            "commit.*SHA",
+            "COMMIT_SHA",
+            "commit hash"
+          ]
+        },
+        {
+          "label": "3-outcomes",
+          "anyOf": [
+            "THREE.*valid",
+            "ONLY THREE",
+            "3 valid"
+          ]
+        },
+        {
+          "label": "issue-reconciliation",
+          "anyOf": [
+            "from-review.*issue",
+            "Cross-Reference",
+            "cross-reference",
+            "Reconcile"
+          ]
+        }
+      ]
     },
     {
       "name": "create-issue",
@@ -73,13 +137,90 @@
       "name": "full-review",
       "hash": "1e5962e",
       "lines": 78,
-      "description": "Run a complete review pipeline: agent-review first, then check-pr. The agent-review pass naturally fills the ~4 minute Copilot review delay, so check-pr starts with comments already waiting."
+      "description": "Run a complete review pipeline: agent-review first, then check-pr. The agent-review pass naturally fills the ~4 minute Copilot review delay, so check-pr starts with comments already waiting.",
+      "guards": [
+        {
+          "label": "agent-review-phase",
+          "anyOf": [
+            "Phase 1.*Agent Review",
+            "agent-review"
+          ]
+        },
+        {
+          "label": "check-pr-phase",
+          "anyOf": [
+            "Phase 2.*Check-PR",
+            "check-pr"
+          ]
+        },
+        {
+          "label": "combined-summary",
+          "anyOf": [
+            "Combined Summary",
+            "combined.*table",
+            "summary table"
+          ]
+        },
+        {
+          "label": "sequential-execution",
+          "anyOf": [
+            "Sequential.*not parallel",
+            "MUST complete before"
+          ]
+        }
+      ]
     },
     {
       "name": "learn",
       "hash": "df2de5e",
       "lines": 296,
-      "description": "Capture genuinely novel learnings from the current session and persist them to the correct memory layer. Designed to produce \"nothing to persist\" on most sessions -- that is the skill working correctly, not a failure."
+      "description": "Capture genuinely novel learnings from the current session and persist them to the correct memory layer. Designed to produce \"nothing to persist\" on most sessions -- that is the skill working correctly, not a failure.",
+      "guards": [
+        {
+          "label": "gate-check",
+          "anyOf": [
+            "Gate Check",
+            "gate check",
+            "Nothing to persist"
+          ]
+        },
+        {
+          "label": "behavioral-test",
+          "anyOf": [
+            "Behavioral Test",
+            "do X instead of Y"
+          ]
+        },
+        {
+          "label": "deduplication",
+          "anyOf": [
+            "Deduplicate",
+            "dedup"
+          ]
+        },
+        {
+          "label": "approval-gate",
+          "anyOf": [
+            "CLAUDE.md.*approval",
+            "do NOT write without approval"
+          ]
+        },
+        {
+          "label": "entry-cap",
+          "anyOf": [
+            "3 entries max",
+            "max 3",
+            "at most 3"
+          ]
+        },
+        {
+          "label": "self-ref-guard",
+          "anyOf": [
+            "self-referential",
+            "Self-referential"
+          ]
+        }
+      ]
     },
     {
       "name": "manual-testing-mode",
@@ -119,8 +260,8 @@
     },
     {
       "name": "skill",
-      "hash": "c5040e5",
-      "lines": 176,
+      "hash": "c5ad15d",
+      "lines": 191,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs."
     },
     {
@@ -139,13 +280,88 @@
       "name": "swarm-audit",
       "hash": "c8b8477",
       "lines": 204,
-      "description": "Launch a swarm of specialized agents to perform a multi-perspective audit of any design document, architecture, codebase, or proposal."
+      "description": "Launch a swarm of specialized agents to perform a multi-perspective audit of any design document, architecture, codebase, or proposal.",
+      "guards": [
+        {
+          "label": "core-panel",
+          "anyOf": [
+            "Core Panel"
+          ]
+        },
+        {
+          "label": "master-assessment",
+          "anyOf": [
+            "master-assessment"
+          ]
+        },
+        {
+          "label": "file-line-refs",
+          "anyOf": [
+            "file:line"
+          ]
+        },
+        {
+          "label": "consensus-section",
+          "anyOf": [
+            "Consensus Findings"
+          ]
+        }
+      ]
     },
     {
       "name": "tackle-issues",
       "hash": "21fa678",
       "lines": 410,
-      "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows."
+      "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
+      "guards": [
+        {
+          "label": "wave-model",
+          "anyOf": [
+            "Wave Model",
+            "multi-wave",
+            "wave.*retry"
+          ]
+        },
+        {
+          "label": "convergence-detection",
+          "anyOf": [
+            "Convergence",
+            "convergence.*check",
+            "zero.*completions"
+          ]
+        },
+        {
+          "label": "morning-summary",
+          "anyOf": [
+            "Morning Summary",
+            "marathon.*complete",
+            "Session Complete"
+          ]
+        },
+        {
+          "label": "strategy-escalation",
+          "anyOf": [
+            "Escalat",
+            "alternative.*approach",
+            "Alt.*Strategy"
+          ]
+        },
+        {
+          "label": "queue-replenishment",
+          "anyOf": [
+            "Replenish",
+            "replenish.*queue",
+            "Queue Replenishment"
+          ]
+        },
+        {
+          "label": "batch-merge-option",
+          "anyOf": [
+            "batch-merge",
+            "merge:true"
+          ]
+        }
+      ]
     },
     {
       "name": "visual-brief",
