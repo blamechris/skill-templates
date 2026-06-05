@@ -622,9 +622,12 @@ deploy_pair() {
     # validator bounds.
     local result
     if is_deterministic_skill "$skill"; then
-        # Deterministic path — no API, no retry. validate_output still runs as a
-        # safety net (skeleton preservation passes by construction; it would
-        # still catch a malformed template, e.g. an unterminated code fence).
+        # Deterministic path — no API, no retry. The skeleton-preservation check
+        # passes by construction, but validate_output still runs as a safety net
+        # for its OTHER checks: residual {{CUSTOMIZE}} markers (a render-awk bug),
+        # an attribution footer in the template, or heading-count/length bounds
+        # (e.g. a template whose "## Customization*" heading was mistyped, so the
+        # whole section leaks through or the body is truncated).
         echo "    ⚙️  Deterministic render (no Claude API)"
         result=$(render_deterministic "$template_content")
         if ! validate_output "$result" "$template_content" "$skill" "$repo"; then
