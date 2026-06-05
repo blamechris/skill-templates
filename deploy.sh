@@ -579,7 +579,9 @@ render_deterministic() {
 # A line whose leading-trimmed text starts with <line_prefix> is replaced
 # wholesale by <repl> (which carries its own indentation). Unmatched overrides
 # warn (a stale prefix shouldn't silently no-op). Echoes content unchanged if
-# the repo has no values file.
+# the repo has no values file. Each override changes one skeleton line, which
+# counts toward validate_output check #5's body-drift budget (tolerance 8) — keep
+# per-repo overrides well under that.
 apply_value_overrides() {
     local content="$1" repo="$2" skill="$3"
     local vfile="$SCRIPT_DIR/values/${repo}.values"
@@ -588,14 +590,20 @@ apply_value_overrides() {
         return 0
     fi
     local vskill vprefix vrepl
-    while IFS=$'\t' read -r vskill vprefix vrepl; do
+    # `|| [ -n "$vskill" ]` processes a final override that lacks a trailing
+    # newline (common from editors/git) instead of silently dropping it.
+    while IFS=$'\t' read -r vskill vprefix vrepl || [ -n "$vskill" ]; do
         case "$vskill" in ''|'#'*) continue ;; esac
         [ "$vskill" = "$skill" ] || continue
         [ -n "$vprefix" ] || continue
+        vrepl=${vrepl%$'\r'}   # tolerate a CRLF-saved .values file
         if printf '%s\n' "$content" | grep -qF -- "$vprefix"; then
-            # print r (not sub/gsub) so &, \, etc. in the replacement are literal.
-            content=$(printf '%s\n' "$content" | awk -v p="$vprefix" -v r="$vrepl" '
-                { t=$0; sub(/^[ \t]+/,"",t); if (index(t,p)==1) print r; else print $0 }')
+            # Pass prefix + replacement via ENVIRON (NOT awk -v): -v applies
+            # ANSI escape processing (\t, \\, …) and would mangle a replacement
+            # containing a backslash. ENVIRON is the raw value. print (not
+            # sub/gsub) also keeps & literal.
+            content=$(printf '%s\n' "$content" | VP="$vprefix" VR="$vrepl" awk '
+                { t=$0; sub(/^[ \t]+/,"",t); if (index(t, ENVIRON["VP"])==1) print ENVIRON["VR"]; else print $0 }')
         else
             echo "    ⚠️  ${repo}:${skill} value override prefix not found (stale?): $vprefix" >&2
         fi
