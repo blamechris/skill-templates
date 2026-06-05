@@ -13,13 +13,13 @@ is retired — see "Legacy" below.)
 
 ```
 skill-templates/
+├── README.md                    # registry overview + /skill workflow
 ├── generic/                     # Skill templates (repo-agnostic, with {{CUSTOMIZE: ...}} markers)
 │   └── skill.md                 # the /skill client itself
 ├── registry.json                # generated index: skill → template hash, description, guards
 ├── skill-guards.json            # per-skill content guards (load-bearing markers)
 ├── scripts/build-index.sh       # regenerates registry.json
-├── docs/skill-profile-schema.md # the .claude/skill-profile.md spec
-└── (legacy, retained pending full rollout): deploy.conf, customizations/, values/, skill-check.sh
+└── docs/skill-profile-schema.md # the .claude/skill-profile.md spec
 ```
 
 **Using skills (consumer side)** — in any repo, run `/skill`:
@@ -41,16 +41,16 @@ profile drift (`.claude/skill-profile.md` changed), and corruption drift (a `gua
 check fails).
 
 ### Legacy (#68 / #75)
-**Removed (#75):** `deploy.sh` (Haiku push-deploy), `sync.sh` (central drift scan), and the
-`deploy-skills.yml` / `test-deploy-sh.yml` workflows + `tests/test_deploy_bash_compat.sh` —
-the push-deploy execution machinery. The one-time migration tool
-`scripts/rollout-pull-model.sh` replaced it. **Do not recreate a push trigger or `deploy.sh`.**
+The push-deploy model is **fully retired** (#75). All 16 managed repos are on the pull
+model — each carries its own `.claude/skill-profile.md` + `.claude/skills.lock`.
 
-**Retained pending full rollout:** `customizations/<repo>.md`, `deploy.conf`, `values/` —
-still the profile source for repos not yet migrated (some had uncommitted trees at rollout
-time). Finish them by re-running `scripts/rollout-pull-model.sh`; these get removed once every
-repo carries its own `.claude/skill-profile.md`. `skill-check.sh` (SessionStart drift hook)
-stays.
+**Removed:** `deploy.sh` (Haiku push-deploy), `sync.sh` (central drift scan), the
+`deploy-skills.yml` / `test-deploy-sh.yml` workflows, `tests/test_deploy_bash_compat.sh`,
+`deploy.conf` (repo→skill map), `customizations/` (migrated into each repo's
+`.claude/skill-profile.md`), `values/` (deploy-time substitutions), `skill-check.sh`
+(SessionStart drift hook — superseded by `skill outdated`), and the one-time migration tool
+`scripts/rollout-pull-model.sh` (its job is done). **Do not recreate a push trigger,
+`deploy.sh`, or `deploy.conf`.**
 
 ## Critical: Attribution Policy
 
@@ -73,11 +73,12 @@ The `repo-memory` MCP is available. Prefer `get_file_summary` over `Read` when e
 
 ## Managed Repos
 
-> **Legacy note (#68/#75):** in the pull model each repo owns which skills it installs
-> (its `.claude/commands/` + `.claude/skills.lock`), so `deploy.conf` is no longer
-> authoritative — the table below is historical, kept until the 15-repo rollout completes.
+> **Legacy note (#68/#75):** the rollout is **complete** — every repo owns which skills it
+> installs via its `.claude/commands/` + `.claude/skills.lock`, which is now the authoritative
+> source. `deploy.conf` has been removed; the table below is a **historical snapshot** of the
+> old push-model mapping, kept for reference only.
 
-This table is **derived from `deploy.conf`** — it lists each managed repo and the skills it was deployed under the old push model. Repos can also have **repo-only skills** (`commit`, `qa-update`, `tdd-feature`, `consolidate-dependabot`) maintained directly in their `.claude/commands/` — those weren't in `deploy.conf`.
+The table lists each managed repo and the skills it carried under the old push model. Repos can also have **repo-only skills** (`commit`, `qa-update`, `tdd-feature`, `consolidate-dependabot`) maintained directly in their `.claude/commands/`.
 
 | Repo | Tech Stack | Skills (from `deploy.conf`) |
 |------|-----------|--------|
