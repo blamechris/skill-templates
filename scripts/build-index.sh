@@ -7,7 +7,9 @@
 # Run from the repo root after adding/editing a template:
 #   ./scripts/build-index.sh && git add registry.json
 #
-# Output is deterministic (skills sorted by name) so re-runs produce clean diffs.
+# Output is deterministic (skills sorted by name, fixed 7-char hashes) so re-runs
+# produce clean diffs. The file is written atomically — a failure leaves the old
+# registry.json untouched rather than truncating it.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,52 +19,73 @@ if [ ! -d generic ]; then
   echo "ERROR: run from the skill-templates root (no generic/ dir found)" >&2
   exit 1
 fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "ERROR: python3 is required but not found on PATH" >&2
+  exit 1
+fi
 
-GEN_HASH="$(git rev-parse --short HEAD)"
+# Fixed-length (7) abbreviation so the index hash always matches what consumers
+# record. --short alone yields a repo-dependent variable length.
+GEN_HASH="$(git rev-parse --short=7 HEAD)"
 
-python3 - "$GEN_HASH" <<'PY' > registry.json
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+
+python3 - "$GEN_HASH" <<'PY' > "$TMP"
 import json, subprocess, sys, glob, os
 
 generated_from = sys.argv[1]
 
 def short_hash(path):
-    # Latest commit that touched this template — this is the version a consumer
-    # records in its lockfile, and what `skill outdated` diffs against.
+    # Latest commit that touched this template, fixed to 7 chars (matches the
+    # consumer's lockfile pin and `skill outdated` comparison).
     out = subprocess.run(
-        ["git", "log", "-1", "--format=%h", "--", path],
+        ["git", "log", "-1", "--abbrev=7", "--format=%h", "--", path],
         capture_output=True, text=True,
     ).stdout.strip()
-    return out or None
+    if not out:
+        # No commit touches this template (e.g. staged-but-uncommitted new file).
+        # Fail loudly rather than emitting a null hash the client can't resolve.
+        sys.stderr.write(
+            f"ERROR: no commit found for {path} — commit the template before "
+            f"building the index.\n"
+        )
+        sys.exit(1)
+    return out
 
 def describe(path):
-    # First non-empty, non-heading line after the leading `# /name` H1.
-    name = None
-    desc = ""
+    # First paragraph after the leading `# /name` H1: join wrapped lines until a
+    # blank line so multi-line opening paragraphs aren't truncated mid-sentence.
+    saw_h1 = False
+    para = []
     with open(path, encoding="utf-8") as f:
         for line in f:
             s = line.strip()
+            if not saw_h1:
+                if s.startswith("#"):
+                    saw_h1 = True
+                continue
             if not s:
-                continue
-            if name is None and s.startswith("#"):
-                name = s.lstrip("# ").lstrip("/").strip()
-                continue
+                if para:
+                    break          # blank line ends the first paragraph
+                continue           # skip blanks before the paragraph starts
             if s.startswith("#") or s.startswith("<!--"):
+                if para:
+                    break
                 continue
-            desc = s
-            break
-    return name, desc
+            para.append(s)
+    return " ".join(para)
 
 skills = []
 for path in sorted(glob.glob("generic/*.md")):
     slug = os.path.splitext(os.path.basename(path))[0]
-    h1name, desc = describe(path)
     with open(path, encoding="utf-8") as f:
         lines = sum(1 for _ in f)
     skills.append({
         "name": slug,
         "hash": short_hash(path),
         "lines": lines,
-        "description": desc,
+        "description": describe(path),
     })
 
 doc = {
@@ -74,4 +97,6 @@ doc = {
 print(json.dumps(doc, indent=2, ensure_ascii=False))
 PY
 
+mv "$TMP" registry.json
+trap - EXIT
 echo "Wrote registry.json — $(python3 -c 'import json;print(json.load(open("registry.json"))["skillCount"])') skills (generated from ${GEN_HASH})." >&2
