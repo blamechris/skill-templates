@@ -28,8 +28,11 @@ In any managed repo, run `/skill`:
 
 - **`skill add <name>`** — resolve from `registry.json` → fetch `generic/<name>.md` → the
   agent fills `{{CUSTOMIZE: ...}}` markers from the repo's `CLAUDE.md` +
-  `.claude/skill-profile.md` + code → self-validate → run `scripts/skill-lint.sh` →
-  write `.claude/commands/<name>.md` (version-stamped) → record in `.claude/skills.lock`.
+  `.claude/skill-profile.md` + code → self-validate → write `.claude/commands/<name>.md`
+  (version-stamped) → lint the written file with the registry clone's
+  `scripts/skill-lint.sh` (a deterministic gate independent of the agent's judgment) →
+  record in `.claude/skills.lock`. Consumers can run the same linter in a pre-commit hook
+  or CI.
 - **`skill list`** — show installed skills and their registry status.
 - **`skill outdated`** — flag drift: **version** (template hash moved), **profile**
   (`.claude/skill-profile.md` changed), or **corruption** (a `guards` check fails).
