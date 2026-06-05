@@ -1,0 +1,3 @@
+# ltl — required branch-protection check, pinned exactly (renaming the CI job
+# breaks merge even when CI passes). Source: customizations/ltl.md.
+batch-merge	REQUIRED_CHECKS=	REQUIRED_CHECKS=("Typecheck + Lint")
