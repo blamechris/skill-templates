@@ -797,6 +797,31 @@ These skills were customized from generic templates using the Claude API. Please
         done
     fi
 
+    # Supersede older deploy PRs. Each deploy opens a fresh `skill-deploy/<date>`
+    # branch off main; older ones are never closed, so they pile up and conflict
+    # (every branch overlaps the same `.claude/commands/*` files). The newest
+    # render is authoritative, so close any OTHER open skill-deploy PR in this
+    # repo and link it here. Best-effort: never fail the deploy on a close error.
+    #
+    # NOTE: this assumes the newest render is correct. Renders are non-
+    # deterministic (Claude API), so a bad newer render can supersede a good
+    # older one — the standing guidance is to DIFF a skill-deploy PR before
+    # merging it regardless.
+    local stale_prs old
+    stale_prs=$(gh pr list --repo "$slug" --state open \
+        --json number,headRefName \
+        -q ".[] | select(.headRefName | startswith(\"skill-deploy/\")) | select(.headRefName != \"$BRANCH_NAME\") | .number" \
+        2>/dev/null || true)
+    for old in $stale_prs; do
+        if gh pr close "$old" --repo "$slug" --delete-branch \
+            --comment "Superseded by the newer skill deploy on \`$BRANCH_NAME\`. Closing to avoid stacked, conflicting skill-deploy PRs — review/merge the newest one instead." \
+            >/dev/null 2>&1; then
+            echo "    🧹 Superseded older deploy PR #$old in $slug"
+        else
+            echo "    ⚠️  Could not close older deploy PR #$old in $slug (left open)"
+        fi
+    done
+
     cd "$SCRIPT_DIR"
 }
 
