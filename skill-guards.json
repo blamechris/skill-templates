@@ -1,5 +1,5 @@
 {
-  "_comment": "Per-skill content guards — load-bearing markers that must survive customization. Each guard passes if ANY of its regexes matches the installed skill. Ported from sync.sh so the check outlives it; build-index.sh folds these into registry.json, and /skill uses them in `add` self-validation and `outdated`/`doctor`.",
+  "_comment": "Per-skill content guards — load-bearing markers that must survive customization. Each guard passes if ANY of its regexes matches the installed skill. Ported from sync.sh so the check outlives it; build-index.sh folds these into registry.json, and /skill uses them in `add` self-validation and `outdated`.",
   "check-pr": [
     { "label": "idempotency", "anyOf": ["in_reply_to_id"] },
     { "label": "mandatory-issues", "anyOf": ["FOLLOW-UP ISSUE"] },

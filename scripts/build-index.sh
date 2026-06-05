@@ -80,7 +80,8 @@ def describe(path):
 # Carried into the index so consumers can check corruption-drift without sync.sh.
 guards_all = {}
 if os.path.exists("skill-guards.json"):
-    raw = json.load(open("skill-guards.json", encoding="utf-8"))
+    with open("skill-guards.json", encoding="utf-8") as gf:
+        raw = json.load(gf)
     guards_all = {k: v for k, v in raw.items() if not k.startswith("_")}
 
 skills = []
