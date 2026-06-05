@@ -1,0 +1,151 @@
+{
+  "registry": "blamechris/skill-templates",
+  "generatedFromCommit": "65f4325",
+  "skillCount": 24,
+  "skills": [
+    {
+      "name": "agent-review",
+      "hash": "a10ef75",
+      "lines": 202,
+      "description": "Launch an expert code reviewer agent with full project context."
+    },
+    {
+      "name": "agentic-audit",
+      "hash": "3f616c3",
+      "lines": 142,
+      "description": "Launch a panel of specialized agents to audit a pull request from multiple perspectives before merge."
+    },
+    {
+      "name": "autonomous-dev-flow",
+      "hash": "4a47e13",
+      "lines": 454,
+      "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, and continue to the next issue. The user reviews and merges PRs asynchronously while work continues."
+    },
+    {
+      "name": "batch-merge",
+      "hash": "0a76684",
+      "lines": 306,
+      "description": "Sequentially merge a set of reviewed PRs, handling branch protection's \"must be up-to-date\" requirement by updating each branch after the previous merge."
+    },
+    {
+      "name": "bug-hunt",
+      "hash": "7f5fa28",
+      "lines": 316,
+      "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues."
+    },
+    {
+      "name": "check-pr",
+      "hash": "cc062bc",
+      "lines": 470,
+      "description": "Address all PR review comments systematically and respond inline."
+    },
+    {
+      "name": "create-issue",
+      "hash": "12b011f",
+      "lines": 158,
+      "description": "Create a standardized GitHub issue with labels and traceability."
+    },
+    {
+      "name": "create-pr",
+      "hash": "12b011f",
+      "lines": 179,
+      "description": "Create a pull request with auto-detected issue closures and proper formatting."
+    },
+    {
+      "name": "decompose-issue",
+      "hash": "b4268c2",
+      "lines": 237,
+      "description": "Break a single GitHub issue that is too large into 2-5 independently implementable sub-issues. This is the **manual triage** counterpart to the auto-decomposition baked into `/autonomous-dev-flow` and `/parallel-dev` — use it when a human reads an issue and decides it needs splitting before any implementation runs."
+    },
+    {
+      "name": "fetch-docs",
+      "hash": "410e202",
+      "lines": 68,
+      "description": "Sync a companion documentation repo (e.g., Obsidian vault) so agents can reference design docs, architecture notes, and project knowledge during development."
+    },
+    {
+      "name": "fix-ci",
+      "hash": "3768ea6",
+      "lines": 277,
+      "description": "Diagnose CI failures or cancellations on a PR, take corrective action (re-trigger, fix, or escalate), and report status."
+    },
+    {
+      "name": "full-review",
+      "hash": "1e5962e",
+      "lines": 78,
+      "description": "Run a complete review pipeline: agent-review first, then check-pr. The agent-review pass naturally fills the ~4 minute Copilot review delay, so check-pr starts with comments already waiting."
+    },
+    {
+      "name": "learn",
+      "hash": "df2de5e",
+      "lines": 296,
+      "description": "Capture genuinely novel learnings from the current session and persist them to the correct memory layer. Designed to produce \"nothing to persist\" on most sessions -- that is the skill working correctly, not a failure."
+    },
+    {
+      "name": "manual-testing-mode",
+      "hash": "a1368f4",
+      "lines": 222,
+      "description": "Bootstrap a dogfooding session, then capture issues as the user finds them — defaulting to filing GitHub issues over fixing."
+    },
+    {
+      "name": "merge-gate",
+      "hash": "85269c8",
+      "lines": 57,
+      "description": "Short-circuit token-expensive diagnostic reasoning when `gh pr merge` fails due to branch protection. The most common blocker is unresolved review threads, which **only a human can resolve** via GitHub UI. This pattern turns a multi-step investigation into a 2-line handoff."
+    },
+    {
+      "name": "merge",
+      "hash": "d34b05d",
+      "lines": 230,
+      "description": "Merge PRs, verify post-merge version bump, and run post-merge actions (build, deploy, etc.)."
+    },
+    {
+      "name": "parallel-dev",
+      "hash": "6a1a98b",
+      "lines": 408,
+      "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts."
+    },
+    {
+      "name": "project-audit",
+      "hash": "aae4d65",
+      "lines": 515,
+      "description": "Launch a comprehensive multi-agent audit of the entire project. Agents with diverse perspectives analyze the codebase in parallel, then findings are synthesized into a master assessment with actionable recommendations."
+    },
+    {
+      "name": "recon",
+      "hash": "7f5fa28",
+      "lines": 275,
+      "description": "Map an unfamiliar repository (or area within one) so you know where to start. Output is a **descriptive lay-of-the-land**, not a critique. Use this *before* `/tackle-issues`, `/bug-hunt`, or `/project-audit` — it produces the orientation those skills assume."
+    },
+    {
+      "name": "smoke-test",
+      "hash": "21fa678",
+      "lines": 212,
+      "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results."
+    },
+    {
+      "name": "start-working",
+      "hash": "15d7b73",
+      "lines": 357,
+      "description": "Scan all work sources — GitHub issues, open PRs, roadmap files, audit outputs, codebase TODOs — to determine what to work on next. If nothing actionable is found, perform a lightweight codebase audit to surface potential investigations."
+    },
+    {
+      "name": "swarm-audit",
+      "hash": "c8b8477",
+      "lines": 204,
+      "description": "Launch a swarm of specialized agents to perform a multi-perspective audit of any design document, architecture, codebase, or proposal."
+    },
+    {
+      "name": "tackle-issues",
+      "hash": "21fa678",
+      "lines": 410,
+      "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows."
+    },
+    {
+      "name": "visual-brief",
+      "hash": "a4c08cb",
+      "lines": 186,
+      "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together."
+    }
+  ]
+}
