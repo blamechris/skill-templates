@@ -285,6 +285,61 @@ assert_guarded_subscript CONF_SLUGS "CONF_SLUGS subscripts are guarded against i
 assert_guarded_subscript CONF_PATHS "CONF_PATHS subscripts are guarded against idx=-1"
 assert_guarded_subscript CONF_SKILLS "CONF_SKILLS subscripts are guarded against idx=-1"
 
+# ---- validate_output skeleton-preservation tests ----
+#
+# Functional tests for check #5 in validate_output. A non-deterministic render
+# once deleted batch-merge's entire Copilot review gate (Step 2b/2c) for one
+# repo and slipped past the fuzzy heading-count (±5) and length (50-200%)
+# checks. Check #5 pins section drops exactly. These tests prove it both
+# ACCEPTS a faithful render and REJECTS a gate-drop, so the guard can't silently
+# regress (e.g. if someone reintroduces `grep -f <(...)`, which no-ops on the
+# bash 3.2 runner). deploy.sh has top-level prereq checks that would exit on
+# source, so we extract just the function body.
+
+echo ""
+echo "${YELLOW}== validate_output skeleton tests ==${RESET}"
+
+VO_SRC=$(mktemp)
+awk '/^validate_output\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$DEPLOY_SH" > "$VO_SRC"
+# shellcheck source=/dev/null
+. "$VO_SRC"
+rm -f "$VO_SRC"
+
+# assert_validate <test_name> <expected_rc> <output> <template>
+assert_validate() {
+    local name="$1" want_rc="$2" out="$3" tmpl="$4"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    local got_rc=0
+    validate_output "$out" "$tmpl" "batch-merge" "test" >/dev/null 2>&1 || got_rc=$?
+    if [ "$got_rc" = "$want_rc" ]; then
+        pass_test "$name"
+    else
+        fail_test "$name" "expected validate_output rc=$want_rc, got rc=$got_rc"
+    fi
+}
+
+if ! type validate_output >/dev/null 2>&1; then
+    TESTS_RUN=$((TESTS_RUN + 1))
+    fail_test "validate_output_sourced" "could not source validate_output from deploy.sh"
+else
+    VO_TMPL=$(cat "$REPO_ROOT/generic/batch-merge.md")
+    # Faithful render of the current template: strip the trailing "Customization*"
+    # section and remove {{CUSTOMIZE}} marker lines — a valid render when the
+    # notes fill nothing. The skeleton guard must accept this unchanged.
+    VO_FAITHFUL=$(printf '%s\n' "$VO_TMPL" \
+        | awk '/^#{2,}[[:space:]]+Customization([[:space:]]|$)/ {exit} {print}' \
+        | grep -vE '(^|[^`])\{\{CUSTOMIZE')
+    # Gate-drop: faithful render minus the Copilot review section (Step 2b/2c) —
+    # the exact regression class. If the template is ever restructured so these
+    # headings vanish, VO_DROPPED == VO_FAITHFUL and this test fails loudly,
+    # signalling the fixture needs updating.
+    VO_DROPPED=$(printf '%s\n' "$VO_FAITHFUL" \
+        | awk '/^#### Step 2b:/{drop=1} /^#### Step 2(d|e):/{drop=0} !drop{print}')
+
+    assert_validate "skeleton_accepts_faithful_render" 0 "$VO_FAITHFUL" "$VO_TMPL"
+    assert_validate "skeleton_rejects_dropped_section" 1 "$VO_DROPPED" "$VO_TMPL"
+fi
+
 # ---- Summary ----
 
 echo ""
