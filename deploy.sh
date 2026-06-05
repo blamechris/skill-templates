@@ -25,6 +25,22 @@ SKILLS_DIR=".claude/commands"
 # Defaults
 DRY_RUN=false
 LOCAL_MODE=false
+
+# Skills deployed DETERMINISTICALLY (no Claude API) — see issue #64. Their
+# {{CUSTOMIZE}} markers are guidance comments and the functional code ships
+# working defaults, so running them through Haiku adds only non-determinism and
+# section-drop risk (batch-merge's entire Copilot gate was repeatably deleted).
+# render_deterministic emits the template skeleton; validate_output still runs
+# as a safety net.
+#
+# DORMANT by default (empty): emitting the skeleton uses TEMPLATE defaults for
+# every marker, but some markers are genuinely per-repo — notably batch-merge's
+# REQUIRED_CHECKS (rah6="Build, lint, test", sovereign-storm=()), which the
+# default ("Run Tests"/"Validate Project") would wrongly overwrite and mis-gate.
+# Enabling a skill here is safe only once Phase 3 (#64) substitutes those values
+# per repo. Until then, opt in explicitly via env (e.g. DETERMINISTIC_SKILLS=...)
+# for a repo you've checked. Space-delimited.
+DETERMINISTIC_SKILLS="${DETERMINISTIC_SKILLS:-}"
 FILTER_REPO=""
 FILTER_SKILL=""
 CHANGED_TEMPLATES=false
@@ -530,6 +546,27 @@ MH
     return 0
 }
 
+# --- Deterministic render (no Claude API) ---
+# is_deterministic_skill <skill> — true if the skill is in DETERMINISTIC_SKILLS.
+is_deterministic_skill() {
+    case " $DETERMINISTIC_SKILLS " in
+        *" $1 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# render_deterministic <template_content> — emit the template skeleton:
+# stop at the first "## Customization*" heading (rule #4) and drop {{CUSTOMIZE}}
+# marker lines (rule #2 fallback). Same awk as validate_output's skeleton, so a
+# deterministic render passes check #5 by construction. awk does the filtering
+# (not grep -v) so it exits 0 even when it emits nothing — set -euo pipefail safe.
+render_deterministic() {
+    printf '%s\n' "$1" | awk '
+        /^#{2,}[[:space:]]+Customization([[:space:]]|$)/ { exit }
+        /(^|[^`])[{][{]CUSTOMIZE/ { next }
+        { print }'
+}
+
 # --- Deploy a single pair ---
 declare -a FAILURES=()
 
@@ -584,29 +621,45 @@ deploy_pair() {
     # transient drift without changing the customization or relaxing the
     # validator bounds.
     local result
-    local v_attempt
-    for v_attempt in 1 2; do
-        # API errors: do NOT retry here — call_claude already has its own HTTP
-        # retry (3x exponential backoff on 429/5xx, fail-fast on 400/401/403/404).
-        # Re-trying here would double up on transients and obscure the real
-        # 4xx auth/quota failures that should fail loudly. This loop only
-        # re-samples on validation failure.
-        if ! result=$(call_claude "$template_content" "$custom_content" "$repo" "$skill"); then
-            FAILURES+=("${repo}:${skill} — API error")
+    if is_deterministic_skill "$skill"; then
+        # Deterministic path — no API, no retry. The skeleton-preservation check
+        # passes by construction, but validate_output still runs as a safety net
+        # for its OTHER checks: residual {{CUSTOMIZE}} markers (a render-awk bug),
+        # an attribution footer in the template, or heading-count/length bounds
+        # (e.g. a template whose "## Customization*" heading was mistyped, so the
+        # whole section leaks through or the body is truncated).
+        echo "    ⚙️  Deterministic render (no Claude API)"
+        result=$(render_deterministic "$template_content")
+        if ! validate_output "$result" "$template_content" "$skill" "$repo"; then
+            FAILURES+=("${repo}:${skill} — deterministic render failed validation (template bug?)")
             return
         fi
-        if validate_output "$result" "$template_content" "$skill" "$repo"; then
-            break
-        fi
-        if [ "$v_attempt" = "1" ]; then
-            echo "    ↻  Validation failed on attempt 1 — re-sampling Haiku (output variance)" >&2
-            PAIRS_RETRIED=$((PAIRS_RETRIED + 1))
-        else
-            PAIRS_FAILED_AFTER_RETRY=$((PAIRS_FAILED_AFTER_RETRY + 1))
-            FAILURES+=("${repo}:${skill} — output validation failed after retry")
-            return
-        fi
-    done
+    else
+        # Call Claude and validate before writing — never write defective output.
+        # Retry once on validation failure: Haiku is stochastic even at
+        # temperature=0, so re-sampling typically clears transient drift without
+        # changing the customization or relaxing the validator bounds.
+        local v_attempt
+        for v_attempt in 1 2; do
+            # API errors: do NOT retry here — call_claude already has its own HTTP
+            # retry (3x exponential backoff on 429/5xx, fail-fast on 4xx).
+            if ! result=$(call_claude "$template_content" "$custom_content" "$repo" "$skill"); then
+                FAILURES+=("${repo}:${skill} — API error")
+                return
+            fi
+            if validate_output "$result" "$template_content" "$skill" "$repo"; then
+                break
+            fi
+            if [ "$v_attempt" = "1" ]; then
+                echo "    ↻  Validation failed on attempt 1 — re-sampling Haiku (output variance)" >&2
+                PAIRS_RETRIED=$((PAIRS_RETRIED + 1))
+            else
+                PAIRS_FAILED_AFTER_RETRY=$((PAIRS_FAILED_AFTER_RETRY + 1))
+                FAILURES+=("${repo}:${skill} — output validation failed after retry")
+                return
+            fi
+        done
+    fi
 
     # Append version stamp so sync.sh can detect outdated deployments
     local template_hash

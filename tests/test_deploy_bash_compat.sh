@@ -340,6 +340,63 @@ else
     assert_validate "skeleton_rejects_dropped_section" 1 "$VO_DROPPED" "$VO_TMPL"
 fi
 
+# ---- deterministic render tests (issue #64) ----
+#
+# batch-merge (and other logic-heavy skills) deploy deterministically — no
+# Claude API — because the render repeatably dropped whole sections. These
+# prove render_deterministic emits a gate-preserving, marker-free skeleton that
+# passes the validate_output safety net, and that skill membership works.
+
+echo ""
+echo "${YELLOW}== deterministic render tests ==${RESET}"
+
+DET_SRC=$(mktemp)
+awk '/^is_deterministic_skill\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$DEPLOY_SH" >> "$DET_SRC"
+awk '/^render_deterministic\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$DEPLOY_SH" >> "$DET_SRC"
+# shellcheck source=/dev/null
+. "$DET_SRC"
+rm -f "$DET_SRC"
+
+DETERMINISTIC_SKILLS="batch-merge"
+
+TESTS_RUN=$((TESTS_RUN + 1))
+if is_deterministic_skill batch-merge && ! is_deterministic_skill agent-review; then
+    pass_test "deterministic_skill_membership"
+else
+    fail_test "deterministic_skill_membership" "batch-merge should match, agent-review should not"
+fi
+
+if type render_deterministic >/dev/null 2>&1 && type validate_output >/dev/null 2>&1; then
+    DET_TMPL=$(cat "$REPO_ROOT/generic/batch-merge.md")
+    DET_OUT=$(render_deterministic "$DET_TMPL")
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if printf '%s' "$DET_OUT" | grep -qE '(^|[^`])\{\{CUSTOMIZE'; then
+        fail_test "deterministic_render_no_markers" "residual {{CUSTOMIZE}} marker in output"
+    else
+        pass_test "deterministic_render_no_markers"
+    fi
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if printf '%s\n' "$DET_OUT" | grep -q '#### Step 2b: Check Copilot Review' \
+        && ! printf '%s\n' "$DET_OUT" | grep -qE '^## Customization'; then
+        pass_test "deterministic_render_gate_kept_section_stripped"
+    else
+        fail_test "deterministic_render_gate_kept_section_stripped" \
+            "expected Step 2b heading present and the ## Customization* section stripped"
+    fi
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if validate_output "$DET_OUT" "$DET_TMPL" "batch-merge" "test" >/dev/null 2>&1; then
+        pass_test "deterministic_render_passes_validate_output"
+    else
+        fail_test "deterministic_render_passes_validate_output" "deterministic render must pass the validate_output safety net"
+    fi
+else
+    TESTS_RUN=$((TESTS_RUN + 1))
+    fail_test "deterministic_functions_sourced" "could not source render_deterministic / validate_output"
+fi
+
 # ---- Summary ----
 
 echo ""
