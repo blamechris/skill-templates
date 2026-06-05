@@ -807,20 +807,33 @@ These skills were customized from generic templates using the Claude API. Please
     # deterministic (Claude API), so a bad newer render can supersede a good
     # older one — the standing guidance is to DIFF a skill-deploy PR before
     # merging it regardless.
-    local stale_prs old
-    stale_prs=$(gh pr list --repo "$slug" --state open \
+    # --limit 100 (not the default 30): this is the only unbounded `gh pr list`
+    # in the file; without it a repo with >30 open PRs could silently skip
+    # older deploy PRs and defeat the supersede.
+    local stale_prs old branch
+    stale_prs=$(gh pr list --repo "$slug" --state open --limit 100 \
         --json number,headRefName \
-        -q ".[] | select(.headRefName | startswith(\"skill-deploy/\")) | select(.headRefName != \"$BRANCH_NAME\") | .number" \
+        -q ".[] | select(.headRefName | startswith(\"skill-deploy/\")) | select(.headRefName != \"$BRANCH_NAME\") | \"\(.number) \(.headRefName)\"" \
         2>/dev/null || true)
-    for old in $stale_prs; do
-        if gh pr close "$old" --repo "$slug" --delete-branch \
+    while read -r old branch; do
+        [ -n "$old" ] || continue
+        # Close FIRST (no --delete-branch). Closing is what stops the pile-up.
+        # Keeping branch deletion separate means a protected branch or a token
+        # without delete scope can't make the whole call fail and leave the PR
+        # open — which would re-list and re-comment on every later run (spam).
+        if gh pr close "$old" --repo "$slug" \
             --comment "Superseded by the newer skill deploy on \`$BRANCH_NAME\`. Closing to avoid stacked, conflicting skill-deploy PRs — review/merge the newest one instead." \
             >/dev/null 2>&1; then
             echo "    🧹 Superseded older deploy PR #$old in $slug"
+            # Best-effort branch cleanup; never affects the close above.
+            gh api -X DELETE "repos/$slug/git/refs/heads/$branch" >/dev/null 2>&1 \
+                && echo "       🧽 deleted branch $branch" || true
         else
             echo "    ⚠️  Could not close older deploy PR #$old in $slug (left open)"
         fi
-    done
+    done <<EOF
+$stale_prs
+EOF
 
     cd "$SCRIPT_DIR"
 }
