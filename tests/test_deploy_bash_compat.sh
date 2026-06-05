@@ -440,6 +440,22 @@ if type apply_value_overrides >/dev/null 2>&1 && type render_deterministic >/dev
     else
         fail_test "value_override_noop_without_file" "a repo with no .values file should pass content through unchanged"
     fi
+
+    # A prefix that only appears mid-line (a substring of REQUIRED_CHECKS=, but no
+    # line STARTS with it) must WARN, not silently no-op — the warning and the
+    # replacement must use the same line-start-anchored test. (Uses EQUIRED_CHECKS=,
+    # which is a substring of REQUIRED_CHECKS= but begins no line.)
+    TESTS_RUN=$((TESTS_RUN + 1))
+    VAL_STALE_DIR=$(mktemp -d); mkdir -p "$VAL_STALE_DIR/values"
+    printf 'batch-merge\tEQUIRED_CHECKS=\tEQUIRED_CHECKS=oops\n' > "$VAL_STALE_DIR/values/srepo.values"
+    VAL_SAVED_SD="$SCRIPT_DIR"; SCRIPT_DIR="$VAL_STALE_DIR"
+    VAL_STALE_ERR=$(apply_value_overrides "$VAL_SKEL" "srepo" "batch-merge" 2>&1 >/dev/null)
+    SCRIPT_DIR="$VAL_SAVED_SD"; rm -rf "$VAL_STALE_DIR"
+    if printf '%s' "$VAL_STALE_ERR" | grep -q 'prefix not found'; then
+        pass_test "value_override_warns_on_substring_only_prefix"
+    else
+        fail_test "value_override_warns_on_substring_only_prefix" "a prefix that only appears mid-line should warn, not silently no-op"
+    fi
 else
     TESTS_RUN=$((TESTS_RUN + 1))
     fail_test "value_override_functions_sourced" "could not source apply_value_overrides / render_deterministic"

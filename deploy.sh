@@ -597,13 +597,18 @@ apply_value_overrides() {
         [ "$vskill" = "$skill" ] || continue
         [ -n "$vprefix" ] || continue
         vrepl=${vrepl%$'\r'}   # tolerate a CRLF-saved .values file
-        if printf '%s\n' "$content" | grep -qF -- "$vprefix"; then
-            # Pass prefix + replacement via ENVIRON (NOT awk -v): -v applies
-            # ANSI escape processing (\t, \\, …) and would mangle a replacement
-            # containing a backslash. ENVIRON is the raw value. print (not
-            # sub/gsub) also keeps & literal.
-            content=$(printf '%s\n' "$content" | VP="$vprefix" VR="$vrepl" awk '
-                { t=$0; sub(/^[ \t]+/,"",t); if (index(t, ENVIRON["VP"])==1) print ENVIRON["VR"]; else print $0 }')
+        # ONE awk pass does the replacement AND signals (via exit code) whether
+        # a line actually matched — so the "not found" warning uses the SAME
+        # leading-trim, line-start-anchored test as the replacement, not a looser
+        # substring check that would skip the warning on a stale prefix that only
+        # appears mid-line. Pass prefix+replacement via ENVIRON (not awk -v) so
+        # escape sequences in the replacement stay literal; print (not sub) keeps
+        # & literal too.
+        local new
+        if new=$(printf '%s\n' "$content" | VP="$vprefix" VR="$vrepl" awk '
+            { t=$0; sub(/^[ \t]+/,"",t); if (index(t, ENVIRON["VP"])==1) { print ENVIRON["VR"]; m=1 } else print $0 }
+            END { exit (m ? 0 : 1) }'); then
+            content="$new"
         else
             echo "    ⚠️  ${repo}:${skill} value override prefix not found (stale?): $vprefix" >&2
         fi
