@@ -33,14 +33,14 @@ LOCAL_MODE=false
 # render_deterministic emits the template skeleton; validate_output still runs
 # as a safety net.
 #
-# DORMANT by default (empty): emitting the skeleton uses TEMPLATE defaults for
-# every marker, but some markers are genuinely per-repo — notably batch-merge's
-# REQUIRED_CHECKS (rah6="Build, lint, test", sovereign-storm=()), which the
-# default ("Run Tests"/"Validate Project") would wrongly overwrite and mis-gate.
-# Enabling a skill here is safe only once Phase 3 (#64) substitutes those values
-# per repo. Until then, opt in explicitly via env (e.g. DETERMINISTIC_SKILLS=...)
-# for a repo you've checked. Space-delimited.
-DETERMINISTIC_SKILLS="${DETERMINISTIC_SKILLS:-}"
+# Enabled per SKILL here, but actually applied per REPO only when the repo has a
+# values/<repo>.values opt-in file (see should_render_deterministic, Phase 3b).
+# So a skill listed here deploys deterministically to vetted repos and falls back
+# to the LLM for the rest — a repo is never silently given template defaults for
+# its per-repo values (e.g. REQUIRED_CHECKS). Onboard a repo by adding its values
+# file after diff-checking that deterministic wouldn't drop repo-specific content
+# (an LLM-added rule, etc.). Space-delimited; env-overridable.
+DETERMINISTIC_SKILLS="${DETERMINISTIC_SKILLS:-batch-merge}"
 FILTER_REPO=""
 FILTER_SKILL=""
 CHANGED_TEMPLATES=false
@@ -555,6 +555,18 @@ is_deterministic_skill() {
     esac
 }
 
+# should_render_deterministic <repo> <skill> — true iff the skill is configured
+# for deterministic deploy AND the repo opted in via a values/<repo>.values file
+# (Phase 3b guard, issue #64). The opt-in file stops deterministic deploy from
+# silently applying TEMPLATE defaults to a repo whose per-repo values (e.g.
+# REQUIRED_CHECKS) were never vetted — which would mis-gate its merges. Adding a
+# repo's values file is a deliberate "I checked this repo" step (an empty file is
+# valid — it means the template defaults are correct here). Repos without one
+# fall back to the LLM path.
+should_render_deterministic() {
+    is_deterministic_skill "$2" && [ -f "$SCRIPT_DIR/values/$1.values" ]
+}
+
 # render_deterministic <template_content> — emit the template skeleton:
 # stop at the first "## Customization*" heading (rule #4) and drop {{CUSTOMIZE}}
 # marker lines (rule #2 fallback). Same awk as validate_output's skeleton, so a
@@ -670,7 +682,10 @@ deploy_pair() {
     # transient drift without changing the customization or relaxing the
     # validator bounds.
     local result
-    if is_deterministic_skill "$skill"; then
+    if ! should_render_deterministic "$repo" "$skill" && is_deterministic_skill "$skill"; then
+        echo "    ⚠️  ${repo}:${skill} is deterministic-eligible but has no values/${repo}.values — using LLM render. Add the file (even empty) to opt this repo into deterministic deploy." >&2
+    fi
+    if should_render_deterministic "$repo" "$skill"; then
         # Deterministic path — no API, no retry. The skeleton-preservation check
         # passes by construction, but validate_output still runs as a safety net
         # for its OTHER checks: residual {{CUSTOMIZE}} markers (a render-awk bug),

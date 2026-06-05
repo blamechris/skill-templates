@@ -352,6 +352,7 @@ echo "${YELLOW}== deterministic render tests ==${RESET}"
 
 DET_SRC=$(mktemp)
 awk '/^is_deterministic_skill\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$DEPLOY_SH" >> "$DET_SRC"
+awk '/^should_render_deterministic\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$DEPLOY_SH" >> "$DET_SRC"
 awk '/^render_deterministic\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$DEPLOY_SH" >> "$DET_SRC"
 # shellcheck source=/dev/null
 . "$DET_SRC"
@@ -364,6 +365,20 @@ if is_deterministic_skill batch-merge && ! is_deterministic_skill agent-review; 
     pass_test "deterministic_skill_membership"
 else
     fail_test "deterministic_skill_membership" "batch-merge should match, agent-review should not"
+fi
+
+# Phase 3b guard: a deterministic skill applies to a repo ONLY if that repo has
+# a values/<repo>.values opt-in file. Vetted repos (sovereign-storm, ltl) yes;
+# an unvetted repo or a non-deterministic skill, no.
+TESTS_RUN=$((TESTS_RUN + 1))
+SCRIPT_DIR="$REPO_ROOT"
+if should_render_deterministic sovereign-storm batch-merge \
+    && should_render_deterministic ltl batch-merge \
+    && ! should_render_deterministic no-such-repo-xyz batch-merge \
+    && ! should_render_deterministic sovereign-storm check-pr; then
+    pass_test "deterministic_guard_requires_values_file"
+else
+    fail_test "deterministic_guard_requires_values_file" "vetted repos (with .values) should pass; unvetted repo / non-deterministic skill should not"
 fi
 
 if type render_deterministic >/dev/null 2>&1 && type validate_output >/dev/null 2>&1; then
