@@ -4,30 +4,46 @@
 
 **skill-templates** is a private repository of reusable Claude Code skill templates (`.claude/commands/*.md`) that get customized per project. It serves as the canonical source of truth for review workflows, PR processes, and development skills used across all repos.
 
-## How It Works
+## How It Works (pull-based registry)
+
+This repo is a **registry** — `npm`/`brew` for Claude Code skills. Repos install skills
+**on demand** via the `/skill` client; the invoking agent customizes each template inline
+for its repo. There is no central fan-out. (Migration tracked in #68; the old push-deploy
+is retired — see "Legacy" below.)
 
 ```
 skill-templates/
-├── generic/           # Gold standard templates (repo-agnostic)
-├── customizations/    # Per-repo adaptation notes
-├── deploy.conf        # Repo-to-skill mapping (authoritative source)
-├── deploy.sh          # Claude API-powered skill deployment
-├── sync.sh            # Drift checker (reads deploy.conf)
-└── .github/workflows/ # CI: auto-deploy on push to main
+├── generic/                     # Skill templates (repo-agnostic, with {{CUSTOMIZE}} markers)
+│   └── skill.md                 # the /skill client itself
+├── registry.json                # generated index: skill → template hash, description, guards
+├── skill-guards.json            # per-skill content guards (load-bearing markers)
+├── scripts/build-index.sh       # regenerates registry.json
+├── docs/skill-profile-schema.md # the .claude/skill-profile.md spec
+└── (legacy, pending removal #75): deploy.conf, deploy.sh, sync.sh, customizations/, values/
 ```
 
-**Configuration:** `deploy.conf` is the single source of truth for which repos get which skills. Both `sync.sh` and `deploy.sh` read from it. Format: `REPO|GITHUB_SLUG|LOCAL_PATH_SUFFIX|SKILL1,SKILL2,...`
+**Using skills (consumer side)** — in any repo, run `/skill`:
+- `skill add <name>` — resolve from `registry.json` → fetch `generic/<name>.md` → the
+  agent fills `{{CUSTOMIZE}}` from the repo's `CLAUDE.md` + `.claude/skill-profile.md` +
+  code → self-validate → write `.claude/commands/<name>.md` (version-stamped) → record in
+  `.claude/skills.lock`.
+- `skill list` / `outdated` / `update [name]` / `remove <name>`.
+- A missing `/X` auto-installs via `skill add X` (global CLAUDE.md rule).
 
-**Deployment:** `deploy.sh` calls the Claude API (Haiku 4.5, temperature 0) to customize generic templates using per-repo customization notes. It replaces `{{CUSTOMIZE: ...}}` markers with repo-specific content.
-- **Local mode:** `./deploy.sh --local --repo chroxy --skill agent-review` — writes directly to local repo clone
-- **CI mode:** Triggered by GitHub Actions on push to main when `generic/`, `customizations/`, or `deploy.conf` change. Clones target repos, creates PRs with customized skills.
-- **Drift check:** `./sync.sh [repo]` — compares deployed skills against templates using pattern checks
+**Maintaining the registry** — edit a template in `generic/`, commit, then run
+`./scripts/build-index.sh` to refresh `registry.json`. Consumers pick it up on their next
+`skill update`. No deploy step, no API key here.
 
-**Workflow:**
-1. Skills are refined here when failure modes are discovered
-2. Push to main auto-deploys changed templates/customizations to managed repos via PR
-3. `sync.sh` checks for drift between deployed skills and templates
-4. Each repo's `.claude/commands/` contains the customized version
+**Drift** — `skill outdated` (consumer side) flags version drift (template hash moved),
+profile drift (`.claude/skill-profile.md` changed), and corruption drift (a `guards`
+check fails).
+
+### Legacy (being retired — #68 / #75)
+`deploy.sh` (Haiku push-deploy), `deploy.conf` (repo→skill map), `sync.sh` (central drift
+scan), `customizations/<repo>.md` (replaced by per-repo `.claude/skill-profile.md`), and
+the `deploy-skills.yml` auto-deploy trigger (already removed in #69; `workflow_dispatch`
+remains only as a manual escape hatch). **Do not re-enable the push trigger or run a full
+`deploy.sh`.**
 
 ## Critical: Attribution Policy
 
@@ -50,7 +66,11 @@ The `repo-memory` MCP is available. Prefer `get_file_summary` over `Read` when e
 
 ## Managed Repos
 
-This table is **derived from `deploy.conf`** — it lists each managed repo and the skills currently deployed to it. Repos can also have **repo-only skills** (`commit`, `qa-update`, `tdd-feature`, `consolidate-dependabot`) maintained directly in their `.claude/commands/` — those aren't in `deploy.conf` and aren't listed here. **`deploy.conf` is the authoritative source; this table is documentation.** If they drift, trust `deploy.conf`.
+> **Legacy note (#68/#75):** in the pull model each repo owns which skills it installs
+> (its `.claude/commands/` + `.claude/skills.lock`), so `deploy.conf` is no longer
+> authoritative — the table below is historical, kept until the 15-repo rollout completes.
+
+This table is **derived from `deploy.conf`** — it lists each managed repo and the skills it was deployed under the old push model. Repos can also have **repo-only skills** (`commit`, `qa-update`, `tdd-feature`, `consolidate-dependabot`) maintained directly in their `.claude/commands/` — those weren't in `deploy.conf`.
 
 | Repo | Tech Stack | Skills (from `deploy.conf`) |
 |------|-----------|--------|
