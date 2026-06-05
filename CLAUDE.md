@@ -13,7 +13,7 @@ is retired — see "Legacy" below.)
 
 ```
 skill-templates/
-├── generic/                     # Skill templates (repo-agnostic, with {{CUSTOMIZE}} markers)
+├── generic/                     # Skill templates (repo-agnostic, with {{CUSTOMIZE: ...}} markers)
 │   └── skill.md                 # the /skill client itself
 ├── registry.json                # generated index: skill → template hash, description, guards
 ├── skill-guards.json            # per-skill content guards (load-bearing markers)
@@ -24,11 +24,13 @@ skill-templates/
 
 **Using skills (consumer side)** — in any repo, run `/skill`:
 - `skill add <name>` — resolve from `registry.json` → fetch `generic/<name>.md` → the
-  agent fills `{{CUSTOMIZE}}` from the repo's `CLAUDE.md` + `.claude/skill-profile.md` +
-  code → self-validate → write `.claude/commands/<name>.md` (version-stamped) → record in
-  `.claude/skills.lock`.
+  agent fills `{{CUSTOMIZE: ...}}` from the repo's `CLAUDE.md` + `.claude/skill-profile.md`
+  + code → self-validate → write `.claude/commands/<name>.md` (version-stamped) → record
+  in `.claude/skills.lock`.
 - `skill list` / `outdated` / `update [name]` / `remove <name>`.
-- A missing `/X` auto-installs via `skill add X` (global CLAUDE.md rule).
+- Install-on-miss is a **rule, not automatic tooling**: per global `CLAUDE.md`, if `/X` is
+  requested but absent from `.claude/commands/`, the agent runs `skill add X` first, then
+  invokes it.
 
 **Maintaining the registry** — edit a template in `generic/`, commit, then run
 `./scripts/build-index.sh` to refresh `registry.json`. Consumers pick it up on their next
