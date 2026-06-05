@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "f034694",
+  "generatedFromCommit": "a9824dd",
   "skillCount": 25,
   "skills": [
     {
@@ -300,8 +300,7 @@
         {
           "label": "no-admin",
           "anyOf": [
-            "Never use \\*\\*`?--admin",
-            "--admin"
+            "Never use `?--admin"
           ]
         },
         {

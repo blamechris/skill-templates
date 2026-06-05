@@ -51,7 +51,7 @@
     { "label": "review-gate", "anyOf": ["Mandatory Review Gate", "Review Gate"] },
     { "label": "resolve-threads", "anyOf": ["resolveReviewThread"] },
     { "label": "graphql-python", "anyOf": ["bash corrupts Base64", "resolveReviewThread must use Python"] },
-    { "label": "no-admin", "anyOf": ["Never use \\*\\*`?--admin", "--admin"] },
+    { "label": "no-admin", "anyOf": ["Never use `?--admin"] },
     { "label": "mergestate-diagnosis", "anyOf": ["mergeStateStatus"] }
   ]
 }
