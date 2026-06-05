@@ -105,13 +105,19 @@ note in the report that hashes may be stale. Record which source you used.
    - **No forged stamp:** the customized body contains no `<!-- skill-templates: … -->`
      line of its own. Strip any before step 5 appends the single authoritative stamp, so
      `outdated` can't be fooled by a planted version.
+   - **Guards intact:** if this skill has a `guards` array in `registry.json`, every guard
+     must still be satisfied — for each guard, at least one of its `anyOf` regexes matches
+     the customized output. A guard miss means customization stripped a load-bearing
+     section; restore it. (These are the content checks ported from `sync.sh`.)
    - If any check fails, fix and re-check before writing. Never write defective output.
 5. **Write + stamp.** Create `.claude/commands/` if absent, strip any pre-existing
    `<!-- skill-templates: … -->` lines from the body, then write to
    `.claude/commands/<name>.md` ending with exactly:
    `<!-- skill-templates: <name> <hash> <date> -->` (today's date, `YYYY-MM-DD`).
 6. **Record in the lockfile.** Create `.claude/skills.lock` (schema below) if absent,
-   then upsert `<name>`.
+   then upsert `<name>` with the template `hash` and, when a `.claude/skill-profile.md`
+   exists, its `profileHash` (so `update` can tell when the *profile* changed, not just
+   the template).
 7. **Report.** State the skill, the hash installed, the registry source used, and any
    markers dropped for lack of repo context.
 
@@ -119,9 +125,15 @@ note in the report that hashes may be stale. Record which source you used.
 
 1. Resolve the registry and read `registry.json`.
 2. For each entry in `.claude/skills.lock` (or each stamped `.claude/commands/*.md`),
-   compare the installed `hash` against the registry's current hash.
-3. Print the drifted skills: `name  installed_hash → registry_hash`. If none, say so.
-   (This is the consumer-side port of the registry's `sync.sh` drift check.)
+   flag it stale if **any** of:
+   - **version drift** — installed `hash` ≠ the registry's current hash;
+   - **profile drift** — the lockfile's `profileHash` ≠ the current
+     `.claude/skill-profile.md` hash (the skill was tailored against an older profile);
+   - **corruption drift** — the installed file fails a registry `guard` (some guard's
+     `anyOf` regexes no longer match — a load-bearing section was lost).
+3. Print the drifted skills with the reason, e.g. `name  abc1234 → def5678 (version)` or
+   `name  (guard miss: idempotency)`. If none, say so. (This is the consumer-side port of
+   the registry's `sync.sh` drift check — version stamp **and** content guards.)
 
 ### `skill update [name]`
 
@@ -140,7 +152,7 @@ Delete `.claude/commands/<name>.md` and its `.claude/skills.lock` entry. Report.
 {
   "registry": "blamechris/skill-templates",
   "skills": {
-    "full-review": { "hash": "cc062bc", "installed": "2026-06-04" },
+    "full-review": { "hash": "cc062bc", "installed": "2026-06-04", "profileHash": "3f1a9c2" },
     "check-pr":    { "hash": "a10ef75", "installed": "2026-06-04" }
   }
 }
@@ -149,6 +161,9 @@ Delete `.claude/commands/<name>.md` and its `.claude/skills.lock` entry. Report.
 - `hash` — the registry template commit this install was built from (matches the
   version stamp). `outdated` diffs this against `registry.json`.
 - `installed` — date the install/update ran (`YYYY-MM-DD`).
+- `profileHash` *(optional)* — short hash of `.claude/skill-profile.md` at install time.
+  Present only when a profile existed. `outdated` flags profile drift when it no longer
+  matches the current profile, so a changed profile triggers a re-tailor on `update`.
 - The lockfile is the authoritative manifest; the per-file stamp is a convenient
   inline mirror. Keep them in agreement.
 

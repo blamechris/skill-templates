@@ -76,17 +76,27 @@ def describe(path):
             para.append(s)
     return " ".join(para)
 
+# Per-skill content guards (load-bearing markers that must survive customization).
+# Carried into the index so consumers can check corruption-drift without sync.sh.
+guards_all = {}
+if os.path.exists("skill-guards.json"):
+    raw = json.load(open("skill-guards.json", encoding="utf-8"))
+    guards_all = {k: v for k, v in raw.items() if not k.startswith("_")}
+
 skills = []
 for path in sorted(glob.glob("generic/*.md")):
     slug = os.path.splitext(os.path.basename(path))[0]
     with open(path, encoding="utf-8") as f:
         lines = sum(1 for _ in f)
-    skills.append({
+    entry = {
         "name": slug,
         "hash": short_hash(path),
         "lines": lines,
         "description": describe(path),
-    })
+    }
+    if slug in guards_all:
+        entry["guards"] = guards_all[slug]
+    skills.append(entry)
 
 doc = {
     "registry": "blamechris/skill-templates",

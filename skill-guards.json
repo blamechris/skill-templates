@@ -1,0 +1,43 @@
+{
+  "_comment": "Per-skill content guards — load-bearing markers that must survive customization. Each guard passes if ANY of its regexes matches the installed skill. Ported from sync.sh so the check outlives it; build-index.sh folds these into registry.json, and /skill uses them in `add` self-validation and `outdated`/`doctor`.",
+  "check-pr": [
+    { "label": "idempotency", "anyOf": ["in_reply_to_id"] },
+    { "label": "mandatory-issues", "anyOf": ["FOLLOW-UP ISSUE"] },
+    { "label": "commit-links", "anyOf": ["commit.*SHA", "COMMIT_SHA", "commit hash"] },
+    { "label": "3-outcomes", "anyOf": ["THREE.*valid", "ONLY THREE", "3 valid"] },
+    { "label": "issue-reconciliation", "anyOf": ["from-review.*issue", "Cross-Reference", "cross-reference", "Reconcile"] }
+  ],
+  "agent-review": [
+    { "label": "mandatory-issues", "anyOf": ["MANDATORY", "mandatory", "MUST.*issue"] },
+    { "label": "issue-creation-code", "anyOf": ["issue create"] },
+    { "label": "issue-reconciliation", "anyOf": ["from-review.*issue", "Reconcile", "reconcile", "cross-reference"] }
+  ],
+  "swarm-audit": [
+    { "label": "core-panel", "anyOf": ["Core Panel"] },
+    { "label": "master-assessment", "anyOf": ["master-assessment"] },
+    { "label": "file-line-refs", "anyOf": ["file:line"] },
+    { "label": "consensus-section", "anyOf": ["Consensus Findings"] }
+  ],
+  "full-review": [
+    { "label": "agent-review-phase", "anyOf": ["Phase 1.*Agent Review", "agent-review"] },
+    { "label": "check-pr-phase", "anyOf": ["Phase 2.*Check-PR", "check-pr"] },
+    { "label": "combined-summary", "anyOf": ["Combined Summary", "combined.*table", "summary table"] },
+    { "label": "sequential-execution", "anyOf": ["Sequential.*not parallel", "MUST complete before"] }
+  ],
+  "learn": [
+    { "label": "gate-check", "anyOf": ["Gate Check", "gate check", "Nothing to persist"] },
+    { "label": "behavioral-test", "anyOf": ["Behavioral Test", "do X instead of Y"] },
+    { "label": "deduplication", "anyOf": ["Deduplicate", "dedup"] },
+    { "label": "approval-gate", "anyOf": ["CLAUDE.md.*approval", "do NOT write without approval"] },
+    { "label": "entry-cap", "anyOf": ["3 entries max", "max 3", "at most 3"] },
+    { "label": "self-ref-guard", "anyOf": ["self-referential", "Self-referential"] }
+  ],
+  "tackle-issues": [
+    { "label": "wave-model", "anyOf": ["Wave Model", "multi-wave", "wave.*retry"] },
+    { "label": "convergence-detection", "anyOf": ["Convergence", "convergence.*check", "zero.*completions"] },
+    { "label": "morning-summary", "anyOf": ["Morning Summary", "marathon.*complete", "Session Complete"] },
+    { "label": "strategy-escalation", "anyOf": ["Escalat", "alternative.*approach", "Alt.*Strategy"] },
+    { "label": "queue-replenishment", "anyOf": ["Replenish", "replenish.*queue", "Queue Replenishment"] },
+    { "label": "batch-merge-option", "anyOf": ["batch-merge", "merge:true"] }
+  ]
+}
