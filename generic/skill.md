@@ -44,14 +44,16 @@ Find the registry once, in this order; use the first that works:
 
 1. `$SKILL_REGISTRY_DIR` if set — a local clone path.
 2. `~/Projects/skill-templates` if it exists — the conventional local clone (fast,
-   offline, always current via `git -C … pull`).
+   works offline for reads).
 3. Otherwise fetch over the network with `gh`:
    - Index: `gh api repos/blamechris/skill-templates/contents/registry.json --jq '.content' | base64 -d`
    - Template: `gh api repos/blamechris/skill-templates/contents/generic/<name>.md --jq '.content' | base64 -d`
    - Hash of a template: `gh api 'repos/blamechris/skill-templates/commits?path=generic/<name>.md&per_page=1' --jq '.[0].sha[0:7]'`
 
-When using a local clone, prefer it but `git -C "$REG" pull --quiet` first so hashes
-are current. Record which source you used in the report.
+When using a local clone, refresh it **only when online** and tolerantly:
+`git -C "$REG" pull --ff-only --quiet 2>/dev/null || true`. A failed fetch (offline) or
+a non-fast-forward leaves the existing clone usable — fall back to its current state and
+note in the report that hashes may be stale. Record which source you used.
 
 ## Instructions
 
@@ -59,7 +61,8 @@ are current. Record which source you used in the report.
 
 1. Resolve the registry and read `registry.json`.
 2. Read this repo's `.claude/skills.lock` (treat missing as empty) and list
-   `.claude/commands/*.md`.
+   `.claude/commands/*.md` (treat a missing directory as no skills installed — a bare
+   repo being bootstrapped).
 3. Print a table: skill, registry hash, installed hash (from the stamp/lock), and
    status — `installed` / `outdated` / `not installed`. Group installed first.
 
@@ -87,19 +90,28 @@ are current. Record which source you used in the report.
      placeholder shapes (`path/to/file:<line>`, `scope`) rather than fabricating.
    - **No attribution** anywhere — no "Generated with", no "Co-Authored-By", no AI
      mentions (this is a hard registry rule).
-4. **Self-validate** before writing (the agent IS the validator here — these mirror the
-   registry's `validate_output`):
+4. **Self-validate** before writing (the agent IS the validator here — these cover the
+   registry's `validate_output` checks, including its skeleton-preservation pass):
    - **No residual markers:** no `{{CUSTOMIZE` remains (outside backticked mentions).
    - **No attribution footer:** none of the last ~15 lines start with "Generated with
      Claude" / "Co-Authored-By: Claude".
-   - **Headings preserved:** every real markdown heading from the template (minus the
-     removed `## Customization Points`) appears verbatim in the output.
+   - **Headings preserved (exact):** every real markdown heading from the template
+     (minus the removed `## Customization Points`) appears verbatim in the output.
+   - **Body preserved:** non-heading, non-marker template lines survive in the output —
+     only the spots where a `{{CUSTOMIZE}}` marker was filled or removed may differ. Do
+     not silently drop or reword the template's prose, code blocks, or examples.
    - **Length sane:** output is roughly 50–200% of the template length (catches
      truncation or runaway expansion).
+   - **No forged stamp:** the customized body contains no `<!-- skill-templates: … -->`
+     line of its own. Strip any before step 5 appends the single authoritative stamp, so
+     `outdated` can't be fooled by a planted version.
    - If any check fails, fix and re-check before writing. Never write defective output.
-5. **Write + stamp.** Write to `.claude/commands/<name>.md`, ending with exactly:
+5. **Write + stamp.** Create `.claude/commands/` if absent, strip any pre-existing
+   `<!-- skill-templates: … -->` lines from the body, then write to
+   `.claude/commands/<name>.md` ending with exactly:
    `<!-- skill-templates: <name> <hash> <date> -->` (today's date, `YYYY-MM-DD`).
-6. **Record in the lockfile.** Upsert `<name>` into `.claude/skills.lock` (see schema).
+6. **Record in the lockfile.** Create `.claude/skills.lock` (schema below) if absent,
+   then upsert `<name>`.
 7. **Report.** State the skill, the hash installed, the registry source used, and any
    markers dropped for lack of repo context.
 
