@@ -61,9 +61,11 @@ the skill's exact name plus the literal ` Customizations` suffix.>
 - **Keep it current.** When conventions change (a new required check, a renamed scope),
   update the profile so future `skill add` / `skill update` installs stay accurate.
 
-## Migration from `customizations/<repo>.md`
+## History: migration from `customizations/<repo>.md`
 
-The registry's `customizations/<repo>.md` files map 1:1 onto this schema (same sections).
-Migrating a repo means copying its `customizations/<repo>.md` to `<repo>/.claude/skill-profile.md`
-(adjusting the H1 to `# <repo> skill profile`) and folding any `values/<repo>.values`
-deterministic overrides into the relevant skill sections. Tracked by #70.
+Migration is **complete** (#70, #75) — every managed repo now carries its own
+`.claude/skill-profile.md`, and the registry's old `customizations/<repo>.md` and
+`values/<repo>.values` sources have been removed. For the record, migrating a repo meant
+copying its `customizations/<repo>.md` into `<repo>/.claude/skill-profile.md` (adjusting the
+H1 to `# <repo> skill profile`) and folding any `values/<repo>.values` deterministic
+overrides into the relevant skill sections.

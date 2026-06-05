@@ -1,9 +1,0 @@
-# Per-repo value overrides for deterministic skill deploy (issue #64 phase 3).
-# Format:  <skill>\t<line-prefix>\t<replacement-line>
-# A skeleton line whose leading-trimmed text starts with <line-prefix> is
-# replaced wholesale by <replacement-line>. Kept OUT of customizations/ so
-# edits here do not trigger a fleet redeploy.
-#
-# sovereign-storm has no required CI checks (main is not branch-protected),
-# so batch-merge must not wait on any — empty REQUIRED_CHECKS.
-batch-merge	REQUIRED_CHECKS=	REQUIRED_CHECKS=()
