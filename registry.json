@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "65f4325",
-  "skillCount": 24,
+  "generatedFromCommit": "c5040e5",
+  "skillCount": 25,
   "skills": [
     {
       "name": "agent-review",
@@ -116,6 +116,12 @@
       "hash": "7f5fa28",
       "lines": 275,
       "description": "Map an unfamiliar repository (or area within one) so you know where to start. Output is a **descriptive lay-of-the-land**, not a critique. Use this *before* `/tackle-issues`, `/bug-hunt`, or `/project-audit` — it produces the orientation those skills assume."
+    },
+    {
+      "name": "skill",
+      "hash": "c5040e5",
+      "lines": 176,
+      "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs."
     },
     {
       "name": "smoke-test",
