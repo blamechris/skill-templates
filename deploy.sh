@@ -567,6 +567,55 @@ render_deterministic() {
         { print }'
 }
 
+# apply_value_overrides <content> <repo> <skill> — substitute per-repo values
+# for the handful of marker-governed lines that genuinely vary per repo (issue
+# #64 phase 3), e.g. batch-merge's REQUIRED_CHECKS (rah6="Build, lint, test",
+# sovereign-storm=()). Without this, render_deterministic uses TEMPLATE defaults
+# and would mis-gate those repos.
+#
+# Overrides live in values/<repo>.values — TSV "skill<TAB>line_prefix<TAB>repl" —
+# kept OUT of customizations/ so editing them does NOT trigger a fleet redeploy
+# (deploy-skills.yml watches generic/customizations/deploy.conf, not values/).
+# A line whose leading-trimmed text starts with <line_prefix> is replaced
+# wholesale by <repl> (which carries its own indentation). Unmatched overrides
+# warn (a stale prefix shouldn't silently no-op). Echoes content unchanged if
+# the repo has no values file. Each override changes one skeleton line, which
+# counts toward validate_output check #5's body-drift budget (tolerance 8) — keep
+# per-repo overrides well under that.
+apply_value_overrides() {
+    local content="$1" repo="$2" skill="$3"
+    local vfile="$SCRIPT_DIR/values/${repo}.values"
+    if [ ! -f "$vfile" ]; then
+        printf '%s' "$content"
+        return 0
+    fi
+    local vskill vprefix vrepl
+    # `|| [ -n "$vskill" ]` processes a final override that lacks a trailing
+    # newline (common from editors/git) instead of silently dropping it.
+    while IFS=$'\t' read -r vskill vprefix vrepl || [ -n "$vskill" ]; do
+        case "$vskill" in ''|'#'*) continue ;; esac
+        [ "$vskill" = "$skill" ] || continue
+        [ -n "$vprefix" ] || continue
+        vrepl=${vrepl%$'\r'}   # tolerate a CRLF-saved .values file
+        # ONE awk pass does the replacement AND signals (via exit code) whether
+        # a line actually matched — so the "not found" warning uses the SAME
+        # leading-trim, line-start-anchored test as the replacement, not a looser
+        # substring check that would skip the warning on a stale prefix that only
+        # appears mid-line. Pass prefix+replacement via ENVIRON (not awk -v) so
+        # escape sequences in the replacement stay literal; print (not sub) keeps
+        # & literal too.
+        local new
+        if new=$(printf '%s\n' "$content" | VP="$vprefix" VR="$vrepl" awk '
+            { t=$0; sub(/^[ \t]+/,"",t); if (index(t, ENVIRON["VP"])==1) { print ENVIRON["VR"]; m=1 } else print $0 }
+            END { exit (m ? 0 : 1) }'); then
+            content="$new"
+        else
+            echo "    ⚠️  ${repo}:${skill} value override prefix not found (stale?): $vprefix" >&2
+        fi
+    done < "$vfile"
+    printf '%s' "$content"
+}
+
 # --- Deploy a single pair ---
 declare -a FAILURES=()
 
@@ -630,6 +679,7 @@ deploy_pair() {
         # whole section leaks through or the body is truncated).
         echo "    ⚙️  Deterministic render (no Claude API)"
         result=$(render_deterministic "$template_content")
+        result=$(apply_value_overrides "$result" "$repo" "$skill")
         if ! validate_output "$result" "$template_content" "$skill" "$repo"; then
             FAILURES+=("${repo}:${skill} — deterministic render failed validation (template bug?)")
             return
