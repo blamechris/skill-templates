@@ -16,7 +16,7 @@ Examples:
 ```
 /catchup
 /catchup scope=prs
-/catchup blamechris/archery-apprentice since=3
+/catchup owner/repo since=3
 /catchup scope=issues limit=40
 ```
 
