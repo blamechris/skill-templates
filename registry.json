@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "8e971c9",
+  "generatedFromCommit": "c3686b6",
   "skillCount": 26,
   "skills": [
     {
@@ -97,7 +97,7 @@
     },
     {
       "name": "catchup",
-      "hash": "8e971c9",
+      "hash": "c3686b6",
       "lines": 181,
       "description": "Answer **\"where did we leave off?\"** — a fast, read-only recap of a project's recent activity and current open state. Pulls recent commits, CI/deploy health, open PRs (with mergeability), open issues, local git state, and session memory into one scannable summary, ending with a single suggested next step.",
       "guards": [
