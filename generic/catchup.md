@@ -64,7 +64,10 @@ gh pr list -R "$R" --state merged --limit 8 \
 # Latest CI run health
 gh run list -R "$R" --limit 8
 
-# Deploy health on the default branch (customize the workflow name)
+# Deploy health on the default branch. Customize the workflow name; if the name is
+# wrong or the repo has no deploy workflow, this simply returns nothing — treat an
+# empty result as "no deploy info" and skip the line, never as an error (graceful
+# degradation, consistent with the rest of the skill).
 gh run list -R "$R" --workflow="{{CUSTOMIZE: deploy/release workflow name, e.g. Deploy to Play Store; remove this whole block if the repo has no deploy workflow}}" --limit 4
 ```
 
@@ -76,13 +79,15 @@ Summarize: what shipped recently, whether the latest default-branch run is green
 gh pr list -R "$R" --state open --limit "$LIMIT"
 ```
 
-For each open PR, pull the merge/CI rollup so stale or conflicting PRs are obvious:
+For each open PR, pull the merge/CI rollup so stale or conflicting PRs are obvious. Loop over the **already-capped** list from above so `$PR` is defined and the number of `gh pr view` calls stays bounded by `$LIMIT` (no unbounded N+1 on repos with many open PRs):
 
 ```bash
-gh pr view "$PR" -R "$R" \
-  --json title,mergeable,mergeStateStatus,statusCheckRollup \
-  -q '{title:.title, mergeable:.mergeable, state:.mergeStateStatus,
-       checks:([.statusCheckRollup[]?|.conclusion]|group_by(.)|map("\(.[0]):\(length)")|join(", "))}'
+for PR in $(gh pr list -R "$R" --state open --limit "$LIMIT" --json number -q '.[].number'); do
+  gh pr view "$PR" -R "$R" \
+    --json number,title,mergeable,mergeStateStatus,statusCheckRollup \
+    -q '{num:("#"+(.number|tostring)), title:.title, mergeable:.mergeable, state:.mergeStateStatus,
+         checks:([.statusCheckRollup[]?|.conclusion]|group_by(.)|map("\(.[0]):\(length)")|join(", "))}'
+done
 ```
 
 Flag each PR using `mergeStateStatus` + `statusCheckRollup`:
