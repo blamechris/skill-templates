@@ -1,5 +1,11 @@
 {
   "_comment": "Per-skill content guards — load-bearing markers that must survive customization. Each guard passes if ANY of its regexes matches the installed skill. Ported from sync.sh so the check outlives it; build-index.sh folds these into registry.json, and /skill uses them in `add` self-validation and `outdated`.",
+  "catchup": [
+    { "label": "graceful-degradation", "anyOf": ["github-only", "no local clone", "[Gg]raceful degradation"] },
+    { "label": "pr-rollup", "anyOf": ["statusCheckRollup", "mergeStateStatus"] },
+    { "label": "read-only", "anyOf": ["read-only", "does not merge", "never edit"] },
+    { "label": "next-step", "anyOf": ["Suggested next step", "one next step", "single .*next step"] }
+  ],
   "check-pr": [
     { "label": "idempotency", "anyOf": ["in_reply_to_id"] },
     { "label": "mandatory-issues", "anyOf": ["FOLLOW-UP ISSUE"] },

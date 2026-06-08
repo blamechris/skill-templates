@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "a9824dd",
-  "skillCount": 25,
+  "generatedFromCommit": "8e971c9",
+  "skillCount": 26,
   "skills": [
     {
       "name": "agent-review",
@@ -94,6 +94,45 @@
       "hash": "7f5fa28",
       "lines": 316,
       "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues."
+    },
+    {
+      "name": "catchup",
+      "hash": "8e971c9",
+      "lines": 181,
+      "description": "Answer **\"where did we leave off?\"** — a fast, read-only recap of a project's recent activity and current open state. Pulls recent commits, CI/deploy health, open PRs (with mergeability), open issues, local git state, and session memory into one scannable summary, ending with a single suggested next step.",
+      "guards": [
+        {
+          "label": "graceful-degradation",
+          "anyOf": [
+            "github-only",
+            "no local clone",
+            "[Gg]raceful degradation"
+          ]
+        },
+        {
+          "label": "pr-rollup",
+          "anyOf": [
+            "statusCheckRollup",
+            "mergeStateStatus"
+          ]
+        },
+        {
+          "label": "read-only",
+          "anyOf": [
+            "read-only",
+            "does not merge",
+            "never edit"
+          ]
+        },
+        {
+          "label": "next-step",
+          "anyOf": [
+            "Suggested next step",
+            "one next step",
+            "single .*next step"
+          ]
+        }
+      ]
     },
     {
       "name": "check-pr",
