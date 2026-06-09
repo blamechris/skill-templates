@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "3f7f775",
-  "skillCount": 26,
+  "generatedFromCommit": "04d63e7",
+  "skillCount": 29,
   "skills": [
     {
       "name": "agent-review",
@@ -198,6 +198,18 @@
       "description": "Break a single GitHub issue that is too large into 2-5 independently implementable sub-issues. This is the **manual triage** counterpart to the auto-decomposition baked into `/autonomous-dev-flow` and `/parallel-dev` — use it when a human reads an issue and decides it needs splitting before any implementation runs."
     },
     {
+      "name": "deps",
+      "hash": "04d63e7",
+      "lines": 96,
+      "description": "Keep this project's dependencies healthy: report what's outdated and vulnerable, flag native modules that can break across runtime upgrades, and apply the safe bumps with tests as the gate. A periodic checkup that catches dependency rot before it becomes a broken build or a security advisory."
+    },
+    {
+      "name": "doctor",
+      "hash": "04d63e7",
+      "lines": 93,
+      "description": "Diagnose a broken local setup and propose the fix. Works through the layers that make a project runnable — runtime version, installed dependencies, native modules, build state, and the entrypoint actually starting — finds the first thing that's wrong, and explains the remedy before touching anything."
+    },
+    {
       "name": "fetch-docs",
       "hash": "410e202",
       "lines": 68,
@@ -367,6 +379,12 @@
       "hash": "7f5fa28",
       "lines": 275,
       "description": "Map an unfamiliar repository (or area within one) so you know where to start. Output is a **descriptive lay-of-the-land**, not a critique. Use this *before* `/tackle-issues`, `/bug-hunt`, or `/project-audit` — it produces the orientation those skills assume."
+    },
+    {
+      "name": "release",
+      "hash": "04d63e7",
+      "lines": 112,
+      "description": "Ship a new version of this project end to end: run the release gates, bump the version, build the artifacts, publish, tag, and verify. One command that encodes the project's release checklist so a release never skips a step or ships a broken build."
     },
     {
       "name": "skill",
