@@ -1,0 +1,68 @@
+name: validate-registry
+
+# Guards the skill registry: registry.json stays in sync with generic/*.md and
+# every template indexes cleanly with a usable description. The per-template git
+# hashes in registry.json are validated consumer-side by scripts/skill-lint.sh
+# (and legitimately change on squash-merge), so CI checks the stable invariants
+# — the skill set and indexability — not the volatile hashes. Template-internal
+# structure (H1 style, {{CUSTOMIZE}} markers) varies legitimately across
+# templates and is validated at install time, so it is intentionally not gated
+# here to avoid false positives.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # build-index.sh derives each template's hash from git history, so it
+          # needs full history, not a shallow clone.
+          fetch-depth: 0
+
+      - name: registry.json in sync with generic/*.md
+        run: |
+          python3 - <<'PY'
+          import json, glob, os, sys
+          reg = json.load(open('registry.json'))
+          reg_names = sorted(s['name'] for s in reg['skills'])
+          file_names = sorted(os.path.splitext(os.path.basename(p))[0] for p in glob.glob('generic/*.md'))
+          ok = True
+          if reg_names != file_names:
+              print('::error::registry.json skill set is out of sync with generic/*.md '
+                    '(run scripts/build-index.sh and commit)')
+              missing = sorted(set(file_names) - set(reg_names))
+              extra = sorted(set(reg_names) - set(file_names))
+              if missing: print('  templates missing from registry:', missing)
+              if extra:   print('  registry entries with no template:', extra)
+              ok = False
+          if reg.get('skillCount') != len(file_names):
+              print(f"::error::skillCount {reg.get('skillCount')} != {len(file_names)} templates")
+              ok = False
+          if not ok:
+              sys.exit(1)
+          print(f"OK: {len(file_names)} templates, registry in sync (names + count).")
+          PY
+
+      - name: build-index runs cleanly with usable descriptions
+        run: |
+          # Regenerates the index — catches an uncommitted template, a missing
+          # commit, or a python failure. Then assert the output is valid JSON and
+          # every skill has a non-empty description (what build-index lifts from
+          # each template's opening paragraph). Not committed here; freshness of
+          # the committed file is enforced by the sync check above.
+          ./scripts/build-index.sh
+          python3 - <<'PY'
+          import json, sys
+          reg = json.load(open('registry.json'))
+          missing = [s['name'] for s in reg['skills'] if not s.get('description', '').strip()]
+          if missing:
+              print('::error::templates with no extractable description:', missing)
+              print('  (build-index reads the first paragraph after the leading heading)')
+              sys.exit(1)
+          print(f"build-index OK: valid JSON, {reg['skillCount']} skills all have descriptions.")
+          PY
