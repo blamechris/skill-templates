@@ -27,11 +27,12 @@ Examples:
 Determine `FROM..TO`:
 
 ```bash
-FROM=${from:-$(git describe --tags --abbrev=0 2>/dev/null)}
+# Previous release tag, or the repo's root commit on a first release (no tags yet).
+FROM=${from:-$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD | tail -1)}
 TO=${to:-HEAD}
 ```
 
-If there is no prior tag (first release), use the repository's root commit as the start and say so in the output. State the resolved range before collecting.
+When `FROM` falls back to the root commit (first release, no prior tag), say so in the output. State the resolved range before collecting.
 
 ### 2. Collect what changed in the range
 

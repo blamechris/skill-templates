@@ -44,7 +44,9 @@ If any gate fails, stop and report which one — do not continue to the bump.
 
 Bump per the resolved type from step 1.
 
-{{CUSTOMIZE: the version-bump mechanism, e.g. "npm version <type> --no-git-tag-version" or editing a VERSION file / Cargo.toml. Note whether the tool also creates a git tag/commit so step 6 doesn't double-tag.}}
+{{CUSTOMIZE: the version-bump mechanism, e.g. "npm version <type>" or editing a VERSION file / Cargo.toml. Note whether the tool also creates a git commit and/or tag.}}
+
+**If the release branch forbids direct pushes** (changes must land via PR), bump *without* auto-creating a tag — the tag is created on the merged commit in step 7, never locally, so it can't point at a commit that the squash/rebase merge will replace. Land the bump via PR and wait for it to merge before publishing. If direct pushes to the release branch are allowed, the bump may commit (and tag) in place.
 
 ### 4. Update release notes / changelog
 
@@ -62,6 +64,8 @@ Produce the exact artifacts that will be published — never publish from a stal
 
 If `--dry-run` or `--no-publish`, skip this step and say so.
 
+Publish only from the released state: if the bump landed via a PR (step 3), confirm that PR is **merged** and you have pulled and rebuilt from the updated release branch first — the published artifact must carry the bumped version, never a stale local tree.
+
 Publish to the project's distribution target.
 
 {{CUSTOMIZE: the publish command and target registry, e.g. "npm publish --access public". CALL OUT any publish footguns specific to this project here — interactive auth/OTP prompts, "do not retry on a prompt that may have already succeeded", whether to show full output so an auth URL is visible, and any pre-publish check (e.g. run the linter independently first) that has bitten past releases. These hard-won details are the whole point of having a release skill.}}
@@ -70,11 +74,12 @@ Show the publish output in full — do not truncate it, so any auth URL, OTP pro
 
 ### 7. Tag and push
 
-If `--dry-run`, skip. Otherwise:
+If `--dry-run`, skip. Otherwise tag the exact released commit:
 
-- Commit the version bump (and changelog) if the bump tool did not.
-- Create an annotated tag for the new version (skip if step 3's tool already tagged).
-- Push the commit and the tag to the remote {{CUSTOMIZE: remote/branch, e.g. "origin <release branch>"; note if the project forbids direct pushes to the release branch and requires a PR instead}}.
+- **Bump landed via PR:** the version bump is already in the release branch's history — create the annotated tag on that merged commit and push **only the tag**.
+- **Direct-push repos:** commit the version bump if the bump tool did not, create the annotated tag, and push the commit and the tag together.
+
+{{CUSTOMIZE: remote/branch, e.g. "origin <release branch>"; state whether direct pushes are allowed, or the bump lands via PR and only the tag is pushed.}}
 
 Do not force-push.
 
