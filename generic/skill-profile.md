@@ -58,7 +58,7 @@ Write markdown in this structure (the schema `/skill` expects). The first three 
 - Source file patterns: <globs the skills should target>
 
 ## <skill-name> Customizations
-<Exactly what that skill's {{CUSTOMIZE}} markers need — persona, labels, review
+<Exactly what that skill's customization markers need — persona, labels, review
 criteria, audit focus, required-check names, publish footguns, etc. Head each
 section with the skill's exact name + the literal " Customizations" suffix.>
 ```
