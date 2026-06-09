@@ -16,7 +16,7 @@ This skill **writes** the profile; `/skill` **reads** it. The profile is optiona
 ### 1. Read the current state
 
 - Read `.claude/skill-profile.md` if it exists (you are refreshing, not blindly overwriting — preserve hand-written nuance that's still accurate).
-- List `.claude/commands/*.md` — the installed skills whose `{{CUSTOMIZE}}` markers the profile should feed.
+- List `.claude/commands/*.md` to see which skills this repo uses — the profile carries a tailoring section for the ones that need repo-specific values. (Installed copies have already had their `{{CUSTOMIZE}}` markers filled in at install time; the *registry templates* are where you read what each skill needs — see step 2.)
 
 ### 2. Gather repo facts (real values only)
 
@@ -29,7 +29,7 @@ Discover, don't assume. Pull from the repo itself:
 - **Conventions** — branch naming, commit style + scope list, source-file globs — from `CLAUDE.md` and recent `git log`.
 - **Hard requirements / invariants** — non-negotiables from `CLAUDE.md` (e.g. "never return stale data", "ESM only", a zero-attribution policy).
 - **Labels** — `gh label list` (for skills that file issues). Record the real label families; never invent.
-- **Per-skill needs** — for each installed skill, look at what its `{{CUSTOMIZE}}` markers ask for (persona, review criteria, audit focus, required-check names, test conventions, label scheme, publish footguns, …) and whether this repo has a real, specific value for it.
+- **Per-skill needs** — for each skill this repo uses, read its **registry template** (`generic/<name>.md` in the resolved registry — see `/skill`'s "Resolving the registry") to learn what its `{{CUSTOMIZE}}` markers ask for (persona, review criteria, audit focus, required-check names, test conventions, label scheme, publish footguns, …). The installed `.claude/commands/<name>.md` has already had its markers filled, so the **template** is the source of truth for what needs a value — then decide whether this repo has a real, specific one.
 
 ### 3. Compose the profile
 
@@ -65,7 +65,7 @@ section with the skill's exact name + the literal " Customizations" suffix.>
 
 ### 4. Rules (match the registry's profile contract)
 
-- **Use real values, never invent.** No label set, test command, or persona for a spot? Omit it — at install time the agent drops the corresponding marker rather than fabricate. Placeholder *shapes* (`scope`, `path/to/file:<line>`) are fine; fabricated specifics are not.
+- **Use real values, never invent.** No label set, test command, or persona for a spot? Omit it — at install time the agent drops the corresponding marker rather than fabricate a value. Placeholder *shapes* (`scope`, `path/to/file:<line>`) are fine; fabricated specifics are not.
 - **One section per skill that needs it**, headed `## <skill-name> Customizations` (exact skill name + literal ` Customizations`). Skills with no repo-specific needs get no section — they just use the generic template.
 - **No secrets.** The profile is committed. Keys, tokens, OTP secrets never go here (a publish footgun like "OTP is interactive, don't retry" is fine — a *value* is not).
 - **Capture hard-won footguns.** If a skill has bitten this repo before (a release OTP quirk, a native-module/runtime constraint, a lint-vs-typecheck gap), record it in that skill's section — that is the highest-value content a profile carries.
