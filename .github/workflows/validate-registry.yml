@@ -14,6 +14,10 @@ on:
   push:
     branches: [main]
 
+# Least privilege: this workflow only reads the checked-out tree.
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -28,7 +32,11 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, glob, os, sys
-          reg = json.load(open('registry.json'))
+          # Validate the COMMITTED registry — names, count, and descriptions — before
+          # anything regenerates it, so a stale or empty entry in the checked-in file
+          # is caught here rather than masked by a rebuild.
+          with open('registry.json', encoding='utf-8') as f:
+              reg = json.load(f)
           reg_names = sorted(s['name'] for s in reg['skills'])
           file_names = sorted(os.path.splitext(os.path.basename(p))[0] for p in glob.glob('generic/*.md'))
           ok = True
@@ -43,26 +51,25 @@ jobs:
           if reg.get('skillCount') != len(file_names):
               print(f"::error::skillCount {reg.get('skillCount')} != {len(file_names)} templates")
               ok = False
+          undescribed = [s['name'] for s in reg['skills'] if not s.get('description', '').strip()]
+          if undescribed:
+              print('::error::registry entries with an empty description:', undescribed)
+              ok = False
           if not ok:
               sys.exit(1)
-          print(f"OK: {len(file_names)} templates, registry in sync (names + count).")
+          print(f"OK: {len(file_names)} templates, registry in sync (names + count + descriptions).")
           PY
 
-      - name: build-index runs cleanly with usable descriptions
+      - name: build-index runs cleanly
         run: |
-          # Regenerates the index — catches an uncommitted template, a missing
-          # commit, or a python failure. Then assert the output is valid JSON and
-          # every skill has a non-empty description (what build-index lifts from
-          # each template's opening paragraph). Not committed here; freshness of
-          # the committed file is enforced by the sync check above.
+          # Smoke test: regenerates the index — catches an uncommitted template, a
+          # missing commit, or a python failure — and confirms the output is valid
+          # JSON. Not committed here; freshness of the committed file is enforced by
+          # the sync check above.
           ./scripts/build-index.sh
           python3 - <<'PY'
-          import json, sys
-          reg = json.load(open('registry.json'))
-          missing = [s['name'] for s in reg['skills'] if not s.get('description', '').strip()]
-          if missing:
-              print('::error::templates with no extractable description:', missing)
-              print('  (build-index reads the first paragraph after the leading heading)')
-              sys.exit(1)
-          print(f"build-index OK: valid JSON, {reg['skillCount']} skills all have descriptions.")
+          import json
+          with open('registry.json', encoding='utf-8') as f:
+              reg = json.load(f)
+          print(f"build-index OK: valid JSON, {reg['skillCount']} skills.")
           PY
