@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "3254376",
-  "skillCount": 30,
+  "generatedFromCommit": "ecb5d01",
+  "skillCount": 31,
   "skills": [
     {
       "name": "agent-review",
@@ -391,6 +391,12 @@
       "hash": "3254376",
       "lines": 117,
       "description": "Ship a new version of this project end to end: run the release gates, bump the version, build the artifacts, publish, tag, and verify. One command that encodes the project's release checklist so a release never skips a step or ships a broken build."
+    },
+    {
+      "name": "skill-profile",
+      "hash": "ecb5d01",
+      "lines": 88,
+      "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time."
     },
     {
       "name": "skill",
