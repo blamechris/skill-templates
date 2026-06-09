@@ -8,6 +8,11 @@ Skills are **not** pushed out. Repos install them **on demand** via the `/skill`
 and the invoking agent customizes each template inline for its repo. There is no central
 fan-out, no deploy step, and no API key in this repo.
 
+> **License: all rights reserved.** This repo is public for visibility only — it is not
+> open source. No permission to use, copy, or adapt these skills is granted by its
+> availability. See [NOTICE](./NOTICE); contact [@blamechris](https://github.com/blamechris)
+> to request use.
+
 ## Layout
 
 ```
