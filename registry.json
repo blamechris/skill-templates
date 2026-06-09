@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "ecb5d01",
-  "skillCount": 31,
+  "generatedFromCommit": "969295a",
+  "skillCount": 32,
   "skills": [
     {
       "name": "agent-review",
@@ -391,6 +391,12 @@
       "hash": "3254376",
       "lines": 117,
       "description": "Ship a new version of this project end to end: run the release gates, bump the version, build the artifacts, publish, tag, and verify. One command that encodes the project's release checklist so a release never skips a step or ships a broken build."
+    },
+    {
+      "name": "rollback",
+      "hash": "969295a",
+      "lines": 95,
+      "description": "Back out a bad change or a broken release safely — revert the offending merged PR, mark the bad published version so nobody new installs it, and ship a corrected version. The counterpart to `/release`: when something shipped that shouldn't have, this is the controlled path back to a good state without breaking people who already have the bad version."
     },
     {
       "name": "skill-profile",
