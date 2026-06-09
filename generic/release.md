@@ -48,7 +48,7 @@ Bump per the resolved type from step 1.
 
 ### 4. Update release notes / changelog
 
-Collect the changes since `--from` (default: previous release tag) and summarize them for the release. If this project has a `/changelog` skill, invoke it; otherwise generate notes from merged PR titles / commit subjects in range.
+Generate the release notes for the changes since `--from` (default: previous release tag). **Prefer the `/changelog` skill** — invoke it for the range (`/changelog --from=<prev tag> --version=<new version>`) and use its rendered section as the release notes. If `/changelog` is not installed, fall back to generating notes directly from merged PR titles / commit subjects in range.
 
 {{CUSTOMIZE: where release notes live and the format, e.g. "prepend a section to CHANGELOG.md" or "draft a GitHub release body"; remove if this project keeps no changelog.}}
 

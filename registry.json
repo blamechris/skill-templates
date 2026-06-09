@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "04d63e7",
-  "skillCount": 29,
+  "generatedFromCommit": "e4df909",
+  "skillCount": 30,
   "skills": [
     {
       "name": "agent-review",
@@ -133,6 +133,12 @@
           ]
         }
       ]
+    },
+    {
+      "name": "changelog",
+      "hash": "e4df909",
+      "lines": 98,
+      "description": "Generate release notes from what actually merged: collect the merged PRs and commits since the last release, group them into meaningful sections, and write them to the project's changelog (or a draft release body). Turns \"what changed since the last version?\" into a formatted, linked summary instead of a hand-scrolled git log."
     },
     {
       "name": "check-pr",
@@ -382,7 +388,7 @@
     },
     {
       "name": "release",
-      "hash": "04d63e7",
+      "hash": "e4df909",
       "lines": 112,
       "description": "Ship a new version of this project end to end: run the release gates, bump the version, build the artifacts, publish, tag, and verify. One command that encodes the project's release checklist so a release never skips a step or ships a broken build."
     },
