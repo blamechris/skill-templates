@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "b8cd615",
+  "generatedFromCommit": "141bc88",
   "skillCount": 31,
   "skills": [
     {
@@ -394,7 +394,7 @@
     },
     {
       "name": "skill-profile",
-      "hash": "b8cd615",
+      "hash": "141bc88",
       "lines": 88,
       "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time."
     },
