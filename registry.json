@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "d3cd6f5",
+  "generatedFromCommit": "5ed9260",
   "skillCount": 33,
   "skills": [
     {
@@ -42,9 +42,9 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "d3cd6f5",
+      "hash": "5ed9260",
       "lines": 463,
-      "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, and continue to the next issue. The user reviews and merges PRs asynchronously while work continues.",
+      "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, merge through the Unattended Merge Gate, and continue to the next issue. Gate-failing PRs accumulate for asynchronous user review while work continues.",
       "guards": [
         {
           "label": "unattended-merge-gate",
