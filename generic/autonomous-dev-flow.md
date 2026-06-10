@@ -1,6 +1,6 @@
 # /autonomous-dev-flow
 
-Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, and continue to the next issue. The user reviews and merges PRs asynchronously while work continues.
+Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, merge through the Unattended Merge Gate, and continue to the next issue. Gate-failing PRs accumulate for asynchronous user review while work continues.
 
 ## Arguments
 
