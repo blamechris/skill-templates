@@ -1,5 +1,13 @@
 {
   "_comment": "Per-skill content guards — load-bearing markers that must survive customization. Each guard passes if ANY of its regexes matches the installed skill. Ported from sync.sh so the check outlives it; build-index.sh folds these into registry.json, and /skill uses them in `add` self-validation and `outdated`.",
+  "unattended-merge": [
+    { "label": "full-review-gate", "anyOf": ["full-review.*clean", "/full-review"] },
+    { "label": "no-auto-merge", "anyOf": ["gh pr merge --auto", "auto-merge"] },
+    { "label": "threads-resolved", "anyOf": ["review threads.*resolved", "ZERO unresolved", "threads are resolved"] },
+    { "label": "no-overrides", "anyOf": ["--admin", "never bypass", "without overrides"] },
+    { "label": "report-entry", "anyOf": ["report entry", "entry in the end-of-session report", "Merged by this session"] },
+    { "label": "failed-gate-flags", "anyOf": ["do NOT merge", "flag.*don't merge", "failed gate"] }
+  ],
   "catchup": [
     { "label": "graceful-degradation", "anyOf": ["github-only", "no local clone", "[Gg]raceful degradation"] },
     { "label": "pr-rollup", "anyOf": ["statusCheckRollup", "mergeStateStatus"] },
@@ -44,7 +52,14 @@
     { "label": "morning-summary", "anyOf": ["Morning Summary", "marathon.*complete", "Session Complete"] },
     { "label": "strategy-escalation", "anyOf": ["Escalat", "alternative.*approach", "Alt.*Strategy"] },
     { "label": "queue-replenishment", "anyOf": ["Replenish", "replenish.*queue", "Queue Replenishment"] },
-    { "label": "batch-merge-option", "anyOf": ["batch-merge", "merge:true"] }
+    { "label": "batch-merge-option", "anyOf": ["batch-merge", "merge:off"] },
+    { "label": "unattended-merge-gate", "anyOf": ["Unattended Merge Gate", "unattended-merge"] },
+    { "label": "merge-report-entry", "anyOf": ["Merged by this session", "entry in the Morning Summary"] }
+  ],
+  "autonomous-dev-flow": [
+    { "label": "unattended-merge-gate", "anyOf": ["Unattended Merge Gate", "unattended-merge"] },
+    { "label": "merge-report-entry", "anyOf": ["Merged by this session", "entry in the final session report"] },
+    { "label": "no-auto-merge", "anyOf": ["gh pr merge --auto", "auto-merge"] }
   ],
   "batch-merge": [
     { "label": "copilot-gate", "anyOf": ["Copilot review \\*\\*must be present\\*\\*", "quality gate"] },
