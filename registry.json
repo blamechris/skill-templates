@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "969295a",
-  "skillCount": 32,
+  "generatedFromCommit": "d3cd6f5",
+  "skillCount": 33,
   "skills": [
     {
       "name": "agent-review",
@@ -42,9 +42,32 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "4a47e13",
-      "lines": 454,
-      "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, and continue to the next issue. The user reviews and merges PRs asynchronously while work continues."
+      "hash": "d3cd6f5",
+      "lines": 463,
+      "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, and continue to the next issue. The user reviews and merges PRs asynchronously while work continues.",
+      "guards": [
+        {
+          "label": "unattended-merge-gate",
+          "anyOf": [
+            "Unattended Merge Gate",
+            "unattended-merge"
+          ]
+        },
+        {
+          "label": "merge-report-entry",
+          "anyOf": [
+            "Merged by this session",
+            "entry in the final session report"
+          ]
+        },
+        {
+          "label": "no-auto-merge",
+          "anyOf": [
+            "gh pr merge --auto",
+            "auto-merge"
+          ]
+        }
+      ]
     },
     {
       "name": "batch-merge",
@@ -456,8 +479,8 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "21fa678",
-      "lines": 410,
+      "hash": "d3cd6f5",
+      "lines": 418,
       "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
       "guards": [
         {
@@ -504,7 +527,75 @@
           "label": "batch-merge-option",
           "anyOf": [
             "batch-merge",
-            "merge:true"
+            "merge:off"
+          ]
+        },
+        {
+          "label": "unattended-merge-gate",
+          "anyOf": [
+            "Unattended Merge Gate",
+            "unattended-merge"
+          ]
+        },
+        {
+          "label": "merge-report-entry",
+          "anyOf": [
+            "Merged by this session",
+            "entry in the Morning Summary"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unattended-merge",
+      "hash": "d3cd6f5",
+      "lines": 69,
+      "description": "Defines when an autonomous session (e.g. `/autonomous-dev-flow`, `/tackle-issues`) may merge its **own** PR without a human pause, and what record it must leave behind. This replaces the old blanket \"never merge — PRs accumulate for user review\" rule for unattended sessions: a PR that has genuinely cleared every gate may merge so dependent work isn't deadlocked overnight, but nothing merges on faith and every merge is visible in the session report.",
+      "guards": [
+        {
+          "label": "full-review-gate",
+          "anyOf": [
+            "full-review.*clean",
+            "/full-review"
+          ]
+        },
+        {
+          "label": "no-auto-merge",
+          "anyOf": [
+            "gh pr merge --auto",
+            "auto-merge"
+          ]
+        },
+        {
+          "label": "threads-resolved",
+          "anyOf": [
+            "review threads.*resolved",
+            "ZERO unresolved",
+            "threads are resolved"
+          ]
+        },
+        {
+          "label": "no-overrides",
+          "anyOf": [
+            "--admin",
+            "never bypass",
+            "without overrides"
+          ]
+        },
+        {
+          "label": "report-entry",
+          "anyOf": [
+            "report entry",
+            "entry in the end-of-session report",
+            "Merged by this session"
+          ]
+        },
+        {
+          "label": "failed-gate-flags",
+          "anyOf": [
+            "do NOT merge",
+            "flag.*don't merge",
+            "failed gate"
           ]
         }
       ]

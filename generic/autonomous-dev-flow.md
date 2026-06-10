@@ -330,7 +330,7 @@ Capture results: verdict, findings counts, fixes committed, issues created/close
 
 **If critical findings exist:** Fix them (standard /full-review behavior handles this). Two fix attempts max — after that, flag the PR as "Needs attention" and move on.
 
-**Do NOT merge.** PRs accumulate for user review. The agent keeps working.
+**Merge through the Unattended Merge Gate** (see `unattended-merge`). If the verdict is clean, ALL CI checks pass on the final commit, and ALL review threads are resolved, merge per repo convention, verify the PR reports `MERGED`, and record the merge as an entry in the final session report. NEVER use `gh pr merge --auto` or GitHub auto-merge — verify the gates first, then merge synchronously. If any gate fails, do NOT merge: flag the PR for the user with the failed gate named and keep working.
 
 ### Phase 6: Assess, Report, and Continue
 
@@ -338,7 +338,7 @@ Based on /full-review results, classify the PR:
 
 | Verdict | Meaning | Action |
 |---------|---------|--------|
-| Clean | No critical findings, all comments addressed | Edit PR body: `Refs` → `Closes`. Mark issue done, continue |
+| Clean | No critical findings, all comments addressed | Edit PR body: `Refs` → `Closes`. Merge via the Unattended Merge Gate, record the entry, mark issue done, continue |
 | Needs attention | Critical findings or unresolved comments | Keep `Refs` (don't auto-close). Flag for user, continue |
 | Broken | Tests failing after review fixes | Keep `Refs` (don't auto-close). Flag for user, continue |
 
@@ -380,14 +380,23 @@ After all issues are processed (or the queue is exhausted), output final summary
 
 | # | Issue | PR | Smoke | Review Verdict | Status |
 |---|-------|----|-------|---------------|--------|
-| 1 | #12 — Add retry logic | [#45](url) | — | Approve | Ready to merge |
+| 1 | #12 — Add retry logic | [#45](url) | — | Approve | Merged (`abc1234`) |
 | 2 | #15 — Add leaderboard | — | — | — | Decomposed → #20, #21, #22 |
-| 3 | #20 — Leaderboard data model | [#46](url) | 12/13 | Approve | Ready to merge |
+| 3 | #20 — Leaderboard data model | [#46](url) | 12/13 | Approve | Merged (`def5678`) |
 | 4 | #18 — Add auth tests | [#47](url) | — | Request Changes | Needs attention |
 
+### Merged by this session
+
+One entry per self-merged PR — MANDATORY (Unattended Merge Gate rule 6):
+
+| PR | Issue | Review | Checks | Merge SHA |
+|----|-------|--------|--------|-----------|
+| [#45](url) | #12 — Add retry logic | Approve, 0 unresolved | all green | `abc1234` |
+| [#46](url) | #20 — Leaderboard data model | Approve, 0 unresolved | all green | `def5678` |
+
 ### Summary
-- **Ready to merge:** N PRs
-- **Needs attention:** M PRs (details below)
+- **Merged this session:** N PRs (entries above)
+- **Open / needs attention:** M PRs (details below)
 - **Decomposed:** K issues → L sub-issues created
 - **Skipped:** J issues (reasons below)
 - **Issues created during reviews:** #A, #B, #C
@@ -401,8 +410,8 @@ After all issues are processed (or the queue is exhausted), output final summary
 - **#30**: Needs user decision on provider choice
 
 ### Next Steps
-- Merge ready PRs
-- Address flagged PRs
+- Review the merged-PR entries (post-merge audit)
+- Address flagged PRs (each names its failed gate)
 - Review created issues for follow-up work
 ```
 
@@ -424,7 +433,7 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 2. **TDD is mandatory** — RED → GREEN → REFACTOR for every issue. No skipping tests. If pure docs/config, note why tests are N/A.
 3. **Branch from main every time** — Never stack branches. Each PR is independently mergeable in any order.
 4. **One confirmation point** — The initial queue approval. Everything after is fully autonomous.
-5. **Never merge** — PRs accumulate for user review. The agent keeps working.
+5. **Merge only through the Unattended Merge Gate** — /full-review clean + ALL checks green on the final commit + ALL review threads resolved. No `gh pr merge --auto`, no GitHub auto-merge, no protection overrides. A failed gate means flag, don't merge. Every self-merged PR MUST appear as an entry in the final session report.
 6. **Never block on review findings** — Flag and move on. The user handles flagged PRs during check-ins.
 7. **Two fix attempts max** — If /full-review finds critical issues, fix them. If a second attempt still fails, flag and move on.
 8. **Progress table after every issue** — The user may check in at any time. The table must be current.
