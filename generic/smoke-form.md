@@ -98,6 +98,16 @@ fail=red, blocked=amber, skipped=gray. Respect `prefers-reduced-motion`.
 
 - Every input persists to `localStorage` keyed by the file's slug+date
   (restore on load; checkbox auto-checks when a result is chosen).
+- **Dictation (progressive enhancement):** if `window.SpeechRecognition ||
+  window.webkitSpeechRecognition` exists, render a small round 🎤 button beside
+  every note field and tester-metadata input. Click → start recognition
+  (`continuous: true`, final results only, `lang` from `navigator.language`),
+  appending each final transcript to the field (space-joined) and persisting;
+  button pulses red while recording, click again (⏹) to stop; only one active
+  recorder at a time. Errors (mic permission, offline) surface via the button
+  tooltip — never an alert. Where the API is absent the button simply doesn't
+  render. Title-hint the privacy caveat: Chromium relays audio to Google's
+  speech service; macOS users can always use built-in Dictation instead.
 - Progress counts update live in header and section summaries.
 - **Copy Results markdown format** (exact):
 
