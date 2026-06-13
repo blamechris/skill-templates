@@ -17,8 +17,6 @@ Orchestrate long-running autonomous dev sessions — work through GitHub issues 
 ### Phase 0: Queue Setup
 
 ```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-
 # {{CUSTOMIZE: Branch prefix for autonomous session branches — e.g., "auto/" or multiple prefixes for repos that use feat/, fix/, etc.}}
 BRANCH_PREFIX="auto/"
 ```
