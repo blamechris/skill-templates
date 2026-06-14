@@ -74,5 +74,10 @@
     { "label": "graphql-python", "anyOf": ["bash corrupts Base64", "resolveReviewThread must use Python"] },
     { "label": "no-admin", "anyOf": ["Never use `?--admin"] },
     { "label": "mergestate-diagnosis", "anyOf": ["mergeStateStatus"] }
+  ],
+  "skill": [
+    { "label": "multi-target-compile", "anyOf": ["compile-skill-targets\\.mjs", "Compile to native targets", "custom-command format"] },
+    { "label": "targets-concept", "anyOf": ["targets:.*line", "provider-NEUTRAL source", "model-agnostic"] },
+    { "label": "remove-cleanup", "anyOf": ["every compiled\\s+native artifact", "\\.gemini/commands/<name>\\.toml"] }
   ]
 }
