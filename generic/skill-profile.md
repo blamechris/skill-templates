@@ -57,11 +57,16 @@ Write markdown in this structure (the schema `/skill` expects). The first three 
 - Commit style + scopes: <conventional commits; scope list>
 - Source file patterns: <globs the skills should target>
 
+## Skill Targets
+targets: <comma-separated agents this repo drives — e.g. claude, gemini>
+
 ## <skill-name> Customizations
 <Exactly what that skill's customization markers need — persona, labels, review
 criteria, audit focus, required-check names, publish footguns, etc. Head each
 section with the skill's exact name + the literal " Customizations" suffix.>
 ```
+
+The `targets:` line drives `compile-skill-targets.mjs` (`claude` → `.claude/skills/<name>/SKILL.md`, `gemini` → `.gemini/commands/<name>.toml`, `codex` → `~/.codex/prompts/<name>.md`). Keep `codex` OUT of the committed list — it's a per-machine opt-in (`--targets codex`) because it writes to the user-global `~/.codex`, isn't version-controlled, and is deprecated upstream.
 
 ### 4. Rules (match the registry's profile contract)
 
@@ -70,6 +75,7 @@ section with the skill's exact name + the literal " Customizations" suffix.>
 - **No secrets.** The profile is committed. Keys, tokens, OTP secrets never go here (a publish footgun like "OTP is interactive, don't retry" is fine — a *value* is not).
 - **Capture hard-won footguns.** If a skill has bitten this repo before (a release OTP quirk, a native-module/runtime constraint, a lint-vs-typecheck gap), record it in that skill's section — that is the highest-value content a profile carries.
 - **Keep it tight.** The profile is read on every install; favor specifics over prose.
+- **Targets are version-controlled only.** Put an agent in `targets:` only if its output is committed to the repo (`claude`, `gemini`). `codex` writes to the user-global `~/.codex` — keep it out of the committed list so a clone never provisions an unaware machine; it's a per-machine `--targets codex` opt-in.
 
 ### 5. Write / report
 

@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "5df829a",
+  "generatedFromCommit": "52f1136",
   "skillCount": 34,
   "skills": [
     {
@@ -423,15 +423,40 @@
     },
     {
       "name": "skill-profile",
-      "hash": "ecb5d01",
-      "lines": 88,
+      "hash": "c7eea29",
+      "lines": 94,
       "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time."
     },
     {
       "name": "skill",
-      "hash": "18b9f3e",
-      "lines": 197,
-      "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs."
+      "hash": "52f1136",
+      "lines": 233,
+      "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs.",
+      "guards": [
+        {
+          "label": "multi-target-compile",
+          "anyOf": [
+            "compile-skill-targets\\.mjs",
+            "Compile to native targets",
+            "custom-command format"
+          ]
+        },
+        {
+          "label": "targets-concept",
+          "anyOf": [
+            "targets:.*line",
+            "provider-NEUTRAL source",
+            "model-agnostic"
+          ]
+        },
+        {
+          "label": "remove-cleanup",
+          "anyOf": [
+            "every compiled\\s+native artifact",
+            "\\.gemini/commands/<name>\\.toml"
+          ]
+        }
+      ]
     },
     {
       "name": "smoke-form",

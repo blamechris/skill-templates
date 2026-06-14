@@ -18,6 +18,8 @@ skill-templates/
 │   └── skill.md                 # the /skill client itself
 ├── registry.json                # generated index: skill → template hash, description, guards
 ├── skill-guards.json            # per-skill content guards (load-bearing markers)
+├── assets/                      # files distributed verbatim to consumer repos
+│   └── compile-skill-targets.mjs # generic→native compiler (claude/gemini/codex), copied into a repo's scripts/
 ├── scripts/build-index.sh       # regenerates registry.json
 └── docs/skill-profile-schema.md # the .claude/skill-profile.md spec
 ```

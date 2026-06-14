@@ -42,6 +42,9 @@ per skill that needs more than the generic template provides.
 - Commit style + scopes: <conventional commits; scope list>
 - Source file patterns: <globs the skills should target>
 
+## Skill Targets
+targets: <comma-separated agents this repo drives — e.g. claude, gemini>
+
 ## <skill-name> Customizations
 <Anything that skill's {{CUSTOMIZE}} markers need: persona, labels, review
 criteria, audit focus, required-check names, test conventions, etc. One
@@ -60,6 +63,11 @@ the skill's exact name plus the literal ` Customizations` suffix.>
 - **No secrets.** Profiles are committed to the repo. Keys and tokens never go here.
 - **Keep it current.** When conventions change (a new required check, a renamed scope),
   update the profile so future `skill add` / `skill update` installs stay accurate.
+- **`targets:` selects which agents a skill compiles for.** `compile-skill-targets.mjs` reads
+  this line: `claude` → `.claude/skills/<name>/SKILL.md`, `gemini` → `.gemini/commands/<name>.toml`,
+  `codex` → `~/.codex/prompts/<name>.md`. Only list agents whose output is **version-controlled**
+  (`claude`, `gemini`); keep `codex` a per-machine opt-in (`--targets codex`) because it writes to
+  the user-global `~/.codex` and is deprecated upstream. No line ⇒ the compiler falls back to `claude`.
 
 ## History: migration from `customizations/<repo>.md`
 
