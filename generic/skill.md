@@ -128,11 +128,7 @@ note in the report that hashes may be stale. Record which source you used.
    (where `$REG` is the resolved registry clone). If it exits non-zero, fix the reported
    issues and re-lint before recording the lockfile — do not lock a skill that fails lint.
    Consumers can run the same linter as a pre-commit hook or in CI.
-7. **Record in the lockfile.** Create `.claude/skills.lock` (schema below) if absent,
-   then upsert `<name>` with the template `hash` and, when a `.claude/skill-profile.md`
-   exists, its `profileHash` (so `update` can tell when the *profile* changed, not just
-   the template).
-8. **Compile to native targets.** Ensure the compiler exists in this repo (create `scripts/` if
+7. **Compile to native targets.** Ensure the compiler exists in this repo (create `scripts/` if
    absent). If `scripts/compile-skill-targets.mjs` is missing, obtain it from the registry: from a
    local clone, `cp "$REG/assets/compile-skill-targets.mjs" scripts/`; on the network-only path
    (no local clone), fetch it like the templates —
@@ -143,9 +139,16 @@ note in the report that hashes may be stale. Record which source you used.
    offer to record the choice in the profile (the compiler falls back to `claude` if unset). Then
    run `node scripts/compile-skill-targets.mjs --name <name>` (it reads the profile targets), or
    `--targets <list>` to override. It writes the native artifact per target and exits non-zero on
-   any emit failure — treat that as a hard gate: fix and re-run before the install is done. Codex
-   emits to the user-global `~/.codex/prompts/` (not version-controlled, deprecated upstream) —
-   only when `codex` is explicitly a target.
+   any emit failure — treat that as a hard gate: fix and re-run before locking. Codex emits to the
+   user-global `~/.codex/prompts/` (not version-controlled, deprecated upstream) — only when
+   `codex` is explicitly a target. Keep the list of `targets` you compiled with for the next step.
+8. **Record in the lockfile.** Only after a successful compile, create `.claude/skills.lock`
+   (schema below) if absent and upsert `<name>` **atomically** with: the template `hash`; the
+   `profileHash` when a `.claude/skill-profile.md` exists (so `update` can tell when the *profile*
+   changed, not just the template); and the `targets` you just compiled with (so `remove` cleans
+   exactly the right native artifacts and `outdated` can detect target drift). Writing the entry
+   only after compile succeeds means a failed compile never leaves a half-written or
+   `targets`-less entry.
 9. **Report.** State the skill, the hash installed, the registry source used, the targets
    compiled (with output paths), and any markers dropped for lack of repo context.
 
@@ -159,9 +162,15 @@ note in the report that hashes may be stale. Record which source you used.
      `.claude/skill-profile.md` hash (the skill was tailored against an older profile);
    - **corruption drift** — the installed file fails a registry `guard` (some guard's
      `anyOf` regexes no longer match — a load-bearing section was lost).
+   - **target drift** — *only when the lock entry has a `targets` array* (a pre-`targets` install
+     with no such field is treated as "unknown" — fall back to disk inspection, never flagged just
+     for the field's absence): the profile's `targets:` list has an agent not in the lock entry's
+     `targets` (added to the profile but never compiled), or a recorded target's native artifact is
+     missing on disk. A plain recompile fixes it — no registry fetch needed.
 3. Print the drifted skills with the reason, e.g. `name  abc1234 → def5678 (version)` or
-   `name  (guard miss: idempotency)`. If none, say so. (This is the consumer-side port of
-   the registry's `sync.sh` drift check — version stamp **and** content guards.)
+   `name  (guard miss: idempotency)` or `name  (target drift: gemini not compiled)`. If none, say
+   so. (This is the consumer-side port of the registry's `sync.sh` drift check — version stamp
+   **and** content guards.)
 
 ### `skill update [name]`
 
@@ -172,9 +181,11 @@ note in the report that hashes may be stale. Record which source you used.
 
 ### `skill remove <name>`
 
-Delete `.claude/commands/<name>.md`, its `.claude/skills.lock` entry, and every compiled
-native artifact: `.claude/skills/<name>/` (dir), `.gemini/commands/<name>.toml`, and (if codex
-was a target) `~/.codex/prompts/<name>.md`. Report what was removed.
+Read the skill's `targets` from its `.claude/skills.lock` entry, then delete
+`.claude/commands/<name>.md`, its lock entry, and exactly the native artifacts for those targets:
+`claude` → `.claude/skills/<name>/` (dir), `gemini` → `.gemini/commands/<name>.toml`,
+`codex` → `~/.codex/prompts/<name>.md`. If the lock entry has no `targets` (an older install),
+fall back to removing whichever of those three exist. Report what was removed.
 
 ## Lockfile schema (`.claude/skills.lock`)
 
@@ -182,8 +193,8 @@ was a target) `~/.codex/prompts/<name>.md`. Report what was removed.
 {
   "registry": "blamechris/skill-templates",
   "skills": {
-    "full-review": { "hash": "cc062bc", "installed": "2026-06-04", "profileHash": "3f1a9c2" },
-    "check-pr":    { "hash": "a10ef75", "installed": "2026-06-04" }
+    "full-review": { "hash": "cc062bc", "installed": "2026-06-04", "profileHash": "3f1a9c2", "targets": ["claude", "gemini"] },
+    "check-pr":    { "hash": "a10ef75", "installed": "2026-06-04", "targets": ["claude"] }
   }
 }
 ```
@@ -194,6 +205,10 @@ was a target) `~/.codex/prompts/<name>.md`. Report what was removed.
 - `profileHash` *(optional)* — short hash of `.claude/skill-profile.md` at install time.
   Present only when a profile existed. `outdated` flags profile drift when it no longer
   matches the current profile, so a changed profile triggers a re-tailor on `update`.
+- `targets` *(optional)* — the agents this skill was compiled for at install time
+  (e.g. `["claude", "gemini"]`). Written by the `add` compile step; `remove` uses it to delete
+  exactly the right native artifacts, and `outdated` uses it to detect target drift. Absent on
+  pre-targets installs — treat a missing `targets` as "unknown" and fall back to disk inspection.
 - The lockfile is the authoritative manifest; the per-file stamp is a convenient
   inline mirror. Keep them in agreement.
 

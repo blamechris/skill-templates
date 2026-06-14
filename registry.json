@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "8bc2550",
+  "generatedFromCommit": "d96078b",
   "skillCount": 34,
   "skills": [
     {
@@ -429,8 +429,8 @@
     },
     {
       "name": "skill",
-      "hash": "8bc2550",
-      "lines": 233,
+      "hash": "d96078b",
+      "lines": 248,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs.",
       "guards": [
         {
@@ -452,7 +452,7 @@
         {
           "label": "remove-cleanup",
           "anyOf": [
-            "every compiled\\s+native artifact",
+            "exactly the native artifacts",
             "\\.gemini/commands/<name>\\.toml"
           ]
         }
