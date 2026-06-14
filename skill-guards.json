@@ -78,6 +78,6 @@
   "skill": [
     { "label": "multi-target-compile", "anyOf": ["compile-skill-targets\\.mjs", "Compile to native targets", "custom-command format"] },
     { "label": "targets-concept", "anyOf": ["targets:.*line", "provider-NEUTRAL source", "model-agnostic"] },
-    { "label": "remove-cleanup", "anyOf": ["every compiled\\s+native artifact", "\\.gemini/commands/<name>\\.toml"] }
+    { "label": "remove-cleanup", "anyOf": ["exactly the native artifacts", "\\.gemini/commands/<name>\\.toml"] }
   ]
 }
