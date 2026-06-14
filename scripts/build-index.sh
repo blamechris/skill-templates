@@ -27,9 +27,10 @@ fi
 # Derive from the last commit that touched an index INPUT (templates or guards),
 # not HEAD — so the separate "rebuild index" commit (which only touches
 # registry.json) doesn't advance this field and leave the committed index
-# non-idempotent at HEAD. Fixed-length (7) so it always matches what consumers
-# record (--short alone yields a repo-dependent variable length). Falls back to
-# HEAD if git can't resolve an input commit (e.g. a shallow or bare checkout).
+# non-idempotent at HEAD. --abbrev=7 requests a 7-char hash (git's minimum; it
+# may widen only when needed for uniqueness, and consumers compute the same way,
+# so the values stay in agreement). Falls back to HEAD if git can't resolve an
+# input commit (e.g. a shallow or bare checkout).
 GEN_HASH="$(git log -1 --abbrev=7 --format=%h -- generic/ skill-guards.json 2>/dev/null || true)"
 GEN_HASH="${GEN_HASH:-$(git rev-parse --short=7 HEAD)}"
 
