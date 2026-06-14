@@ -132,10 +132,13 @@ note in the report that hashes may be stale. Record which source you used.
    then upsert `<name>` with the template `hash` and, when a `.claude/skill-profile.md`
    exists, its `profileHash` (so `update` can tell when the *profile* changed, not just
    the template).
-8. **Compile to native targets.** Ensure the compiler exists in this repo: if
-   `scripts/compile-skill-targets.mjs` is absent, copy it from the registry
-   (`$REG/assets/compile-skill-targets.mjs`) and commit it alongside the skill (on `update`,
-   refresh it from the registry too). Read the `targets:` line from `.claude/skill-profile.md`;
+8. **Compile to native targets.** Ensure the compiler exists in this repo (create `scripts/` if
+   absent). If `scripts/compile-skill-targets.mjs` is missing, obtain it from the registry: from a
+   local clone, `cp "$REG/assets/compile-skill-targets.mjs" scripts/`; on the network-only path
+   (no local clone), fetch it like the templates —
+   `gh api repos/blamechris/skill-templates/contents/assets/compile-skill-targets.mjs --jq '.content' | base64 -d > scripts/compile-skill-targets.mjs`.
+   Write it to `scripts/` and track it in VCS so it travels with the repo (on `update`, refresh it
+   from the registry too). Read the `targets:` line from `.claude/skill-profile.md`;
    if there is none, **ask the user** which agents to compile for (claude / gemini / codex) and
    offer to record the choice in the profile (the compiler falls back to `claude` if unset). Then
    run `node scripts/compile-skill-targets.mjs --name <name>` (it reads the profile targets), or
@@ -202,7 +205,7 @@ was a target) `~/.codex/prompts/<name>.md`. Report what was removed.
 - **Auto-install on miss.** A repo or global `CLAUDE.md` rule should say: *asked to run `/X`?
   Check the neutral source `.claude/commands/X.md`. Missing → not installed → `skill add X`.
   Present but the native artifact (`.claude/skills/X/SKILL.md`) is missing → just not compiled →
-  recompile with `compile-skill-targets.mjs --name X` (no registry fetch). Then invoke.* That
+  recompile with `node scripts/compile-skill-targets.mjs --name X` (no registry fetch). Then invoke.* That
   makes "use /full-review in a repo that lacks it" just work without re-fetching when a recompile
   suffices.
 - **Compile is deterministic.** The generic→native transform lives in
