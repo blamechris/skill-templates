@@ -74,6 +74,28 @@ adjacent). 3–10 items per section; split bigger sections.
 - **Source** — the PR/issue reference(s) this item verifies (rendered as links).
 - **Prereq chip** — if it needs special setup (device, second machine, etc.).
 
+**Atomicity + Steps↔Expected discipline (the QA rigor that makes the form
+trustworthy — a tester runs this deliberately, not by inference):**
+
+- **One observable check per item.** Each item verifies ONE thing with ONE pass
+  condition. Never bundle independent verifications — "launches without a crash"
+  + "no white box" + "a second launch doesn't duplicate" + "a log line appears"
+  are FOUR items, not one. If an item's Expected has multiple "AND" clauses
+  testing unrelated behaviors, split it.
+- **Every Expected clause must trace to a numbered Step.** Expected states the
+  observable result of the listed Steps and nothing else. If verifying something
+  needs an action (e.g. "launch it a second time", "drag the window"), that
+  action IS a numbered Step — never assert in Expected the result of an action
+  the tester was never told to perform.
+- **Make observation explicit.** When a check needs the tester to look at and
+  *report* something rather than judge a clean pass/fail, add an explicit Step —
+  "note what you saw, and where" — with a notes prompt. Never smuggle a "go
+  observe X" requirement into the Expected line; if you need information from the
+  tester, ask for it as a step.
+
+A tester must be able to execute the Steps top-to-bottom and judge each Expected
+without inferring any hidden action. When in doubt, split the item.
+
 ### 3. Build the HTML — structure and behavior contract
 
 Single file, inline `<style>` and `<script>`, zero external requests. The
