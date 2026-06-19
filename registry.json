@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "21fe7c3",
+  "generatedFromCommit": "f937026",
   "skillCount": 34,
   "skills": [
     {
@@ -429,7 +429,7 @@
     },
     {
       "name": "skill",
-      "hash": "21fe7c3",
+      "hash": "f937026",
       "lines": 251,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs.",
       "guards": [
@@ -461,7 +461,7 @@
     {
       "name": "smoke-form",
       "hash": "3cd93cc",
-      "lines": 145,
+      "lines": 170,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device."
     },
     {

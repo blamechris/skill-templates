@@ -10,7 +10,11 @@ The output is a single dark-mode `.html` file with inline CSS/JS (no external
 dependencies, no network): collapsible sections per test area, a checkbox +
 result dropdown + notes field per item, progress tracking, localStorage
 persistence (progress survives reloads), and a **Copy Results** button that
-serializes everything the tester entered into paste-ready markdown.
+serializes everything the tester entered into paste-ready markdown. Every command
+in the steps is **click-to-copy**, and each item has **🆘 Need help** / **🖥
+Terminal** buttons that hand the item's context (+ the tester's notes) to an
+assisting agent — so a tester who's mid-task, even playing the app under test,
+gets unblocked in one tap.
 
 ## Arguments
 
@@ -50,6 +54,12 @@ changed:
 - Note per-item **prerequisites** (device, simulator, second machine, network
   conditions) so the tester can batch items by setup:
   {{CUSTOMIZE: Common prerequisites for manual testing in this repo — devices, simulators, servers, env vars}}
+- If the form can only be run after a **deploy/restart** (the app must be at a
+  specific build — e.g. boot-loaded code a page reload won't pick up), make the
+  FIRST item a **build-precondition gate**: the exact redeploy/restart command +
+  how to confirm the live build matches (a `/build` or version check), with a
+  hard "if it doesn't match, STOP". A tester validating a stale build produces
+  false fails that look like real regressions — this trap is worth a dedicated item.
 
 Group items into 4–8 sections by surface or setup (not by PR number). Order
 sections so setup flows naturally (e.g. everything needing the same device is
@@ -92,6 +102,14 @@ fail=red, blocked=amber, skipped=gray. Respect `prefers-reduced-motion`.
    - a **notes `<input>`/`<textarea>` beside every field** with a
      placeholder hinting what to record ("what you saw, device, repro…").
      Notes are per-item, always visible, never hidden behind a click.
+   - **Per-item agent-assist actions** for a hands-busy tester (e.g. playing the
+     app under test): a **🆘 Need help** button that copies a self-contained help
+     request — the item's title + steps + expected + the tester's per-item AND
+     session/metadata notes + the build under test — to paste straight back to
+     the driving agent; and a **🖥 Terminal** button that copies a single-line
+     `claude "…"` command (quotes/newlines sanitized so it pastes into any shell)
+     seeded with the same context to spin up a fresh session. Both flag the item
+     amber, and reuse the same clipboard fallback as Copy Results.
    - Row border/left-edge tints with the selected result color.
 
 **Behavior:**
@@ -108,6 +126,13 @@ fail=red, blocked=amber, skipped=gray. Respect `prefers-reduced-motion`.
   tooltip — never an alert. Where the API is absent the button simply doesn't
   render. Title-hint the privacy caveat: Chromium relays audio to Google's
   speech service; macOS users can always use built-in Dictation instead.
+- **Click-to-copy commands (essential for a multitasking tester):** every
+  `<code>`/`<pre>` block is click-to-copy — click anywhere on it to copy its
+  text, with a brief flash + toast. Detect terminal commands (text starting
+  `npm `/`node `/`curl `/`git `/`gh `/`cd `/`http`/`<ENV>=`) and render them as
+  prominent, obviously-tappable chips with a `⧉ copy` affordance, so each command
+  is a one-tap target. `stopPropagation` so copying a command inside a
+  collapsible header doesn't also toggle it.
 - Progress counts update live in header and section summaries.
 - **Copy Results markdown format** (exact):
 
