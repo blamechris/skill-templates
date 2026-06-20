@@ -63,6 +63,8 @@ model — each carries its own `.claude/skill-profile.md` + `.claude/skills.lock
 - A subagent's final message (which is its return value to the orchestrator) likewise ends with its own status line.
 - It's a status, not a recap — don't pad it.
 
+**End of a long / multi-task run → an HTML executive brief, not a wall of text.** When a session shipped real work (several PRs/issues, an epic), close it with a `visual-brief` HTML report into the Obsidian vault (`$CLAUDE_BRIEF_DIR`), opened in the browser — a "two-minute" CEO view: a hero executive statement + outcome chips + a one-line "needs you" callout on top; the nitty-gritty (per-PR table, bugs caught, what's next) at the bottom for the vault record. Lead with verifiable outcomes (PRs merged, issues closed, gates passed); don't pad with misleading whole-file token/time metrics. Still end the chat message with the short `**Status:**` line pointing at the report.
+
 When authoring or customizing a skill whose output is shown to the user, include this instruction (and pass it through to any subagent prompt the skill issues).
 
 ## Critical: Attribution Policy
