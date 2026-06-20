@@ -54,6 +54,17 @@ model — each carries its own `.claude/skill-profile.md` + `.claude/skills.lock
 `scripts/rollout-pull-model.sh` (its job is done). **Do not recreate a push trigger,
 `deploy.sh`, or `deploy.conf`.**
 
+## End-of-message summary (cross-skill convention)
+
+**Every skill that reports back to the user — and every agent a skill spawns — ends its output with a short status summary.** This is a registry-wide standard so reporting is consistent across skills/agents.
+
+- The status is the **last thing** in the message, under a bold `**Status:**` lead.
+- One to three lines, factual and scannable: what's done, what's in flight, and what it's blocked on / waiting for (name the background task / CI run / review) or doing next.
+- A subagent's final message (which is its return value to the orchestrator) likewise ends with its own status line.
+- It's a status, not a recap — don't pad it.
+
+When authoring or customizing a skill whose output is shown to the user, include this instruction (and pass it through to any subagent prompt the skill issues).
+
 ## Critical: Attribution Policy
 
 **I am the sole author of all work in this repository.**
