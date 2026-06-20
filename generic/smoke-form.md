@@ -60,6 +60,16 @@ changed:
   how to confirm the live build matches (a `/build` or version check), with a
   hard "if it doesn't match, STOP". A tester validating a stale build produces
   false fails that look like real regressions — this trap is worth a dedicated item.
+- **Open with a labeled UI-region map / glossary** whenever the test targets a
+  visual app or overlay. BEFORE the first item, name and locate every on-screen
+  region the checklist will reference — e.g. "top-left status bar = hero name +
+  placement", "prediction modal = the win/tie/loss bar under it", "Reference tabs
+  = Minions / Powers / Comps". An annotated screenshot with callouts is ideal. A
+  tester who doesn't share the codebase's vocabulary cannot run an item that says
+  "check the face-damage chip" — they don't know what that is or where to look.
+  Give them the map first so every later item can simply *point*. (Straight from a
+  live tester: "Assume the tester doesn't know where these things are. Don't just
+  refer to them by name — point out where you expect it, what it looks like.")
 
 Group items into 4–8 sections by surface or setup (not by PR number). Order
 sections so setup flows naturally (e.g. everything needing the same device is
@@ -92,6 +102,14 @@ trustworthy — a tester runs this deliberately, not by inference):**
   "note what you saw, and where" — with a notes prompt. Never smuggle a "go
   observe X" requirement into the Expected line; if you need information from the
   tester, ask for it as a step.
+- **Anchor every UI reference to a named region + what it looks like.** Never
+  refer to an element by an internal/code name alone — say WHERE it is on screen
+  and WHAT it looks like: "the small grey line UNDER the win/tie/loss bar", "the
+  Tier header row reading 'Tier 3 · N'", not "the staleness caveat" or "the tier
+  group". This is the per-item enforcement of the region map above; assume the
+  tester has never seen the code and doesn't know your names for things. An item
+  that names a behavior with no visual anchor leaves the tester guessing what's
+  even being checked.
 
 A tester must be able to execute the Steps top-to-bottom and judge each Expected
 without inferring any hidden action. When in doubt, split the item.
