@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "1a89097",
+  "generatedFromCommit": "93c07be",
   "skillCount": 34,
   "skills": [
     {
@@ -460,8 +460,8 @@
     },
     {
       "name": "smoke-form",
-      "hash": "1a89097",
-      "lines": 210,
+      "hash": "93c07be",
+      "lines": 220,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device."
     },
     {

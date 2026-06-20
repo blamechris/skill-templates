@@ -208,3 +208,13 @@ Result: X pass / Y fail / Z blocked / W skipped / U untested
 - Anything already covered by green automated tests does not need a manual
   item UNLESS it has a visual/device component automation can't see.
   {{CUSTOMIZE: What automation already covers in this repo — so the form doesn't duplicate it}}
+- **LIVE / VISUAL ONLY — never put a purely back-end check in front of a human.**
+  The manual pass is exclusively for what a person at the running app can SEE or
+  DO. CLI output, API routes/status codes, parser or function return shapes,
+  numeric/statistical correctness (scores, percentages, sort orders) — those are
+  UNIT tests, not smoke items. If you catch yourself writing "run `X`, confirm the
+  output is `Y`" with no on-screen component, move it to the test suite and leave
+  it off the checklist entirely. A human's time is for the things automation
+  fundamentally can't observe: layout, rendering, real-device input, "does it
+  feel right." (Build-precondition gates like a redeploy/version check are the one
+  exception — they protect the live pass itself.)
