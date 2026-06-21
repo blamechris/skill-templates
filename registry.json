@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "93c07be",
-  "skillCount": 34,
+  "generatedFromCommit": "75a5b5d",
+  "skillCount": 35,
   "skills": [
     {
       "name": "agent-review",
@@ -398,6 +398,12 @@
       "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts."
     },
     {
+      "name": "prime-directive",
+      "hash": "75a5b5d",
+      "lines": 64,
+      "description": "Run the repo's open-issue backlog to completion while the user is away. Triggered when the user says something like \"work autonomously / use the prime directive / keep working til I'm back or there's literally nothing left.\" Do NOT wait for the user and do NOT wrap up early — the only stop is a clean backlog. This is the north-star wrapper around the companion autonomous skills (tackle-issues, autonomous-dev-flow, agent-review, unattended-merge, swarm-audit)."
+    },
+    {
       "name": "project-audit",
       "hash": "aae4d65",
       "lines": 515,
@@ -460,7 +466,7 @@
     },
     {
       "name": "smoke-form",
-      "hash": "93c07be",
+      "hash": "8a8c45b",
       "lines": 220,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device."
     },
