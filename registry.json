@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "93c07be",
+  "generatedFromCommit": "27131b2",
   "skillCount": 34,
   "skills": [
     {
@@ -460,9 +460,9 @@
     },
     {
       "name": "smoke-form",
-      "hash": "93c07be",
-      "lines": 220,
-      "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device."
+      "hash": "27131b2",
+      "lines": 302,
+      "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device. With its **wake-on-save loop** (section 6 + `assets/smoke-intake.mjs`), the tester's Pass / Pass-with-note / Fail marks **stream live to the driving agent**, which triages and files issues in real time — no copy-paste, no waiting."
     },
     {
       "name": "smoke-test",
