@@ -4,7 +4,9 @@ Generate an interactive, **self-contained HTML smoke-test form** that guides a
 human through a manual verification pass — the hand-driven sibling of
 `/smoke-test` (which runs an automated browser pass). Use it before releases,
 after a feature batch lands, or whenever a change set needs eyes on a real
-device.
+device. With its **wake-on-save loop** (section 6 + `assets/smoke-intake.mjs`),
+the tester's Pass / Pass-with-note / Fail marks **stream live to the driving
+agent**, which triages and files issues in real time — no copy-paste, no waiting.
 
 The output is a single dark-mode `.html` file with inline CSS/JS (no external
 dependencies, no network): collapsible sections per test area, a checkbox +
@@ -70,6 +72,17 @@ changed:
   Give them the map first so every later item can simply *point*. (Straight from a
   live tester: "Assume the tester doesn't know where these things are. Don't just
   refer to them by name — point out where you expect it, what it looks like.")
+- **Open EVERY section with a "⚙ Before this section — make sure these are running"
+  prereq box.** The region map is global; this is per-section. Before a section's
+  first item, list the exact services/apps/state that must be up to run it — each
+  with its click-to-copy start command — written so a tester with **zero app
+  knowledge** can satisfy them. If the driving agent normally starts something (a
+  server), say so explicitly ("the agent starts this") AND give the manual command
+  as a fallback. (This generalizes the build-precondition gate below from one global
+  gate to per-section preconditions. Straight from a live tester who got stranded on
+  a section because nothing told them an overlay app had to be launched: "list out
+  what needs to be in play before every section — the tester shouldn't need to
+  understand the application; that's the whole goal of this flow.")
 
 Group items into 4–8 sections by surface or setup (not by PR number). Order
 sections so setup flows naturally (e.g. everything needing the same device is
@@ -137,7 +150,17 @@ fail=red, blocked=amber, skipped=gray. Respect `prefers-reduced-motion`.
    section-level progress count in the `<summary>`.
 4. **Items**: each row has —
    - a **checkbox** (tested = touched this item),
-   - a **result `<select>`**: `— / Pass / Fail / Blocked / Skipped`,
+   - a **result control with FIVE statuses** that map to what the agent does with
+     them — this status set is load-bearing (a live tester found the 4-status model
+     forced them to misuse "Fail" or "🆘" for "it works but I have a note"):
+     - **✅ Pass** — works, nothing to say → agent does nothing.
+     - **💡 Pass + note** — *works, but I have feedback* → agent files an
+       **enhancement**. (The bridge from smoke-test to backlog; distinct color, e.g.
+       sky-blue. This is the status most feedback lands on — don't omit it.)
+     - **❌ Fail** — broken / a regression → agent files a **bug** (higher priority).
+     - **⏭ Skip** — not tested / N/A → nothing.
+     - **🆘 Need help** — *I'm blocked right now* → agent helps live (synchronous).
+       Distinct from 💡: 🆘 interrupts, 💡 is async feedback.
    - the title, steps (collapsible if long), expected outcome, source links,
    - a **notes `<input>`/`<textarea>` beside every field** with a
      placeholder hinting what to record ("what you saw, device, repro…").
@@ -173,17 +196,34 @@ fail=red, blocked=amber, skipped=gray. Respect `prefers-reduced-motion`.
   prominent, obviously-tappable chips with a `⧉ copy` affordance, so each command
   is a one-tap target. `stopPropagation` so copying a command inside a
   collapsible header doesn't also toggle it.
-- Progress counts update live in header and section summaries.
-- **Copy Results markdown format** (exact):
+- Progress counts update live in header and section summaries (count notes
+  separately from fails, e.g. `N notes · M fail · K need-help`).
+- **Live wake-on-save POST (the loop's client half — see section 6):** detect
+  online mode with `const ONLINE = /^https?:$/.test(location.protocol)` (true when
+  served by the intake server, false from `file://`). When ONLINE, `postResult(id)`
+  POSTs `{id, title, section, status, notes, build, ts}` to `/result` (a) on every
+  status change and (b) debounced on note edits for `fail`/`help`/`note` items.
+  **Dedup**: keep a `_lastSent[id]` signature of `status+notes` and skip the POST
+  when unchanged (otherwise focus/toggle re-pings the agent endlessly). Wrap in
+  try/catch — a failure just leaves the answer in localStorage for Export. Show a
+  header badge: **🟢 live — auto-files** (online) vs **💾 offline** (file://). From
+  `file://` the form degrades to localStorage + Copy Results, unchanged.
+- **Copy Results markdown format** (exact) — note the dedicated feedback section so
+  the next agent sees what *worked-but-was-flagged* apart from what *broke*:
 
 ```markdown
 # Smoke test: <scope> — <date>
 Tester: <name> · Build: <build> · Env: <env>
-Result: X pass / Y fail / Z blocked / W skipped / U untested
+Result: X pass / N notes / Y fail / Z blocked / W skipped / U untested
 
-## <Section>
-- [x] **<Item title>** — PASS — <note if any>
-- [x] **<Item title>** — FAIL — <note>
+## ⚠️ Needs attention (fail / need-help)
+- ❌ **<Item title>** — <note>
+
+## 💡 Passed with feedback (file as enhancements)
+- 💡 **<Item title>** — <note>
+
+## All results
+- ✅ **<Item title>** — <note if any>
 - [ ] **<Item title>** — (untested)
 ```
 
@@ -218,3 +258,45 @@ Result: X pass / Y fail / Z blocked / W skipped / U untested
   fundamentally can't observe: layout, rendering, real-device input, "does it
   feel right." (Build-precondition gates like a redeploy/version check are the one
   exception — they protect the live pass itself.)
+
+### 6. Live wake-on-save mode (the loop — strongly recommended)
+
+The form alone makes the tester paste a markdown summary back when they finish. The
+**wake-on-save loop** removes that wait entirely: results stream to the driving agent
+as the tester marks them, and the agent files issues **in real time**. Battle-tested
+live; this is the flow to reach for whenever you (the agent) can stay attached.
+
+Three parts:
+
+1. **The form** (this skill) — generated with the section-6 POST wiring above, so each
+   mark hits `/result` when served online.
+2. **The intake server** — `assets/smoke-intake.mjs` (copy it into the project's
+   tools/ or run from the asset path). It serves the form AND appends every result to
+   `<form>.results.jsonl` next to it. Generic + dependency-free:
+   ```bash
+   node assets/smoke-intake.mjs <form.html>   # serves http://127.0.0.1:8770/ , writes <form>.results.jsonl
+   ```
+   The tester opens the served URL (badge reads 🟢 live), not the `file://` path.
+3. **The wake-monitor + triage (agent side)** — the agent tails the results file for
+   actionable statuses and is woken on each, then triages with `/create-issue`:
+   ```bash
+   # arm AFTER the file may already exist; start at end so only NEW marks wake you
+   F="<form>.results.jsonl"; until [ -f "$F" ]; do sleep 2; done
+   tail -n 0 -F "$F" | grep --line-buffered -E '"status":"(fail|help|note)"'
+   ```
+   On each wake: read the FULL note from the JSONL (the wake event truncates), then —
+   **`fail` → file a bug**, **`note` → file an enhancement**, **`help` → answer/assist
+   live**. Use `/create-issue` for the filing (one grouped issue per surface, not one
+   per micro-nit; dedup against issues already filed this session). Notes can grow as
+   the tester edits — re-read before filing; the dedup in the form prevents identical
+   re-pings.
+
+**Setup discipline for the agent:** before telling the tester "go", (a) start every
+service the form's prereq boxes name (or confirm it's their job), (b) start the intake
+server, (c) arm the wake-monitor. Confirm all three are up with one health check.
+Tear down (stop the monitor, kill the intake server) when the tester says the pass is
+done, and back up the `.results.jsonl` (the filed issues are the durable output, but
+keep the raw record).
+
+**Offline fallback is automatic:** opened from `file://` the form still works
+(localStorage + Copy Results) — the loop is a strict enhancement, never a requirement.
