@@ -179,6 +179,17 @@ fail=red, blocked=amber, skipped=gray. Respect `prefers-reduced-motion`.
 
 - Every input persists to `localStorage` keyed by the file's slug+date
   (restore on load; checkbox auto-checks when a result is chosen).
+- **Per-mark timestamp + "carried over" staleness (the reuse model).** A form is
+  ONE dated pass; reopening it CONTINUES that pass. So a status must record **WHEN**
+  it was set (`at`, set in `setStatus`) and the item must SHOW it — "✓ marked just
+  now / 3h ago". A mark older than a `STALE_MS` threshold (~30 min), **or one with no
+  timestamp** (made before this field existed), renders as **"↩ carried over from an
+  earlier pass — re-confirm?"** with a dashed left-border + an amber tint, and the
+  header shows an "N ↩ carried over" count. This stops a stale Pass from silently
+  reading as a fresh one across sessions/builds — the tester re-confirms it (one click
+  → "just now") or trusts it deliberately. **Make the reuse intentional:** for a NEW
+  change set, generate a NEW form (new slug/date) rather than reopening an old one;
+  reopening is only for continuing an in-progress pass. State this in the form's intro.
 - **Dictation (progressive enhancement):** if `window.SpeechRecognition ||
   window.webkitSpeechRecognition` exists, render a small round 🎤 button beside
   every note field and tester-metadata input. Click → start recognition
