@@ -39,6 +39,10 @@ if (!formPath || !fs.existsSync(formPath)) {
 }
 const portFlag = process.argv.indexOf('--port');
 const PORT = portFlag >= 0 ? Number(process.argv[portFlag + 1]) : Number(process.env.SMOKE_PORT || 8770);
+if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) {
+  console.error(`[intake] bad port "${process.argv[portFlag + 1] ?? process.env.SMOKE_PORT}" — use an integer 0–65535`);
+  process.exit(1);
+}
 const resultsPath = formPath.replace(/\.html?$/i, '') + '.results.jsonl';
 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
@@ -65,7 +69,10 @@ const server = http.createServer((req, res) => {
       let rec;
       try { rec = JSON.parse(body); } catch { return json(res, 400, { ok: false, error: 'bad json' }); }
       rec.receivedAt = new Date().toISOString();
-      fs.appendFileSync(resultsPath, JSON.stringify(rec) + '\n');
+      // try/catch so a transient write error (dir removed, EROFS, perms) returns 500 instead of
+      // throwing in this async handler and taking the whole server down mid-session.
+      try { fs.appendFileSync(resultsPath, JSON.stringify(rec) + '\n'); }
+      catch (e) { console.error(`[intake] write failed: ${e.message}`); return json(res, 500, { ok: false, error: 'write failed' }); }
       // stdout doubles as a human log; the Monitor watches the file, not this.
       console.log(`[intake] ${String(rec.status || '?').toUpperCase().padEnd(4)} ${rec.id || ''}  ${rec.title || ''}${rec.notes ? '  — ' + rec.notes : ''}`);
       json(res, 200, { ok: true });
@@ -75,6 +82,7 @@ const server = http.createServer((req, res) => {
   json(res, 404, { ok: false, error: 'not found' });
 });
 
+server.on('error', (e) => { console.error(`[intake] server error: ${e.code === 'EADDRINUSE' ? `port ${PORT} already in use` : e.message}`); process.exit(1); });
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[intake] serving ${path.basename(formPath)}  →  http://127.0.0.1:${PORT}/`);
   console.log(`[intake] results  →  ${resultsPath}`);
