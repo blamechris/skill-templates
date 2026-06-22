@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "810e4d9",
+  "generatedFromCommit": "a6758e7",
   "skillCount": 35,
   "skills": [
     {
@@ -399,8 +399,8 @@
     },
     {
       "name": "prime-directive",
-      "hash": "810e4d9",
-      "lines": 100,
+      "hash": "a6758e7",
+      "lines": 102,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
         {
@@ -470,6 +470,15 @@
           "anyOf": [
             "[Nn]ever commit to main",
             "feature branch \\+ PR"
+          ]
+        },
+        {
+          "label": "no-fake-completion",
+          "anyOf": [
+            "fake-merge",
+            "fake completion",
+            "faked completion",
+            "documented-blocked"
           ]
         }
       ]
