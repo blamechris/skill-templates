@@ -61,6 +61,17 @@
     { "label": "merge-report-entry", "anyOf": ["Merged by this session", "entry in the final session report"] },
     { "label": "no-auto-merge", "anyOf": ["gh pr merge --auto", "auto-merge"] }
   ],
+  "prime-directive": [
+    { "label": "reload-contract", "anyOf": ["[Rr]eload contract", "after every compaction", "Reload by invocation"] },
+    { "label": "self-contained", "anyOf": ["self-contained", "this file alone", "constitution stands alone"] },
+    { "label": "idempotent-reentry", "anyOf": ["[Ii]dempotent", "duplicate work"] },
+    { "label": "mission-convergence", "anyOf": ["[Cc]onvergence", "no stop condition", "converged backlog"] },
+    { "label": "per-issue-loop", "anyOf": ["[Pp]er-issue loop", "RED .* GREEN", "TDD"] },
+    { "label": "merge-gate", "anyOf": ["/full-review", "Merge gate", "ALL .*threads resolved"] },
+    { "label": "no-auto-merge", "anyOf": ["gh pr merge --auto", "--admin", "protection override"] },
+    { "label": "zero-attribution", "anyOf": ["[Zz]ero attribution", "Co-Authored-By"] },
+    { "label": "never-commit-main", "anyOf": ["[Nn]ever commit to main", "feature branch \\+ PR"] }
+  ],
   "batch-merge": [
     { "label": "copilot-gate", "anyOf": ["Copilot review \\*\\*must be present\\*\\*", "quality gate"] },
     { "label": "stale-review-recheck", "anyOf": ["dismiss_stale_reviews", "re-enter Step 2b", "fresh Copilot review"] },
