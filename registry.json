@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "93c07be",
-  "skillCount": 34,
+  "generatedFromCommit": "810e4d9",
+  "skillCount": 35,
   "skills": [
     {
       "name": "agent-review",
@@ -398,6 +398,83 @@
       "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts."
     },
     {
+      "name": "prime-directive",
+      "hash": "810e4d9",
+      "lines": 100,
+      "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
+      "guards": [
+        {
+          "label": "reload-contract",
+          "anyOf": [
+            "[Rr]eload contract",
+            "after every compaction",
+            "Reload by invocation"
+          ]
+        },
+        {
+          "label": "self-contained",
+          "anyOf": [
+            "self-contained",
+            "this file alone",
+            "constitution stands alone"
+          ]
+        },
+        {
+          "label": "idempotent-reentry",
+          "anyOf": [
+            "[Ii]dempotent",
+            "duplicate work"
+          ]
+        },
+        {
+          "label": "mission-convergence",
+          "anyOf": [
+            "[Cc]onvergence",
+            "no stop condition",
+            "converged backlog"
+          ]
+        },
+        {
+          "label": "per-issue-loop",
+          "anyOf": [
+            "[Pp]er-issue loop",
+            "RED .* GREEN",
+            "TDD"
+          ]
+        },
+        {
+          "label": "merge-gate",
+          "anyOf": [
+            "/full-review",
+            "Merge gate",
+            "ALL .*threads resolved"
+          ]
+        },
+        {
+          "label": "no-auto-merge",
+          "anyOf": [
+            "gh pr merge --auto",
+            "--admin",
+            "protection override"
+          ]
+        },
+        {
+          "label": "zero-attribution",
+          "anyOf": [
+            "[Zz]ero attribution",
+            "Co-Authored-By"
+          ]
+        },
+        {
+          "label": "never-commit-main",
+          "anyOf": [
+            "[Nn]ever commit to main",
+            "feature branch \\+ PR"
+          ]
+        }
+      ]
+    },
+    {
       "name": "project-audit",
       "hash": "aae4d65",
       "lines": 515,
@@ -460,7 +537,7 @@
     },
     {
       "name": "smoke-form",
-      "hash": "93c07be",
+      "hash": "8a8c45b",
       "lines": 220,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device."
     },
