@@ -70,7 +70,8 @@
     { "label": "merge-gate", "anyOf": ["/full-review", "Merge gate", "ALL .*threads resolved"] },
     { "label": "no-auto-merge", "anyOf": ["gh pr merge --auto", "--admin", "protection override"] },
     { "label": "zero-attribution", "anyOf": ["[Zz]ero attribution", "Co-Authored-By"] },
-    { "label": "never-commit-main", "anyOf": ["[Nn]ever commit to main", "feature branch \\+ PR"] }
+    { "label": "never-commit-main", "anyOf": ["[Nn]ever commit to main", "feature branch \\+ PR"] },
+    { "label": "no-fake-completion", "anyOf": ["fake-merge", "fake completion", "faked completion", "documented-blocked"] }
   ],
   "batch-merge": [
     { "label": "copilot-gate", "anyOf": ["Copilot review \\*\\*must be present\\*\\*", "quality gate"] },

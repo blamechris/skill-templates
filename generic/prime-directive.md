@@ -2,7 +2,7 @@
 
 A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.
 
-Invoke it at the **start** of an unattended run to set the mission, and again **after every compaction** to reload it. It does not start work by itself — it re-grounds the agent, then hands off to the marathon machinery (`/tackle-issues`) for the actual wave loop. Treat this file as load-bearing: everything an interrupted, freshly-compacted agent needs to safely resume is here, in one read.
+Invoke it at the **start** of an unattended run to set the mission, and again **after every compaction** to reload it. It does not start work by itself — it re-grounds the agent, then hands off to the marathon machinery (`/tackle-issues`) for the actual wave loop. Treat this file as load-bearing: everything an interrupted, freshly-compacted agent needs to safely resume is here, in one read. Natural-language cues like *"work autonomously / use the prime directive / keep going until the backlog is clean or you're genuinely blocked"* should route here.
 
 ## Arguments
 
@@ -27,6 +27,8 @@ This skill exists because a long autonomous run is **compacted repeatedly**, and
 
 Clear the **entire** open issue backlog for {{CUSTOMIZE: target repository, e.g. `owner/name` — the repo this marathon owns}}, autonomously, until **convergence**. There is **no stop condition besides a converged backlog** — keep going until every open issue is resolved (closed via a merged PR, decomposed into tracked sub-issues, or documented-blocked with a comment), or nothing tractable remains. The user is away and will review on return. Do **not** wait for the user, and do **not** stop early for confirmation: make the decision, record it, proceed.
 
+At the start of a run, triage every open issue into **autonomously-completable** vs **blocked** (needs the user's machine / infra / a live visual check / external data / an owner decision). Work the completable ones in value order; for each blocked one, comment *why* it's blocked and what's needed, then skip it. **Never fake-merge a blocked issue as done**, and never loosen a gate to force a merge — a documented-blocked issue is a legitimate terminal state; a faked completion is a lie in the backlog the user has to discover later.
+
 ## Authority
 
 For an unattended run, this directive grants: full autonomous **self-merge under the merge gate below**; create / close / comment / label issues; decompose epics into sub-issues; file follow-up issues for deferred work; and use a decision panel ({{CUSTOMIZE: decision mechanism — e.g. `/swarm-audit`, or a decision sub-agent panel}}) to choose among genuine options and then **act on the recommendation** rather than escalating to the user.
@@ -38,7 +40,7 @@ For an unattended run, this directive grants: full autonomous **self-merge under
 1. **Sync** — `git checkout main && git pull origin main`. Always branch fresh from main; never stack branches.
 2. **Understand** — read the issue + linked threads. {{CUSTOMIZE: code-intelligence shortcut — if the repo has a code-intel MCP (e.g. repo-memory: `get_file_summary` / `search_by_purpose`), use it before Read/grep to save tokens; otherwise grep/Read.}} Re-verify any stored audit/plan claim against current main — audits go stale as main moves.
 3. **Decide (only if genuinely ambiguous)** — for any real decision (epic scope, design fork, choosing among N approaches), run the decision panel ({{CUSTOMIZE: `/swarm-audit` or equivalent}}), **pick the recommended option**, and **record the decision** in the session log plus a one-line note on the issue. Never block on the user.
-4. **Implement (TDD)** — branch {{CUSTOMIZE: branch naming convention, e.g. `feat|fix|refactor|test/<slug>`}}, then RED → GREEN → REFACTOR. Match house style: {{CUSTOMIZE: house code style, e.g. "server: ES modules, no semicolons, single quotes, no TypeScript"}}. Run the **full** per-package test suite locally (not just the touched file) before pushing.
+4. **Implement (TDD)** — branch {{CUSTOMIZE: branch naming convention, e.g. `feat|fix|refactor|test/<slug>`}}, then RED → GREEN → REFACTOR. Match house style: {{CUSTOMIZE: house code style, e.g. "server: ES modules, no semicolons, single quotes, no TypeScript"}}. Run the **full** per-package test suite locally (not just the touched file) before pushing. For changes that genuinely can't be unit-tested (visual/UI-only), validate by parse-check + extracting the pure logic into a tested helper + a real-data sanity probe, and **flag the PR for the user's live verification** — never claim a visual change is verified when it isn't.
 5. **PR** — push, open a PR. Link the issue with a closing keyword: `Closes #N`. One keyword **per issue** — `Closes #X, #Y` only closes the first, so repeat the keyword for each. Avoid negated phrasings ("does NOT close #N" still auto-closes).
 6. **Full review (MANDATORY)** — run `/full-review`. A sub-agent review is mandatory on **every** PR (read-only: `gh pr diff` / `git show <ref>:<path>`; a non-worktree review agent must **never** `git checkout`). {{CUSTOMIZE: third-party review — e.g. Copilot is best-effort: if it is blocked / quota-exhausted / not arriving, skip it and do not stall.}} Triage every thread.
 7. **Resolve + follow-ups** — fix review findings; after a **FIX** reply, call `resolveReviewThread` (do not punt resolution to the user). **File follow-up issues** for anything deferred and link them. All threads resolved before merge.
@@ -79,7 +81,7 @@ Run a **SOLID + DRY** whole-project audit ({{CUSTOMIZE: audit skill, e.g. `/swar
 
 ## State / where things live
 
-- **Session log + decision log:** {{CUSTOMIZE: session-log path, e.g. `autonomous-session-<date>.md` at repo root — gitignored, never commit}}. Source of truth for progress + decisions to present on interrupt. Its **first line carries the reload trigger** (Reliability rule 2).
+- **Session log + decision log:** {{CUSTOMIZE: session-log path, e.g. `autonomous-session-<date>.md` at repo root — gitignored, never commit}}. Source of truth for progress + decisions to present on interrupt. Its **first line carries the reload trigger** (Reliability rule 2). Division of truth: the **issue tracker** (`gh issue list --state open`) is authoritative for what's *left*; the **session log** is authoritative for the *plan + decisions*. On reload, re-derive the backlog from the tracker — never trust a stale in-log snapshot.
 - **This directive:** invoke `/prime-directive` (compiled live artifact: `.claude/skills/prime-directive/SKILL.md`). Do not depend on the `.claude/commands/` path resolving (Reliability rule 1).
 - **Issue list:** `gh issue list --state open`.
 
