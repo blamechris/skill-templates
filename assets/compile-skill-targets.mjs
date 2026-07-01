@@ -21,6 +21,7 @@
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 
 const ALL_TARGETS = ['claude', 'gemini', 'codex']
 
@@ -67,11 +68,33 @@ function stripStamp(body) {
   return body.replace(/^<!--\s*skill-templates:.*?-->\s*$/gm, '').replace(/\n{3,}$/g, '\n').trimEnd() + '\n'
 }
 
+// Period-bearing abbreviations whose trailing dot must NOT be treated as end of
+// sentence. A small deny-list, not a sentence tokenizer — extend only when a real
+// skill description trips it (#737: "…session (e.g." shipped as a menu description).
+const NON_TERMINAL_ABBREV = /\b(?:e\.g|i\.e|etc|vs|cf)\.$/i
+
+// Index of the first period that genuinely ends a sentence: skips periods that
+// close a known abbreviation and periods inside a still-open "(…" parenthetical.
+// Returns -1 when no period qualifies (caller falls back to the length cap).
+function sentenceEnd(text) {
+  const re = /\.(?=\s|$)/g
+  let m
+  while ((m = re.exec(text)) !== null) {
+    const head = text.slice(0, m.index + 1)
+    if (NON_TERMINAL_ABBREV.test(head)) continue
+    const opens = (head.match(/\(/g) || []).length
+    const closes = (head.match(/\)/g) || []).length
+    if (opens > closes) continue
+    return m.index
+  }
+  return -1
+}
+
 // First sentence of the first non-heading prose PARAGRAPH -> a clean one-line
 // description for menus. Accumulate the whole paragraph first (the source's first
 // sentence often wraps across several physical lines) so we don't return a dangling
 // half-sentence. Capped; ellipsis only when truncated.
-function deriveDescription(body, name) {
+export function deriveDescription(body, name) {
   let para = ''
   for (const raw of body.split('\n')) {
     const line = raw.trim()
@@ -83,7 +106,7 @@ function deriveDescription(body, name) {
   }
   if (!para) return `Project skill: /${name}`
   let desc = para.replace(/\s+/g, ' ').trim()
-  const dot = desc.search(/\.(\s|$)/)
+  const dot = sentenceEnd(desc)
   if (dot !== -1 && dot < 160) desc = desc.slice(0, dot + 1)
   if (desc.length > 160) desc = desc.slice(0, 157).trimEnd() + '...'
   return desc
@@ -245,4 +268,8 @@ function main() {
   console.log(`\nDone.${skipped ? ` ${skipped} target(s) skipped (logged above — not emitted).` : ''}`)
 }
 
-main()
+// Run the CLI only when executed directly — importing this module (e.g. the unit
+// test pulling in deriveDescription) must not trigger a compile.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+}
