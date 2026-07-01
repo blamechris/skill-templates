@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "a6758e7",
+  "generatedFromCommit": "07a6391",
   "skillCount": 35,
   "skills": [
     {
@@ -399,7 +399,7 @@
     },
     {
       "name": "prime-directive",
-      "hash": "a6758e7",
+      "hash": "d318c59",
       "lines": 102,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
@@ -509,13 +509,13 @@
     },
     {
       "name": "skill-profile",
-      "hash": "8bc2550",
+      "hash": "07a6391",
       "lines": 94,
       "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time."
     },
     {
       "name": "skill",
-      "hash": "f937026",
+      "hash": "07a6391",
       "lines": 251,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs.",
       "guards": [
@@ -546,8 +546,8 @@
     },
     {
       "name": "smoke-form",
-      "hash": "8a8c45b",
-      "lines": 220,
+      "hash": "07a6391",
+      "lines": 233,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device."
     },
     {
