@@ -65,9 +65,10 @@ the skill's exact name plus the literal ` Customizations` suffix.>
   update the profile so future `skill add` / `skill update` installs stay accurate.
 - **`targets:` selects which agents a skill compiles for.** `compile-skill-targets.mjs` reads
   this line: `claude` → `.claude/skills/<name>/SKILL.md`, `gemini` → `.gemini/commands/<name>.toml`,
-  `codex` → `~/.codex/prompts/<name>.md`. Only list agents whose output is **version-controlled**
-  (`claude`, `gemini`); keep `codex` a per-machine opt-in (`--targets codex`) because it writes to
-  the user-global `~/.codex` and is deprecated upstream. No line ⇒ the compiler falls back to `claude`.
+  `codex` → `.codex/skills/<name>/SKILL.md`. All three emit **version-controlled, repo-tracked**
+  artifacts, so any combination is safe to commit (codex's repo folder can be copied/synced into
+  `~/.codex/skills` where repo-local discovery is unavailable). No line ⇒ the compiler falls back
+  to `claude`.
 
 ## History: migration from `customizations/<repo>.md`
 

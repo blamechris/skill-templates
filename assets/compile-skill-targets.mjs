@@ -8,13 +8,13 @@
 //
 //   claude -> .claude/skills/<name>/SKILL.md        (md + YAML frontmatter; v2.1.x "skills")
 //   gemini -> .gemini/commands/<name>.toml          (TOML: prompt + description; {{args}})
-//   codex  -> ~/.codex/prompts/<name>.md            (md; $ARGUMENTS; user-global, /prompts:<name>)
+//   codex  -> .codex/skills/<name>/SKILL.md         (md + YAML frontmatter; repo-tracked Codex skill)
 //
 // Targets come from `.claude/skill-profile.md` (a `targets:` line) unless
-// overridden with --targets. Codex is opt-in (user-global + deprecated upstream).
+// overridden with --targets.
 //
 // Usage:
-//   node scripts/compile-skill-targets.mjs [--name <name>] [--targets claude,gemini]
+//   node scripts/compile-skill-targets.mjs [--name <name>] [--targets claude,gemini,codex]
 //        [--repo <root>] [--dry-run]
 //
 // Exit non-zero on emit failure so /skill and CI can gate on it.
@@ -143,14 +143,14 @@ function emitGemini(name, body, description, repo) {
   }
 }
 
-function emitCodex(name, body, description) {
-  // Codex custom prompts: ~/.codex/prompts (user-global, no project scope).
-  // $ARGUMENTS is natively supported, so the body passes through. Invoked as
-  // /prompts:<name>, not /<name>.
+function emitCodex(name, body, description, repo) {
+  // Codex skills use the same folder shape as ~/.codex/skills, but emit into
+  // the repo so the artifact is reviewable, portable, and installable by any
+  // Codex user or agent runner.
   return {
-    path: join(homedir(), '.codex/prompts', `${name}.md`),
-    content: `---\ndescription: ${yamlDq(description)}\n---\n\n${body}`,
-    note: `codex: invoke as /prompts:${name} (user-global; OpenAI marks custom prompts deprecated)`,
+    path: join(repo, '.codex/skills', name, 'SKILL.md'),
+    content: `---\nname: ${name}\ndescription: ${yamlDq(description)}\n---\n\n${body}`,
+    note: `codex: repo-tracked skill; install by copying/syncing .codex/skills/${name} into ~/.codex/skills when repo-local discovery is unavailable`,
   }
 }
 
