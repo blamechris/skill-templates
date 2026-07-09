@@ -467,7 +467,7 @@
     {
       "name": "smoke-form",
       "hash": "8a8c45b",
-      "lines": 220,
+      "lines": 232,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device."
     },
     {
