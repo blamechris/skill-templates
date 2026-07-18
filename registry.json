@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "a6758e7",
-  "skillCount": 35,
+  "generatedFromCommit": "01903fb",
+  "skillCount": 36,
   "skills": [
     {
       "name": "agent-review",
@@ -399,7 +399,7 @@
     },
     {
       "name": "prime-directive",
-      "hash": "a6758e7",
+      "hash": "d318c59",
       "lines": 102,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
@@ -662,6 +662,12 @@
           ]
         }
       ]
+    },
+    {
+      "name": "tiered-delegation",
+      "hash": "01903fb",
+      "lines": 63,
+      "description": "The cost-discipline constitution for multi-agent work: the **session's top model orchestrates; cheaper tiers execute**. Invoke it when a session is about to fan out subagents or workflows (audits, marathons, parallel implementation, large research) to load the delegation rules — who does what tier of work, how far down to push each task, and when a claim must be re-verified before it drives an action. It composes with the marathon machinery (`/prime-directive`, `/tackle-issues`, `/parallel-dev`) and with ad-hoc Workflow/Agent fan-outs alike."
     },
     {
       "name": "unattended-merge",
