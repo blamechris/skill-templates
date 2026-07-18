@@ -159,13 +159,26 @@ fail=red, blocked=amber, skipped=gray. Respect `prefers-reduced-motion`.
 - **Dictation (progressive enhancement):** if `window.SpeechRecognition ||
   window.webkitSpeechRecognition` exists, render a small round 🎤 button beside
   every note field and tester-metadata input. Click → start recognition
-  (`continuous: true`, final results only, `lang` from `navigator.language`),
-  appending each final transcript to the field (space-joined) and persisting;
+  (`continuous: true`, `interimResults: true`, `lang` from `navigator.language`),
+  appending each FINAL transcript to the field (space-joined) and persisting;
   button pulses red while recording, click again (⏹) to stop; only one active
   recorder at a time. Errors (mic permission, offline) surface via the button
   tooltip — never an alert. Where the API is absent the button simply doesn't
   render. Title-hint the privacy caveat: Chromium relays audio to Google's
   speech service; macOS users can always use built-in Dictation instead.
+  **"You are being heard" signal:** show a strong live indicator under the
+  field being dictated into — a `● recording…` label (pulsing dot) + a live
+  **interim-transcript preview** (the not-yet-final text, distinct/dimmed from the
+  committed text, replaced on each event), and outline the active item. Keep the
+  pure split (interim vs final) + append/merge in a testable helper.
+- **Per-item screenshot paste:** the per-item notes accept a pasted
+  (`Ctrl+V`) or dropped image — store it WITH that item's result, show a dark
+  thumbnail frame on the item, and (when the repo customizes an online
+  results-intake mode) include it in the POST to the intake. Guard each image to
+  a sane cap (~2.5 MB decoded); oversize → a visible note, never a silent drop.
+  Intake side: decode the base64 data-URL to a file under
+  `<results>.jsonl.files/` and store a `{file,bytes,mime}` ref in the row
+  (keeps the JSONL small + greppable). Multiple items each carry their own shots.
 - **Click-to-copy commands (essential for a multitasking tester):** every
   `<code>`/`<pre>` block is click-to-copy — click anywhere on it to copy its
   text, with a brief flash + toast. Detect terminal commands (text starting

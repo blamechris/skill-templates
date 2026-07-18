@@ -40,7 +40,7 @@ every skill into every repo, a repo pulls a skill the moment it needs one and th
 - **Targets** — the coding agents a skill is compiled for. `.claude/commands/<name>.md`
   (the customized install) is the provider-NEUTRAL source; `scripts/compile-skill-targets.mjs`
   emits each agent's NATIVE custom-command format: `claude` → `.claude/skills/<name>/SKILL.md`,
-  `gemini` → `.gemini/commands/<name>.toml`, `codex` → `~/.codex/prompts/<name>.md`. The active
+  `gemini` → `.gemini/commands/<name>.toml`, `codex` → `.codex/skills/<name>/SKILL.md`. The active
   list comes from the `targets:` line in `.claude/skill-profile.md` (prompt the user if absent;
   the compiler falls back to `claude`). This is what makes a skill model-agnostic — author once,
   run under any model. The neutral arg token is `$ARGUMENTS`; the compiler maps it per agent
@@ -140,9 +140,10 @@ note in the report that hashes may be stale. Record which source you used.
    offer to record the choice in the profile (the compiler falls back to `claude` if unset). Then
    run `node scripts/compile-skill-targets.mjs --name <name>` (it reads the profile targets), or
    `--targets <list>` to override. It writes the native artifact per target and exits non-zero on
-   any emit failure — treat that as a hard gate: fix and re-run before locking. Codex emits to the
-   user-global `~/.codex/prompts/` (not version-controlled, deprecated upstream) — only when
-   `codex` is explicitly a target. Keep the list of `targets` you compiled with for the next step.
+   any emit failure — treat that as a hard gate: fix and re-run before locking. Codex emits a
+   repo-tracked skill folder under `.codex/skills/` so it can be reviewed, copied into
+   `~/.codex/skills`, or used by runners that support repo-local Codex skills. Keep the list of
+   `targets` you compiled with for the next step.
 8. **Record in the lockfile.** Only after a successful compile, create `.claude/skills.lock`
    (schema below) if absent and upsert `<name>` **atomically** with: the template `hash`; the
    `profileHash` when a `.claude/skill-profile.md` exists (so `update` can tell when the *profile*
@@ -187,7 +188,7 @@ note in the report that hashes may be stale. Record which source you used.
 Read the skill's `targets` from its `.claude/skills.lock` entry, then delete
 `.claude/commands/<name>.md`, its lock entry, and exactly the native artifacts for those targets:
 `claude` → `.claude/skills/<name>/` (dir), `gemini` → `.gemini/commands/<name>.toml`,
-`codex` → `~/.codex/prompts/<name>.md`. If the lock entry has no `targets` (an older install),
+`codex` → `.codex/skills/<name>/` (dir). If the lock entry has no `targets` (an older install),
 fall back to removing whichever of those three exist. Report what was removed.
 
 ## Lockfile schema (`.claude/skills.lock`)
@@ -245,7 +246,6 @@ fall back to removing whichever of those three exist. Report what was removed.
 - **Open/list ergonomics** — extend the `list` table columns (e.g. show descriptions)
   per repo preference.
 - **Default compile targets** — `scripts/compile-skill-targets.mjs` reads the `targets:` line
-  from `.claude/skill-profile.md`. Set it to the agents this repo drives (e.g. `claude, gemini`);
-  keep `codex` a per-machine opt-in (`--targets codex`) since it writes to the user-global
-  `~/.codex/prompts/` (not version-controlled, deprecated upstream). With no `targets:` line the
-  compiler falls back to `claude` only.
+  from `.claude/skill-profile.md`. Set it to the agents this repo drives (e.g.
+  `claude, gemini, codex` — all three emit version-controlled, repo-tracked artifacts). With no
+  `targets:` line the compiler falls back to `claude` only.

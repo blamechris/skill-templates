@@ -73,3 +73,6 @@ jobs:
               reg = json.load(f)
           print(f"build-index OK: valid JSON, {reg['skillCount']} skills.")
           PY
+
+      - name: compile-skill-targets unit tests
+        run: node assets/compile-skill-targets.test.mjs
