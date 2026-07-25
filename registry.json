@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "01903fb",
+  "generatedFromCommit": "6f335c0",
   "skillCount": 36,
   "skills": [
     {
@@ -218,7 +218,24 @@
       "name": "create-pr",
       "hash": "12b011f",
       "lines": 179,
-      "description": "Create a pull request with auto-detected issue closures and proper formatting."
+      "description": "Create a pull request with auto-detected issue closures and proper formatting.",
+      "guards": [
+        {
+          "label": "zero-attribution-rule",
+          "anyOf": [
+            "[Nn][Oo] attribution",
+            "[Zz]ero [Aa]ttribution",
+            "[Aa]ttribution is (prohibited|forbidden)"
+          ]
+        },
+        {
+          "label": "closes-tags-in-body",
+          "anyOf": [
+            "Closes tags go in the body",
+            "only auto-closes from the body"
+          ]
+        }
+      ]
     },
     {
       "name": "decompose-issue",
@@ -509,13 +526,13 @@
     },
     {
       "name": "skill-profile",
-      "hash": "8bc2550",
+      "hash": "ea888eb",
       "lines": 94,
       "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time."
     },
     {
       "name": "skill",
-      "hash": "f937026",
+      "hash": "ea888eb",
       "lines": 251,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs.",
       "guards": [
@@ -546,7 +563,7 @@
     },
     {
       "name": "smoke-form",
-      "hash": "8a8c45b",
+      "hash": "ea888eb",
       "lines": 233,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device."
     },
@@ -665,7 +682,7 @@
     },
     {
       "name": "tiered-delegation",
-      "hash": "01903fb",
+      "hash": "0389e93",
       "lines": 63,
       "description": "The cost-discipline constitution for multi-agent work: the **session's top model orchestrates; cheaper tiers execute**. Invoke it when a session is about to fan out subagents or workflows (audits, marathons, parallel implementation, large research) to load the delegation rules — who does what tier of work, how far down to push each task, and when a claim must be re-verified before it drives an action. It composes with the marathon machinery (`/prime-directive`, `/tackle-issues`, `/parallel-dev`) and with ad-hoc Workflow/Agent fan-outs alike."
     },
