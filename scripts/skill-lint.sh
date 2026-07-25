@@ -58,10 +58,11 @@ for i, ln in enumerate(lines, 1):
 #    prevent the very thing being checked for.
 #
 #    Two narrowings kill the false positive without weakening the gate:
-#      a. anchor to the start of the line (leading whitespace only). A real
-#         footer is never mid-sentence, never behind a "No " or a quote mark —
-#         which also subsumes the "skip lines quoting the string" heuristic,
-#         since an opening quote is not a footer.
+#      a. anchor to the start of the line's CONTENT — not column 0; see the
+#         note below the negation paragraph for what that means and why.
+#         A real footer is never mid-sentence, never behind a "No " or a
+#         quote mark — which also subsumes the "skip lines quoting the
+#         string" heuristic, since an opening quote is not a footer.
 #      b. require the trailer form to LOOK like a trailer: `Co-Authored-By:`
 #         followed by a value. The bare phrase ("no Co-Authored-By trailers")
 #         is description; the colon-plus-value form is attribution. Any
