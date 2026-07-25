@@ -114,6 +114,50 @@ expect dirty 'trailer crediting a non-Claude co-author (zero attribution, not ju
 expect dirty 'indented footer (leading whitespace is not cover)' -m 'attribution footer' \
   "$(skill_with '    🤖 Generated with [Claude Code](https://claude.com/claude-code)')"
 
+expect dirty 'indented footer, no emoji (whitespace tolerance of pattern 1)' -m 'attribution footer' \
+  "$(skill_with '    Generated with [Claude Code](https://claude.com/claude-code)')"
+
+expect dirty 'indented trailer, no emoji (whitespace tolerance of pattern 3)' -m 'attribution footer' \
+  "$(skill_with '  Co-Authored-By: Claude <noreply@anthropic.com>')"
+
+# These are markdown files: decoration is the normal way a footer arrives. An
+# anchor at column 0 would treat every one of these prefixes as cover. The
+# HTML-comment case matters most — every installed skill ENDS with one, so it is
+# the least suspicious place on the page to hide a footer.
+echo "attribution: decoration is not cover"
+
+expect dirty 'footer in a list item' -m 'attribution footer' \
+  "$(skill_with '- 🤖 Generated with [Claude Code](https://claude.com/claude-code)')"
+
+expect dirty 'footer in a blockquote' -m 'attribution footer' \
+  "$(skill_with '> Generated with Claude Code')"
+
+expect dirty 'footer inside an HTML comment' -m 'attribution footer' \
+  "$(skill_with '<!-- Generated with Claude Code -->')"
+
+expect dirty 'footer wrapped in emphasis' -m 'attribution footer' \
+  "$(skill_with '**Generated with Claude Code**')"
+
+expect dirty 'trailer in an ordered list item' -m 'attribution footer' \
+  "$(skill_with '1. Co-Authored-By: Claude <noreply@anthropic.com>')"
+
+expect dirty 'trailer in an ordered list item, paren form' -m 'attribution footer' \
+  "$(skill_with '1) Co-Authored-By: Some Bot <bot@example.com>')"
+
+expect dirty 'footer behind stacked decoration' -m 'attribution footer' \
+  "$(skill_with '   > - **🤖 Generated with Claude Code**')"
+
+expect dirty 'footer behind a non-robot emoji' -m 'attribution footer' \
+  "$(skill_with '✨ Generated with Claude')"
+
+# The flip side of the anchor: a quote mark is NOT skippable, because a footer
+# never opens with one and a line describing a footer quotes it.
+expect clean 'quoted mention behind prose stays clean' \
+  "$(skill_with 'The footer "Generated with Claude Code" is forbidden.')"
+
+expect clean 'single-quoted trailer mention stays clean' \
+  "$(skill_with "Do not write 'Co-Authored-By:' anywhere.")"
+
 echo "attribution: the check is scoped to the tail window"
 
 # 20 filler lines push the footer out of the last 15 — documents the scope so a

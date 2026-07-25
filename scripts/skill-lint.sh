@@ -71,13 +71,30 @@ for i, ln in enumerate(lines, 1):
 #    escape hatch. Scanning for negations ("no", "never") risks the opposite,
 #    worse failure — `\bno\b` matches inside `<no-reply@anthropic.com>`, which
 #    would silence a genuine trailer. Anchoring has no such false-negative edge.
+#    Anchor to the start of the line's CONTENT, not to column 0. These are
+#    markdown files, so a footer routinely arrives wearing decoration: a list
+#    bullet, a blockquote marker, emphasis, an HTML comment (the version stamp
+#    is one), an em-dash, an emoji. A column-0 anchor lets every one of those
+#    through — and `- 🤖 Generated with [Claude Code](…)` is simply the real
+#    footer inside a list.
+#
+#    The lead therefore skips any run of NON-WORD characters, plus an optional
+#    ordered-list marker (`1.` / `1)` — a digit is a word character, so it has
+#    to be named explicitly).
+#
+#    Quote marks are deliberately NOT skippable, and that is what keeps the
+#    prose case dead: a footer never opens with a quote, while a line describing
+#    one quotes it. Word characters are not skippable either, so "No
+#    Co-Authored-By" and `no "Generated with Claude"` stay unmatched — the
+#    phrase sits behind prose the anchor cannot cross.
+_LEAD = r'^[^\w"\']*(?:\d+[.)][^\w"\']*)?'
 attribution_res = (
     # 🤖 Generated with [Claude Code](…) — emoji optional, "claude" required.
-    re.compile(r'^[ \t]*(?:🤖[ \t]*)?generated with\b.*\bclaude', re.I),
+    re.compile(_LEAD + r'(?:🤖[ \t]*)?generated with\b.*\bclaude', re.I),
     # 🤖 <anything> generated … — the emoji alone is attribution decoration.
-    re.compile(r'^[ \t]*🤖.*\bgenerated\b', re.I),
+    re.compile(_LEAD + r'🤖.*\bgenerated\b', re.I),
     # Co-Authored-By: <value> — a real trailer, not the phrase.
-    re.compile(r'^[ \t]*co-authored-by:[ \t]*\S', re.I),
+    re.compile(_LEAD + r'co-authored-by:[ \t]*\S', re.I),
 )
 for ln in lines[-15:]:
     if any(r.search(ln) for r in attribution_res):
