@@ -9,7 +9,7 @@
 #      …Claude" / "🤖 …generated" / a real "Co-Authored-By: <value>" trailer.
 #      Prose that forbids those strings (create-pr's Critical Rules) is not a footer,
 #      so the match is line-anchored; see the note in check 2 below.
-#   3. a well-formed version stamp as the last line,
+#   3. a well-formed version stamp that IS the last line, nothing after it,
 #   4. every registry `guard` for the skill is satisfied (reads registry.json).
 #
 # Usage: scripts/skill-lint.sh <skill-name> <path/to/installed/skill.md> [registry.json]

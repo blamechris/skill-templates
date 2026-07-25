@@ -193,6 +193,8 @@ expect dirty 'footer riding the stamp line' -m 'version stamp' \
 expect dirty 'prose riding the stamp line' -m 'version stamp' \
   "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n%s and one more thing\n' "$STAMP")"
 
+# Guards the `.strip()` specifically, not the fullmatch: this case stays green on
+# a straight revert to `search` and goes red only if the strip is dropped.
 expect clean 'stamp with surrounding whitespace is still valid' \
   "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n   %s   \n' "$STAMP")"
 
