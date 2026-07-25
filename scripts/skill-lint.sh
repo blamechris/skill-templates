@@ -5,7 +5,10 @@
 # installing agent's self-checks. This restores a MECHANICAL gate the agent runs after
 # `skill add`, and that a consumer pre-commit hook or CI can run too. It checks:
 #   1. no residual {{CUSTOMIZE markers (outside backticked mentions),
-#   2. no attribution footer (Generated with Claude / Co-Authored-By: Claude in the tail),
+#   2. no attribution footer in the tail — a line that OPENS with "Generated with
+#      …Claude" / "🤖 …generated" / a real "Co-Authored-By: <value>" trailer.
+#      Prose that forbids those strings (create-pr's Critical Rules) is not a footer,
+#      so the match is line-anchored; see the note in check 2 below.
 #   3. a well-formed version stamp as the last line,
 #   4. every registry `guard` for the skill is satisfied (reads registry.json).
 #
@@ -40,14 +43,44 @@ for i, ln in enumerate(lines, 1):
             fails.append("residual {{CUSTOMIZE marker at line %d: %s" % (i, ln.strip()[:70]))
             break
 
-# 2) attribution footer in the last ~15 lines. Catches both the trailer
-#    ("Co-Authored-By: Claude …") and the Claude Code footer
-#    ("🤖 Generated with [Claude Code](…)"), anywhere on the line.
-attribution_re = re.compile(
-    r'(generated with[^\n]*claude|co-authored-by:[^\n]*claude|🤖[^\n]*generated)', re.I
+# 2) attribution footer in the last ~15 lines. Catches the git trailer
+#    ("Co-Authored-By: Claude <…>") and the Claude Code footer
+#    ("🤖 Generated with [Claude Code](…)").
+#
+#    A footer is a LINE, not a phrase — it opens its own line, at column 0, in a
+#    fixed form. Prose that FORBIDS those strings mentions them mid-sentence and
+#    quoted, e.g. create-pr's load-bearing first Critical Rule:
+#        1. **NO attribution** — No Co-Authored-By, no "Generated with Claude", …
+#    The old patterns matched anywhere on the line, so they flagged that
+#    prohibition as the violation. `skill add` strips the trailing
+#    "## Customization Points" section, which pulls the rule inside this 15-line
+#    tail window — so every consumer repo failed on the rule that exists to
+#    prevent the very thing being checked for.
+#
+#    Two narrowings kill the false positive without weakening the gate:
+#      a. anchor to the start of the line (leading whitespace only). A real
+#         footer is never mid-sentence, never behind a "No " or a quote mark —
+#         which also subsumes the "skip lines quoting the string" heuristic,
+#         since an opening quote is not a footer.
+#      b. require the trailer form to LOOK like a trailer: `Co-Authored-By:`
+#         followed by a value. The bare phrase ("no Co-Authored-By trailers")
+#         is description; the colon-plus-value form is attribution. Any
+#         co-author counts, not just Claude — the policy is zero attribution.
+#
+#    Deliberately NOT added: a keyword-based "this line is describing a footer"
+#    escape hatch. Scanning for negations ("no", "never") risks the opposite,
+#    worse failure — `\bno\b` matches inside `<no-reply@anthropic.com>`, which
+#    would silence a genuine trailer. Anchoring has no such false-negative edge.
+attribution_res = (
+    # 🤖 Generated with [Claude Code](…) — emoji optional, "claude" required.
+    re.compile(r'^[ \t]*(?:🤖[ \t]*)?generated with\b.*\bclaude', re.I),
+    # 🤖 <anything> generated … — the emoji alone is attribution decoration.
+    re.compile(r'^[ \t]*🤖.*\bgenerated\b', re.I),
+    # Co-Authored-By: <value> — a real trailer, not the phrase.
+    re.compile(r'^[ \t]*co-authored-by:[ \t]*\S', re.I),
 )
 for ln in lines[-15:]:
-    if attribution_re.search(ln):
+    if any(r.search(ln) for r in attribution_res):
         fails.append(f"attribution footer: {ln.strip()[:70]}")
 
 # 3) well-formed version stamp as the last non-empty line, naming this skill
