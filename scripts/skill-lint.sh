@@ -9,7 +9,7 @@
 #      …Claude" / "🤖 …generated" / a real "Co-Authored-By: <value>" trailer.
 #      Prose that forbids those strings (create-pr's Critical Rules) is not a footer,
 #      so the match is line-anchored; see the note in check 2 below.
-#   3. a well-formed version stamp that IS the last line, nothing after it,
+#   3. a well-formed version stamp alone on the last non-blank line,
 #   4. every registry `guard` for the skill is satisfied (reads registry.json).
 #
 # Usage: scripts/skill-lint.sh <skill-name> <path/to/installed/skill.md> [registry.json]
@@ -116,8 +116,9 @@ nonempty = [l for l in lines if l.strip()]
 m = stamp_re.fullmatch(nonempty[-1].strip()) if nonempty else None
 if not m:
     fails.append("missing/malformed version stamp "
-                 "(expected '<!-- skill-templates: <name> <hash> <date> -->' as the last line, "
-                 "with nothing after it)")
+                 "(expected '<!-- skill-templates: <name> <hash> <date> -->' as the last "
+                 "non-blank line, alone on it — trailing blank lines and surrounding "
+                 "whitespace are fine, anything else on the line is not)")
 elif m.group(1) != name:
     fails.append(f"stamp names '{m.group(1)}', expected '{name}'")
 
