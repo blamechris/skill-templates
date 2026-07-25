@@ -9,7 +9,7 @@
 #      …Claude" / "🤖 …generated" / a real "Co-Authored-By: <value>" trailer.
 #      Prose that forbids those strings (create-pr's Critical Rules) is not a footer,
 #      so the match is line-anchored; see the note in check 2 below.
-#   3. a well-formed version stamp as the last line,
+#   3. a well-formed version stamp alone on the last non-blank line,
 #   4. every registry `guard` for the skill is satisfied (reads registry.json).
 #
 # Usage: scripts/skill-lint.sh <skill-name> <path/to/installed/skill.md> [registry.json]
@@ -58,10 +58,11 @@ for i, ln in enumerate(lines, 1):
 #    prevent the very thing being checked for.
 #
 #    Two narrowings kill the false positive without weakening the gate:
-#      a. anchor to the start of the line (leading whitespace only). A real
-#         footer is never mid-sentence, never behind a "No " or a quote mark —
-#         which also subsumes the "skip lines quoting the string" heuristic,
-#         since an opening quote is not a footer.
+#      a. anchor to the start of the line's CONTENT — not column 0; see the
+#         note below the negation paragraph for what that means and why.
+#         A real footer is never mid-sentence, never behind a "No " or a
+#         quote mark — which also subsumes the "skip lines quoting the
+#         string" heuristic, since an opening quote is not a footer.
 #      b. require the trailer form to LOOK like a trailer: `Co-Authored-By:`
 #         followed by a value. The bare phrase ("no Co-Authored-By trailers")
 #         is description; the colon-plus-value form is attribution. Any
@@ -105,10 +106,19 @@ stamp_re = re.compile(
     r'<!--\s*skill-templates:\s+(\S+)\s+([0-9a-f]{7,40})\s+(\d{4}-\d{2}-\d{2})\s*-->'
 )
 nonempty = [l for l in lines if l.strip()]
-m = stamp_re.search(nonempty[-1]) if nonempty else None
+# fullmatch, not search: the stamp must BE the last line, not merely appear in
+# it. With a substring match, anything riding along after the stamp was invisible
+# to every check — check 2 is line-anchored, so a footer sharing the stamp's line
+# does not start its line and is skipped, while check 3 was satisfied by finding
+# the stamp somewhere in it. Both `… --> Co-Authored-By: Claude <…>` and
+# `… --> 🤖 Generated with Claude Code` linted clean before this. Closing it here
+# rather than loosening check 2's anchor rejects trailing junk of every kind.
+m = stamp_re.fullmatch(nonempty[-1].strip()) if nonempty else None
 if not m:
     fails.append("missing/malformed version stamp "
-                 "(expected '<!-- skill-templates: <name> <hash> <date> -->' as the last line)")
+                 "(expected '<!-- skill-templates: <name> <hash> <date> -->' as the last "
+                 "non-blank line, alone on it — trailing blank lines and surrounding "
+                 "whitespace are fine, anything else on the line is not)")
 elif m.group(1) != name:
     fails.append(f"stamp names '{m.group(1)}', expected '{name}'")
 

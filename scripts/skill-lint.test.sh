@@ -180,6 +180,24 @@ expect dirty 'missing version stamp' -m 'version stamp' \
 expect dirty 'stamp naming the wrong skill' -m "expected 'create-pr'" \
   "$(skill_with 'All good.')" create-pr
 
+# The stamp must BE the last line, not merely appear in it. A footer sharing the
+# stamp's line is skipped by check 2 (it does not start its line) and used to
+# satisfy check 3 (which searched rather than matched), so it was invisible to
+# the whole linter.
+expect dirty 'trailer riding the stamp line' -m 'version stamp' \
+  "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n%s Co-Authored-By: Claude <noreply@anthropic.com>\n' "$STAMP")"
+
+expect dirty 'footer riding the stamp line' -m 'version stamp' \
+  "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n%s 🤖 Generated with Claude Code\n' "$STAMP")"
+
+expect dirty 'prose riding the stamp line' -m 'version stamp' \
+  "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n%s and one more thing\n' "$STAMP")"
+
+# Guards the `.strip()` specifically, not the fullmatch: this case stays green on
+# a straight revert to `search` and goes red only if the strip is dropped.
+expect clean 'stamp with surrounding whitespace is still valid' \
+  "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n   %s   \n' "$STAMP")"
+
 expect dirty 'guard miss when a load-bearing section is stripped' -m 'guard miss' \
   "$(printf '# /demo\n\nDoes a thing.\n\n## Rules\n\nCustomization dropped the marker.\n%s' "$STAMP")"
 
