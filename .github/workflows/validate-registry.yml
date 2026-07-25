@@ -76,3 +76,10 @@ jobs:
 
       - name: compile-skill-targets unit tests
         run: node assets/compile-skill-targets.test.mjs
+
+      - name: skill-lint regression tests
+        # Covers the attribution check's line-anchored semantics — prose that
+        # FORBIDS a footer (create-pr's first Critical Rule) must not be mistaken
+        # for one — plus an end-to-end lint of generic/create-pr.md stripped the
+        # way `skill add` strips it.
+        run: ./scripts/skill-lint.test.sh
