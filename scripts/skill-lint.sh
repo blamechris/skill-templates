@@ -105,10 +105,18 @@ stamp_re = re.compile(
     r'<!--\s*skill-templates:\s+(\S+)\s+([0-9a-f]{7,40})\s+(\d{4}-\d{2}-\d{2})\s*-->'
 )
 nonempty = [l for l in lines if l.strip()]
-m = stamp_re.search(nonempty[-1]) if nonempty else None
+# fullmatch, not search: the stamp must BE the last line, not merely appear in
+# it. With a substring match, anything riding along after the stamp was invisible
+# to every check — check 2 is line-anchored, so a footer sharing the stamp's line
+# does not start its line and is skipped, while check 3 was satisfied by finding
+# the stamp somewhere in it. Both `… --> Co-Authored-By: Claude <…>` and
+# `… --> 🤖 Generated with Claude Code` linted clean before this. Closing it here
+# rather than loosening check 2's anchor rejects trailing junk of every kind.
+m = stamp_re.fullmatch(nonempty[-1].strip()) if nonempty else None
 if not m:
     fails.append("missing/malformed version stamp "
-                 "(expected '<!-- skill-templates: <name> <hash> <date> -->' as the last line)")
+                 "(expected '<!-- skill-templates: <name> <hash> <date> -->' as the last line, "
+                 "with nothing after it)")
 elif m.group(1) != name:
     fails.append(f"stamp names '{m.group(1)}', expected '{name}'")
 
