@@ -161,15 +161,15 @@
     {
       "label": "zero-attribution-rule",
       "anyOf": [
-        "NO attribution",
-        "Zero Attribution Policy"
+        "[Nn][Oo] attribution",
+        "[Zz]ero [Aa]ttribution",
+        "[Aa]ttribution is (prohibited|forbidden)"
       ]
     },
     {
       "label": "closes-tags-in-body",
       "anyOf": [
         "Closes tags go in the body",
-        "Closes #N.*body",
         "only auto-closes from the body"
       ]
     }
