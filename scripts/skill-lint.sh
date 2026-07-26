@@ -12,6 +12,12 @@
 #   3. a well-formed version stamp alone on the last non-blank line,
 #   4. every registry `guard` for the skill is satisfied (reads registry.json).
 #
+# Checks 1-2 need no registry, so they also run for a REPO-ONLY skill (one kept in
+# a repo's .claude/commands and absent from the index). Checks 3-4 cannot: a stamp
+# is proof of a registry install and a guard comes from the index. Such a file is
+# reported on what could be checked and exits 2 — never 0, so "not verified" can
+# never be read as "passed".
+#
 # Usage: scripts/skill-lint.sh <skill-name> <path/to/installed/skill.md> [registry.json]
 # Exit:  0 clean · 1 lint failures (printed) · 2 usage/environment error
 set -euo pipefail
@@ -101,7 +107,12 @@ for ln in lines[-15:]:
     if any(r.search(ln) for r in attribution_res):
         fails.append(f"attribution footer: {ln.strip()[:70]}")
 
-# 3) well-formed version stamp as the last non-empty line, naming this skill
+# 3) well-formed version stamp as the last non-empty line, naming this skill.
+#    Collected separately from checks 1-2: the stamp is proof of a registry
+#    INSTALL, so a repo-only skill has none by definition and demanding one would
+#    fail every such file. Merged into `fails` below only once the skill is known
+#    to be a registry skill.
+stamp_fails = []
 stamp_re = re.compile(
     r'<!--\s*skill-templates:\s+(\S+)\s+([0-9a-f]{7,40})\s+(\d{4}-\d{2}-\d{2})\s*-->'
 )
@@ -115,12 +126,20 @@ nonempty = [l for l in lines if l.strip()]
 # rather than loosening check 2's anchor rejects trailing junk of every kind.
 m = stamp_re.fullmatch(nonempty[-1].strip()) if nonempty else None
 if not m:
-    fails.append("missing/malformed version stamp "
+    # Show the line, escaped. `.strip()` removes Unicode whitespace, so the
+    # survivors that fail here are the ones that render as nothing — a zero-width
+    # space or a BOM mid-line leaves a stamp that looks pixel-identical to a valid
+    # one, and a message without the bytes is undebuggable.
+    saw = repr(nonempty[-1]) if nonempty else "(no non-blank lines)"
+    stamp_fails.append("missing/malformed version stamp "
                  "(expected '<!-- skill-templates: <name> <hash> <date> -->' as the last "
                  "non-blank line, alone on it — trailing blank lines and surrounding "
-                 "whitespace are fine, anything else on the line is not)")
+                 f"whitespace are fine, anything else on the line is not). Last line was: {saw}")
 elif m.group(1) != name:
-    fails.append(f"stamp names '{m.group(1)}', expected '{name}'")
+    # repr() here too: an invisible character inside the NAME renders the two
+    # strings identically, so a bare interpolation reads "stamp names 'demo',
+    # expected 'demo'" and tells the reader nothing.
+    stamp_fails.append(f"stamp names {m.group(1)!r}, expected {name!r}")
 
 # 4) registry guards — each guard passes if ANY of its anyOf regexes matches.
 #    A missing registry or an unknown skill is an ENVIRONMENT error (exit 2), not a
@@ -135,9 +154,29 @@ except FileNotFoundError:
 
 entry = next((s for s in reg.get("skills", []) if s.get("name") == name), None)
 if entry is None:
+    # Repo-only skills (CLAUDE.md names `commit`, `qa-update`, `tdd-feature` …)
+    # are maintained directly in a repo's .claude/commands and are legitimately
+    # absent from the index. Checks 1-2 are registry-independent and apply to
+    # them perfectly well, so report those before bailing out (check 3 does NOT:
+    # a stamp is proof of a registry install, so requiring one would fail every
+    # repo-only file) — `commit.md` is a
+    # skill about writing commits, which is exactly where an attribution footer
+    # would do damage, and it was the one class the linter refused to inspect.
+    #
+    # The exit code still distinguishes "found problems" (1) from "could not
+    # verify guards" (2), so nothing here can green-light an unchecked skill.
     print(f"ERROR: '{name}' is not in the registry index ({reg_path}) — "
           f"stale index, or not a registry skill. Cannot verify guards.", file=sys.stderr)
+    if fails:
+        print(f"✗ {name}: {len(fails)} issue(s) from the registry-independent checks "
+              f"(markers, attribution); guards and version stamp NOT verified")
+        for f in fails:
+            print(f"  - {f}")
+        sys.exit(1)
+    print(f"~ {name}: clean on markers and attribution; "
+          f"guards and version stamp NOT verified (not a registry skill)")
     sys.exit(2)
+fails.extend(stamp_fails)   # a registry skill: the stamp is required after all
 guards = entry.get("guards", [])
 
 for g in guards:
