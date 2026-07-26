@@ -201,6 +201,33 @@ expect clean 'stamp with surrounding whitespace is still valid' \
 expect dirty 'guard miss when a load-bearing section is stripped' -m 'guard miss' \
   "$(printf '# /demo\n\nDoes a thing.\n\n## Rules\n\nCustomization dropped the marker.\n%s' "$STAMP")"
 
+# A stamp with an invisible character renders pixel-identical to a valid one, so
+# the failure has to show the bytes or it cannot be debugged.
+expect dirty 'stamp failure escapes the offending line' -m '\u200b' \
+  "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n%s\xe2\x80\x8b' "$STAMP")"
+
+echo "repo-only skills: registry-independent checks still report"
+
+# Skills maintained directly in a repo (commit, qa-update, tdd-feature …) are
+# legitimately absent from the index. Checks 1-3 do not need the registry and
+# must still run for them; only the guard verdict is unavailable.
+expect dirty 'unregistered skill still reports an attribution footer' \
+  -m 'guards and version stamp NOT verified' \
+  "$(printf '# /repo-only-demo\n\nDoes a thing.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \
+  repo-only-demo
+
+expect dirty 'unregistered skill still reports a residual marker' \
+  -m 'residual {{CUSTOMIZE' \
+  "$(printf '# /repo-only-demo\n\nRepo test command: {{CUSTOMIZE: test command}}\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \
+  repo-only-demo
+
+# Clean-but-unverifiable stays non-zero (exit 2): "guards not checked" must never
+# read as "guards passed".
+expect dirty 'clean unregistered skill is reported as unverified, not clean' \
+  -m 'clean on markers and attribution' \
+  "$(printf '# /repo-only-demo\n\nDoes a thing.\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \
+  repo-only-demo
+
 echo "end-to-end: the real template, stripped the way \`skill add\` strips it"
 
 # Faithful reproduction of the install path: remove the trailing
