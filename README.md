@@ -39,8 +39,9 @@ In any managed repo, run `/skill`:
   record in `.claude/skills.lock`. Consumers can run the same linter in a pre-commit hook
   or CI — note its three outcomes: **0** clean, **1** real findings, **2** not fully
   verifiable. A repo-only skill (kept in `.claude/commands/` and absent from the index)
-  legitimately exits **2**: markers and attribution are checked, the version stamp and
-  guards cannot be. A hook linting a whole directory should fail on 1 and tolerate 2.
+  legitimately exits **2**. Do not tolerate 2 blindly, though: a stale index turns a real
+  `guard miss` into a clean-looking exit 2. Tolerate it only for files with no version
+  stamp — see the exit-code guidance in `generic/skill.md` step 6.
 - **`skill list`** — show installed skills and their registry status.
 - **`skill outdated`** — flag drift: **version** (template hash moved), **profile**
   (`.claude/skill-profile.md` changed), or **corruption** (a `guards` check fails).

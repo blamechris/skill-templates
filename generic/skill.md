@@ -129,17 +129,35 @@ note in the report that hashes may be stale. Record which source you used.
    issues and re-lint before recording the lockfile — do not lock a skill that fails lint.
    Consumers can run the same linter as a pre-commit hook or in CI.
 
-   The linter has three outcomes, and only the first two apply to `skill add`:
-   - **exit 0** — clean, all four checks passed.
+   The linter has three outcomes. **Key on the exit code, not on the output
+   markers** — `ERROR:` is printed for an unknown skill *and* then followed by
+   findings at exit 1, and a usage error exits 2 printing no marker at all. Only
+   `~` is exclusive to exit 2.
+   - **exit 0** (`✓`) — clean, all four checks passed.
    - **exit 1** (`✗`) — real findings. Fix and re-lint; never lock.
-   - **exit 2** (`~` or `ERROR:`) — could not be fully verified. For a skill absent
-     from the index this is the *expected* result: markers and attribution were
-     checked and passed, the version stamp and guards could not be (a stamp is
-     proof of a registry install, a guard comes from the index). A skill you just
-     ran `add` on is in the index by definition, so exit 2 there means a stale
-     index or a wrong name — treat it as a failure. A pre-commit hook that lints
-     a whole `.claude/commands/` directory, however, will hit exit 2 legitimately
-     on every repo-only skill and should accept it while still failing on 1.
+   - **exit 2** — could not be fully verified. Five causes, and only one is benign:
+     unknown skill (the `~` line), plus missing registry file, missing `python3`,
+     unreadable skill file, and usage error. The last four are environment
+     breakage.
+
+   For `skill add`, exit 2 is always a failure: `add` stops before writing if the
+   name is absent from the index, so by lint time the skill is in the index by
+   construction — exit 2 there means a stale index, a wrong name, or a broken
+   environment.
+
+   For a **pre-commit hook or CI** linting a whole `.claude/commands/` directory,
+   exit 2 is legitimate for repo-only skills but must not be tolerated blindly:
+   a *stale index* turns what should be `✗ guard miss` (exit 1) into `~ clean`
+   (exit 2), so blanket tolerance green-lights exactly the corruption drift guards
+   exist to catch. Tolerate exit 2 only for a file with **no version stamp** — a
+   stamp is proof of a registry install, so a stamped file that the index does not
+   know about is a real problem:
+
+   ```bash
+   scripts/skill-lint.sh "$name" "$file" ; rc=$?
+   if [ "$rc" -eq 1 ]; then exit 1; fi
+   if [ "$rc" -eq 2 ] && grep -q '^<!-- skill-templates: ' "$file"; then exit 1; fi
+   ```
 7. **Compile to native targets.** Ensure the compiler exists in this repo (create `scripts/` if
    absent). If `scripts/compile-skill-targets.mjs` is missing — or you're running `update`, so it
    stays current with the registry — (re)fetch it: from a local clone,
