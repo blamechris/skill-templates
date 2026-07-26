@@ -41,7 +41,16 @@ In any managed repo, run `/skill`:
   verifiable. A repo-only skill (kept in `.claude/commands/` and absent from the index)
   legitimately exits **2**. Do not tolerate 2 blindly, though: a stale index turns a real
   `guard miss` into a clean-looking exit 2. Tolerate it only for files with no version
-  stamp — see the exit-code guidance in `generic/skill.md` step 6.
+  stamp, since a stamp proves a registry install:
+
+  ```bash
+  scripts/skill-lint.sh "$name" "$file" ; rc=$?
+  [ "$rc" -eq 1 ] && exit 1                                              # real findings
+  [ "$rc" -eq 2 ] && grep -q '^<!-- skill-templates: ' "$file" && exit 1 # stamped but unknown
+  ```
+
+  Key on the exit code, not the output markers — `ERROR:` also appears on exit 1, and a
+  usage error exits 2 printing none. Full guidance in `generic/skill.md` step 6.
 - **`skill list`** — show installed skills and their registry status.
 - **`skill outdated`** — flag drift: **version** (template hash moved), **profile**
   (`.claude/skill-profile.md` changed), or **corruption** (a `guards` check fails).
