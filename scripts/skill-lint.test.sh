@@ -221,7 +221,9 @@ echo "repo-only skills: registry-independent checks still report"
 
 # Skills maintained directly in a repo (commit, qa-update, tdd-feature …) are
 # legitimately absent from the index. Checks 1-2 do not need the registry and
-# must still run for them; only the guard verdict is unavailable.
+# must still run for them. The stamp and guard verdicts are both
+# unavailable: a stamp is proof of a registry install, so a repo-only file has
+# none by definition.
 expect dirty 'unregistered skill still reports an attribution footer' \
   -m 'guards and version stamp NOT verified' \
   "$(printf '# /repo-only-demo\n\nDoes a thing.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \

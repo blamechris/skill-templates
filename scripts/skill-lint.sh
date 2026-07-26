@@ -130,7 +130,7 @@ if not m:
     # survivors that fail here are the ones that render as nothing — a zero-width
     # space or a BOM mid-line leaves a stamp that looks pixel-identical to a valid
     # one, and a message without the bytes is undebuggable.
-    saw = repr(nonempty[-1]) if nonempty else "(file is empty)"
+    saw = repr(nonempty[-1]) if nonempty else "(no non-blank lines)"
     stamp_fails.append("missing/malformed version stamp "
                  "(expected '<!-- skill-templates: <name> <hash> <date> -->' as the last "
                  "non-blank line, alone on it — trailing blank lines and surrounding "
