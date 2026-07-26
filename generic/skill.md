@@ -128,6 +128,18 @@ note in the report that hashes may be stale. Record which source you used.
    (where `$REG` is the resolved registry clone). If it exits non-zero, fix the reported
    issues and re-lint before recording the lockfile — do not lock a skill that fails lint.
    Consumers can run the same linter as a pre-commit hook or in CI.
+
+   The linter has three outcomes, and only the first two apply to `skill add`:
+   - **exit 0** — clean, all four checks passed.
+   - **exit 1** (`✗`) — real findings. Fix and re-lint; never lock.
+   - **exit 2** (`~` or `ERROR:`) — could not be fully verified. For a skill absent
+     from the index this is the *expected* result: markers and attribution were
+     checked and passed, the version stamp and guards could not be (a stamp is
+     proof of a registry install, a guard comes from the index). A skill you just
+     ran `add` on is in the index by definition, so exit 2 there means a stale
+     index or a wrong name — treat it as a failure. A pre-commit hook that lints
+     a whole `.claude/commands/` directory, however, will hit exit 2 legitimately
+     on every repo-only skill and should accept it while still failing on 1.
 7. **Compile to native targets.** Ensure the compiler exists in this repo (create `scripts/` if
    absent). If `scripts/compile-skill-targets.mjs` is missing — or you're running `update`, so it
    stays current with the registry — (re)fetch it: from a local clone,
