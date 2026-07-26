@@ -1,0 +1,12 @@
+{
+  "registry": "blamechris/skill-templates",
+  "skills": {
+    "prime-directive": {
+      "hash": "d318c59",
+      "installed": "2026-07-26",
+      "targets": [
+        "claude"
+      ]
+    }
+  }
+}
