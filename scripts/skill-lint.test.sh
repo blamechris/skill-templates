@@ -42,9 +42,15 @@ PASS=0; FAIL=0
 # expect <clean|dirty> <label> <body...>  — body is written as the skill file.
 # For "dirty", an optional -m <substring> asserts the reported reason.
 expect() {
-  local want="$1" label="$2" want_msg=""
+  local want="$1" label="$2" want_msg="" want_rc=""
   shift 2
-  if [ "${1:-}" = "-m" ]; then want_msg="$2"; shift 2; fi
+  while :; do
+    case "${1:-}" in
+      -m) want_msg="$2"; shift 2 ;;
+      -rc) want_rc="$2"; shift 2 ;;   # assert the EXACT code: 1 (findings) vs 2 (unverifiable)
+      *) break ;;
+    esac
+  done
   local body="$1" skill="${2:-demo}"
   local f="$TMP/case.md"
   printf '%s\n' "$body" > "$f"
@@ -53,6 +59,11 @@ expect() {
   out="$($LINT "$skill" "$f" "$TMP/registry.json" 2>&1)"; rc=$?
 
   local got="clean"; [ "$rc" -ne 0 ] && got="dirty"
+  if [ -n "$want_rc" ] && [ "$rc" -ne "$want_rc" ]; then
+    printf '  FAIL - %s\n    wanted exit %s, got %s:\n%s\n' \
+      "$label" "$want_rc" "$rc" "$(printf '%s\n' "$out" | sed 's/^/      /')"
+    FAIL=$((FAIL + 1)); return
+  fi
   if [ "$got" != "$want" ]; then
     printf '  FAIL - %s\n    wanted %s, got %s (rc=%d):\n%s\n' \
       "$label" "$want" "$got" "$rc" "$(printf '%s\n' "$out" | sed 's/^/      /')"
@@ -209,7 +220,7 @@ expect dirty 'stamp failure escapes the offending line' -m '\u200b' \
 echo "repo-only skills: registry-independent checks still report"
 
 # Skills maintained directly in a repo (commit, qa-update, tdd-feature …) are
-# legitimately absent from the index. Checks 1-3 do not need the registry and
+# legitimately absent from the index. Checks 1-2 do not need the registry and
 # must still run for them; only the guard verdict is unavailable.
 expect dirty 'unregistered skill still reports an attribution footer' \
   -m 'guards and version stamp NOT verified' \
@@ -224,9 +235,29 @@ expect dirty 'unregistered skill still reports a residual marker' \
 # Clean-but-unverifiable stays non-zero (exit 2): "guards not checked" must never
 # read as "guards passed".
 expect dirty 'clean unregistered skill is reported as unverified, not clean' \
-  -m 'clean on markers and attribution' \
+  -m 'clean on markers and attribution' -rc 2 \
   "$(printf '# /repo-only-demo\n\nDoes a thing.\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \
   repo-only-demo
+
+# The realistic shape: a repo-only skill has NO version stamp, because it was
+# never installed from the registry. None of the 9 on this machine has one. This
+# is the case that pins the decision to skip check 3 for unregistered skills —
+# without it, merging stamp findings before the registry read passes the suite
+# while failing every real repo-only file.
+expect dirty 'unstamped repo-only skill is unverified, NOT a stamp failure' \
+  -m 'clean on markers and attribution' -rc 2 \
+  "$(printf '# /repo-only-demo\n\nDoes a thing.\n\n## Usage\n\nRun it.')" \
+  repo-only-demo
+
+expect dirty 'unstamped repo-only skill still reports a real footer' \
+  -m 'attribution footer' -rc 1 \
+  "$(printf '# /repo-only-demo\n\nDoes a thing.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)')" \
+  repo-only-demo
+
+# An invisible character inside the stamp NAME hits the mismatch branch, which
+# must escape too or it reads "stamp names 'demo', expected 'demo'".
+expect dirty 'stamp name mismatch escapes both sides' -m '\u200b' \
+  "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n<!-- skill-templates: de\xe2\x80\x8bmo 1234abc 2026-06-03 -->')"
 
 echo "end-to-end: the real template, stripped the way \`skill add\` strips it"
 

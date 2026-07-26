@@ -136,7 +136,10 @@ if not m:
                  "non-blank line, alone on it — trailing blank lines and surrounding "
                  f"whitespace are fine, anything else on the line is not). Last line was: {saw}")
 elif m.group(1) != name:
-    stamp_fails.append(f"stamp names '{m.group(1)}', expected '{name}'")
+    # repr() here too: an invisible character inside the NAME renders the two
+    # strings identically, so a bare interpolation reads "stamp names 'demo',
+    # expected 'demo'" and tells the reader nothing.
+    stamp_fails.append(f"stamp names {m.group(1)!r}, expected {name!r}")
 
 # 4) registry guards — each guard passes if ANY of its anyOf regexes matches.
 #    A missing registry or an unknown skill is an ENVIRONMENT error (exit 2), not a
@@ -153,8 +156,10 @@ entry = next((s for s in reg.get("skills", []) if s.get("name") == name), None)
 if entry is None:
     # Repo-only skills (CLAUDE.md names `commit`, `qa-update`, `tdd-feature` …)
     # are maintained directly in a repo's .claude/commands and are legitimately
-    # absent from the index. Checks 1-3 are registry-independent and apply to
-    # them perfectly well, so report those before bailing out — `commit.md` is a
+    # absent from the index. Checks 1-2 are registry-independent and apply to
+    # them perfectly well, so report those before bailing out (check 3 does NOT:
+    # a stamp is proof of a registry install, so requiring one would fail every
+    # repo-only file) — `commit.md` is a
     # skill about writing commits, which is exactly where an attribution footer
     # would do damage, and it was the one class the linter refused to inspect.
     #
