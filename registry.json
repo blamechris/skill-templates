@@ -1,12 +1,12 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "e0b5e48",
-  "skillCount": 36,
+  "generatedFromCommit": "5dba3ce",
+  "skillCount": 37,
   "skills": [
     {
       "name": "agent-review",
-      "hash": "a10ef75",
-      "lines": 202,
+      "hash": "5dba3ce",
+      "lines": 204,
       "description": "Launch an expert code reviewer agent with full project context.",
       "guards": [
         {
@@ -307,6 +307,74 @@
           "anyOf": [
             "Closes tags go in the body",
             "only auto-closes from the body"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "decide",
+      "hash": "5dba3ce",
+      "lines": 133,
+      "description": "A decision protocol for an agent that thinks it is blocked. Most apparent blocks are not blocks: they are questions the repo already answers, or cheap reversible calls the agent is entitled to make and record. The few that are real deserve a structured question carrying options and a recommendation — not a paragraph of prose that hands the problem back and waits. This skill routes any pending decision down a fixed ladder, and dictates the shape of the ask when escalation is genuinely warranted.",
+      "guards": [
+        {
+          "label": "ladder-is-ordered",
+          "anyOf": [
+            "[Rr]un the rungs \\*\\*in order\\*\\*",
+            "rungs?\\b[^\\n]*\\bin order\\b",
+            "stop at the first[^\\n]*(rung|one that resolves)",
+            "surviv\\w+ rungs 1 and 2"
+          ]
+        },
+        {
+          "label": "rung1-answer-from-repo",
+          "anyOf": [
+            "[Ss]earch before (you )?escalat",
+            "already answered by[^\\n]*(artifact|repo|code)",
+            "git log -S"
+          ]
+        },
+        {
+          "label": "rung2-decide-and-record",
+          "anyOf": [
+            "undo it in a minute",
+            "cheap and reversible[^\\n]*(yours|your call|decide)",
+            "[Ss]tate the assumption",
+            "[Ww]rite it down"
+          ]
+        },
+        {
+          "label": "rung3-escalation-threshold",
+          "anyOf": [
+            "[Ee]scalate only if at least one",
+            "[Dd]ivergent deliverable",
+            "[Aa]sking is not free",
+            "costs the user a context switch"
+          ]
+        },
+        {
+          "label": "rung4-ask-user-question-tool",
+          "anyOf": [
+            "AskUserQuestion",
+            "[Nn]ever prose",
+            "structured question is answered"
+          ]
+        },
+        {
+          "label": "rung4-recommendation-first",
+          "anyOf": [
+            "[Ll]ead with your recommendation",
+            "[Ff]irst option is the one you would",
+            "labell?ed as the recommendation"
+          ]
+        },
+        {
+          "label": "rung5-never-idle",
+          "anyOf": [
+            "block on one thread is not a block",
+            "[Kk]eep going on everything else",
+            "[Ss]plit the work",
+            "entire content is a question"
           ]
         }
       ]
@@ -676,7 +744,7 @@
     },
     {
       "name": "prime-directive",
-      "hash": "d318c59",
+      "hash": "5dba3ce",
       "lines": 102,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
