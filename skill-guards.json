@@ -118,6 +118,54 @@
       ]
     }
   ],
+  "changelog": [
+    {
+      "label": "idempotent-version-section",
+      "anyOf": [
+        "[Ii]dempotent",
+        "[Rr]epeatable",
+        "replace that version's section",
+        "not append a duplicate",
+        "in place instead of adding"
+      ]
+    },
+    {
+      "label": "no-invented-history",
+      "anyOf": [
+        "invent history",
+        "trace to a real",
+        "fabricat",
+        "made-up entries"
+      ]
+    },
+    {
+      "label": "date-from-environment",
+      "anyOf": [
+        "take it from the environment",
+        "do not invent (one|a date)",
+        "today's date[^\\n]*environment"
+      ]
+    },
+    {
+      "label": "no-attribution",
+      "anyOf": [
+        "[Nn][Oo] (AI )?attribution",
+        "[Zz]ero[- ][Aa]ttribution",
+        "[Aa]ttribution [Pp]olicy",
+        "[Ss]ole author",
+        "AI/agent mentions"
+      ]
+    },
+    {
+      "label": "stdout-mode-writes-nothing",
+      "anyOf": [
+        "write nothing",
+        "nothing is written",
+        "print to stdout only",
+        "leave the file untouched"
+      ]
+    }
+  ],
   "check-pr": [
     {
       "label": "idempotency",
@@ -157,6 +205,30 @@
       ]
     }
   ],
+  "create-issue": [
+    {
+      "label": "duplicate-check",
+      "anyOf": [
+        "[Cc]heck for [Dd]uplicates",
+        "[Ss]earch[^\\n]*duplicat",
+        "duplicate issues"
+      ]
+    },
+    {
+      "label": "acceptance-criteria-required",
+      "anyOf": [
+        "[Aa]cceptance [Cc]riteria"
+      ]
+    },
+    {
+      "label": "source-linkage",
+      "anyOf": [
+        "\\*\\*[Ll]ink to source\\*\\*",
+        "PR number and comment",
+        "[Ll]ink back to the source"
+      ]
+    }
+  ],
   "create-pr": [
     {
       "label": "zero-attribution-rule",
@@ -171,6 +243,161 @@
       "anyOf": [
         "Closes tags go in the body",
         "only auto-closes from the body"
+      ]
+    }
+  ],
+  "decompose-issue": [
+    {
+      "label": "confirmation-gate",
+      "anyOf": [
+        "[Cc]onfirmation gate is mandatory",
+        "[Nn]ever create sub-issues without explicit user approval",
+        "pauses for user confirmation"
+      ]
+    },
+    {
+      "label": "prior-decomposition-guard",
+      "anyOf": [
+        "re-decompose",
+        "existing \"Decomposed into\" comment",
+        "prior \"Decomposed into\" comment"
+      ]
+    },
+    {
+      "label": "parent-decomposed-comment",
+      "anyOf": [
+        "gh issue comment \"\\$PARENT_NUM\"",
+        "Decomposed into \\$\\{SUB_LIST\\}",
+        "comment on the parent with the canonical"
+      ]
+    },
+    {
+      "label": "parent-stays-open",
+      "anyOf": [
+        "[Dd]o (NOT|not) close the parent",
+        "[Pp]arent stays open"
+      ]
+    }
+  ],
+  "deps": [
+    {
+      "label": "apply-gated-on-tests",
+      "anyOf": [
+        "gate each batch on the test suite",
+        "never apply a wave of bumps",
+        "gate(?:d|s)? (?:each|every) batch",
+        "in (?:small )?batches",
+        "after each (?:one|batch)"
+      ]
+    },
+    {
+      "label": "no-apply-means-no-change",
+      "anyOf": [
+        "[Ww]ithout `--apply`",
+        "change nothing — only propose",
+        "[Ww]ithout --apply"
+      ]
+    },
+    {
+      "label": "bisect-failed-batch",
+      "anyOf": [
+        "bisect it",
+        "isolate the offender",
+        "[Rr]eport the offender",
+        "one at a time until"
+      ]
+    }
+  ],
+  "doctor": [
+    {
+      "label": "cheapest-check-first",
+      "anyOf": [
+        "cheapest and most foundational first",
+        "most foundational first",
+        "cheapest layer first",
+        "stop drilling once you find the root cause"
+      ]
+    },
+    {
+      "label": "confirm-before-destructive-fix",
+      "anyOf": [
+        "get confirmation",
+        "ask the user first",
+        "do not run it unprompted",
+        "deletes files, modifies global config"
+      ]
+    },
+    {
+      "label": "reject-wrong-obvious-fix",
+      "anyOf": [
+        "obvious-but-wrong",
+        "offer the correct alternative",
+        "suggest what to do instead"
+      ]
+    }
+  ],
+  "fix-ci": [
+    {
+      "label": "diagnose-before-acting",
+      "anyOf": [
+        "[Dd]iagnose before acting",
+        "[Nn]ever blindly retrigger",
+        "check logs and classify the failure first",
+        "[Rr]ead the logs and (?:classify|categorise|categorize)"
+      ]
+    },
+    {
+      "label": "one-retrigger-attempt",
+      "anyOf": [
+        "[Oo]ne retrigger attempt",
+        "retrigger a second time",
+        "[Ss]econd retrigger"
+      ]
+    },
+    {
+      "label": "escalate-takes-no-action",
+      "anyOf": [
+        "[Nn][Oo][Tt] take automated action",
+        "[Tt]ake no (?:automated )?action",
+        "[Nn]o automated action"
+      ]
+    },
+    {
+      "label": "sha-awareness",
+      "anyOf": [
+        "SHA awareness",
+        "run matches HEAD",
+        "[Ss]tale runs on old SHAs",
+        "(?:run|results?)[^\\n]{0,40}(?:current )?HEAD",
+        "old(?:er)? (?:SHA|commit)"
+      ]
+    },
+    {
+      "label": "classification-order",
+      "anyOf": [
+        "first match wins",
+        "[Ii]n order.{0,4}\\(first match",
+        "first rule that matches"
+      ]
+    },
+    {
+      "label": "minimal-fix-scope",
+      "anyOf": [
+        "[Mm]inimal fix scope",
+        "(?:[Dd]on't|[Dd]o not|[Nn]ever) refactor",
+        "should be surgical",
+        "[Kk]eep the fix small",
+        "narrowly scoped"
+      ]
+    },
+    {
+      "label": "idempotent-rerun",
+      "anyOf": [
+        "[Ii]dempotent",
+        "[Rr]epeatable",
+        "[Ss]afe to re-run",
+        "already green",
+        "CI is passing it reports"
       ]
     }
   ],
@@ -285,6 +512,37 @@
       ]
     }
   ],
+  "merge-gate": [
+    {
+      "label": "no-diagnostic-investigation",
+      "anyOf": [
+        "[Dd]o (?:NOT|not) investigate",
+        "investigate, reason about, or run diagnostic"
+      ]
+    },
+    {
+      "label": "verbatim-handoff-message",
+      "anyOf": [
+        "[Mm]erge blocked",
+        "/pull/\\{N\\}/files"
+      ]
+    },
+    {
+      "label": "wait-for-user-confirmation",
+      "anyOf": [
+        "[Ww]ait for (?:the )?user",
+        "[Ww]ait for .{0,24}confirmation",
+        "[Pp]ause until the user"
+      ]
+    },
+    {
+      "label": "escalate-only-on-second-failure",
+      "anyOf": [
+        "fails a second time",
+        "[Ss]econd failure"
+      ]
+    }
+  ],
   "prime-directive": [
     {
       "label": "reload-contract",
@@ -362,6 +620,104 @@
         "fake completion",
         "faked completion",
         "documented-blocked"
+      ]
+    }
+  ],
+  "release": [
+    {
+      "label": "clean-tree-preflight",
+      "anyOf": [
+        "[Cc]lean working tree",
+        "git status --porcelain",
+        "build from committed state",
+        "[Nn]o uncommitted"
+      ]
+    },
+    {
+      "label": "all-gates-must-pass",
+      "anyOf": [
+        "[Ee]very gate must pass",
+        "[Aa]ll gates must pass",
+        "[Aa]ll checks must be green",
+        "never ship red",
+        "never (?:ship|go out) with failures"
+      ]
+    },
+    {
+      "label": "tag-only-on-merged-commit",
+      "anyOf": [
+        "never locally",
+        "create a local tag",
+        "tag is created on the merged"
+      ]
+    },
+    {
+      "label": "publish-from-merged-state",
+      "anyOf": [
+        "never a stale local tree",
+        "must carry the bumped version"
+      ]
+    },
+    {
+      "label": "untruncated-publish-output",
+      "anyOf": [
+        "publish output in full",
+        "[Dd]o not truncate",
+        "[Nn]ever truncate",
+        "FULL[^\\n]{0,30}publish",
+        "never `tail"
+      ]
+    },
+    {
+      "label": "no-force-push",
+      "anyOf": [
+        "(?:[Dd]o not|[Dd]on't|[Nn]ever) force-push",
+        "[Ff]orce-push(?:ing)? is (?:forbidden|prohibited|not allowed)",
+        "[Nn]o force-push"
+      ]
+    }
+  ],
+  "rollback": [
+    {
+      "label": "deprecate-never-delete",
+      "anyOf": [
+        "do not delete/unpublish",
+        "[Dd]eprecate, don't delete",
+        "[Pp]refer deprecate over unpublish"
+      ]
+    },
+    {
+      "label": "revert-not-force-reset",
+      "anyOf": [
+        "not force-resetting",
+        "(?:[Dd]o not|[Dd]on't|[Nn]ever) force-reset",
+        "rather than a force-reset"
+      ]
+    },
+    {
+      "label": "revert-goes-through-review",
+      "anyOf": [
+        "revert is a normal change",
+        "[Pp]ut the revert on a branch and open a PR",
+        "reverts straight to a protected branch"
+      ]
+    },
+    {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "[Nn][Oo] (AI )?attribution",
+        "[Zz]ero[- ][Aa]ttribution",
+        "[Aa]ttribution [Pp]olicy",
+        "[Ss]ole author",
+        "[Aa]ttribution is (prohibited|forbidden)"
+      ]
+    },
+    {
+      "label": "deprecation-names-good-version",
+      "anyOf": [
+        "name the \\*\\*good version\\*\\*",
+        "name the good version",
+        "deprecation message points to"
       ]
     }
   ],
