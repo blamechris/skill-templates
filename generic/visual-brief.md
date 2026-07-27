@@ -120,7 +120,9 @@ open_brief() {
   elif command -v start >/dev/null 2>&1; then      # "" is start's window-title arg
     start "" "$1" >/dev/null 2>&1 && return 0
   fi
-  echo "no browser launcher found — open it manually"
+  # Reached both when no launcher exists and when one exists but failed — the
+  # loop above returns early only on a launcher that actually succeeded.
+  echo "no browser launcher found, or it failed — open the path printed below"
   return 0                                         # never abort the caller
 }
 open_brief "$FILE"
