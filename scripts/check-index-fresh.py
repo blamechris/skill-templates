@@ -165,7 +165,28 @@ def main(argv):
             sys.stderr.write(f"ERROR: cannot read {path}: {exc}\n")
             return 2
 
-    problems = differences(*docs)
+    # Both inputs must actually be a registry. Without this, two identically
+    # malformed documents compare equal and report OK — technically true
+    # ('committed matches rebuilt') and useless as a freshness gate.
+    for path, doc in zip(argv[1:], docs):
+        if not isinstance(doc, dict) or not isinstance(doc.get("skills"), list):
+            sys.stderr.write(
+                f"ERROR: {path} is not a registry document "
+                f"(expected an object with a 'skills' list)\n"
+            )
+            return 2
+
+    # differences() indexes into the parsed JSON; a file that parses but is not
+    # the expected shape (no 'skills' list, an entry that is not a dict) would
+    # raise and exit with a traceback and some code other than the documented 2.
+    try:
+        problems = differences(*docs)
+    except (KeyError, TypeError, AttributeError, IndexError) as exc:
+        sys.stderr.write(
+            f"ERROR: registry JSON parsed but has an unexpected shape: "
+            f"{type(exc).__name__}: {exc}\n"
+        )
+        return 2
     if not problems:
         print(
             f"OK: committed registry.json matches a fresh build-index.sh run "
