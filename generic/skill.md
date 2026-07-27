@@ -137,15 +137,25 @@ note in the report that hashes may be stale. Record which source you used.
    *file* here, not just in context:
 
    ```bash
+   set -o pipefail
    lintdir="$(mktemp -d)"
    gh api repos/blamechris/skill-templates/contents/scripts/skill-lint.sh \
-     --jq '.content' | base64 -d > "$lintdir/skill-lint.sh"
+     --jq '.content' | base64 -d > "$lintdir/skill-lint.sh" || exit 1
    gh api repos/blamechris/skill-templates/contents/registry.json \
-     --jq '.content' | base64 -d > "$lintdir/registry.json"
+     --jq '.content' | base64 -d > "$lintdir/registry.json" || exit 1
+   [ -s "$lintdir/skill-lint.sh" ] && [ -s "$lintdir/registry.json" ] || {
+     echo "lint gate unavailable: a fetch produced an empty file" >&2; exit 1; }
    bash "$lintdir/skill-lint.sh" <name> .claude/commands/<name>.md "$lintdir/registry.json"
    ```
 
-   Both details are load-bearing:
+   Three details are load-bearing:
+   - **The fetch guards** — `gh` failing (offline, 404, rate limit) leaves a 0-byte
+     file behind, and `bash` on an empty file exits **0** printing nothing, which
+     this document's own outcome table below reads as *"clean, all four checks
+     passed"*. Unguarded, the network path's failure mode is a silent green gate —
+     worse than the exit 127 this section exists to fix, because 127 is at least
+     loud. Source 3 is reached exactly when there is no clone to fall back on, and
+     "Resolving the registry" above explicitly contemplates being offline.
    - **`bash <path>`** — a fetched file is written `0644`, so running it directly
      exits 126 (permission denied), not 127. Same skipped gate, different code.
    - **The third argument** — with it omitted the linter defaults its registry to
