@@ -1,13 +1,21 @@
 name: validate-registry
 
 # Guards the skill registry: registry.json stays in sync with generic/*.md and
-# every template indexes cleanly with a usable description. The per-template git
-# hashes in registry.json are validated consumer-side by scripts/skill-lint.sh
-# (and legitimately change on squash-merge), so CI checks the stable invariants
-# — the skill set and indexability — not the volatile hashes. Template-internal
-# structure (H1 style, {{CUSTOMIZE}} markers) varies legitimately across
-# templates and is validated at install time, so it is intentionally not gated
-# here to avoid false positives.
+# is genuinely the output of ./scripts/build-index.sh against this tree.
+#
+# The freshness gate below compares the committed index against a rebuild,
+# EXCLUDING the two fields build-index.sh derives from git history —
+# `generatedFromCommit` and the per-skill `hash`. Those resolve to the branch's
+# own commit on a PR and to the squash commit once merged, so comparing them
+# here would fail every honest template PR for a difference the author cannot
+# avoid. Repairing them after the squash is
+# .github/workflows/reindex-after-merge.yml's job. Every other field is derived
+# from file content or the set of files on disk and IS compared; the reasoning,
+# field by field, lives in scripts/check-index-fresh.py.
+#
+# Template-internal structure (H1 style, {{CUSTOMIZE}} markers) varies
+# legitimately across templates and is validated at install time, so it is
+# intentionally not gated here to avoid false positives.
 
 on:
   pull_request:
@@ -60,22 +68,38 @@ jobs:
           print(f"OK: {len(file_names)} templates, registry in sync (names + count + descriptions).")
           PY
 
-      - name: build-index runs cleanly
+      - name: registry.json is freshly generated
         run: |
-          # Smoke test: regenerates the index — catches an uncommitted template, a
-          # missing commit, or a python failure — and confirms the output is valid
-          # JSON. Not committed here; freshness of the committed file is enforced by
-          # the sync check above.
+          # Subsumes the old "build-index runs cleanly" smoke step: it still runs
+          # the generator (so an uncommitted template, a missing commit, or a
+          # python failure fails here) and still parses the result as JSON, but
+          # it now also compares the rebuild against what is committed.
+          #
+          # The committed file is stashed and restored, because later steps —
+          # skill-lint.test.sh lints generic/create-pr.md against the repo's real
+          # registry.json — must see the checked-in file, not the rebuild.
+          #
+          # actions/checkout gives a `pull_request` run the merge ref, not the PR
+          # head. That is the right tree to validate here and needs no override:
+          # the fields being compared come from file content, which is the merged
+          # content, and the two fields that WOULD differ between head and merge
+          # ref are the git-derived ones this check already excludes.
+          cp registry.json "$RUNNER_TEMP/registry.committed.json"
           ./scripts/build-index.sh
-          python3 - <<'PY'
-          import json
-          with open('registry.json', encoding='utf-8') as f:
-              reg = json.load(f)
-          print(f"build-index OK: valid JSON, {reg['skillCount']} skills.")
-          PY
+          cp registry.json "$RUNNER_TEMP/registry.rebuilt.json"
+          git checkout -- registry.json
+          python3 scripts/check-index-fresh.py \
+            "$RUNNER_TEMP/registry.committed.json" "$RUNNER_TEMP/registry.rebuilt.json"
 
       - name: compile-skill-targets unit tests
         run: node assets/compile-skill-targets.test.mjs
+
+      - name: check-index-fresh regression tests
+        # Proves the freshness gate ignores exactly the two git-derived fields
+        # and nothing more (the false-positive case that would otherwise block
+        # every template PR), and locks the anti-loop invariant on
+        # reindex-after-merge.yml's `paths:` filter.
+        run: ./scripts/check-index-fresh.test.sh
 
       - name: skill-lint regression tests
         # Covers the attribution check's line-anchored semantics — prose that
