@@ -108,7 +108,16 @@ export function deriveDescription(body, name) {
   let desc = para.replace(/\s+/g, ' ').trim()
   const dot = sentenceEnd(desc)
   if (dot !== -1 && dot < 160) desc = desc.slice(0, dot + 1)
-  if (desc.length > 160) desc = desc.slice(0, 157).trimEnd() + '...'
+  // Cap at 160 with an ellipsis — backing up to the last word boundary so the
+  // menu line never ends in a word stump ("must le...", #748). Only back up when
+  // the 157-char cut actually lands INSIDE a word: if char 157 is already a space,
+  // the slice ends on a complete word and trimming would drop a good word (#760
+  // review). A single token longer than the cap has no boundary; keep the hard cut.
+  if (desc.length > 160) {
+    let head = desc.slice(0, 157)
+    if (/\S/.test(desc[157] || '')) head = head.replace(/\s*\S*$/, '') // mid-word cut → drop the stump
+    desc = (head.trimEnd() || desc.slice(0, 157)) + '...'
+  }
   return desc
 }
 

@@ -56,6 +56,59 @@ t('caps an over-long first sentence with an ellipsis', () => {
   assert.ok(desc.endsWith('...'))
 })
 
+t('ellipsis cap trims to the last word boundary — no mid-word stump (#748)', () => {
+  // 40x "word " = a 199-char single "sentence" (no period before the cap).
+  // slice(0,157) ends mid-word ("…word wo"); the boundary trim must drop the
+  // " wo" stump, leaving 31 whole words + "...".
+  const body = 'word '.repeat(40) + '\n'
+  const desc = deriveDescription(body, 'x')
+  assert.equal(desc, 'word '.repeat(30) + 'word...')
+  assert.ok(desc.length <= 160)
+})
+
+t('capped description never ends in a partial word (property check)', () => {
+  const words = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu'
+  const body = `${words} ${words}\n`
+  const desc = deriveDescription(body, 'x')
+  assert.ok(desc.length <= 160)
+  assert.ok(desc.endsWith('...'))
+  assert.ok(/\S\.\.\.$/.test(desc), 'no whitespace before the ellipsis')
+  const kept = desc.slice(0, -3)
+  const orig = `${words} ${words}`
+  assert.ok(orig.startsWith(kept), 'kept text is a prefix of the source')
+  assert.equal(orig[kept.length], ' ', 'cut lands exactly on a word boundary')
+})
+
+t('a single unbroken token longer than the cap keeps the hard cut (no boundary to back up to)', () => {
+  const body = 'B'.repeat(300) + '\n'
+  const desc = deriveDescription(body, 'x')
+  assert.equal(desc.length, 160)
+  assert.equal(desc, 'B'.repeat(157) + '...')
+})
+
+t('a cut that already lands on a space keeps the whole word (#760 review)', () => {
+  // "a " x100 -> a 199-char paragraph whose char 157 is a SPACE, so slice(0,157)
+  // already ends on a complete word. Backing up unconditionally would throw away
+  // that good word; the boundary trim must fire only on a mid-word cut.
+  const body = 'a '.repeat(100) + '\n'
+  const desc = deriveDescription(body, 'x')
+  assert.equal(desc.length, 160, 'no word dropped: the full 157-char cut is kept')
+  assert.equal(desc, 'a '.repeat(78) + 'a...')
+})
+
+t('a description shorter than the cap is returned unchanged (no ellipsis)', () => {
+  const body = 'Short prose with no terminal period\n'
+  assert.equal(deriveDescription(body, 'x'), 'Short prose with no terminal period')
+})
+
+t('a description exactly at the 160 cap is not truncated', () => {
+  const body = 'c'.repeat(160) + '\n'
+  const desc = deriveDescription(body, 'x')
+  assert.equal(desc.length, 160)
+  assert.equal(desc, 'c'.repeat(160))
+  assert.ok(!desc.endsWith('...'))
+})
+
 t('falls back to the project-skill stub for a body with no prose', () => {
   assert.equal(deriveDescription('# Only a heading\n', 'my-skill'), 'Project skill: /my-skill')
 })
