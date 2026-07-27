@@ -45,10 +45,12 @@ In any managed repo, run `/skill`:
 
   ```bash
   scripts/skill-lint.sh "$name" "$file" ; rc=$?
-  [ "$rc" -eq 1 ] && exit 1   # real findings, incl. a stamped file absent from the index
+  # `if` blocks, not `[ … ] && exit 1`: an and-list as a script's last command
+  # exports the failed test's status, so the hook would exit 1 on a clean run.
+  if [ "$rc" -eq 1 ]; then exit 1; fi   # findings, incl. a stamped file the index lacks
   # Exit 2 on a stamped file can now only mean environment breakage — a missing or
   # wrong-path registry, no python3, an unreadable file. Still a failure for a hook.
-  [ "$rc" -eq 2 ] && grep -q '^<!-- skill-templates: ' "$file" && exit 1
+  if [ "$rc" -eq 2 ] && grep -q '^<!-- skill-templates: ' "$file"; then exit 1; fi
   ```
 
   Key on the exit code, not the output markers — `ERROR:` also appears on exit 1, and a

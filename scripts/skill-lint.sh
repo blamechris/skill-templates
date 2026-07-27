@@ -200,7 +200,7 @@ if entry is None:
                         f"typo'd skill name, or the wrong registry")
         fails.extend(stamp_fails)
         print(f"ERROR: '{name}' is not in the registry index ({reg_path}), yet the file "
-              f"carries a version stamp — a registry install the index does not know, "
+              f"carries a stamp marker — a registry install the index does not know, "
               f"not a repo-only skill. Cannot verify guards.", file=sys.stderr)
         print(f"✗ {name}: {len(fails)} issue(s); guards NOT verified "
               f"(the skill is absent from the index)")

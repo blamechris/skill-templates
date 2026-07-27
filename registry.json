@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "07adebe",
+  "generatedFromCommit": "b5d849d",
   "skillCount": 36,
   "skills": [
     {
@@ -532,7 +532,7 @@
     },
     {
       "name": "skill",
-      "hash": "07adebe",
+      "hash": "b5d849d",
       "lines": 336,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs.",
       "guards": [
