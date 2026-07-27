@@ -35,8 +35,18 @@ skill-templates/
   invokes it.
 
 **Maintaining the registry** — edit a template in `generic/`, commit, then run
-`./scripts/build-index.sh` to refresh `registry.json`. Consumers pick it up on their next
-`skill update`. No deploy step, no API key here.
+`./scripts/build-index.sh` to refresh `registry.json` and commit that too. CI's freshness
+gate (`validate-registry.yml`) fails the PR if you skip it. Consumers pick it up on their
+next `skill update`. No deploy step, no API key here.
+
+**Why the index is reindexed again after merge** — `build-index.sh` records each skill's
+`hash` as the last commit touching `generic/<name>.md`. On a branch that is the branch's
+own commit, and `main` squash-merges, so the squash replaces it and the merged
+`registry.json` pins a hash unreachable from `main`. The freshness gate therefore compares
+everything *except* `generatedFromCommit` and the per-skill `hash` — those two are
+git-derived and cannot be right pre-squash. `reindex-after-merge.yml` runs after the push
+to `main` and opens a follow-up PR with the corrected values. Do not hand-edit
+`registry.json`, and do not try to pre-empt the squash by guessing hashes.
 
 **Drift** — `skill outdated` (consumer side) flags version drift (template hash moved),
 profile drift (`.claude/skill-profile.md` changed), and corruption drift (a `guards`
@@ -77,8 +87,13 @@ When authoring or customizing a skill whose output is shown to the user, include
 
 ## Git Workflow
 
-- `main` branch, PRs for significant changes
-- Direct commits OK for template refinements
+- `main` is protected — "Require a pull request before merging" is on, so **every**
+  change lands through a PR. That includes one-line template refinements and
+  generated-index updates; there is no "too small for a PR" tier.
+- Admin bypass is not permission. `enforce_admins` is off, so a direct push by the
+  owner will succeed silently and skip `validate-registry` entirely. The one time
+  that happened (`49ccfc5`, no associated PR) it was reverted in #132 and redone
+  properly as #133. Branch, push the branch, open a PR.
 - Commit format: `type(scope): description`
 - Types: feat, fix, refactor, docs, chore
 
