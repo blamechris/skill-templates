@@ -156,7 +156,8 @@ note in the report that hashes may be stale. Record which source you used.
      worse than the exit 127 this section exists to fix, because 127 is at least
      loud. Source 3 is reached exactly when there is no clone to fall back on, and
      "Resolving the registry" above explicitly contemplates being offline.
-   - **`bash <path>`** — a fetched file is written `0644`, so running it directly
+   - **`bash <path>`** — a redirected fetch lands non-executable (the exact mode is
+     umask-dependent; what matters is that no execute bit is set), so running it directly
      exits 126 (permission denied), not 127. Same skipped gate, different code.
    - **The third argument** — with it omitted the linter defaults its registry to
      `<the script's own dir>/../registry.json`, which for a copy under a temp dir is

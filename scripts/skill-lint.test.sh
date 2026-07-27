@@ -277,7 +277,8 @@ echo "network-only install path: the linter run as a fetched copy outside the re
 FETCHED="$TMP/fetched"; mkdir -p "$FETCHED/bin"
 COPY="$FETCHED/bin/skill-lint.sh"
 cp "$LINT" "$COPY"
-chmod 644 "$COPY"          # `gh api … | base64 -d > file` yields 0644, not 0755
+chmod 644 "$COPY"          # a redirected fetch lands non-executable (mode is
+                           # umask-dependent; the invariant is no execute bit)
 
 printf '# /demo\n\nDoes a thing.\n\nLOAD BEARING MARKER\n\n## Rules\n\nfine\n%s\n' \
   "$STAMP" > "$TMP/copy-clean.md"
