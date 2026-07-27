@@ -39,14 +39,13 @@ In any managed repo, run `/skill`:
   record in `.claude/skills.lock`. Consumers can run the same linter in a pre-commit hook
   or CI — note its three outcomes: **0** clean, **1** real findings, **2** not fully
   verifiable. A repo-only skill (kept in `.claude/commands/` and absent from the index)
-  legitimately exits **2**. Do not tolerate 2 blindly, though: a stale index turns a real
-  `guard miss` into a clean-looking exit 2. Tolerate it only for files with no version
-  stamp, since a stamp proves a registry install:
+  legitimately exits **2** — but only if it is *unstamped*. A **stamped** file the index
+  does not know is a stale clone, a renamed/retired skill, a typo'd name or the wrong
+  registry, and exits **1**; the linter draws that line itself, so the hook is just:
 
   ```bash
   scripts/skill-lint.sh "$name" "$file" ; rc=$?
-  [ "$rc" -eq 1 ] && exit 1                                              # real findings
-  [ "$rc" -eq 2 ] && grep -q '^<!-- skill-templates: ' "$file" && exit 1 # stamped but unknown
+  [ "$rc" -eq 1 ] && exit 1   # real findings, incl. a stamped file absent from the index
   ```
 
   Key on the exit code, not the output markers — `ERROR:` also appears on exit 1, and a

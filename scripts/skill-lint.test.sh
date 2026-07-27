@@ -217,28 +217,16 @@ expect dirty 'guard miss when a load-bearing section is stripped' -m 'guard miss
 expect dirty 'stamp failure escapes the offending line' -m '\u200b' \
   "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n%s\xe2\x80\x8b' "$STAMP")"
 
-echo "repo-only skills: registry-independent checks still report"
+echo "repo-only skills (unstamped): registry-independent checks still report"
 
 # Skills maintained directly in a repo (commit, qa-update, tdd-feature …) are
 # legitimately absent from the index. Checks 1-2 do not need the registry and
 # must still run for them. The stamp and guard verdicts are both
 # unavailable: a stamp is proof of a registry install, so a repo-only file has
 # none by definition.
-expect dirty 'unregistered skill still reports an attribution footer' \
-  -m 'guards and version stamp NOT verified' \
-  "$(printf '# /repo-only-demo\n\nDoes a thing.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \
-  repo-only-demo
-
-expect dirty 'unregistered skill still reports a residual marker' \
-  -m 'residual {{CUSTOMIZE' \
-  "$(printf '# /repo-only-demo\n\nRepo test command: {{CUSTOMIZE: test command}}\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \
-  repo-only-demo
-
-# Clean-but-unverifiable stays non-zero (exit 2): "guards not checked" must never
-# read as "guards passed".
-expect dirty 'clean unregistered skill is reported as unverified, not clean' \
-  -m 'clean on markers and attribution' -rc 2 \
-  "$(printf '# /repo-only-demo\n\nDoes a thing.\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \
+expect dirty 'unstamped repo-only skill still reports a residual marker' \
+  -m 'residual {{CUSTOMIZE' -rc 1 \
+  "$(printf '# /repo-only-demo\n\nRepo test command: {{CUSTOMIZE: test command}}\n')" \
   repo-only-demo
 
 # The realistic shape: a repo-only skill has NO version stamp, because it was
@@ -254,6 +242,72 @@ expect dirty 'unstamped repo-only skill is unverified, NOT a stamp failure' \
 expect dirty 'unstamped repo-only skill still reports a real footer' \
   -m 'attribution footer' -rc 1 \
   "$(printf '# /repo-only-demo\n\nDoes a thing.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)')" \
+  repo-only-demo
+
+echo "stamped but absent from the index: a stale index is a finding, not a shrug"
+
+# The split this section exists for. "Absent from the index" used to be one exit
+# code (2) for two conditions: a genuine repo-only skill, and a REGISTRY skill the
+# index does not know — a stale clone, a renamed/retired skill, a typo'd name, the
+# wrong registry.json. The documented consumer contract is "fail on 1, tolerate 2",
+# so the second was tolerated, and with it every guard miss hiding behind a stale
+# index. The stamp separates them: it is proof of a registry install, so a stamped
+# file the index has never heard of is a finding (exit 1), not an absence of one.
+#
+# Every case here asserts -rc explicitly. clean/dirty cannot pin this change: both
+# conditions were already "dirty", which is exactly why the ambiguity survived.
+expect dirty 'stamped skill absent from the index is a finding (exit 1, not 2)' \
+  -m 'stamped as a registry install but absent from the index' -rc 1 \
+  "$(printf '# /repo-only-demo\n\nDoes a thing.\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \
+  repo-only-demo
+
+# The issue's headline reproduction. This file lost its load-bearing marker — a
+# `✗ guard miss` at exit 1 when the index knows the skill. Against an index that
+# does NOT, the guard cannot run at all; before, that came back `~ clean` at exit 2
+# and a "tolerate 2" hook accepted the corruption. It must now match the exit code
+# of the same corruption seen with a current index.
+expect dirty 'guard-miss corruption behind a stale index is no longer tolerated' \
+  -m 'guards NOT verified' -rc 1 \
+  "$(printf '# /demo-stale\n\nDoes a thing.\n\n## Rules\n\ncustomization dropped the marker\n<!-- skill-templates: demo-stale 1234abc 2026-06-03 -->')" \
+  demo-stale
+
+# The registry-independent findings must still be printed on this branch too —
+# the exit code changed, the reporting did not.
+expect dirty 'stamped + absent still reports an attribution footer' \
+  -m 'attribution footer' -rc 1 \
+  "$(printf '# /repo-only-demo\n\nDoes a thing.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->')" \
+  repo-only-demo
+
+# A typo'd <skill-name> argument reaches the same branch, and the stamp names the
+# skill the file really is — so the stamp checks are folded back in here, and they
+# say which. Before, this exited 2 saying only "not a registry skill".
+expect dirty "typo'd skill name: the stamp says which skill this really is" \
+  -m "stamp names 'demo', expected 'demo-typo'" -rc 1 \
+  "$(skill_with 'All good.')" demo-typo
+
+# Provenance is "bears a stamp marker", NOT "bears a VALID stamp" — these two
+# cases are the whole reason. Keying on the well-formed stamp would route a
+# mangled or displaced stamp back into the tolerated bucket, i.e. hand the
+# quietest treatment to the files that look most tampered with. Both exit 2 under
+# that reading and 1 under this one.
+expect dirty 'a MALFORMED stamp is still proof of a registry install' \
+  -m 'stamped as a registry install but absent from the index' -rc 1 \
+  "$(printf '# /repo-only-demo\n\nDoes a thing.\n<!-- skill-templates: repo-only-demo -->')" \
+  repo-only-demo
+
+expect dirty 'a stamp that is not the last line is still proof of one' \
+  -m 'stamped as a registry install but absent from the index' -rc 1 \
+  "$(printf '# /repo-only-demo\n\nDoes a thing.\n<!-- skill-templates: repo-only-demo 1234abc 2026-06-03 -->\nand a note after it\n')" \
+  repo-only-demo
+
+# The flip side, and the reason the marker test is anchored to the start of the
+# line's content: skill.md's own step 5 tells the agent to end the file with
+# `<!-- skill-templates: <name> <hash> <date> -->`, quoted inline. A repo-only
+# skill that DOCUMENTS the stamp format has not been installed from the registry,
+# and a naive `'skill-templates:' in text` would fail every such file at exit 1.
+expect dirty 'prose quoting the stamp format is not proof of an install' \
+  -m 'clean on markers and attribution' -rc 2 \
+  "$(printf '# /repo-only-demo\n\nEnd the file with `<!-- skill-templates: <name> <hash> <date> -->` on its own line.\n')" \
   repo-only-demo
 
 # An invisible character inside the stamp NAME hits the mismatch branch, which
