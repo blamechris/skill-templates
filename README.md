@@ -46,6 +46,9 @@ In any managed repo, run `/skill`:
   ```bash
   scripts/skill-lint.sh "$name" "$file" ; rc=$?
   [ "$rc" -eq 1 ] && exit 1   # real findings, incl. a stamped file absent from the index
+  # Exit 2 on a stamped file can now only mean environment breakage — a missing or
+  # wrong-path registry, no python3, an unreadable file. Still a failure for a hook.
+  [ "$rc" -eq 2 ] && grep -q '^<!-- skill-templates: ' "$file" && exit 1
   ```
 
   Key on the exit code, not the output markers — `ERROR:` also appears on exit 1, and a

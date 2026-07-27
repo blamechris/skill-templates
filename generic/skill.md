@@ -192,10 +192,15 @@ note in the report that hashes may be stale. Record which source you used.
    environment.
 
    For a **pre-commit hook or CI** linting a whole `.claude/commands/` directory,
-   exit 2 on a `~` line is legitimate and can be tolerated as-is: the linter now
-   reaches it only for genuinely repo-only files, because a *stale index* — which
-   used to turn a real `✗ guard miss` into a clean-looking `~` — is reported as a
-   finding at exit 1 instead.
+   exit 2 is far narrower than it was: a *stale index* — which used to turn a real
+   `✗ guard miss` into a clean-looking `~` — is now reported as a finding at exit 1.
+   What remains at 2 is a genuinely repo-only file **or** environment breakage
+   (missing/wrong-path registry, no `python3`, unreadable file), and the linter
+   cannot tell a hook which of those it hit. So keep the version-stamp test: a
+   stamped file can no longer legitimately exit 2, because provenance means the
+   index should know it. Tolerating 2 unconditionally re-opens the hole this change
+   closes — for the 270 stamped files in the current fleet, a mistyped registry path
+   would go from caught to silently green.
 
    ```bash
    scripts/skill-lint.sh "$name" "$file" ; rc=$?
