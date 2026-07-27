@@ -253,43 +253,48 @@
       "label": "ladder-is-ordered",
       "anyOf": [
         "[Rr]un the rungs \\*\\*in order\\*\\*",
-        "rungs?\\b[^\\n]*\\bin order\\b",
-        "stop at the first[^\\n]*(rung|one that resolves)",
-        "surviv\\w+ rungs 1 and 2"
+        "rungs?\\b[^\\n]*\\bin order\\b[^\\n]*stop at the first",
+        "work the rungs in sequence"
       ]
     },
     {
-      "label": "rung1-answer-from-repo",
+      "label": "rung1-search-before-escalating",
       "anyOf": [
-        "[Ss]earch before (you )?escalat",
-        "already answered by[^\\n]*(artifact|repo|code)",
-        "git log -S"
+        "[Ss]earch before you escalate",
+        "[Ll]ook it up before you ask",
+        "already answered by artifacts you can read"
       ]
     },
     {
-      "label": "rung2-decide-and-record",
+      "label": "rung2-reversibility-test",
       "anyOf": [
         "undo it in a minute",
-        "cheap and reversible[^\\n]*(yours|your call|decide)",
-        "[Ss]tate the assumption",
-        "[Ww]rite it down"
+        "cheap and reversible, it is yours to make",
+        "reversible[^\\n]*decide it yourself"
+      ]
+    },
+    {
+      "label": "rung2-record-the-assumption",
+      "anyOf": [
+        "\\*\\*[Ss]tate the assumption\\*\\*",
+        "[Ss]tate the assumption in plain",
+        "record the assumption in plain"
       ]
     },
     {
       "label": "rung3-escalation-threshold",
       "anyOf": [
         "[Ee]scalate only if at least one",
-        "[Dd]ivergent deliverable",
-        "[Aa]sking is not free",
-        "costs the user a context switch"
+        "[Ee]scalate when any one of these",
+        "any single one of these is enough to escalate"
       ]
     },
     {
       "label": "rung4-ask-user-question-tool",
       "anyOf": [
-        "AskUserQuestion",
         "[Nn]ever prose",
-        "structured question is answered"
+        "AskUserQuestion` tool\\. Never",
+        "structured question, not a paragraph"
       ]
     },
     {
@@ -304,9 +309,8 @@
       "label": "rung5-never-idle",
       "anyOf": [
         "block on one thread is not a block",
-        "[Kk]eep going on everything else",
-        "[Ss]plit the work",
-        "entire content is a question"
+        "one blocked thread does not block the work",
+        "a partial block is not a full stop"
       ]
     }
   ],

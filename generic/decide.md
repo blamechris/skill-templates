@@ -108,11 +108,11 @@ Every one of these has shipped. Name it when you catch yourself doing it.
 
 ## Is this actually blocked?
 
-Run this before every escalation. Every line must be **yes**; the first **no** names the rung to go back to.
+Run this before every escalation. Items 3 and 4 are an **or** — either one alone justifies escalating, matching rung 3's "at least one". The rest must be yes; the first **no** names where to go back to. Read them in order and stop at the first that sends you to rung 4.
 
 1. I searched the code, the git history, the issue thread and the docs, and the answer is not there. *(No → rung 1.)*
 2. It was not already decided earlier in this session, or in a previous one. *(No → rung 1.)*
-3. The answers lead to genuinely different work — not just a different name, order, or internal shape. *(No → rung 2.)*
+3. The answers lead to genuinely different work — not just a different name, order, or internal shape. *(No → check item 4; a small-diff change can still be irreversible.)*
 4. I cannot cheaply undo the wrong choice; or the action is irreversible, outward-facing, or spends the user's money or reputation. *(No → rung 2.)*
 5. I can state 2-4 concrete options, and I know which one I would pick and why. *(No → rung 1 — you do not understand it well enough to ask yet.)*
 6. I know what continues regardless of the answer, and it is already continuing. *(No → rung 5.)*
