@@ -261,6 +261,103 @@ expect dirty 'unstamped repo-only skill still reports a real footer' \
 expect dirty 'stamp name mismatch escapes both sides' -m '\u200b' \
   "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n<!-- skill-templates: de\xe2\x80\x8bmo 1234abc 2026-06-03 -->')"
 
+echo "network-only install path: the linter run as a fetched copy outside the repo"
+
+# `skill add` source 3 has no clone on disk, so the gate can only run by fetching
+# scripts/skill-lint.sh to a temp dir and running THAT copy. Two things differ
+# from the in-repo run and both are pinned here: the fetched file is not
+# executable, and its DEFAULT registry — "$(dirname "$0")/../registry.json" —
+# points at the temp dir's parent, not at this registry.
+#
+# The copy sits one level below $FETCHED so the default resolves to
+# $FETCHED/registry.json, which does not exist: the same shape as a real
+# `mktemp -d`, and hermetic. Putting it directly under $TMP would NOT work —
+# $TMP/registry.json is the hermetic index above, so the omitted-argument cases
+# would pass for the wrong reason.
+FETCHED="$TMP/fetched"; mkdir -p "$FETCHED/bin"
+COPY="$FETCHED/bin/skill-lint.sh"
+cp "$LINT" "$COPY"
+chmod 644 "$COPY"          # `gh api … | base64 -d > file` yields 0644, not 0755
+
+printf '# /demo\n\nDoes a thing.\n\nLOAD BEARING MARKER\n\n## Rules\n\nfine\n%s\n' \
+  "$STAMP" > "$TMP/copy-clean.md"
+# Only fault is a guard miss: the ONE check that cannot run without the registry,
+# so it proves the third argument actually reaches the guard pass.
+printf '# /demo\n\nDoes a thing.\n\n## Rules\n\ncustomization dropped the marker\n%s\n' \
+  "$STAMP" > "$TMP/copy-guardmiss.md"
+
+# copy_case <label> <want-rc> <want-stdout|-> <want-stderr|-> <file> [registry]
+# Each stream assertion is "-" (must be empty), "!<s>" (must NOT contain <s>) or
+# "<s>" (must contain). Both streams are asserted because the whole hazard here
+# is a run that says nothing on stdout while failing on stderr.
+copy_case() {
+  local label="$1" want_rc="$2" want_out="$3" want_err="$4" file="$5" reg="${6:-}"
+  local o="$TMP/copy.out" e="$TMP/copy.err" rc
+  if [ -n "$reg" ]; then
+    bash "$COPY" demo "$file" "$reg" >"$o" 2>"$e"
+  else
+    bash "$COPY" demo "$file" >"$o" 2>"$e"
+  fi
+  rc=$?
+  local why=""
+  [ "$rc" -ne "$want_rc" ] && why="wanted exit $want_rc, got $rc"
+  local stream want
+  for stream in out err; do
+    [ -n "$why" ] && break
+    eval "want=\$want_$stream"
+    local f="$TMP/copy.$stream"
+    case "$want" in
+      -)  [ -s "$f" ] && why="wanted an empty std$stream, got: $(cat "$f")" ;;
+      !*) grep -qF -- "${want#!}" "$f" &&
+            why="std$stream must not mention $(printf %q "${want#!}")" ;;
+      *)  grep -qF -- "$want" "$f" ||
+            why="std$stream did not mention $(printf %q "$want")" ;;
+    esac
+  done
+  if [ -n "$why" ]; then
+    printf '  FAIL - %s\n    %s\n    stdout: %s\n    stderr: %s\n' \
+      "$label" "$why" "$(cat "$o")" "$(cat "$e")"
+    FAIL=$((FAIL + 1)); return
+  fi
+  printf '  ok - %s\n' "$label"
+  PASS=$((PASS + 1))
+}
+
+copy_case 'copy + explicit registry: clean file passes, guards applied' \
+  0 '✓ demo: clean (1 guard(s) ok' - "$TMP/copy-clean.md" "$TMP/registry.json"
+
+copy_case 'copy + explicit registry: guard miss is caught from outside the repo' \
+  1 'guard miss: load-bearing' - "$TMP/copy-guardmiss.md" "$TMP/registry.json"
+
+# The reason the third argument is mandatory rather than nice-to-have. Omitting
+# it does not degrade to "guards unchecked, rest reported": the registry read
+# happens after checks 1-3 have collected their findings and exits before any of
+# them is printed, so today the run is loud on the exit code and on stderr and
+# says nothing at all on stdout. The invariant pinned is the one that must hold
+# however that is later reworded — it must NEVER exit 0 and NEVER print the clean
+# marker, because to a caller reading the output that is what a pass looks like.
+copy_case 'copy without the registry argument fails loudly, never clean (guard-miss file)' \
+  2 '!✓' 'ERROR: registry not found' "$TMP/copy-guardmiss.md"
+
+copy_case 'copy without the registry argument cannot pass a clean file either' \
+  2 '!✓' 'ERROR: registry not found' "$TMP/copy-clean.md"
+
+# Worse than mute: the default is a PATH, not "no registry", so an unrelated
+# registry.json living next to the temp dir is loaded as if it were this one. It
+# names "demo" but carries no guards, so the file that just failed on a guard
+# miss now lints clean at exit 0 with 0 guards applied — literally "no problems
+# found" from a gate that checked nothing. Characterization, not endorsement: if
+# the linter is ever hardened to reject a registry it was not handed, update this
+# case deliberately. Runs last and cleans up — the file it plants is exactly what
+# the two cases above rely on being absent.
+cat > "$FETCHED/registry.json" <<'JSON'
+{ "registry": "someone-elses", "skillCount": 1,
+  "skills": [ { "name": "demo", "hash": "0000000", "lines": 1, "description": "d" } ] }
+JSON
+copy_case 'copy without the registry argument silently adopts a foreign registry.json' \
+  0 '✓ demo: clean (0 guard(s) ok' - "$TMP/copy-guardmiss.md"
+rm -f "$FETCHED/registry.json"
+
 echo "end-to-end: the real template, stripped the way \`skill add\` strips it"
 
 # Faithful reproduction of the install path: remove the trailing

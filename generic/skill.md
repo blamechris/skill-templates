@@ -124,10 +124,39 @@ note in the report that hashes may be stale. Record which source you used.
    `<!-- skill-templates: <name> <hash> <date> -->` (today's date, `YYYY-MM-DD`).
 6. **Lint (deterministic gate).** Run the registry's mechanical linter on the file just
    written — it re-checks markers, attribution, the stamp, and guards independently of
-   the agent's judgment: `"$REG/scripts/skill-lint.sh" <name> .claude/commands/<name>.md`
+   the agent's judgment. From a **local clone** (the preferred path):
+   `"$REG/scripts/skill-lint.sh" <name> .claude/commands/<name>.md`
    (where `$REG` is the resolved registry clone). If it exits non-zero, fix the reported
    issues and re-lint before recording the lockfile — do not lock a skill that fails lint.
    Consumers can run the same linter as a pre-commit hook or in CI.
+
+   On the **network-only path** (source 3 — no clone on disk, so `$REG` is unset and
+   that command expands to `/scripts/skill-lint.sh`: exit 127, gate not run at all),
+   fetch the linter the way step 7 fetches the compiler, and pass `registry.json`
+   **explicitly as the third argument** — the index from step 1 has to exist as a
+   *file* here, not just in context:
+
+   ```bash
+   lintdir="$(mktemp -d)"
+   gh api repos/blamechris/skill-templates/contents/scripts/skill-lint.sh \
+     --jq '.content' | base64 -d > "$lintdir/skill-lint.sh"
+   gh api repos/blamechris/skill-templates/contents/registry.json \
+     --jq '.content' | base64 -d > "$lintdir/registry.json"
+   bash "$lintdir/skill-lint.sh" <name> .claude/commands/<name>.md "$lintdir/registry.json"
+   ```
+
+   Both details are load-bearing:
+   - **`bash <path>`** — a fetched file is written `0644`, so running it directly
+     exits 126 (permission denied), not 127. Same skipped gate, different code.
+   - **The third argument** — with it omitted the linter defaults its registry to
+     `<the script's own dir>/../registry.json`, which for a copy under a temp dir is
+     not this registry. Either that path is absent, and the run exits 2 printing
+     `ERROR: registry not found …` on **stderr** with an **empty stdout** — the
+     findings it had already collected are discarded unprinted, so a caller watching
+     the output sees exactly what a pass looks like — or some unrelated
+     `registry.json` sits there and gets loaded instead, in which case a skill it
+     happens to name with no guards of its own lints `✓ <name>: clean (0 guard(s) ok)`
+     at **exit 0**, with this registry's guards never applied.
 
    The linter has three outcomes. **Key on the exit code, not on the output
    markers** — `ERROR:` is printed for an unknown skill *and* then followed by
