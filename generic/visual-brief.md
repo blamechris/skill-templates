@@ -103,9 +103,34 @@ Use the skeleton below. Rules:
 ```bash
 DIR="${ARG_DIR:-${CLAUDE_BRIEF_DIR:-$HOME/.claude/briefs}}"
 mkdir -p "$DIR"
-# …write the file to "$DIR/<slug>-<date>.html"…
-[ -z "$NO_OPEN" ] && open "$DIR/<slug>-<date>.html"   # macOS; skip with --no-open
+FILE="$DIR/<slug>-<date>.html"
+# …write the file to "$FILE"…
+
+# Launch the browser portably. Opening is a convenience, never a gate: if no
+# launcher exists (headless box, container, CI) we print the path and succeed.
+open_brief() {
+  if [ -n "$NO_OPEN" ]; then return 0; fi          # --no-open
+  for opener in open xdg-open wslview; do          # macOS, Linux, WSL
+    if command -v "$opener" >/dev/null 2>&1; then
+      "$opener" "$1" >/dev/null 2>&1 && return 0
+    fi
+  done
+  if command -v cmd.exe >/dev/null 2>&1; then      # Windows / Git Bash / MSYS
+    cmd.exe /c start "" "$1" >/dev/null 2>&1 && return 0
+  elif command -v start >/dev/null 2>&1; then      # "" is start's window-title arg
+    start "" "$1" >/dev/null 2>&1 && return 0
+  fi
+  echo "no browser launcher found — open it manually"
+  return 0                                         # never abort the caller
+}
+open_brief "$FILE"
+echo "$FILE"
 ```
+
+Two things that snippet is deliberately careful about — keep them if you edit it:
+`open_brief` always returns 0, so a missing or failing launcher can't kill a
+caller running under `set -e`; and it ends on `echo`, so the block's exit status
+isn't the short-circuited `--no-open` test.
 
 Report the absolute path so the user can find/link it. If `$CLAUDE_BRIEF_DIR`
 points into an Obsidian vault, mention it's now linkable there.
@@ -181,6 +206,8 @@ Component cheatsheet:
   an Obsidian vault subfolder for durable, linkable recall.
 - **House palette** — the CSS `:root` variables in the skeleton. Swap for a
   light theme or brand colors if desired.
-- **Open command** — `open` (macOS). On Linux use `xdg-open`; on WSL `wslview`.
+- **Open command** — `open_brief` in step 3 tries `open` (macOS) → `xdg-open`
+  (Linux) → `wslview` (WSL) → `start` (Windows), then falls back to printing the
+  path. Add or reorder launchers there if this environment needs a different one.
 - **Brief types** — extend `--type` with project-specific shapes (e.g. `incident`,
   `review`) by adding a layout recipe in step 1.
