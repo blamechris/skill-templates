@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "987eb2b",
+  "generatedFromCommit": "0500440",
   "skillCount": 36,
   "skills": [
     {
@@ -161,7 +161,55 @@
       "name": "changelog",
       "hash": "3254376",
       "lines": 99,
-      "description": "Generate release notes from what actually merged: collect the merged PRs and commits since the last release, group them into meaningful sections, and write them to the project's changelog (or a draft release body). Turns \"what changed since the last version?\" into a formatted, linked summary instead of a hand-scrolled git log."
+      "description": "Generate release notes from what actually merged: collect the merged PRs and commits since the last release, group them into meaningful sections, and write them to the project's changelog (or a draft release body). Turns \"what changed since the last version?\" into a formatted, linked summary instead of a hand-scrolled git log.",
+      "guards": [
+        {
+          "label": "idempotent-version-section",
+          "anyOf": [
+            "[Ii]dempotent",
+            "[Rr]epeatable",
+            "replace that version's section",
+            "not append a duplicate",
+            "in place instead of adding"
+          ]
+        },
+        {
+          "label": "no-invented-history",
+          "anyOf": [
+            "invent history",
+            "trace to a real",
+            "fabricat",
+            "made-up entries"
+          ]
+        },
+        {
+          "label": "date-from-environment",
+          "anyOf": [
+            "take it from the environment",
+            "do not invent (one|a date)",
+            "today's date[^\\n]*environment"
+          ]
+        },
+        {
+          "label": "no-attribution",
+          "anyOf": [
+            "[Nn][Oo] (AI )?attribution",
+            "[Zz]ero[- ][Aa]ttribution",
+            "[Aa]ttribution [Pp]olicy",
+            "[Ss]ole author",
+            "AI/agent mentions"
+          ]
+        },
+        {
+          "label": "stdout-mode-writes-nothing",
+          "anyOf": [
+            "write nothing",
+            "nothing is written",
+            "print to stdout only",
+            "leave the file untouched"
+          ]
+        }
+      ]
     },
     {
       "name": "check-pr",
@@ -212,7 +260,33 @@
       "name": "create-issue",
       "hash": "12b011f",
       "lines": 158,
-      "description": "Create a standardized GitHub issue with labels and traceability."
+      "description": "Create a standardized GitHub issue with labels and traceability.",
+      "guards": [
+        {
+          "label": "duplicate-check",
+          "anyOf": [
+            "[Cc]heck for [Dd]uplicates",
+            "[Ss]earch[^\\n]*duplicat",
+            "duplicate issues"
+          ]
+        },
+        {
+          "label": "acceptance-criteria-required",
+          "anyOf": [
+            "[Aa]lways include acceptance criteria",
+            "[Ii]ssues without criteria",
+            "criteria are hard to close"
+          ]
+        },
+        {
+          "label": "source-linkage",
+          "anyOf": [
+            "\\*\\*[Ll]ink to source\\*\\*",
+            "PR number and comment",
+            "[Ll]ink back to the source"
+          ]
+        }
+      ]
     },
     {
       "name": "create-pr",
@@ -241,19 +315,109 @@
       "name": "decompose-issue",
       "hash": "b4268c2",
       "lines": 237,
-      "description": "Break a single GitHub issue that is too large into 2-5 independently implementable sub-issues. This is the **manual triage** counterpart to the auto-decomposition baked into `/autonomous-dev-flow` and `/parallel-dev` — use it when a human reads an issue and decides it needs splitting before any implementation runs."
+      "description": "Break a single GitHub issue that is too large into 2-5 independently implementable sub-issues. This is the **manual triage** counterpart to the auto-decomposition baked into `/autonomous-dev-flow` and `/parallel-dev` — use it when a human reads an issue and decides it needs splitting before any implementation runs.",
+      "guards": [
+        {
+          "label": "confirmation-gate",
+          "anyOf": [
+            "[Cc]onfirmation gate is mandatory",
+            "[Nn]ever create sub-issues without explicit user approval",
+            "pauses for user confirmation"
+          ]
+        },
+        {
+          "label": "prior-decomposition-guard",
+          "anyOf": [
+            "re-decompose",
+            "existing \"Decomposed into\" comment",
+            "prior \"Decomposed into\" comment"
+          ]
+        },
+        {
+          "label": "parent-decomposed-comment",
+          "anyOf": [
+            "gh issue comment \"\\$PARENT_NUM\"",
+            "Decomposed into \\$\\{SUB_LIST\\}",
+            "comment on the parent with the canonical"
+          ]
+        },
+        {
+          "label": "parent-stays-open",
+          "anyOf": [
+            "[Dd]o (NOT|not) close the parent",
+            "[Pp]arent stays open"
+          ]
+        }
+      ]
     },
     {
       "name": "deps",
       "hash": "04d63e7",
       "lines": 96,
-      "description": "Keep this project's dependencies healthy: report what's outdated and vulnerable, flag native modules that can break across runtime upgrades, and apply the safe bumps with tests as the gate. A periodic checkup that catches dependency rot before it becomes a broken build or a security advisory."
+      "description": "Keep this project's dependencies healthy: report what's outdated and vulnerable, flag native modules that can break across runtime upgrades, and apply the safe bumps with tests as the gate. A periodic checkup that catches dependency rot before it becomes a broken build or a security advisory.",
+      "guards": [
+        {
+          "label": "apply-gated-on-tests",
+          "anyOf": [
+            "gate each batch on the test suite",
+            "never apply a wave of bumps",
+            "gate(?:d|s)? (?:each|every) batch",
+            "in (?:small )?batches",
+            "after each (?:one|batch)"
+          ]
+        },
+        {
+          "label": "no-apply-means-no-change",
+          "anyOf": [
+            "[Ww]ithout `--apply`",
+            "change nothing — only propose",
+            "[Ww]ithout --apply"
+          ]
+        },
+        {
+          "label": "bisect-failed-batch",
+          "anyOf": [
+            "bisect it",
+            "isolate the offender",
+            "[Rr]eport the offender",
+            "one at a time until"
+          ]
+        }
+      ]
     },
     {
       "name": "doctor",
       "hash": "04d63e7",
       "lines": 93,
-      "description": "Diagnose a broken local setup and propose the fix. Works through the layers that make a project runnable — runtime version, installed dependencies, native modules, build state, and the entrypoint actually starting — finds the first thing that's wrong, and explains the remedy before touching anything."
+      "description": "Diagnose a broken local setup and propose the fix. Works through the layers that make a project runnable — runtime version, installed dependencies, native modules, build state, and the entrypoint actually starting — finds the first thing that's wrong, and explains the remedy before touching anything.",
+      "guards": [
+        {
+          "label": "cheapest-check-first",
+          "anyOf": [
+            "cheapest and most foundational first",
+            "most foundational first",
+            "cheapest layer first",
+            "stop drilling once you find the root cause"
+          ]
+        },
+        {
+          "label": "confirm-before-destructive-fix",
+          "anyOf": [
+            "get confirmation",
+            "ask the user first",
+            "do not run it unprompted",
+            "deletes files, modifies global config"
+          ]
+        },
+        {
+          "label": "reject-wrong-obvious-fix",
+          "anyOf": [
+            "obvious-but-wrong",
+            "offer the correct alternative",
+            "suggest what to do instead"
+          ]
+        }
+      ]
     },
     {
       "name": "fetch-docs",
@@ -265,7 +429,72 @@
       "name": "fix-ci",
       "hash": "3768ea6",
       "lines": 277,
-      "description": "Diagnose CI failures or cancellations on a PR, take corrective action (re-trigger, fix, or escalate), and report status."
+      "description": "Diagnose CI failures or cancellations on a PR, take corrective action (re-trigger, fix, or escalate), and report status.",
+      "guards": [
+        {
+          "label": "diagnose-before-acting",
+          "anyOf": [
+            "[Dd]iagnose before acting",
+            "[Nn]ever blindly retrigger",
+            "check logs and classify the failure first",
+            "[Rr]ead the logs and (?:classify|categorise|categorize)"
+          ]
+        },
+        {
+          "label": "one-retrigger-attempt",
+          "anyOf": [
+            "[Oo]ne retrigger attempt",
+            "retrigger a second time",
+            "[Ss]econd retrigger"
+          ]
+        },
+        {
+          "label": "escalate-takes-no-action",
+          "anyOf": [
+            "[Nn][Oo][Tt] take automated action",
+            "[Tt]ake no (?:automated )?action",
+            "[Nn]o automated action"
+          ]
+        },
+        {
+          "label": "sha-awareness",
+          "anyOf": [
+            "SHA awareness",
+            "run matches HEAD",
+            "[Ss]tale runs on old SHAs",
+            "(?:run|results?)[^\\n]{0,40}(?:current )?HEAD",
+            "old(?:er)? (?:SHA|commit)"
+          ]
+        },
+        {
+          "label": "classification-order",
+          "anyOf": [
+            "first match wins",
+            "[Ii]n order.{0,4}\\(first match",
+            "first rule that matches"
+          ]
+        },
+        {
+          "label": "minimal-fix-scope",
+          "anyOf": [
+            "[Mm]inimal fix scope",
+            "(?:[Dd]on't|[Dd]o not|[Nn]ever) refactor",
+            "should be surgical",
+            "[Kk]eep the fix small",
+            "narrowly scoped"
+          ]
+        },
+        {
+          "label": "idempotent-rerun",
+          "anyOf": [
+            "[Ii]dempotent",
+            "[Rr]epeatable",
+            "[Ss]afe to re-run",
+            "already green",
+            "CI is passing it reports"
+          ]
+        }
+      ]
     },
     {
       "name": "full-review",
@@ -366,7 +595,38 @@
       "name": "merge-gate",
       "hash": "85269c8",
       "lines": 57,
-      "description": "Short-circuit token-expensive diagnostic reasoning when `gh pr merge` fails due to branch protection. The most common blocker is unresolved review threads, which **only a human can resolve** via GitHub UI. This pattern turns a multi-step investigation into a 2-line handoff."
+      "description": "Short-circuit token-expensive diagnostic reasoning when `gh pr merge` fails due to branch protection. The most common blocker is unresolved review threads, which **only a human can resolve** via GitHub UI. This pattern turns a multi-step investigation into a 2-line handoff.",
+      "guards": [
+        {
+          "label": "no-diagnostic-investigation",
+          "anyOf": [
+            "[Dd]o (?:NOT|not) investigate",
+            "investigate, reason about, or run diagnostic"
+          ]
+        },
+        {
+          "label": "verbatim-handoff-message",
+          "anyOf": [
+            "[Mm]erge blocked",
+            "/pull/\\{N\\}/files"
+          ]
+        },
+        {
+          "label": "wait-for-user-confirmation",
+          "anyOf": [
+            "[Ww]ait for (?:the )?user",
+            "[Ww]ait for .{0,24}confirmation",
+            "[Pp]ause until the user"
+          ]
+        },
+        {
+          "label": "escalate-only-on-second-failure",
+          "anyOf": [
+            "fails a second time",
+            "[Ss]econd failure"
+          ]
+        }
+      ]
     },
     {
       "name": "merge",
@@ -516,13 +776,111 @@
       "name": "release",
       "hash": "3254376",
       "lines": 117,
-      "description": "Ship a new version of this project end to end: run the release gates, bump the version, build the artifacts, publish, tag, and verify. One command that encodes the project's release checklist so a release never skips a step or ships a broken build."
+      "description": "Ship a new version of this project end to end: run the release gates, bump the version, build the artifacts, publish, tag, and verify. One command that encodes the project's release checklist so a release never skips a step or ships a broken build.",
+      "guards": [
+        {
+          "label": "clean-tree-preflight",
+          "anyOf": [
+            "[Cc]lean working tree",
+            "git status --porcelain",
+            "build from committed state",
+            "[Nn]o uncommitted"
+          ]
+        },
+        {
+          "label": "all-gates-must-pass",
+          "anyOf": [
+            "[Ee]very gate must pass",
+            "[Aa]ll gates must pass",
+            "[Aa]ll checks must be green",
+            "never ship red",
+            "never (?:ship|go out) with failures"
+          ]
+        },
+        {
+          "label": "tag-only-on-merged-commit",
+          "anyOf": [
+            "never locally",
+            "create a local tag",
+            "tag is created on the merged"
+          ]
+        },
+        {
+          "label": "publish-from-merged-state",
+          "anyOf": [
+            "never a stale local tree",
+            "must carry the bumped version"
+          ]
+        },
+        {
+          "label": "untruncated-publish-output",
+          "anyOf": [
+            "publish output in full",
+            "[Dd]o not truncate",
+            "[Nn]ever truncate",
+            "FULL[^\\n]{0,30}publish",
+            "never `tail"
+          ]
+        },
+        {
+          "label": "no-force-push",
+          "anyOf": [
+            "(?:[Dd]o not|[Dd]on't|[Nn]ever) force-push",
+            "[Ff]orce-push(?:ing)? is (?:forbidden|prohibited|not allowed)",
+            "[Nn]o force-push"
+          ]
+        }
+      ]
     },
     {
       "name": "rollback",
       "hash": "969295a",
       "lines": 95,
-      "description": "Back out a bad change or a broken release safely — revert the offending merged PR, mark the bad published version so nobody new installs it, and ship a corrected version. The counterpart to `/release`: when something shipped that shouldn't have, this is the controlled path back to a good state without breaking people who already have the bad version."
+      "description": "Back out a bad change or a broken release safely — revert the offending merged PR, mark the bad published version so nobody new installs it, and ship a corrected version. The counterpart to `/release`: when something shipped that shouldn't have, this is the controlled path back to a good state without breaking people who already have the bad version.",
+      "guards": [
+        {
+          "label": "deprecate-never-delete",
+          "anyOf": [
+            "do not delete/unpublish",
+            "[Dd]eprecate, don't delete",
+            "[Pp]refer deprecate over unpublish"
+          ]
+        },
+        {
+          "label": "revert-not-force-reset",
+          "anyOf": [
+            "not force-resetting",
+            "(?:[Dd]o not|[Dd]on't|[Nn]ever) force-reset",
+            "rather than a force-reset"
+          ]
+        },
+        {
+          "label": "revert-goes-through-review",
+          "anyOf": [
+            "revert is a normal change",
+            "[Pp]ut the revert on a branch and open a PR",
+            "reverts straight to a protected branch"
+          ]
+        },
+        {
+          "label": "zero-attribution-rule",
+          "anyOf": [
+            "[Nn][Oo] (AI )?attribution",
+            "[Zz]ero[- ][Aa]ttribution",
+            "[Aa]ttribution [Pp]olicy",
+            "[Ss]ole author",
+            "[Aa]ttribution is (prohibited|forbidden)"
+          ]
+        },
+        {
+          "label": "deprecation-names-good-version",
+          "anyOf": [
+            "name the \\*\\*good version\\*\\*",
+            "name the good version",
+            "deprecation message points to"
+          ]
+        }
+      ]
     },
     {
       "name": "skill-profile",
