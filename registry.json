@@ -1,11 +1,11 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "5dba3ce",
+  "generatedFromCommit": "5c35725",
   "skillCount": 37,
   "skills": [
     {
       "name": "agent-review",
-      "hash": "5dba3ce",
+      "hash": "5c35725",
       "lines": 204,
       "description": "Launch an expert code reviewer agent with full project context.",
       "guards": [
@@ -72,7 +72,7 @@
     {
       "name": "batch-merge",
       "hash": "0a76684",
-      "lines": 306,
+      "lines": 319,
       "description": "Sequentially merge a set of reviewed PRs, handling branch protection's \"must be up-to-date\" requirement by updating each branch after the previous merge.",
       "guards": [
         {
@@ -313,7 +313,7 @@
     },
     {
       "name": "decide",
-      "hash": "5dba3ce",
+      "hash": "5c35725",
       "lines": 133,
       "description": "A decision protocol for an agent that thinks it is blocked. Most apparent blocks are not blocks: they are questions the repo already answers, or cheap reversible calls the agent is entitled to make and record. The few that are real deserve a structured question carrying options and a recommendation — not a paragraph of prose that hands the problem back and waits. This skill routes any pending decision down a fixed ladder, and dictates the shape of the ask when escalation is genuinely warranted.",
       "guards": [
@@ -748,7 +748,7 @@
     },
     {
       "name": "prime-directive",
-      "hash": "5dba3ce",
+      "hash": "5c35725",
       "lines": 102,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
