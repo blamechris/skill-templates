@@ -174,11 +174,17 @@ note in the report that hashes may be stale. Record which source you used.
    findings at exit 1, and a usage error exits 2 printing no marker at all. Only
    `~` is exclusive to exit 2.
    - **exit 0** (`✓`) — clean, all four checks passed.
-   - **exit 1** (`✗`) — real findings. Fix and re-lint; never lock.
+   - **exit 1** (`✗`) — real findings. Fix and re-lint; never lock. This includes a
+     file that is **stamped but absent from the index**: a stamp is proof of a
+     registry install, so an index that has never heard of the skill means a stale
+     clone, a renamed or retired skill, a typo'd `<name>`, or the wrong
+     `registry.json` — and its guards went unapplied. The reported findings name
+     which, and the stamp checks are applied on this path too.
    - **exit 2** — could not be fully verified. Five causes, and only one is benign:
-     unknown skill (the `~` line), plus missing registry file, missing `python3`,
-     unreadable skill file, and usage error. The last four are environment
-     breakage.
+     an **unstamped** skill absent from the index (the `~` line — a repo-only skill,
+     with genuinely nothing to verify), plus missing registry file, missing
+     `python3`, unreadable skill file, and usage error. The last four are
+     environment breakage.
 
    For `skill add`, exit 2 is always a failure: `add` stops before writing if the
    name is absent from the index, so by lint time the skill is in the index by
@@ -186,18 +192,27 @@ note in the report that hashes may be stale. Record which source you used.
    environment.
 
    For a **pre-commit hook or CI** linting a whole `.claude/commands/` directory,
-   exit 2 is legitimate for repo-only skills but must not be tolerated blindly:
-   a *stale index* turns what should be `✗ guard miss` (exit 1) into `~ clean`
-   (exit 2), so blanket tolerance green-lights exactly the corruption drift guards
-   exist to catch. Tolerate exit 2 only for a file with **no version stamp** — a
-   stamp is proof of a registry install, so a stamped file that the index does not
-   know about is a real problem:
+   exit 2 is far narrower than it was: a *stale index* — which used to turn a real
+   `✗ guard miss` into a clean-looking `~` — is now reported as a finding at exit 1.
+   What remains at 2 is a genuinely repo-only file **or** environment breakage
+   (missing/wrong-path registry, no `python3`, unreadable file), and the linter
+   cannot tell a hook which of those it hit. So keep the version-stamp test: a
+   stamped file can no longer legitimately exit 2, because provenance means the
+   index should know it. Tolerating 2 unconditionally re-opens the hole this change
+   closes — for the 270 stamped files in the current fleet, a mistyped registry path
+   would go from caught to silently green.
 
    ```bash
    scripts/skill-lint.sh "$name" "$file" ; rc=$?
-   if [ "$rc" -eq 1 ]; then exit 1; fi
-   if [ "$rc" -eq 2 ] && grep -q '^<!-- skill-templates: ' "$file"; then exit 1; fi
+   if [ "$rc" -eq 1 ]; then exit 1; fi   # includes a stamped file the index does not know
    ```
+
+   Earlier revisions of this step told the hook to re-test the file itself with
+   `grep -q '^<!-- skill-templates: '` and fail on a *stamped* exit 2. That existed
+   only because exit 2 covered both conditions and the caller had to re-derive
+   which one it had hit. Do not reintroduce it: it re-implements, less accurately,
+   a check the linter already runs — the grep cannot see a stamp behind leading
+   whitespace, and cannot distinguish a well-formed stamp from a mangled one.
 7. **Compile to native targets.** Ensure the compiler exists in this repo (create `scripts/` if
    absent). If `scripts/compile-skill-targets.mjs` is missing — or you're running `update`, so it
    stays current with the registry — (re)fetch it: from a local clone,

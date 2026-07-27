@@ -18,8 +18,20 @@
 # reported on what could be checked and exits 2 — never 0, so "not verified" can
 # never be read as "passed".
 #
+# "Absent from the index" is two conditions, not one, and the STAMP tells them apart:
+#   - unstamped — a genuine repo-only skill. There is nothing to verify and nothing
+#     wrong. Exit 2 (`~`).
+#   - stamped — the file claims a registry install that this index does not know
+#     about: a stale clone, a renamed or retired skill, a typo'd <skill-name>, or
+#     the wrong registry.json. Its guards exist and were skipped. Exit 1 (`✗`).
+# Both exited 2 before, so the documented "fail on 1, tolerate 2" tolerated the
+# second — and with it every guard miss hiding behind a stale index. The exit code
+# carries the split (not just the wording) so that contract needs no amendment: a
+# consumer that already fails on 1 is fixed without touching its hook.
+#
 # Usage: scripts/skill-lint.sh <skill-name> <path/to/installed/skill.md> [registry.json]
-# Exit:  0 clean · 1 lint failures (printed) · 2 usage/environment error
+# Exit:  0 clean · 1 lint failures (printed) · 2 not verifiable — a repo-only skill,
+#        or a usage/environment error
 set -euo pipefail
 
 NAME="${1:-}"; FILE="${2:-}"
@@ -141,6 +153,24 @@ elif m.group(1) != name:
     # expected 'demo'" and tells the reader nothing.
     stamp_fails.append(f"stamp names {m.group(1)!r}, expected {name!r}")
 
+# 3b) PROVENANCE — does the file bear a stamp marker at all? A different question
+#     from check 3's "is the stamp well formed", and deliberately looser, because
+#     the unregistered path below asks only "was this file ever installed from the
+#     registry". A mangled, misnamed, truncated or hand-forged stamp answers yes
+#     just as loudly as a good one — louder, in fact: those are the files that
+#     most need looking at, and keying on `not stamp_fails` would route exactly
+#     them back into the tolerated bucket.
+#
+#     Anchored to the start of the line's content, so prose quoting the format
+#     is not provenance — skill.md's own step 5 says to end the file with
+#     `<!-- skill-templates: <name> <hash> <date> -->` inside backticks, and a
+#     skill that documents skills must not be read as one that was installed.
+#     A raw stamp line at the head of a fenced example would count; that is the
+#     conservative direction (it asks for a look), and no file among the 337
+#     installed under ~/Projects carries a second marker or a marker anywhere
+#     but the last non-blank line.
+stamped = any(re.match(r'\s*<!--\s*skill-templates:', ln) for ln in lines)
+
 # 4) registry guards — each guard passes if ANY of its anyOf regexes matches.
 #    A missing registry or an unknown skill is an ENVIRONMENT error (exit 2), not a
 #    silent pass — otherwise the "deterministic gate" could green-light unchecked.
@@ -154,12 +184,36 @@ except FileNotFoundError:
 
 entry = next((s for s in reg.get("skills", []) if s.get("name") == name), None)
 if entry is None:
-    # Repo-only skills (CLAUDE.md names `commit`, `qa-update`, `tdd-feature` …)
-    # are maintained directly in a repo's .claude/commands and are legitimately
-    # absent from the index. Checks 1-2 are registry-independent and apply to
-    # them perfectly well, so report those before bailing out (check 3 does NOT:
-    # a stamp is proof of a registry install, so requiring one would fail every
-    # repo-only file) — `commit.md` is a
+    # Two very different files land here, and `stamped` is what separates them.
+    #
+    # STAMPED — not a repo-only skill at all. The file was installed from a
+    # registry; this index just does not know it (stale clone, renamed or retired
+    # skill, typo'd <skill-name>, wrong registry.json). Its guards are real and
+    # went unapplied, so the SAME corruption that reports `✗ guard miss` against
+    # a current index reported `~ clean` against a stale one — and the documented
+    # "tolerate 2" swallowed it. That is a finding about the file, so it is
+    # reported as one, at exit 1, with the stamp checks folded back in: a file
+    # claiming a registry install is held to the stamp's shape.
+    if stamped:
+        fails.insert(0, f"stamped as a registry install but absent from the index "
+                        f"({reg_path}) — stale index, a renamed/retired skill, a "
+                        f"typo'd skill name, or the wrong registry")
+        fails.extend(stamp_fails)
+        print(f"ERROR: '{name}' is not in the registry index ({reg_path}), yet the file "
+              f"carries a stamp marker — a registry install the index does not know, "
+              f"not a repo-only skill. Cannot verify guards.", file=sys.stderr)
+        print(f"✗ {name}: {len(fails)} issue(s); guards NOT verified "
+              f"(the skill is absent from the index)")
+        for f in fails:
+            print(f"  - {f}")
+        sys.exit(1)
+
+    # UNSTAMPED — a repo-only skill (CLAUDE.md names `commit`, `qa-update`,
+    # `tdd-feature` …), maintained directly in a repo's .claude/commands and
+    # legitimately absent from the index. Checks 1-2 are registry-independent and
+    # apply to them perfectly well, so report those before bailing out (check 3
+    # does NOT: a stamp is proof of a registry install, so requiring one would
+    # fail every repo-only file) — `commit.md` is a
     # skill about writing commits, which is exactly where an attribution footer
     # would do damage, and it was the one class the linter refused to inspect.
     #
@@ -173,8 +227,8 @@ if entry is None:
         for f in fails:
             print(f"  - {f}")
         sys.exit(1)
-    print(f"~ {name}: clean on markers and attribution; "
-          f"guards and version stamp NOT verified (not a registry skill)")
+    print(f"~ {name}: clean on markers and attribution; guards and version stamp "
+          f"NOT verified (unstamped and absent from the index — a repo-only skill)")
     sys.exit(2)
 fails.extend(stamp_fails)   # a registry skill: the stamp is required after all
 guards = entry.get("guards", [])
