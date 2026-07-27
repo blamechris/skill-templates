@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "5c35725",
+  "generatedFromCommit": "8c8e472",
   "skillCount": 37,
   "skills": [
     {
@@ -71,7 +71,7 @@
     },
     {
       "name": "batch-merge",
-      "hash": "0a76684",
+      "hash": "8c8e472",
       "lines": 319,
       "description": "Sequentially merge a set of reviewed PRs, handling branch protection's \"must be up-to-date\" requirement by updating each branch after the previous merge.",
       "guards": [
