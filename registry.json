@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "987eb2b",
+  "generatedFromCommit": "0500440",
   "skillCount": 36,
   "skills": [
     {
@@ -273,7 +273,9 @@
         {
           "label": "acceptance-criteria-required",
           "anyOf": [
-            "[Aa]cceptance [Cc]riteria"
+            "[Aa]lways include acceptance criteria",
+            "[Ii]ssues without criteria",
+            "criteria are hard to close"
           ]
         },
         {

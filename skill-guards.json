@@ -217,7 +217,9 @@
     {
       "label": "acceptance-criteria-required",
       "anyOf": [
-        "[Aa]cceptance [Cc]riteria"
+        "[Aa]lways include acceptance criteria",
+        "[Ii]ssues without criteria",
+        "criteria are hard to close"
       ]
     },
     {
