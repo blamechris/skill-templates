@@ -11,13 +11,17 @@
 // a self-contained artifact either way. Generic + dependency-free → reusable across projects
 // (destined for skill-templates alongside /smoke-form).
 //
-// Usage:
-//   node tools/smoke-intake.mjs <form.html> [--port 8770]
+// Usage (run it from wherever it lives — `assets/` here, `tools/` once copied into a project):
+//   node <path>/smoke-intake.mjs <form.html> [--port 8770]
 //     → serves the form at http://127.0.0.1:<port>/ and appends results to <form>.results.jsonl
 //     → watch live with:  tail -f "<form>.results.jsonl"
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+
+// How this script was actually invoked, so the usage line points at the real path
+// instead of a hard-coded one that only matches a repo that copied it to tools/.
+const SELF = process.argv[1] ? path.relative(process.cwd(), process.argv[1]) : 'smoke-intake.mjs';
 
 // Form path: an explicit arg, else the newest docs/smoke-{test,form}-*.html (so `npm run
 // smoke-intake` just works after generating a report).
@@ -34,7 +38,7 @@ function newestForm() {
 const argForm = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : null;
 const formPath = argForm || newestForm();
 if (!formPath || !fs.existsSync(formPath)) {
-  console.error('usage: node tools/smoke-intake.mjs [form.html] [--port N]  (defaults to the newest docs/smoke-*.html)');
+  console.error(`usage: node ${SELF} [form.html] [--port N]  (defaults to the newest docs/smoke-*.html)`);
   process.exit(1);
 }
 const portFlag = process.argv.indexOf('--port');
@@ -51,8 +55,20 @@ const server = http.createServer((req, res) => {
   const url = (req.url || '/').split('?')[0];
 
   if (req.method === 'GET' && url === '/') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-    fs.createReadStream(formPath).pipe(res);
+    // Handle the stream's error BEFORE piping: `.pipe()` does not forward a source
+    // error, so an unhandled one is thrown as an uncaught exception and kills the
+    // whole intake — losing every subsequent mark, not just this page load. The form
+    // existed at startup but can vanish mid-session (regenerated, moved, perms).
+    const stream = fs.createReadStream(formPath);
+    stream.on('error', (e) => {
+      console.error(`[intake] cannot read ${formPath}: ${e.message}`);
+      if (!res.headersSent) return json(res, 500, { ok: false, error: 'form unreadable' });
+      res.destroy();
+    });
+    stream.once('open', () => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      stream.pipe(res);
+    });
     return;
   }
   // The current results, for the agent to read on demand (the Monitor tails the file directly).
