@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "8c8e472",
+  "generatedFromCommit": "6a08cec",
   "skillCount": 37,
   "skills": [
     {
@@ -1596,10 +1596,10 @@
           ]
         },
         {
-          "label": "batch-merge-option",
+          "label": "merge-step-routing",
+          "note": "Binds the MERGE STEP, not the word. Was `anyOf: [\"batch-merge\", \"merge:off\"]` — a bare substring that passed claude-code-notify, whose Phase 5 had been rewritten to `gh pr merge ${PR_NUM} --squash` (bypassing /batch-merge's Copilot gate) while two vestigial `/batch-merge` mentions survived in the Morning Summary template and Critical Rule 5. The replacement is scoped to the merge PHASE section — heading matching `#{2,4} Phase <n> …Merg…` up to the next heading — and requires `/batch-merge` inside it AND no executable `gh pr merge` inside it. `gh pr merge --auto` is exempted because the merge phase names it only to forbid it. `Phase \\d+` in the anchor is deliberate: without it the summary's `### Merged by this session` table and the wave scan's `#### 2c. Check for User Merges` could stand in for the merge phase.",
           "anyOf": [
-            "batch-merge",
-            "merge:off"
+            "#{2,4} +Phase \\d+[^\\n]*Merg[^\\n]*\\n(?:(?!\\n#{1,4} )(?!gh pr merge(?![^\\n]*--auto))[\\s\\S])*?/batch-merge(?:(?!\\n#{1,4} )(?!gh pr merge(?![^\\n]*--auto))[\\s\\S])*(?=\\n#{1,4} |\\Z)"
           ]
         },
         {
