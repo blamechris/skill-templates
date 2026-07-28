@@ -1,5 +1,5 @@
 {
-  "_comment": "Per-skill content guards — load-bearing markers that must survive customization. Each guard passes if ANY of its regexes matches the installed skill. Ported from sync.sh so the check outlives it; build-index.sh folds these into registry.json, and /skill uses them in `add` self-validation and `outdated`.",
+  "_comment": "Per-skill content guards — load-bearing markers that must survive customization. Each guard passes if ANY of its regexes matches the installed skill (Python re.search over the whole file, no flags — so `.` does not cross newlines and ^/$ are string anchors). Ported from sync.sh so the check outlives it; build-index.sh folds these into registry.json, and /skill uses them in `add` self-validation and `outdated`. WRITING A GUARD: bind the sentence that states the rule, not a word that happens to appear near it. Every alternate in an `anyOf` must be a rewording of the SAME sentence — never a neighbouring heading, table row, or output template, because those are exactly what survives when a customizing agent rewrites the rule. Validate by deleting ONLY the rule line and leaving the decoration intact: if the guard still matches, it is vacuous. An optional `note` field records why a non-obvious pattern is shaped the way it is; skill-lint and /skill read only `label` and `anyOf`.",
   "agent-review": [
     {
       "label": "mandatory-issues",
@@ -882,10 +882,10 @@
       ]
     },
     {
-      "label": "batch-merge-option",
+      "label": "merge-step-routing",
+      "note": "Binds the MERGE STEP, not the word. Was `anyOf: [\"batch-merge\", \"merge:off\"]` — a bare substring that passed claude-code-notify, whose Phase 5 had been rewritten to `gh pr merge ${PR_NUM} --squash` (bypassing /batch-merge's Copilot gate) while two vestigial `/batch-merge` mentions survived in the Morning Summary template and Critical Rule 5. The replacement is scoped to the merge PHASE section — heading matching `#{2,4} Phase <n> …Merg…` up to the next heading — and requires `/batch-merge` inside it AND no executable `gh pr merge` inside it. `gh pr merge --auto` is exempted because the merge phase names it only to forbid it. `Phase \\d+` in the anchor is deliberate: without it the summary's `### Merged by this session` table and the wave scan's `#### 2c. Check for User Merges` could stand in for the merge phase.",
       "anyOf": [
-        "batch-merge",
-        "merge:off"
+        "#{2,4} +Phase \\d+[^\\n]*Merg[^\\n]*\\n(?:(?!\\n#{1,4} )(?!gh pr merge(?![^\\n]*--auto))[\\s\\S])*?/batch-merge(?:(?!\\n#{1,4} )(?!gh pr merge(?![^\\n]*--auto))[\\s\\S])*(?=\\n#{1,4} |\\Z)"
       ]
     },
     {
