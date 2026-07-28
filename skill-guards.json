@@ -72,6 +72,14 @@
         "gh pr merge --auto",
         "auto-merge"
       ]
+    },
+    {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "\\*\\*[Nn][Oo] attribution",
+        "[Zz]ero [Aa]ttribution [Pp]olicy",
+        "Co-Authored-By"
+      ]
     }
   ],
   "batch-merge": [
@@ -108,6 +116,14 @@
       "label": "merge-step",
       "anyOf": [
         "gh pr merge"
+      ]
+    },
+    {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "\\*\\*[Nn][Oo] attribution",
+        "[Zz]ero[- ][Aa]ttribution",
+        "[Ff]ollow[^.\\n]{0,30}[Aa]ttribution [Pp]olicy"
       ]
     }
   ],
@@ -300,6 +316,14 @@
         "cross-reference",
         "Reconcile"
       ]
+    },
+    {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "\\*\\*[Nn][Oo] attribution",
+        "[Zz]ero [Aa]ttribution",
+        "[Ff]ollow[^.\\n]{0,30}[Aa]ttribution [Pp]olicy"
+      ]
     }
   ],
   "create-issue": [
@@ -442,6 +466,14 @@
         "[Dd]o (NOT|not) close the parent",
         "[Pp]arent stays open"
       ]
+    },
+    {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "\\*\\*[Nn][Oo] attribution",
+        "Co-Authored-By",
+        "[Ff]ollow[^.\\n]{0,30}[Aa]ttribution [Pp]olicy"
+      ]
     }
   ],
   "deps": [
@@ -564,6 +596,14 @@
         "already green",
         "CI is passing it reports"
       ]
+    },
+    {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "\\*\\*[Nn][Oo] attribution",
+        "[Zz]ero[- ][Aa]ttribution",
+        "[Ff]ollow[^.\\n]{0,30}[Aa]ttribution [Pp]olicy"
+      ]
     }
   ],
   "full-review": [
@@ -594,6 +634,14 @@
       "anyOf": [
         "Sequential.*not parallel",
         "MUST complete before"
+      ]
+    },
+    {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "[Zz]ero[- ][Aa]ttribution",
+        "\\*\\*[Nn][Oo] attribution",
+        "[Ff]ollow[^.\\n]{0,30}[Aa]ttribution [Pp]olicy"
       ]
     }
   ],
@@ -729,6 +777,13 @@
       "label": "mergestate-diagnosis",
       "anyOf": [
         "mergeStateStatus"
+      ]
+    },
+    {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "\\*\\*[Nn][Oo] attribution",
+        "[Zz]ero [Aa]ttribution [Pp]olicy"
       ]
     }
   ],
@@ -1408,6 +1463,14 @@
       "anyOf": [
         "Merged by this session",
         "entry in the Morning Summary"
+      ]
+    },
+    {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "\\*\\*[Nn][Oo] attribution",
+        "[Zz]ero [Aa]ttribution [Pp]olicy",
+        "Co-Authored-By"
       ]
     }
   ],
