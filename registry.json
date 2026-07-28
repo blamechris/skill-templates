@@ -38,7 +38,33 @@
       "name": "agentic-audit",
       "hash": "3f616c3",
       "lines": 142,
-      "description": "Launch a panel of specialized agents to audit a pull request from multiple perspectives before merge."
+      "description": "Launch a panel of specialized agents to audit a pull request from multiple perspectives before merge.",
+      "guards": [
+        {
+          "label": "synthesis-to-user-no-files",
+          "anyOf": [
+            "no files written",
+            "directly to the user",
+            "[Ww]rite no files"
+          ]
+        },
+        {
+          "label": "foreground-agent-batching",
+          "anyOf": [
+            "foreground Task calls",
+            "[Rr]un agents as foreground",
+            "[Dd]o NOT run agents in the background"
+          ]
+        },
+        {
+          "label": "evidence-over-vagueness",
+          "anyOf": [
+            "Reference exact lines",
+            "read surrounding code in changed files",
+            "[Cc]ite exact lines"
+          ]
+        }
+      ]
     },
     {
       "name": "autonomous-dev-flow",
@@ -116,7 +142,78 @@
       "name": "bug-hunt",
       "hash": "7f5fa28",
       "lines": 316,
-      "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues."
+      "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.",
+      "guards": [
+        {
+          "label": "refuse-without-target",
+          "anyOf": [
+            "refuse and ask the user what to hunt",
+            "without a scope is too noisy",
+            "[Rr]efuse if (the )?TARGET is missing"
+          ]
+        },
+        {
+          "label": "verify-labels-exist",
+          "anyOf": [
+            "[Vv]erify labels exist",
+            "[Ss]kip missing labels",
+            "[Cc]heck the labels? exist"
+          ]
+        },
+        {
+          "label": "never-push-bug-hunt-output",
+          "anyOf": [
+            "Do NOT push",
+            "[Dd]o not push",
+            "[Nn]ever push"
+          ]
+        },
+        {
+          "label": "empty-beats-padded",
+          "anyOf": [
+            "Empty is honest",
+            "Padded is harmful",
+            "return an empty findings list",
+            "empty is a valid result",
+            "return empty if their lens"
+          ]
+        },
+        {
+          "label": "duplicate-check-before-filing",
+          "anyOf": [
+            "Check for existing issues",
+            "flag possible duplicates",
+            "gh issue list --search"
+          ]
+        },
+        {
+          "label": "concrete-verified-findings",
+          "anyOf": [
+            "against vibes",
+            "concrete and reproducible",
+            "MUST be concrete",
+            "READ actual source code",
+            "[Vv]erify each finding against the code"
+          ]
+        },
+        {
+          "label": "cap-findings-at-six",
+          "anyOf": [
+            "[Cc]ap your findings at 6",
+            "cap findings at 6",
+            "Quality over quantity",
+            "Quality over noise"
+          ]
+        },
+        {
+          "label": "confirm-before-filing",
+          "anyOf": [
+            "always confirm",
+            "Ask which candidates to file",
+            "ask the user which candidates"
+          ]
+        }
+      ]
     },
     {
       "name": "catchup",
@@ -661,7 +758,62 @@
       "name": "manual-testing-mode",
       "hash": "a1368f4",
       "lines": 222,
-      "description": "Bootstrap a dogfooding session, then capture issues as the user finds them — defaulting to filing GitHub issues over fixing."
+      "description": "Bootstrap a dogfooding session, then capture issues as the user finds them — defaulting to filing GitHub issues over fixing.",
+      "guards": [
+        {
+          "label": "default-to-filing",
+          "anyOf": [
+            "default is to file, not fix",
+            "When in doubt, file",
+            "[Ff]iling is the default"
+          ]
+        },
+        {
+          "label": "file-before-fixing",
+          "anyOf": [
+            "Never fix without filing first",
+            "Still file the issue first",
+            "filed for tracking"
+          ]
+        },
+        {
+          "label": "one-issue-per-report",
+          "anyOf": [
+            "One issue per filed report",
+            "bundle multiple distinct bugs",
+            "[Ff]ile them separately"
+          ]
+        },
+        {
+          "label": "announce-mode-switch",
+          "anyOf": [
+            "Never silently switch modes",
+            "say so explicitly"
+          ]
+        },
+        {
+          "label": "single-manual-testing-branch",
+          "anyOf": [
+            "per-fix branches",
+            "[Aa]ll fixes accumulate on"
+          ]
+        },
+        {
+          "label": "confirm-before-bootstrap",
+          "anyOf": [
+            "Confirm with user",
+            "before creating the branch",
+            "[Aa]sk before creating the branch"
+          ]
+        },
+        {
+          "label": "short-responses-in-flow",
+          "anyOf": [
+            "Default to short responses",
+            "don't need essays"
+          ]
+        }
+      ]
     },
     {
       "name": "merge-gate",
@@ -744,7 +896,96 @@
       "name": "parallel-dev",
       "hash": "6a1a98b",
       "lines": 408,
-      "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts."
+      "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts.",
+      "guards": [
+        {
+          "label": "tdd-mandatory",
+          "anyOf": [
+            "TDD is mandatory",
+            "[Nn]o skipping tests",
+            "TDD is required"
+          ]
+        },
+        {
+          "label": "explicit-staging-only",
+          "anyOf": [
+            "never `git add -A`",
+            "never git add -A",
+            "[Ss]tage specific files"
+          ]
+        },
+        {
+          "label": "never-merge",
+          "anyOf": [
+            "[Nn]ever merge",
+            "Do NOT merge the PR",
+            "accumulate for user review"
+          ]
+        },
+        {
+          "label": "reviews-run-sequentially",
+          "anyOf": [
+            "[Rr]eviews run sequentially",
+            "[Nn]ever run /full-review in parallel",
+            "never in parallel"
+          ]
+        },
+        {
+          "label": "single-confirmation-gate",
+          "anyOf": [
+            "ONLY confirmation point",
+            "One confirmation point",
+            "Wait for user confirmation"
+          ]
+        },
+        {
+          "label": "two-fix-attempts-max",
+          "anyOf": [
+            "Two fix attempts max",
+            "[Ss]econd failure",
+            "second attempt still fails"
+          ]
+        },
+        {
+          "label": "foreground-agents-not-background",
+          "anyOf": [
+            "Do NOT run agents in the background",
+            "foreground Agent calls",
+            "NOT background"
+          ]
+        },
+        {
+          "label": "parent-stays-open",
+          "anyOf": [
+            "Parent stays open",
+            "do NOT close it",
+            "[Dd]o not close the parent"
+          ]
+        },
+        {
+          "label": "comment-on-skips",
+          "anyOf": [
+            "Comment on skips",
+            "comment on each with reason",
+            "skipped issue gets a GitHub comment"
+          ]
+        },
+        {
+          "label": "queue-hard-cap",
+          "anyOf": [
+            "[Hh]ard cap 10",
+            "[Rr]efuse larger queues"
+          ]
+        },
+        {
+          "label": "max-concurrent-agents",
+          "anyOf": [
+            "[Mm]ax(?:imum)? (?:of )?5",
+            "More than 5 degrades quality",
+            "[Cc]ap at 5"
+          ]
+        }
+      ]
     },
     {
       "name": "prime-directive",
@@ -836,13 +1077,128 @@
       "name": "project-audit",
       "hash": "aae4d65",
       "lines": 515,
-      "description": "Launch a comprehensive multi-agent audit of the entire project. Agents with diverse perspectives analyze the codebase in parallel, then findings are synthesized into a master assessment with actionable recommendations."
+      "description": "Launch a comprehensive multi-agent audit of the entire project. Agents with diverse perspectives analyze the codebase in parallel, then findings are synthesized into a master assessment with actionable recommendations.",
+      "guards": [
+        {
+          "label": "real-discovery-not-filenames",
+          "anyOf": [
+            "Spend real effort on discovery",
+            "file names alone",
+            "MUST explore the codebase thoroughly",
+            "MUST read actual source code",
+            "Do NOT skip this step"
+          ]
+        },
+        {
+          "label": "cite-file-line-evidence",
+          "anyOf": [
+            "MUST provide file:line references",
+            "file:line references for every finding",
+            "cite file:line for every finding"
+          ]
+        },
+        {
+          "label": "warn-before-overwriting-audit",
+          "anyOf": [
+            "already contains a previous audit",
+            "ask whether to overwrite",
+            "timestamped subdirectory"
+          ]
+        },
+        {
+          "label": "foreground-agent-batching",
+          "anyOf": [
+            "[Dd]o NOT run agents in the background",
+            "[Dd]o not run agents in the background",
+            "use foreground Task calls",
+            "[Nn]ever run the agents in the background"
+          ]
+        },
+        {
+          "label": "never-push-audit-output",
+          "anyOf": [
+            "Do NOT push",
+            "[Dd]o not push",
+            "[Nn]ever push"
+          ]
+        },
+        {
+          "label": "ask-before-filing-issues",
+          "anyOf": [
+            "ask the user",
+            "Would you like me to create GitHub issues",
+            "[Aa]sk (first )?before (creating|filing) (any )?issues"
+          ]
+        },
+        {
+          "label": "resolve-contested-findings",
+          "anyOf": [
+            "do not just list opinions",
+            "who is right",
+            "[Ss]ynthesi[sz]e the disagreement"
+          ]
+        }
+      ]
     },
     {
       "name": "recon",
       "hash": "7f5fa28",
       "lines": 275,
-      "description": "Map an unfamiliar repository (or area within one) so you know where to start. Output is a **descriptive lay-of-the-land**, not a critique. Use this *before* `/tackle-issues`, `/bug-hunt`, or `/project-audit` — it produces the orientation those skills assume."
+      "description": "Map an unfamiliar repository (or area within one) so you know where to start. Output is a **descriptive lay-of-the-land**, not a critique. Use this *before* `/tackle-issues`, `/bug-hunt`, or `/project-audit` — it produces the orientation those skills assume.",
+      "guards": [
+        {
+          "label": "descriptive-not-evaluative",
+          "anyOf": [
+            "descriptive, not evaluative",
+            "not a critique",
+            "[Dd]o NOT rate, grade",
+            "[Nn]o ratings",
+            "recon, not audit"
+          ]
+        },
+        {
+          "label": "cite-file-line",
+          "anyOf": [
+            "MUST cite `file:line`",
+            "cite `file:line` for any concrete",
+            "file:line for every concrete claim"
+          ]
+        },
+        {
+          "label": "read-real-files-not-names",
+          "anyOf": [
+            "MUST read actual files",
+            "read actual files, not guess",
+            "infer from filenames",
+            "guess from (file)?names"
+          ]
+        },
+        {
+          "label": "open-questions-over-guessing",
+          "anyOf": [
+            "rather than guess",
+            "than fabricate",
+            "flag a gap"
+          ]
+        },
+        {
+          "label": "never-push-recon-output",
+          "anyOf": [
+            "Do NOT push",
+            "[Dd]o not push",
+            "[Nn]ever push"
+          ]
+        },
+        {
+          "label": "synthesize-not-concatenate",
+          "anyOf": [
+            "[Nn]ot just concatenate",
+            "concatenate scout outputs",
+            "individual scout reports",
+            "live only in your synthesis"
+          ]
+        }
+      ]
     },
     {
       "name": "release",
@@ -958,7 +1314,42 @@
       "name": "skill-profile",
       "hash": "ea888eb",
       "lines": 94,
-      "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time."
+      "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time.",
+      "guards": [
+        {
+          "label": "real-values-never-invent",
+          "anyOf": [
+            "never invent",
+            "[Dd]iscover, don't assume",
+            "rather than fabricate",
+            "[Uu]se real values"
+          ]
+        },
+        {
+          "label": "no-secrets-in-profile",
+          "anyOf": [
+            "[Nn]o secrets",
+            "never go here",
+            "[Nn]ever (commit|record) (secrets|credentials)"
+          ]
+        },
+        {
+          "label": "customizations-section-schema",
+          "anyOf": [
+            "One section per skill that needs it",
+            "exact skill name \\+ literal",
+            "headed `## <skill-name> Customizations`"
+          ]
+        },
+        {
+          "label": "idempotent-profile",
+          "anyOf": [
+            "[Ii]dempotent",
+            "[Rr]e-running reproduces the same profile",
+            "only changes when the repo does"
+          ]
+        }
+      ]
     },
     {
       "name": "skill",
@@ -995,19 +1386,136 @@
       "name": "smoke-form",
       "hash": "ea888eb",
       "lines": 233,
-      "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device."
+      "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device.",
+      "guards": [
+        {
+          "label": "ground-items-in-real-changes",
+          "anyOf": [
+            "Ground every item in what actually",
+            "flag, don't fabricate",
+            "could NOT ground in a real change",
+            "[Gg]round every item in real"
+          ]
+        },
+        {
+          "label": "never-overwrite-output",
+          "anyOf": [
+            "[Nn]ever\\s+overwrite",
+            "on collision",
+            "[Dd]o not\\s+overwrite"
+          ]
+        },
+        {
+          "label": "self-contained-zero-network",
+          "anyOf": [
+            "zero external requests",
+            "no external\\b",
+            "NO external `src=`",
+            "[Nn]o network requests"
+          ]
+        },
+        {
+          "label": "defer-to-automated-coverage",
+          "anyOf": [
+            "already covered by green automated tests",
+            "automation can't see",
+            "[Aa]utomated tests already cover"
+          ]
+        }
+      ]
     },
     {
       "name": "smoke-test",
       "hash": "21fa678",
       "lines": 212,
-      "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results."
+      "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results.",
+      "guards": [
+        {
+          "label": "no-real-side-effects",
+          "anyOf": [
+            "[Nn]ever send real messages",
+            "trigger expensive operations",
+            "[Ss]ide-effect free",
+            "[Nn]ever invoke tools that mutate"
+          ]
+        },
+        {
+          "label": "clean-up-artifacts",
+          "anyOf": [
+            "[Ss]creenshots are temporary",
+            "[Aa]lways clean up",
+            "[Nn]o persistent artifacts",
+            "nothing to clean up"
+          ]
+        },
+        {
+          "label": "fail-fast-no-connection",
+          "anyOf": [
+            "[Ff]ail fast on",
+            "report immediately instead of running checks"
+          ]
+        },
+        {
+          "label": "idempotent-rerun",
+          "anyOf": [
+            "[Ii]dempotent",
+            "[Ss]afe to run repeatedly",
+            "no persistent state",
+            "create persistent state"
+          ]
+        }
+      ]
     },
     {
       "name": "start-working",
       "hash": "5df829a",
       "lines": 356,
-      "description": "Scan all work sources — GitHub issues, open PRs, roadmap files, audit outputs, codebase TODOs — to determine what to work on next. If nothing actionable is found, perform a lightweight codebase audit to surface potential investigations."
+      "description": "Scan all work sources — GitHub issues, open PRs, roadmap files, audit outputs, codebase TODOs — to determine what to work on next. If nothing actionable is found, perform a lightweight codebase audit to surface potential investigations.",
+      "guards": [
+        {
+          "label": "read-only-never-writes",
+          "anyOf": [
+            "[Nn]ever writes files",
+            "NEVER writes files",
+            "[Nn]o file writes",
+            "does NOT write report files",
+            "purely informational",
+            "writes nothing"
+          ]
+        },
+        {
+          "label": "deduplicate-across-sources",
+          "anyOf": [
+            "[Dd]eduplicate across sources",
+            "same work item from multiple sources",
+            "[Ll]ink them instead"
+          ]
+        },
+        {
+          "label": "respect-blocked-and-assigned",
+          "anyOf": [
+            "Respect blocked",
+            "recommend working on a blocked",
+            "blocked or assigned item"
+          ]
+        },
+        {
+          "label": "graceful-degradation",
+          "anyOf": [
+            "[Gg]raceful degradation",
+            "[Nn]ever fail on a missing source",
+            "skip it silently"
+          ]
+        },
+        {
+          "label": "fallback-audit-only-when-empty",
+          "anyOf": [
+            "ONLY run this phase if",
+            "skip this phase entirely",
+            "[Oo]nly if Phases 1-3 found zero"
+          ]
+        }
+      ]
     },
     {
       "name": "swarm-audit",
@@ -1114,7 +1622,66 @@
       "name": "tiered-delegation",
       "hash": "0389e93",
       "lines": 63,
-      "description": "The cost-discipline constitution for multi-agent work: the **session's top model orchestrates; cheaper tiers execute**. Invoke it when a session is about to fan out subagents or workflows (audits, marathons, parallel implementation, large research) to load the delegation rules — who does what tier of work, how far down to push each task, and when a claim must be re-verified before it drives an action. It composes with the marathon machinery (`/prime-directive`, `/tackle-issues`, `/parallel-dev`) and with ad-hoc Workflow/Agent fan-outs alike."
+      "description": "The cost-discipline constitution for multi-agent work: the **session's top model orchestrates; cheaper tiers execute**. Invoke it when a session is about to fan out subagents or workflows (audits, marathons, parallel implementation, large research) to load the delegation rules — who does what tier of work, how far down to push each task, and when a claim must be re-verified before it drives an action. It composes with the marathon machinery (`/prime-directive`, `/tackle-issues`, `/parallel-dev`) and with ad-hoc Workflow/Agent fan-outs alike.",
+      "guards": [
+        {
+          "label": "no-up-tier-delegation",
+          "anyOf": [
+            "[Nn]o up-tier drift",
+            "delegated \\*up\\*",
+            "above the session ceiling",
+            "never assume a higher tier",
+            "[Nn]ever delegate up"
+          ]
+        },
+        {
+          "label": "never-invent-a-tier",
+          "anyOf": [
+            "never invent a tier",
+            "[Nn]ever invent a (model )?tier",
+            "do not invent a tier"
+          ]
+        },
+        {
+          "label": "down-tier-claims-need-verification",
+          "anyOf": [
+            "don't drive actions unverified",
+            "independent adversarial verification",
+            "verifier strength to blast radius"
+          ]
+        },
+        {
+          "label": "orchestrator-checks-before-relaying",
+          "anyOf": [
+            "prime investigator",
+            "never relay a subagent conclusion",
+            "conserves tokens, not accountability"
+          ]
+        },
+        {
+          "label": "no-duplicate-delegated-work",
+          "anyOf": [
+            "[Dd]on't duplicate delegated work",
+            "waits for the result instead of re-running",
+            "not \\*re-doing\\*"
+          ]
+        },
+        {
+          "label": "parallel-writers-get-worktrees",
+          "anyOf": [
+            "[Pp]arallel writers get isolation",
+            "write-capable workers each get a worktree",
+            "forbidden to `checkout`"
+          ]
+        },
+        {
+          "label": "effort-dial-before-tier",
+          "anyOf": [
+            "Effort is a dial",
+            "Raising effort is cheaper than raising tier"
+          ]
+        }
+      ]
     },
     {
       "name": "unattended-merge",
@@ -1174,7 +1741,52 @@
       "name": "visual-brief",
       "hash": "a85c799",
       "lines": 215,
-      "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together."
+      "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together.",
+      "guards": [
+        {
+          "label": "never-invent-brief-content",
+          "anyOf": [
+            "Never invent",
+            "can't be verified, say so",
+            "rather than fabricating",
+            "[Dd]o not fabricate"
+          ]
+        },
+        {
+          "label": "verify-citations-before-writing",
+          "anyOf": [
+            "verify symbols before citing",
+            "drift from reality",
+            "misstates the code"
+          ]
+        },
+        {
+          "label": "self-contained-no-external-deps",
+          "anyOf": [
+            "no external dependencies",
+            "no CDN links",
+            "Inline `<style>` only",
+            "One file, self-contained",
+            "opened directly via `file://`"
+          ]
+        },
+        {
+          "label": "never-overwrite-output",
+          "anyOf": [
+            "never overwrite",
+            "on collision",
+            "[Dd]o not overwrite"
+          ]
+        },
+        {
+          "label": "surface-unverified-claims",
+          "anyOf": [
+            "Honesty surfaces",
+            "don't bury it",
+            "mark it\\s*\\n?\\s*visually"
+          ]
+        }
+      ]
     }
   ]
 }
