@@ -25,6 +25,32 @@
       ]
     }
   ],
+  "agentic-audit": [
+    {
+      "label": "synthesis-to-user-no-files",
+      "anyOf": [
+        "no files written",
+        "directly to the user",
+        "[Ww]rite no files"
+      ]
+    },
+    {
+      "label": "foreground-agent-batching",
+      "anyOf": [
+        "foreground Task calls",
+        "[Rr]un agents as foreground",
+        "[Dd]o NOT run agents in the background"
+      ]
+    },
+    {
+      "label": "evidence-over-vagueness",
+      "anyOf": [
+        "Reference exact lines",
+        "read surrounding code in changed files",
+        "[Cc]ite exact lines"
+      ]
+    }
+  ],
   "autonomous-dev-flow": [
     {
       "label": "unattended-merge-gate",
@@ -82,6 +108,77 @@
       "label": "merge-step",
       "anyOf": [
         "gh pr merge"
+      ]
+    }
+  ],
+  "bug-hunt": [
+    {
+      "label": "refuse-without-target",
+      "anyOf": [
+        "refuse and ask the user what to hunt",
+        "without a scope is too noisy",
+        "[Rr]efuse if (the )?TARGET is missing"
+      ]
+    },
+    {
+      "label": "verify-labels-exist",
+      "anyOf": [
+        "[Vv]erify labels exist",
+        "[Ss]kip missing labels",
+        "[Cc]heck the labels? exist"
+      ]
+    },
+    {
+      "label": "never-push-bug-hunt-output",
+      "anyOf": [
+        "Do NOT push",
+        "[Dd]o not push",
+        "[Nn]ever push"
+      ]
+    },
+    {
+      "label": "empty-beats-padded",
+      "anyOf": [
+        "Empty is honest",
+        "Padded is harmful",
+        "return an empty findings list",
+        "empty is a valid result",
+        "return empty if their lens"
+      ]
+    },
+    {
+      "label": "duplicate-check-before-filing",
+      "anyOf": [
+        "Check for existing issues",
+        "flag possible duplicates",
+        "gh issue list --search"
+      ]
+    },
+    {
+      "label": "concrete-verified-findings",
+      "anyOf": [
+        "against vibes",
+        "concrete and reproducible",
+        "MUST be concrete",
+        "READ actual source code",
+        "[Vv]erify each finding against the code"
+      ]
+    },
+    {
+      "label": "cap-findings-at-six",
+      "anyOf": [
+        "[Cc]ap your findings at 6",
+        "cap findings at 6",
+        "Quality over quantity",
+        "Quality over noise"
+      ]
+    },
+    {
+      "label": "confirm-before-filing",
+      "anyOf": [
+        "always confirm",
+        "Ask which candidates to file",
+        "ask the user which candidates"
       ]
     }
   ],
@@ -546,6 +643,61 @@
       ]
     }
   ],
+  "manual-testing-mode": [
+    {
+      "label": "default-to-filing",
+      "anyOf": [
+        "default is to file, not fix",
+        "When in doubt, file",
+        "[Ff]iling is the default"
+      ]
+    },
+    {
+      "label": "file-before-fixing",
+      "anyOf": [
+        "Never fix without filing first",
+        "Still file the issue first",
+        "filed for tracking"
+      ]
+    },
+    {
+      "label": "one-issue-per-report",
+      "anyOf": [
+        "One issue per filed report",
+        "bundle multiple distinct bugs",
+        "[Ff]ile them separately"
+      ]
+    },
+    {
+      "label": "announce-mode-switch",
+      "anyOf": [
+        "Never silently switch modes",
+        "say so explicitly"
+      ]
+    },
+    {
+      "label": "single-manual-testing-branch",
+      "anyOf": [
+        "per-fix branches",
+        "[Aa]ll fixes accumulate on"
+      ]
+    },
+    {
+      "label": "confirm-before-bootstrap",
+      "anyOf": [
+        "Confirm with user",
+        "before creating the branch",
+        "[Aa]sk before creating the branch"
+      ]
+    },
+    {
+      "label": "short-responses-in-flow",
+      "anyOf": [
+        "Default to short responses",
+        "don't need essays"
+      ]
+    }
+  ],
   "merge": [
     {
       "label": "review-gate",
@@ -608,6 +760,95 @@
       "anyOf": [
         "fails a second time",
         "[Ss]econd failure"
+      ]
+    }
+  ],
+  "parallel-dev": [
+    {
+      "label": "tdd-mandatory",
+      "anyOf": [
+        "TDD is mandatory",
+        "[Nn]o skipping tests",
+        "TDD is required"
+      ]
+    },
+    {
+      "label": "explicit-staging-only",
+      "anyOf": [
+        "never `git add -A`",
+        "never git add -A",
+        "[Ss]tage specific files"
+      ]
+    },
+    {
+      "label": "never-merge",
+      "anyOf": [
+        "[Nn]ever merge",
+        "Do NOT merge the PR",
+        "accumulate for user review"
+      ]
+    },
+    {
+      "label": "reviews-run-sequentially",
+      "anyOf": [
+        "[Rr]eviews run sequentially",
+        "[Nn]ever run /full-review in parallel",
+        "never in parallel"
+      ]
+    },
+    {
+      "label": "single-confirmation-gate",
+      "anyOf": [
+        "ONLY confirmation point",
+        "One confirmation point",
+        "Wait for user confirmation"
+      ]
+    },
+    {
+      "label": "two-fix-attempts-max",
+      "anyOf": [
+        "Two fix attempts max",
+        "[Ss]econd failure",
+        "second attempt still fails"
+      ]
+    },
+    {
+      "label": "foreground-agents-not-background",
+      "anyOf": [
+        "Do NOT run agents in the background",
+        "foreground Agent calls",
+        "NOT background"
+      ]
+    },
+    {
+      "label": "parent-stays-open",
+      "anyOf": [
+        "Parent stays open",
+        "do NOT close it",
+        "[Dd]o not close the parent"
+      ]
+    },
+    {
+      "label": "comment-on-skips",
+      "anyOf": [
+        "Comment on skips",
+        "comment on each with reason",
+        "skipped issue gets a GitHub comment"
+      ]
+    },
+    {
+      "label": "queue-hard-cap",
+      "anyOf": [
+        "[Hh]ard cap 10",
+        "[Rr]efuse larger queues"
+      ]
+    },
+    {
+      "label": "max-concurrent-agents",
+      "anyOf": [
+        "[Mm]ax(?:imum)? (?:of )?5",
+        "More than 5 degrades quality",
+        "[Cc]ap at 5"
       ]
     }
   ],
@@ -688,6 +929,121 @@
         "fake completion",
         "faked completion",
         "documented-blocked"
+      ]
+    }
+  ],
+  "project-audit": [
+    {
+      "label": "real-discovery-not-filenames",
+      "anyOf": [
+        "Spend real effort on discovery",
+        "file names alone",
+        "MUST explore the codebase thoroughly",
+        "MUST read actual source code",
+        "Do NOT skip this step"
+      ]
+    },
+    {
+      "label": "cite-file-line-evidence",
+      "anyOf": [
+        "MUST provide file:line references",
+        "file:line references for every finding",
+        "cite file:line for every finding"
+      ]
+    },
+    {
+      "label": "warn-before-overwriting-audit",
+      "anyOf": [
+        "already contains a previous audit",
+        "ask whether to overwrite",
+        "timestamped subdirectory"
+      ]
+    },
+    {
+      "label": "foreground-agent-batching",
+      "anyOf": [
+        "[Dd]o NOT run agents in the background",
+        "[Dd]o not run agents in the background",
+        "use foreground Task calls",
+        "[Nn]ever run the agents in the background"
+      ]
+    },
+    {
+      "label": "never-push-audit-output",
+      "anyOf": [
+        "Do NOT push",
+        "[Dd]o not push",
+        "[Nn]ever push"
+      ]
+    },
+    {
+      "label": "ask-before-filing-issues",
+      "anyOf": [
+        "ask the user",
+        "Would you like me to create GitHub issues",
+        "[Aa]sk (first )?before (creating|filing) (any )?issues"
+      ]
+    },
+    {
+      "label": "resolve-contested-findings",
+      "anyOf": [
+        "do not just list opinions",
+        "who is right",
+        "[Ss]ynthesi[sz]e the disagreement"
+      ]
+    }
+  ],
+  "recon": [
+    {
+      "label": "descriptive-not-evaluative",
+      "anyOf": [
+        "descriptive, not evaluative",
+        "not a critique",
+        "[Dd]o NOT rate, grade",
+        "[Nn]o ratings",
+        "recon, not audit"
+      ]
+    },
+    {
+      "label": "cite-file-line",
+      "anyOf": [
+        "MUST cite `file:line`",
+        "cite `file:line` for any concrete",
+        "file:line for every concrete claim"
+      ]
+    },
+    {
+      "label": "read-real-files-not-names",
+      "anyOf": [
+        "MUST read actual files",
+        "read actual files, not guess",
+        "infer from filenames",
+        "guess from (file)?names"
+      ]
+    },
+    {
+      "label": "open-questions-over-guessing",
+      "anyOf": [
+        "rather than guess",
+        "than fabricate",
+        "flag a gap"
+      ]
+    },
+    {
+      "label": "never-push-recon-output",
+      "anyOf": [
+        "Do NOT push",
+        "[Dd]o not push",
+        "[Nn]ever push"
+      ]
+    },
+    {
+      "label": "synthesize-not-concatenate",
+      "anyOf": [
+        "[Nn]ot just concatenate",
+        "concatenate scout outputs",
+        "individual scout reports",
+        "live only in your synthesis"
       ]
     }
   ],
@@ -814,6 +1170,158 @@
       ]
     }
   ],
+  "skill-profile": [
+    {
+      "label": "real-values-never-invent",
+      "anyOf": [
+        "never invent",
+        "[Dd]iscover, don't assume",
+        "rather than fabricate",
+        "[Uu]se real values"
+      ]
+    },
+    {
+      "label": "no-secrets-in-profile",
+      "anyOf": [
+        "[Nn]o secrets",
+        "never go here",
+        "[Nn]ever (commit|record) (secrets|credentials)"
+      ]
+    },
+    {
+      "label": "customizations-section-schema",
+      "anyOf": [
+        "One section per skill that needs it",
+        "exact skill name \\+ literal",
+        "headed `## <skill-name> Customizations`"
+      ]
+    },
+    {
+      "label": "idempotent-profile",
+      "anyOf": [
+        "[Ii]dempotent",
+        "[Rr]e-running reproduces the same profile",
+        "only changes when the repo does"
+      ]
+    }
+  ],
+  "smoke-form": [
+    {
+      "label": "ground-items-in-real-changes",
+      "anyOf": [
+        "Ground every item in what actually",
+        "flag, don't fabricate",
+        "could NOT ground in a real change",
+        "[Gg]round every item in real"
+      ]
+    },
+    {
+      "label": "never-overwrite-output",
+      "anyOf": [
+        "[Nn]ever\\s+overwrite",
+        "on collision",
+        "[Dd]o not\\s+overwrite"
+      ]
+    },
+    {
+      "label": "self-contained-zero-network",
+      "anyOf": [
+        "zero external requests",
+        "no external\\b",
+        "NO external `src=`",
+        "[Nn]o network requests"
+      ]
+    },
+    {
+      "label": "defer-to-automated-coverage",
+      "anyOf": [
+        "already covered by green automated tests",
+        "automation can't see",
+        "[Aa]utomated tests already cover"
+      ]
+    }
+  ],
+  "smoke-test": [
+    {
+      "label": "no-real-side-effects",
+      "anyOf": [
+        "[Nn]ever send real messages",
+        "trigger expensive operations",
+        "[Ss]ide-effect free",
+        "[Nn]ever invoke tools that mutate"
+      ]
+    },
+    {
+      "label": "clean-up-artifacts",
+      "anyOf": [
+        "[Ss]creenshots are temporary",
+        "[Aa]lways clean up",
+        "[Nn]o persistent artifacts",
+        "nothing to clean up"
+      ]
+    },
+    {
+      "label": "fail-fast-no-connection",
+      "anyOf": [
+        "[Ff]ail fast on",
+        "report immediately instead of running checks"
+      ]
+    },
+    {
+      "label": "idempotent-rerun",
+      "anyOf": [
+        "[Ii]dempotent",
+        "[Ss]afe to run repeatedly",
+        "no persistent state",
+        "create persistent state"
+      ]
+    }
+  ],
+  "start-working": [
+    {
+      "label": "read-only-never-writes",
+      "anyOf": [
+        "[Nn]ever writes files",
+        "NEVER writes files",
+        "[Nn]o file writes",
+        "does NOT write report files",
+        "purely informational",
+        "writes nothing"
+      ]
+    },
+    {
+      "label": "deduplicate-across-sources",
+      "anyOf": [
+        "[Dd]eduplicate across sources",
+        "same work item from multiple sources",
+        "[Ll]ink them instead"
+      ]
+    },
+    {
+      "label": "respect-blocked-and-assigned",
+      "anyOf": [
+        "Respect blocked",
+        "recommend working on a blocked",
+        "blocked or assigned item"
+      ]
+    },
+    {
+      "label": "graceful-degradation",
+      "anyOf": [
+        "[Gg]raceful degradation",
+        "[Nn]ever fail on a missing source",
+        "skip it silently"
+      ]
+    },
+    {
+      "label": "fallback-audit-only-when-empty",
+      "anyOf": [
+        "ONLY run this phase if",
+        "skip this phase entirely",
+        "[Oo]nly if Phases 1-3 found zero"
+      ]
+    }
+  ],
   "swarm-audit": [
     {
       "label": "core-panel",
@@ -903,6 +1411,65 @@
       ]
     }
   ],
+  "tiered-delegation": [
+    {
+      "label": "no-up-tier-delegation",
+      "anyOf": [
+        "[Nn]o up-tier drift",
+        "delegated \\*up\\*",
+        "above the session ceiling",
+        "never assume a higher tier",
+        "[Nn]ever delegate up"
+      ]
+    },
+    {
+      "label": "never-invent-a-tier",
+      "anyOf": [
+        "never invent a tier",
+        "[Nn]ever invent a (model )?tier",
+        "do not invent a tier"
+      ]
+    },
+    {
+      "label": "down-tier-claims-need-verification",
+      "anyOf": [
+        "don't drive actions unverified",
+        "independent adversarial verification",
+        "verifier strength to blast radius"
+      ]
+    },
+    {
+      "label": "orchestrator-checks-before-relaying",
+      "anyOf": [
+        "prime investigator",
+        "never relay a subagent conclusion",
+        "conserves tokens, not accountability"
+      ]
+    },
+    {
+      "label": "no-duplicate-delegated-work",
+      "anyOf": [
+        "[Dd]on't duplicate delegated work",
+        "waits for the result instead of re-running",
+        "not \\*re-doing\\*"
+      ]
+    },
+    {
+      "label": "parallel-writers-get-worktrees",
+      "anyOf": [
+        "[Pp]arallel writers get isolation",
+        "write-capable workers each get a worktree",
+        "forbidden to `checkout`"
+      ]
+    },
+    {
+      "label": "effort-dial-before-tier",
+      "anyOf": [
+        "Effort is a dial",
+        "Raising effort is cheaper than raising tier"
+      ]
+    }
+  ],
   "unattended-merge": [
     {
       "label": "full-review-gate",
@@ -948,6 +1515,51 @@
         "do NOT merge",
         "flag.*don't merge",
         "failed gate"
+      ]
+    }
+  ],
+  "visual-brief": [
+    {
+      "label": "never-invent-brief-content",
+      "anyOf": [
+        "Never invent",
+        "can't be verified, say so",
+        "rather than fabricating",
+        "[Dd]o not fabricate"
+      ]
+    },
+    {
+      "label": "verify-citations-before-writing",
+      "anyOf": [
+        "verify symbols before citing",
+        "drift from reality",
+        "misstates the code"
+      ]
+    },
+    {
+      "label": "self-contained-no-external-deps",
+      "anyOf": [
+        "no external dependencies",
+        "no CDN links",
+        "Inline `<style>` only",
+        "One file, self-contained",
+        "opened directly via `file://`"
+      ]
+    },
+    {
+      "label": "never-overwrite-output",
+      "anyOf": [
+        "never overwrite",
+        "on collision",
+        "[Dd]o not overwrite"
+      ]
+    },
+    {
+      "label": "surface-unverified-claims",
+      "anyOf": [
+        "Honesty surfaces",
+        "don't bury it",
+        "mark it\\s*\\n?\\s*visually"
       ]
     }
   ]
