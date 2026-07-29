@@ -134,13 +134,14 @@ tester may open it weeks later from a different machine — it must work from
 `file://`.
 
 **Theme:** dark mode, system font stack, comfortable line height. Use one
-accent color for interactive elements and result-state colors: pass=green,
-fail=red, blocked=amber, skipped=gray. Respect `prefers-reduced-motion`.
+accent color for interactive elements and result-state colors matching the five
+statuses: pass=green, note=sky-blue, fail=red, skip=gray, need-help=amber.
+Respect `prefers-reduced-motion`.
 
 **Layout, top to bottom:**
 
 1. **Sticky header**: title, scope, generated date, live progress
-   (`N of M checked · X pass / Y fail / Z blocked`), and two buttons:
+   (`N of M checked · X pass / N notes / Y fail / Z need help`), and two buttons:
    - **Copy Results** — serializes the ENTIRE form state to markdown and
      copies to clipboard (see format below). Show a "Copied ✓" flash.
    - **Reset** — clears state after a confirm dialog.
@@ -238,7 +239,7 @@ fail=red, blocked=amber, skipped=gray. Respect `prefers-reduced-motion`.
 ```markdown
 # Smoke test: <scope> — <date>
 Tester: <name> · Build: <build> · Env: <env>
-Result: X pass / N notes / Y fail / Z blocked / W skipped / U untested
+Result: X pass / N notes / Y fail / W skipped / Z need help / U untested
 
 ## ⚠️ Needs attention (fail / need-help)
 - ❌ **<Item title>** — <note>
@@ -294,11 +295,27 @@ Three parts:
 
 1. **The form** (this skill) — generated with the section-6 POST wiring above, so each
    mark hits `/result` when served online.
-2. **The intake server** — `assets/smoke-intake.mjs` (copy it into the project's
-   tools/ or run from the asset path). It serves the form AND appends every result to
+2. **The intake server** — `assets/smoke-intake.mjs`. **It is not installed with this
+   skill.** `skill add` / `skill update` write only `.claude/commands/<name>.md`, so
+   the asset has to be fetched the same way `/skill` fetches its own compiler — from a
+   local registry clone if there is one, over the network otherwise:
+
+   ```bash
+   # local clone (preferred; $REG is the resolved registry path)
+   mkdir -p tools && cp "$REG/assets/smoke-intake.mjs" tools/
+
+   # no clone on disk — fetch it, and fail loudly rather than half-fetching
+   set -o pipefail
+   gh api repos/blamechris/skill-templates/contents/assets/smoke-intake.mjs \
+     --jq '.content' | base64 -d > tools/smoke-intake.mjs || exit 1
+   [ -s tools/smoke-intake.mjs ] || { echo "intake server fetch failed" >&2; exit 1; }
+   ```
+
+   Track it in the project once fetched, so it travels with the repo. It serves the
+   form AND appends every result to
    `<form>.results.jsonl` next to it. Generic + dependency-free:
    ```bash
-   node assets/smoke-intake.mjs <form.html>   # serves http://127.0.0.1:8770/ , writes <form>.results.jsonl
+   node tools/smoke-intake.mjs <form.html>   # serves http://127.0.0.1:8770/ , writes <form>.results.jsonl
    ```
    The tester opens the served URL (badge reads 🟢 live), not the `file://` path.
 3. **The wake-monitor + triage (agent side)** — the agent tails the results file for
