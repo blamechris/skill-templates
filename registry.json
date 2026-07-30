@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "f7bc0db",
+  "generatedFromCommit": "90d3dbd",
   "skillCount": 38,
   "skills": [
     {
@@ -36,8 +36,8 @@
     },
     {
       "name": "agentic-audit",
-      "hash": "a9ed830",
-      "lines": 149,
+      "hash": "90d3dbd",
+      "lines": 151,
       "description": "Launch a panel of specialized agents to audit a pull request from multiple perspectives before merge.",
       "guards": [
         {
@@ -67,8 +67,8 @@
         {
           "label": "tiered-subagents",
           "anyOf": [
-            "sonnet by default",
-            "run on sonnet",
+            "workhorse tier by default",
+            "run at the workhorse tier",
             "Delegation tiers"
           ]
         }
@@ -76,8 +76,8 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "d4fba03",
-      "lines": 470,
+      "hash": "90d3dbd",
+      "lines": 477,
       "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
       "guards": [
         {
@@ -192,8 +192,8 @@
     },
     {
       "name": "bug-hunt",
-      "hash": "a9ed830",
-      "lines": 323,
+      "hash": "90d3dbd",
+      "lines": 325,
       "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.",
       "guards": [
         {
@@ -268,8 +268,8 @@
         {
           "label": "tiered-subagents",
           "anyOf": [
-            "sonnet by default",
-            "run on sonnet",
+            "workhorse tier by default",
+            "run at the workhorse tier",
             "Delegation tiers"
           ]
         }
@@ -993,8 +993,8 @@
     },
     {
       "name": "parallel-dev",
-      "hash": "a9ed830",
-      "lines": 414,
+      "hash": "90d3dbd",
+      "lines": 417,
       "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts.",
       "guards": [
         {
@@ -1087,8 +1087,8 @@
         {
           "label": "tiered-subagents",
           "anyOf": [
-            "sonnet by default",
-            "run on sonnet",
+            "workhorse tier by default",
+            "run at the workhorse tier",
             "Delegation tiers"
           ]
         }
@@ -1096,8 +1096,8 @@
     },
     {
       "name": "prime-directive",
-      "hash": "d4fba03",
-      "lines": 118,
+      "hash": "90d3dbd",
+      "lines": 127,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
         {
@@ -1189,7 +1189,7 @@
         {
           "label": "session-boundaries",
           "anyOf": [
-            "[Ee]nd the session at each wave boundary",
+            "[Ss]hed context at (?:every|each) wave boundary",
             "wave boundaries double as session boundaries",
             "150K"
           ]
@@ -1206,8 +1206,8 @@
     },
     {
       "name": "project-audit",
-      "hash": "a9ed830",
-      "lines": 522,
+      "hash": "90d3dbd",
+      "lines": 524,
       "description": "Launch a comprehensive multi-agent audit of the entire project. Agents with diverse perspectives analyze the codebase in parallel, then findings are synthesized into a master assessment with actionable recommendations.",
       "guards": [
         {
@@ -1272,8 +1272,8 @@
         {
           "label": "tiered-subagents",
           "anyOf": [
-            "sonnet by default",
-            "run on sonnet",
+            "workhorse tier by default",
+            "run at the workhorse tier",
             "Delegation tiers"
           ]
         }
@@ -1705,8 +1705,8 @@
     },
     {
       "name": "swarm-audit",
-      "hash": "a9ed830",
-      "lines": 211,
+      "hash": "90d3dbd",
+      "lines": 213,
       "description": "Launch a swarm of specialized agents to perform a multi-perspective audit of any design document, architecture, codebase, or proposal.",
       "guards": [
         {
@@ -1736,8 +1736,8 @@
         {
           "label": "tiered-subagents",
           "anyOf": [
-            "sonnet by default",
-            "run on sonnet",
+            "workhorse tier by default",
+            "run at the workhorse tier",
             "Delegation tiers"
           ]
         }
@@ -1745,8 +1745,8 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "d4fba03",
-      "lines": 434,
+      "hash": "90d3dbd",
+      "lines": 442,
       "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
       "guards": [
         {
@@ -1835,13 +1835,13 @@
           "anyOf": [
             "STATE header",
             "only mandatory read",
-            "never re-read top-to-bottom"
+            "top-to-bottom re-read"
           ]
         },
         {
           "label": "session-boundaries",
           "anyOf": [
-            "[Ee]nd the session at each wave boundary",
+            "[Ss]hed context at (?:every|each) wave boundary",
             "[Ww]ave boundaries are session boundaries",
             "150K"
           ]
@@ -1858,7 +1858,7 @@
     },
     {
       "name": "tiered-delegation",
-      "hash": "a9ed830",
+      "hash": "90d3dbd",
       "lines": 66,
       "description": "The cost-discipline constitution for multi-agent work: the **session's top model orchestrates; cheaper tiers execute**. Invoke it when a session is about to fan out subagents or workflows (audits, marathons, parallel implementation, large research) to load the delegation rules — who does what tier of work, how far down to push each task, and when a claim must be re-verified before it drives an action. It composes with the marathon machinery (`/prime-directive`, `/tackle-issues`, `/parallel-dev`) and with ad-hoc Workflow/Agent fan-outs alike.",
       "guards": [
@@ -1920,7 +1920,7 @@
           ]
         },
         {
-          "label": "routine-orchestration-on-opus",
+          "label": "routine-orchestration-below-top-tier",
           "anyOf": [
             "Routine orchestration belongs on",
             "top-most tier",
