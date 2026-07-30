@@ -5,7 +5,19 @@
 // period inside common abbreviations ("e.g.", "i.e.", …) or inside a still-open
 // "(…" parenthetical.
 import { strict as assert } from 'node:assert'
-import { deriveDescription } from './compile-skill-targets.mjs'
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  deriveDescription,
+  detectUncompiledAgents,
+  emitPi,
+  ALL_TARGETS,
+} from './compile-skill-targets.mjs'
+
+// A lone surrogate = a half-cut astral character. Emitting one into a YAML/TOML
+// `description:` is the bug the grapheme cap exists to prevent.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
 let n = 0
 function t(label, fn) {
@@ -115,6 +127,118 @@ t('falls back to the project-skill stub for a body with no prose', () => {
 
 t('a paragraph ending in a bare abbreviation returns whole paragraph (no dangling cut)', () => {
   assert.equal(deriveDescription('Handles common cases e.g.\n', 'x'), 'Handles common cases e.g.')
+})
+
+// --- grapheme-safe cap -----------------------------------------------------
+// The UTF-16 cap these replace broke at emoji offset 156 (plain) and 147/150/153/156
+// (ZWJ family cluster). Sweeping every offset, rather than asserting the four known
+// ones, keeps the test honest if the cap constant ever moves.
+
+t('never emits a lone surrogate — plain emoji at any offset around the cut', () => {
+  const broken = []
+  for (let k = 140; k <= 170; k++) {
+    const desc = deriveDescription('x'.repeat(k) + '😀' + 'y'.repeat(80) + '\n', 'x')
+    if (LONE_SURROGATE.test(desc)) broken.push(k)
+  }
+  assert.deepEqual(broken, [], `split an astral pair at emoji offset(s): ${broken.join(',')}`)
+})
+
+t('never emits a lone surrogate — ZWJ family cluster at any offset around the cut', () => {
+  const broken = []
+  for (let k = 140; k <= 170; k++) {
+    const desc = deriveDescription('x'.repeat(k) + '👨‍👩‍👧‍👦' + 'y'.repeat(80) + '\n', 'x')
+    if (LONE_SURROGATE.test(desc)) broken.push(k)
+  }
+  assert.deepEqual(broken, [], `split an astral pair at cluster offset(s): ${broken.join(',')}`)
+})
+
+t('the cap is a grapheme budget, not a UTF-16 one', () => {
+  // 80 family clusters = 80 graphemes but 880 UTF-16 units. A UTF-16 cap would
+  // truncate this to ~14 visible characters; a grapheme cap leaves it untouched.
+  const body = '👨‍👩‍👧‍👦'.repeat(80) + '\n'
+  const desc = deriveDescription(body, 'x')
+  assert.ok(!desc.endsWith('...'), 'must not truncate 80 visible clusters')
+  assert.equal(desc, '👨‍👩‍👧‍👦'.repeat(80))
+})
+
+t('abbreviation handling survives the grapheme rewrite (both fixes coexist)', () => {
+  // The compiler this was merged with used a bare `search(/\.(\s|$)/)` and cut here
+  // at "Runs e.g." — the grapheme cap must not have cost us sentenceEnd().
+  assert.equal(
+    deriveDescription('Runs e.g. the linter. Then it reports findings.\n', 'x'),
+    'Runs e.g. the linter.'
+  )
+  assert.equal(
+    deriveDescription('Fix the cap (see e.g. #137. still open) then ship. Next.\n', 'x'),
+    'Fix the cap (see e.g. #137. still open) then ship.'
+  )
+})
+
+// --- pi target -------------------------------------------------------------
+
+t('pi is a known target', () => {
+  assert.ok(ALL_TARGETS.includes('pi'))
+  assert.deepEqual(ALL_TARGETS, ['claude', 'gemini', 'codex', 'pi'])
+})
+
+t('emitPi writes user-global SKILL.md with quoted name and description', () => {
+  const out = emitPi('my-skill', 'Body prose here.\n', 'A description.')
+  assert.ok(out.path.endsWith('/.pi/agent/skills/my-skill/SKILL.md'), out.path)
+  assert.ok(out.content.startsWith('---\nname: "my-skill"\ndescription: "A description."\n---\n'))
+  assert.ok(out.content.endsWith('Body prose here.\n'))
+  assert.equal(out.warn, null)
+})
+
+t('emitPi quotes a name containing a YAML-significant char', () => {
+  // Frontmatter must stay parseable even though the name is separately warned about.
+  const out = emitPi('weird:name', 'Body.\n', 'D.')
+  assert.ok(out.content.includes('name: "weird:name"'))
+  assert.match(out.warn, /not Pi-valid/)
+})
+
+t('emitPi warns on inline arg tokens but ignores them inside fenced code', () => {
+  assert.match(emitPi('a', 'Pass $ARGUMENTS through.\n', 'D.').warn, /NOT substituted/)
+  assert.match(emitPi('a', 'See $1 below.\n', 'D.').warn, /NOT substituted/)
+  assert.equal(emitPi('a', 'Run it:\n\n```sh\necho $1 $ARGUMENTS\n```\n', 'D.').warn, null)
+})
+
+// --- detectUncompiledAgents ------------------------------------------------
+
+function withHome(dirs, fn) {
+  const home = mkdtempSync(join(tmpdir(), 'skill-home-'))
+  try {
+    for (const d of dirs) mkdirSync(join(home, d), { recursive: true })
+    fn(home)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+t('flags an installed-but-unselected pi (~/.pi present)', () => {
+  withHome(['.pi'], (home) => {
+    assert.deepEqual(detectUncompiledAgents(['claude', 'gemini'], home), ['pi'])
+  })
+})
+
+t('does not flag pi when it IS a selected target', () => {
+  withHome(['.pi'], (home) => {
+    assert.deepEqual(detectUncompiledAgents(['claude', 'pi'], home), [])
+  })
+})
+
+t('never flags codex — it is repo-tracked here, so ~/.codex proves nothing', () => {
+  // The upstream compiler DID flag codex, because there it emitted to
+  // ~/.codex/prompts/. This registry emits .codex/skills/ into the repo (#111), so a
+  // codex home dir carries no information about compile coverage — same as gemini.
+  withHome(['.codex', '.gemini'], (home) => {
+    assert.deepEqual(detectUncompiledAgents(['claude'], home), [])
+  })
+})
+
+t('returns nothing when no agent home dirs exist', () => {
+  withHome([], (home) => {
+    assert.deepEqual(detectUncompiledAgents(['claude'], home), [])
+  })
 })
 
 console.log(`\ncompile-skill-targets.test: ALL PASS (${n} tests)`)
