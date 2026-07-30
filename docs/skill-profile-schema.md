@@ -60,6 +60,23 @@ the skill's exact name plus the literal ` Customizations` suffix.>
 - **One section per skill** that needs customization, headed `## <skill-name> Customizations`
   — the skill's exact name plus the literal ` Customizations` suffix (e.g.
   `## agent-review Customizations`). Skills with no section just use the generic template.
+- **Self-merge posture is a profile decision, and the profile is the only place it lives.**
+  `autonomous-dev-flow` and `tackle-issues` each carry a Critical Rule 5 whose text comes from
+  this profile, and every merge step in those skills defers to it. State it in the skill's
+  `Customizations` section as either **gated** (an autonomous session may merge its own PR once
+  every Unattended Merge Gate condition is met) or **withheld** (PRs always accumulate for user
+  review, however clean):
+
+  ```markdown
+  ## autonomous-dev-flow Customizations
+  Self-merge posture: withheld — every merge in this repo is a human act. PRs accumulate for
+  user review no matter how clean the review and checks are.
+  ```
+
+  Omit the line and the install gets **gated**, which is the template default. Say it explicitly
+  in either direction if the answer matters for the repo — an omission reads as "nobody decided",
+  and the next `skill update` will quietly grant merge authority. A repo that withholds it also
+  does not honour `merge:on`: an invocation flag cannot grant authority the repo withholds.
 - **No secrets.** Profiles are committed to the repo. Keys and tokens never go here.
 - **Keep it current.** When conventions change (a new required check, a renamed scope),
   update the profile so future `skill add` / `skill update` installs stay accurate.

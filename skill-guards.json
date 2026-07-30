@@ -63,8 +63,11 @@
       "label": "merge-report-entry",
       "anyOf": [
         "Merged by this session",
-        "entry in the final session report"
-      ]
+        "entry in the final session report",
+        "flag each finished PR in the session report",
+        "accumulates for `/batch-merge` or user review"
+      ],
+      "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs."
     },
     {
       "label": "no-auto-merge",
@@ -79,6 +82,15 @@
         "\\*\\*[Nn][Oo] attribution",
         "[Zz]ero [Aa]ttribution [Pp]olicy",
         "Co-Authored-By"
+      ]
+    },
+    {
+      "label": "self-merge-posture",
+      "note": "Critical Rule 5 is the single source of truth for whether this repo grants unattended self-merge, and every merge step defers to it. The alternates are the two canonical wordings of that ONE rule — gated or withheld — so the guard fires when the rule line is gone, not when a repo picks the other posture. Do NOT relax this to a bare 'Unattended Merge Gate' substring: that phrase also appears in prose about the gate and would pass a file whose rule 5 had been deleted.",
+      "anyOf": [
+        "Merge only through the Unattended Merge Gate",
+        "NEVER merge, however clean the PR is",
+        "does not grant unattended merge authority"
       ]
     }
   ],
@@ -1462,8 +1474,11 @@
       "label": "merge-report-entry",
       "anyOf": [
         "Merged by this session",
-        "entry in the Morning Summary"
-      ]
+        "entry in the Morning Summary",
+        "flag each finished PR in the session report",
+        "accumulates for `/batch-merge` or user review"
+      ],
+      "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs."
     },
     {
       "label": "zero-attribution-rule",
@@ -1471,6 +1486,15 @@
         "\\*\\*[Nn][Oo] attribution",
         "[Zz]ero [Aa]ttribution [Pp]olicy",
         "Co-Authored-By"
+      ]
+    },
+    {
+      "label": "self-merge-posture",
+      "note": "Critical Rule 5 is the single source of truth for whether this repo grants unattended self-merge, and every merge step defers to it. The alternates are the two canonical wordings of that ONE rule — gated or withheld — so the guard fires when the rule line is gone, not when a repo picks the other posture. Do NOT relax this to a bare 'Unattended Merge Gate' substring: that phrase also appears in prose about the gate and would pass a file whose rule 5 had been deleted.",
+      "anyOf": [
+        "Merge only through the Unattended Merge Gate",
+        "NEVER merge, however clean the PR is",
+        "does not grant unattended merge authority"
       ]
     }
   ],
