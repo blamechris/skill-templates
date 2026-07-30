@@ -17,7 +17,11 @@ This skill exists because a long autonomous run is **compacted repeatedly**, and
 
 1. **Reload by invocation, never by file-path `cat`.** After every compaction, run **`/prime-directive`**. Do **not** rely on `cat .claude/commands/<name>.md` or any hard-coded path: the legacy `.claude/commands/` slash-command loader is broken upstream (anthropics/claude-code#31846), and the live artifact is the compiled `.claude/skills/prime-directive/SKILL.md` that `/prime-directive` loads. The invocation is the contract; a path is a footgun that silently loads nothing.
 
-2. **Plant the reload trigger where a compacted agent will see it.** The session log's **first line** must read, verbatim: *"After any compaction: re-invoke `/prime-directive`, then read this log from the top for live state, then resume."* Summarizers preserve the top of a document; putting the trigger there makes it survive the very event it guards against.
+2. **Plant the reload trigger where a compacted agent will see it.** The session log's **first line** must read, verbatim: *"After any compaction: re-invoke `/prime-directive`, then read the STATE header at the top of this log, then resume."* Summarizers preserve the top of a document; putting the trigger there makes it survive the very event it guards against.
+
+   **The STATE header is the only mandatory post-compaction read.** Directly under that first line, maintain a rolling **STATE header** — a compact block (~2K tokens, hard-capped) that is rewritten in place as the run progresses, holding: current wave + position, queue pointer (next issue up, remaining count), open blockers, the awaiting-user list, the last **verified** merge (PR + SHA), completions from the last wave, and a compact per-issue attempt table (issue# → attempts, last strategy tried, status) — the fields a wave-boundary convergence check needs without a history re-read. Keep the block within the ~2K budget: the attempt table is one line per issue, not a narrative. Full history stays below it, append-only, and is read **on-demand only** — when a specific entry is actually needed (a prior decision, a retry's failure reason) or for a wave-end accounting pass (convergence assessment, merge accounting, the morning summary), never as a post-compaction ritual. Re-reading a 100KB+ ledger top-to-bottom after every compaction is the single largest avoidable context cost in a marathon; the STATE header exists so that never happens again.
+
+   Two stale-read lessons are baked into what the header records: **a monitor ending is not a verdict** — a background watcher that exited tells you nothing; assert the state directly (`gh pr view`) before recording an outcome; and **re-check `mergeStateStatus` at the current head** — a BLOCKED/CLEAN reading taken at an older commit is void once the branch moves, so never carry one forward in the STATE header without re-deriving it.
 
 3. **Keep this file self-contained.** Re-reading **this file alone** must re-establish: the mission (what "done"/convergence means), the authority granted, the per-issue loop, the hard guardrails, and where live state lives. Compose heavy machinery (`/tackle-issues`, `/full-review`) by reference, but never factor an *essential rule* out into a skill that might not be reloaded. The constitution stands alone; the machinery is called by name.
 
@@ -25,7 +29,7 @@ This skill exists because a long autonomous run is **compacted repeatedly**, and
 
 ## Mission
 
-Clear the **entire** open issue backlog for {{CUSTOMIZE: target repository, e.g. `owner/name` — the repo this marathon owns}}, autonomously, until **convergence**. There is **no stop condition besides a converged backlog** — keep going until every open issue is resolved (closed via a merged PR, decomposed into tracked sub-issues, or documented-blocked with a comment), or nothing tractable remains. The user is away and will review on return. Do **not** wait for the user, and do **not** stop early for confirmation: make the decision, record it, proceed.
+Clear the **entire** open issue backlog for {{CUSTOMIZE: target repository, e.g. `owner/name` — the repo this marathon owns}}, autonomously, until **convergence**. There is **no stop condition besides a converged backlog or the cost circuit breaker** (Session boundaries, rule 3 — the one sanctioned exception) — keep going until every open issue is resolved (closed via a merged PR, decomposed into tracked sub-issues, or documented-blocked with a comment), or nothing tractable remains. The user is away and will review on return. Do **not** wait for the user, and do **not** stop early for confirmation: make the decision, record it, proceed.
 
 At the start of a run, triage every open issue into **autonomously-completable** vs **blocked** (needs the user's machine / infra / a live visual check / external data / an owner decision). Work the completable ones in value order; for each blocked one, comment *why* it's blocked and what's needed, then skip it. **Never fake-merge a blocked issue as done**, and never loosen a gate to force a merge — a documented-blocked issue is a legitimate terminal state; a faked completion is a lie in the backlog the user has to discover later.
 
@@ -52,6 +56,20 @@ For an unattended run, this directive grants: full autonomous **self-merge under
 - **Prioritize** tractable, well-scoped issues first (from-review hardening, DRY dedups, lint guards, low/medium bugs), then medium features, then **decompose epics** into concrete sub-issues — decomposition itself is progress; do not one-shot an epic.
 - **Replenish** the queue between waves: pick up sub-issues created by decomposition plus any newly-tractable issue. Escalate strategy on retries: fresh context → alternative approach → simplify scope → documented-blocked comment.
 - **Converge:** if a wave produces zero new completions on the remaining set, stop and summarize. (For the full wave/retry/convergence machinery, this composes `/tackle-issues` — call it; do not re-implement it here.)
+
+## Session boundaries (context + cost discipline)
+
+A marathon is a sequence of **bounded sessions**, not one endless one. Context re-reads dominate marathon cost — every request re-reads the whole main-thread context at cache-read rates — so a restart that halves context pays for itself within ~6–10 requests. Three rules, checked at every wave boundary:
+
+1. **Shed context at every wave boundary — how depends on the run mode.** When a wave completes, write/refresh the handoff note, update the STATE header, then apply the case that matches this run:
+   - **Attended** — **end the session** at the wave boundary. The user/orchestrator relaunches the next wave as a fresh session seeded from exactly three things: the handoff note + the queue + the ledger's STATE header — never the full history.
+   - **Unattended, re-launcher configured** — **end the session**; the re-launcher starts the next wave from the same three seeds. ({{CUSTOMIZE: wave re-launcher — e.g. chroxy scheduled trigger, cron/launchd job, /loop wrapper; leave "none" if absent}})
+   - **Unattended, no re-launcher** — do **NOT** end the session: nothing would relaunch it, and an ended marathon silently halts after wave 1. Instead, write the STATE header, then force/await a **compaction at the wave boundary** so the next wave starts lean, and continue.
+   The cost goal — shed context at the wave boundary — is preserved in all three modes; a restart (or boundary compaction) that halves context pays for itself within ~6–10 requests. The end-and-reseed path is the proven lossless recovery pattern from usage-limit interruptions; use it deliberately wherever something exists to relaunch the run.
+2. **~150K main-thread context ceiling.** Once the main thread's context passes ~150K tokens ({{CUSTOMIZE: how to read the current context size in this harness — e.g. the statusline shows it; otherwise estimate from transcript length}}), finish the current item only, write the handoff, and end the session — do not start another item past the ceiling. (In the unattended-no-re-launcher mode, substitute a forced compaction for the session end here too.)
+3. **Per-wave cost circuit breaker.** At each wave boundary, check the session's cost so far ({{CUSTOMIZE: cost source — e.g. the statusline already computes session cost; name the per-session budget the owner set, e.g. "$X eq."}}). Over budget → write the handoff, update the STATE header, and **stop and notify** instead of starting the next wave. An over-budget wave boundary is a terminal state for the session, not a speed bump — this breaker is the **sole sanctioned exception** to the Mission's no-stop rule, and the two passages defer to each other by design.
+
+A mid-wave compaction is the *fallback* for context pressure; the wave boundary is the *plan* — an end-and-relaunch where something exists to relaunch, a deliberate boundary compaction where nothing does. Never treat surviving a mid-wave compaction as a reason to skip the boundary shed.
 
 ## Final step (only when the backlog is empty / converged)
 
@@ -81,7 +99,9 @@ Run a **SOLID + DRY** whole-project audit ({{CUSTOMIZE: audit skill, e.g. `/swar
 
 ## State / where things live
 
-- **Session log + decision log:** {{CUSTOMIZE: session-log path, e.g. `autonomous-session-<date>.md` at repo root — gitignored, never commit}}. Source of truth for progress + decisions to present on interrupt. Its **first line carries the reload trigger** (Reliability rule 2). Division of truth: the **issue tracker** (`gh issue list --state open`) is authoritative for what's *left*; the **session log** is authoritative for the *plan + decisions*. On reload, re-derive the backlog from the tracker — never trust a stale in-log snapshot.
+- **Session log + decision log:** {{CUSTOMIZE: session-log path, e.g. `autonomous-session-<date>.md` at repo root — gitignored, never commit}}. Source of truth for progress + decisions to present on interrupt. Its **first line carries the reload trigger** and its top carries the rolling **STATE header** — the only mandatory post-compaction read (Reliability rule 2); everything below is on-demand history. Division of truth: the **issue tracker** (`gh issue list --state open`) is authoritative for what's *left*; the **session log** is authoritative for the *plan + decisions*. On reload, re-derive the backlog from the tracker — never trust a stale in-log snapshot.
+- **Wave handoff note:** {{CUSTOMIZE: handoff-note path — default `$CLAUDE_BRIEF_DIR/../handoffs/<repo>-<date>-handoff.md`}}. The session-boundary seed: queue position, open blockers, the awaiting-user list, the last verified merge. It is **disposable by design** — everything in it is re-derivable from GitHub — a seed for the next wave's session, never a second source of truth.
+- **Queue:** {{CUSTOMIZE: queue path — default `scratchpad/autonomous-queue.json`}}. The durable wave queue the next session is seeded from.
 - **This directive:** invoke `/prime-directive` (compiled live artifact: `.claude/skills/prime-directive/SKILL.md`). Do not depend on the `.claude/commands/` path resolving (Reliability rule 1).
 - **Issue list:** `gh issue list --state open`.
 
@@ -100,3 +120,8 @@ Lines and blocks marked `{{CUSTOMIZE}}` need repo-specific adaptation:
 - **Executive-brief mechanism + destination** — e.g. `visual-brief` → `$CLAUDE_BRIEF_DIR` (Report guardrail).
 - **Project-specific build-breaking invariants** — the repo's never-strip CI/state invariants (Hard guardrails).
 - **Session-log path** — the gitignored progress/decision log (State).
+- **Handoff-note path** — where wave handoff notes live, default `$CLAUDE_BRIEF_DIR/../handoffs/<repo>-<date>-handoff.md` (State).
+- **Queue path** — where the durable wave queue lives, default `scratchpad/autonomous-queue.json` (State).
+- **Wave re-launcher** — what restarts the next wave in unattended runs (scheduled trigger, cron/launchd job, /loop wrapper), or "none" (Session boundaries).
+- **Context-size source** — how this harness reports main-thread context size for the ~150K ceiling (Session boundaries).
+- **Cost source + per-session budget** — where session cost is read (e.g. the statusline) and the budget the circuit breaker enforces (Session boundaries).

@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "322e14d",
-  "skillCount": 37,
+  "generatedFromCommit": "90d3dbd",
+  "skillCount": 38,
   "skills": [
     {
       "name": "agent-review",
@@ -36,8 +36,8 @@
     },
     {
       "name": "agentic-audit",
-      "hash": "3f616c3",
-      "lines": 142,
+      "hash": "90d3dbd",
+      "lines": 151,
       "description": "Launch a panel of specialized agents to audit a pull request from multiple perspectives before merge.",
       "guards": [
         {
@@ -63,13 +63,21 @@
             "read surrounding code in changed files",
             "[Cc]ite exact lines"
           ]
+        },
+        {
+          "label": "tiered-subagents",
+          "anyOf": [
+            "workhorse tier by default",
+            "run at the workhorse tier",
+            "Delegation tiers"
+          ]
         }
       ]
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "322e14d",
-      "lines": 461,
+      "hash": "90d3dbd",
+      "lines": 477,
       "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
       "guards": [
         {
@@ -111,6 +119,22 @@
             "Merge only through the Unattended Merge Gate",
             "NEVER merge, however clean the PR is",
             "does not grant unattended merge authority"
+          ]
+        },
+        {
+          "label": "session-boundaries",
+          "anyOf": [
+            "150K",
+            "sequence of bounded sessions",
+            "context ceiling"
+          ]
+        },
+        {
+          "label": "cost-circuit-breaker",
+          "anyOf": [
+            "circuit breaker",
+            "[Oo]ver budget",
+            "stop and notify"
           ]
         }
       ]
@@ -168,8 +192,8 @@
     },
     {
       "name": "bug-hunt",
-      "hash": "7f5fa28",
-      "lines": 316,
+      "hash": "90d3dbd",
+      "lines": 325,
       "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.",
       "guards": [
         {
@@ -239,6 +263,14 @@
             "always confirm",
             "Ask which candidates to file",
             "ask the user which candidates"
+          ]
+        },
+        {
+          "label": "tiered-subagents",
+          "anyOf": [
+            "workhorse tier by default",
+            "run at the workhorse tier",
+            "Delegation tiers"
           ]
         }
       ]
@@ -961,8 +993,8 @@
     },
     {
       "name": "parallel-dev",
-      "hash": "6a1a98b",
-      "lines": 408,
+      "hash": "90d3dbd",
+      "lines": 417,
       "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts.",
       "guards": [
         {
@@ -1051,13 +1083,21 @@
             "More than 5 degrades quality",
             "[Cc]ap at 5"
           ]
+        },
+        {
+          "label": "tiered-subagents",
+          "anyOf": [
+            "workhorse tier by default",
+            "run at the workhorse tier",
+            "Delegation tiers"
+          ]
         }
       ]
     },
     {
       "name": "prime-directive",
-      "hash": "5c35725",
-      "lines": 102,
+      "hash": "90d3dbd",
+      "lines": 127,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
         {
@@ -1137,13 +1177,37 @@
             "faked completion",
             "documented-blocked"
           ]
+        },
+        {
+          "label": "state-header",
+          "anyOf": [
+            "STATE header",
+            "only mandatory post-compaction read",
+            "only mandatory read"
+          ]
+        },
+        {
+          "label": "session-boundaries",
+          "anyOf": [
+            "[Ss]hed context at (?:every|each) wave boundary",
+            "wave boundaries double as session boundaries",
+            "150K"
+          ]
+        },
+        {
+          "label": "cost-circuit-breaker",
+          "anyOf": [
+            "circuit breaker",
+            "[Oo]ver budget",
+            "stop and notify"
+          ]
         }
       ]
     },
     {
       "name": "project-audit",
-      "hash": "aae4d65",
-      "lines": 515,
+      "hash": "90d3dbd",
+      "lines": 524,
       "description": "Launch a comprehensive multi-agent audit of the entire project. Agents with diverse perspectives analyze the codebase in parallel, then findings are synthesized into a master assessment with actionable recommendations.",
       "guards": [
         {
@@ -1203,6 +1267,14 @@
             "do not just list opinions",
             "who is right",
             "[Ss]ynthesi[sz]e the disagreement"
+          ]
+        },
+        {
+          "label": "tiered-subagents",
+          "anyOf": [
+            "workhorse tier by default",
+            "run at the workhorse tier",
+            "Delegation tiers"
           ]
         }
       ]
@@ -1373,6 +1445,53 @@
             "name the \\*\\*good version\\*\\*",
             "name the good version",
             "deprecation message points to"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "session-lifecycle",
+      "hash": "f7bc0db",
+      "lines": 69,
+      "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
+      "guards": [
+        {
+          "label": "prs-split-by-author",
+          "anyOf": [
+            "split by author",
+            "-author:@me"
+          ]
+        },
+        {
+          "label": "rederive-not-trust",
+          "anyOf": [
+            "re-derived, not trusted",
+            "re-derives state rather than trusting",
+            "[Vv]erify the last claimed merge"
+          ]
+        },
+        {
+          "label": "reference-global-not-fork",
+          "anyOf": [
+            "single source of truth",
+            "do not restate or fork",
+            "[Ff]ollow (it|them) from there"
+          ]
+        },
+        {
+          "label": "end-checklist-order",
+          "anyOf": [
+            "[Ss]kip a step only by saying so",
+            "Run in order",
+            "checklist"
+          ]
+        },
+        {
+          "label": "careful-cleanup",
+          "anyOf": [
+            "leave other sessions' worktrees alone",
+            "prune branches only after verifying",
+            "MERGED"
           ]
         }
       ]
@@ -1586,8 +1705,8 @@
     },
     {
       "name": "swarm-audit",
-      "hash": "c8b8477",
-      "lines": 204,
+      "hash": "90d3dbd",
+      "lines": 213,
       "description": "Launch a swarm of specialized agents to perform a multi-perspective audit of any design document, architecture, codebase, or proposal.",
       "guards": [
         {
@@ -1613,13 +1732,21 @@
           "anyOf": [
             "Consensus Findings"
           ]
+        },
+        {
+          "label": "tiered-subagents",
+          "anyOf": [
+            "workhorse tier by default",
+            "run at the workhorse tier",
+            "Delegation tiers"
+          ]
         }
       ]
     },
     {
       "name": "tackle-issues",
-      "hash": "322e14d",
-      "lines": 418,
+      "hash": "90d3dbd",
+      "lines": 442,
       "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
       "guards": [
         {
@@ -1702,13 +1829,37 @@
             "NEVER merge, however clean the PR is",
             "does not grant unattended merge authority"
           ]
+        },
+        {
+          "label": "state-header",
+          "anyOf": [
+            "STATE header",
+            "only mandatory read",
+            "top-to-bottom re-read"
+          ]
+        },
+        {
+          "label": "session-boundaries",
+          "anyOf": [
+            "[Ss]hed context at (?:every|each) wave boundary",
+            "[Ww]ave boundaries are session boundaries",
+            "150K"
+          ]
+        },
+        {
+          "label": "cost-circuit-breaker",
+          "anyOf": [
+            "circuit breaker",
+            "[Oo]ver budget",
+            "stop and notify"
+          ]
         }
       ]
     },
     {
       "name": "tiered-delegation",
-      "hash": "0389e93",
-      "lines": 63,
+      "hash": "90d3dbd",
+      "lines": 66,
       "description": "The cost-discipline constitution for multi-agent work: the **session's top model orchestrates; cheaper tiers execute**. Invoke it when a session is about to fan out subagents or workflows (audits, marathons, parallel implementation, large research) to load the delegation rules — who does what tier of work, how far down to push each task, and when a claim must be re-verified before it drives an action. It composes with the marathon machinery (`/prime-directive`, `/tackle-issues`, `/parallel-dev`) and with ad-hoc Workflow/Agent fan-outs alike.",
       "guards": [
         {
@@ -1766,6 +1917,14 @@
           "anyOf": [
             "Effort is a dial",
             "Raising effort is cheaper than raising tier"
+          ]
+        },
+        {
+          "label": "routine-orchestration-below-top-tier",
+          "anyOf": [
+            "Routine orchestration belongs on",
+            "top-most tier",
+            "convergence assessment"
           ]
         }
       ]

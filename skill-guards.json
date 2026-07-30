@@ -49,6 +49,14 @@
         "read surrounding code in changed files",
         "[Cc]ite exact lines"
       ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "workhorse tier by default",
+        "run at the workhorse tier",
+        "Delegation tiers"
+      ]
     }
   ],
   "autonomous-dev-flow": [
@@ -91,6 +99,22 @@
         "Merge only through the Unattended Merge Gate",
         "NEVER merge, however clean the PR is",
         "does not grant unattended merge authority"
+      ]
+    },
+    {
+      "label": "session-boundaries",
+      "anyOf": [
+        "150K",
+        "sequence of bounded sessions",
+        "context ceiling"
+      ]
+    },
+    {
+      "label": "cost-circuit-breaker",
+      "anyOf": [
+        "circuit breaker",
+        "[Oo]ver budget",
+        "stop and notify"
       ]
     }
   ],
@@ -207,6 +231,14 @@
         "always confirm",
         "Ask which candidates to file",
         "ask the user which candidates"
+      ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "workhorse tier by default",
+        "run at the workhorse tier",
+        "Delegation tiers"
       ]
     }
   ],
@@ -917,6 +949,14 @@
         "More than 5 degrades quality",
         "[Cc]ap at 5"
       ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "workhorse tier by default",
+        "run at the workhorse tier",
+        "Delegation tiers"
+      ]
     }
   ],
   "prime-directive": [
@@ -997,6 +1037,30 @@
         "faked completion",
         "documented-blocked"
       ]
+    },
+    {
+      "label": "state-header",
+      "anyOf": [
+        "STATE header",
+        "only mandatory post-compaction read",
+        "only mandatory read"
+      ]
+    },
+    {
+      "label": "session-boundaries",
+      "anyOf": [
+        "[Ss]hed context at (?:every|each) wave boundary",
+        "wave boundaries double as session boundaries",
+        "150K"
+      ]
+    },
+    {
+      "label": "cost-circuit-breaker",
+      "anyOf": [
+        "circuit breaker",
+        "[Oo]ver budget",
+        "stop and notify"
+      ]
     }
   ],
   "project-audit": [
@@ -1057,6 +1121,14 @@
         "do not just list opinions",
         "who is right",
         "[Ss]ynthesi[sz]e the disagreement"
+      ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "workhorse tier by default",
+        "run at the workhorse tier",
+        "Delegation tiers"
       ]
     }
   ],
@@ -1209,6 +1281,47 @@
         "name the \\*\\*good version\\*\\*",
         "name the good version",
         "deprecation message points to"
+      ]
+    }
+  ],
+  "session-lifecycle": [
+    {
+      "label": "prs-split-by-author",
+      "anyOf": [
+        "split by author",
+        "-author:@me"
+      ]
+    },
+    {
+      "label": "rederive-not-trust",
+      "anyOf": [
+        "re-derived, not trusted",
+        "re-derives state rather than trusting",
+        "[Vv]erify the last claimed merge"
+      ]
+    },
+    {
+      "label": "reference-global-not-fork",
+      "anyOf": [
+        "single source of truth",
+        "do not restate or fork",
+        "[Ff]ollow (it|them) from there"
+      ]
+    },
+    {
+      "label": "end-checklist-order",
+      "anyOf": [
+        "[Ss]kip a step only by saying so",
+        "Run in order",
+        "checklist"
+      ]
+    },
+    {
+      "label": "careful-cleanup",
+      "anyOf": [
+        "leave other sessions' worktrees alone",
+        "prune branches only after verifying",
+        "MERGED"
       ]
     }
   ],
@@ -1413,6 +1526,14 @@
       "anyOf": [
         "Consensus Findings"
       ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "workhorse tier by default",
+        "run at the workhorse tier",
+        "Delegation tiers"
+      ]
     }
   ],
   "tackle-issues": [
@@ -1496,6 +1617,30 @@
         "NEVER merge, however clean the PR is",
         "does not grant unattended merge authority"
       ]
+    },
+    {
+      "label": "state-header",
+      "anyOf": [
+        "STATE header",
+        "only mandatory read",
+        "top-to-bottom re-read"
+      ]
+    },
+    {
+      "label": "session-boundaries",
+      "anyOf": [
+        "[Ss]hed context at (?:every|each) wave boundary",
+        "[Ww]ave boundaries are session boundaries",
+        "150K"
+      ]
+    },
+    {
+      "label": "cost-circuit-breaker",
+      "anyOf": [
+        "circuit breaker",
+        "[Oo]ver budget",
+        "stop and notify"
+      ]
     }
   ],
   "tiered-delegation": [
@@ -1554,6 +1699,14 @@
       "anyOf": [
         "Effort is a dial",
         "Raising effort is cheaper than raising tier"
+      ]
+    },
+    {
+      "label": "routine-orchestration-below-top-tier",
+      "anyOf": [
+        "Routine orchestration belongs on",
+        "top-most tier",
+        "convergence assessment"
       ]
     }
   ],
