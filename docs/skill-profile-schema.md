@@ -71,8 +71,9 @@ the skill's exact name plus the literal ` Customizations` suffix.>
   discovery is unavailable). No line ⇒ the compiler falls back to `claude`.
 - **`pi` is the one target that writes outside the repo**, because Pi has no repo-local skill
   discovery. Committing `pi` in `targets:` means every `skill add`/`update` in this repo writes into
-  whoever ran it's home dir — fine for a solo repo where the owner drives Pi, wrong for a shared
-  one. Prefer leaving it out of the committed line and passing `--targets claude,pi` per machine.
+  the home directory of whoever ran it — fine for a solo repo whose owner drives Pi, wrong for a
+  shared one. Prefer leaving it out of the committed line and passing `--targets claude,pi` per
+  machine.
   The compiler notices `~/.pi` and prints the flag to add; it never adds the target itself.
 
 ## History: migration from `customizations/<repo>.md`
