@@ -20,6 +20,8 @@ Resolve the ladder **relative to the session model** at invocation time:
 
 When only one tier exists, everything runs at the ceiling and this skill's value reduces to the verification and role rules — that is fine; never invent a tier.
 
+**Choosing the session ceiling is itself the biggest tier decision.** Routine orchestration belongs on **opus, not the top-most tier**: the orchestrator's main thread re-reads its full context at cache-read rates on every turn, and the top tier's cache-read rate is ~2x opus — so a marathon orchestrated from the top tier pays double on the largest cost component for work opus handles fine (dispatching waves, running merge gates, writing briefs, triaging queues). Reserve the top-most tier ({{CUSTOMIZE: the top tier's name, e.g. fable}}) for the moments that actually need it: **convergence assessment** (is this run genuinely done?), **adjudicating ambiguous-blocked calls** (blocked-for-real vs blocked-by-timidity), and **gnarly decomposition** (carving an epic whose seams aren't obvious). Start those as fresh, narrow sessions or delegate them up only when the harness lists the tier as available — a standing marathon session at the top tier is an anti-pattern, not a safety margin.
+
 ## Role split (who does what)
 
 | Role | Tier | Work |
@@ -59,5 +61,6 @@ When only one tier exists, everything runs at the ceiling and this skill's value
 - Delegating the synthesis/report to a worker and pasting it to the user unread.
 - A sonnet-produced "absent/missing" claim filed or acted on with no refute pass — explorers over-report absence; verifiers exist because of this.
 - Spawning the ceiling tier for mechanical formatting because it was "already the default".
+- Running a whole marathon with the top-most tier as the session model "for quality" — paying ~2x cache-read on every orchestration turn for work opus handles; the top tier earns its rate only at convergence/adjudication/decomposition moments.
 - A skill hard-coding a top-tier model, breaking sessions that run below it.
 - The orchestrator re-grepping what a delegated explorer is already searching, paying twice.

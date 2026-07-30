@@ -49,6 +49,14 @@
         "read surrounding code in changed files",
         "[Cc]ite exact lines"
       ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "sonnet by default",
+        "run on sonnet",
+        "Delegation tiers"
+      ]
     }
   ],
   "autonomous-dev-flow": [
@@ -223,6 +231,14 @@
         "always confirm",
         "Ask which candidates to file",
         "ask the user which candidates"
+      ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "sonnet by default",
+        "run on sonnet",
+        "Delegation tiers"
       ]
     }
   ],
@@ -933,6 +949,14 @@
         "More than 5 degrades quality",
         "[Cc]ap at 5"
       ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "sonnet by default",
+        "run on sonnet",
+        "Delegation tiers"
+      ]
     }
   ],
   "prime-directive": [
@@ -1097,6 +1121,14 @@
         "do not just list opinions",
         "who is right",
         "[Ss]ynthesi[sz]e the disagreement"
+      ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "sonnet by default",
+        "run on sonnet",
+        "Delegation tiers"
       ]
     }
   ],
@@ -1453,6 +1485,14 @@
       "anyOf": [
         "Consensus Findings"
       ]
+    },
+    {
+      "label": "tiered-subagents",
+      "anyOf": [
+        "sonnet by default",
+        "run on sonnet",
+        "Delegation tiers"
+      ]
     }
   ],
   "tackle-issues": [
@@ -1618,6 +1658,14 @@
       "anyOf": [
         "Effort is a dial",
         "Raising effort is cheaper than raising tier"
+      ]
+    },
+    {
+      "label": "routine-orchestration-on-opus",
+      "anyOf": [
+        "Routine orchestration belongs on",
+        "top-most tier",
+        "convergence assessment"
       ]
     }
   ],
