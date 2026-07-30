@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "7b4d37f",
+  "generatedFromCommit": "44bb1db",
   "skillCount": 37,
   "skills": [
     {
@@ -68,9 +68,9 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "5df829a",
+      "hash": "44bb1db",
       "lines": 461,
-      "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, merge through the Unattended Merge Gate, and continue to the next issue. Gate-failing PRs accumulate for asynchronous user review while work continues.",
+      "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
       "guards": [
         {
           "label": "unattended-merge-gate",
@@ -83,8 +83,11 @@
           "label": "merge-report-entry",
           "anyOf": [
             "Merged by this session",
-            "entry in the final session report"
-          ]
+            "entry in the final session report",
+            "flag each finished PR in the session report",
+            "accumulates for `/batch-merge` or user review"
+          ],
+          "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs."
         },
         {
           "label": "no-auto-merge",
@@ -99,6 +102,15 @@
             "\\*\\*[Nn][Oo] attribution",
             "[Zz]ero [Aa]ttribution [Pp]olicy",
             "Co-Authored-By"
+          ]
+        },
+        {
+          "label": "self-merge-posture",
+          "note": "Critical Rule 5 is the single source of truth for whether this repo grants unattended self-merge, and every merge step defers to it. The alternates are anchor substrings taken from the two canonical wordings of that ONE rule: the first anchors the gated wording, the second the withheld wording, and the third is a fragment both skills' withheld wording shares (autonomous-dev-flow and tackle-issues phrase the rest of that sentence differently). None is redundant — dropping any one leaves a legitimate posture unmatched. The guard fires when the rule line is gone, not when a repo picks the other posture. Do NOT relax this to a bare 'Unattended Merge Gate' substring: that phrase also appears in prose about the gate and would pass a file whose rule 5 had been deleted.",
+          "anyOf": [
+            "Merge only through the Unattended Merge Gate",
+            "NEVER merge, however clean the PR is",
+            "does not grant unattended merge authority"
           ]
         }
       ]
@@ -1606,7 +1618,7 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "d3cd6f5",
+      "hash": "44bb1db",
       "lines": 418,
       "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
       "guards": [
@@ -1668,8 +1680,11 @@
           "label": "merge-report-entry",
           "anyOf": [
             "Merged by this session",
-            "entry in the Morning Summary"
-          ]
+            "entry in the Morning Summary",
+            "flag each finished PR in the session report",
+            "accumulates for `/batch-merge` or user review"
+          ],
+          "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs."
         },
         {
           "label": "zero-attribution-rule",
@@ -1677,6 +1692,15 @@
             "\\*\\*[Nn][Oo] attribution",
             "[Zz]ero [Aa]ttribution [Pp]olicy",
             "Co-Authored-By"
+          ]
+        },
+        {
+          "label": "self-merge-posture",
+          "note": "Critical Rule 5 is the single source of truth for whether this repo grants unattended self-merge, and every merge step defers to it. The alternates are anchor substrings taken from the two canonical wordings of that ONE rule: the first anchors the gated wording, the second the withheld wording, and the third is a fragment both skills' withheld wording shares (autonomous-dev-flow and tackle-issues phrase the rest of that sentence differently). None is redundant — dropping any one leaves a legitimate posture unmatched. The guard fires when the rule line is gone, not when a repo picks the other posture. Do NOT relax this to a bare 'Unattended Merge Gate' substring: that phrase also appears in prose about the gate and would pass a file whose rule 5 had been deleted.",
+          "anyOf": [
+            "Merge only through the Unattended Merge Gate",
+            "NEVER merge, however clean the PR is",
+            "does not grant unattended merge authority"
           ]
         }
       ]

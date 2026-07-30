@@ -14,7 +14,7 @@ Composes `/autonomous-dev-flow` logic internally but adds multi-wave retry with 
   - If empty, auto-detect: scan open issues sorted by complexity (low first, then medium, skip high)
   - Options: `max:N` (default 20, hard cap 30), `sort:created-asc` (default) or `sort:created-desc`
   - `waves:N` (default 3, max 4) — maximum retry waves
-  - `merge:off` — disable the Unattended Merge Gate; PRs accumulate for `/batch-merge` (default: gated self-merge is ON)
+  - `merge:off` — disable the Unattended Merge Gate for this run; PRs accumulate for `/batch-merge`. Default is whatever Critical Rule 5 records for this repo; where rule 5 withholds merge authority this flag is redundant and `merge:on` is not honoured
 
 ## Instructions
 
@@ -56,7 +56,7 @@ BRANCH_PREFIX_RE="^auto/"
 Parse `$ARGUMENTS` — same as `/autonomous-dev-flow` but with higher defaults:
 - `max` defaults to 20, hard cap 30
 - `waves` defaults to 3, max 4
-- gated self-merge defaults to ON (`merge:off` disables it)
+- self-merge follows Critical Rule 5 for this repo (`merge:off` can disable it for a run, but no flag can enable it where rule 5 withholds it)
 
 Build the initial queue using the same logic as `/autonomous-dev-flow` Phase 0:
 - Fetch issues by label, milestone, explicit list, or auto-detect
@@ -80,7 +80,7 @@ Display the marathon queue:
 | — | #16 — Refactor auth module | enhancement | Assigned to @user (skipped) |
 
 **Mode:** Unattended marathon (up to {W} waves)
-**Self-merge:** Unattended Merge Gate {ON / off (`merge:off`)}
+**Self-merge:** {per Critical Rule 5 — Unattended Merge Gate ON / off (`merge:off`) / withheld by this repo}
 **Estimated scope:** {N} issues × {W} max waves
 
 Start marathon session?
@@ -136,7 +136,7 @@ From `MASTER_LOG`, gather issues where the latest attempt was not `Done`:
 
 | Status | Meaning | Retry? |
 |--------|---------|--------|
-| Done | PR merged through the Unattended Merge Gate (or review-clean under `merge:off`) | No — skip in future waves |
+| Done | PR merged through the Unattended Merge Gate, or review-clean and left open where rule 5 withholds merge authority (or under `merge:off`) | No — skip in future waves |
 | Retry | Tests failing or review found critical issues | Yes — re-attempt |
 | Flagged | 2 fix attempts failed in a wave | Yes — with different strategy |
 | Skipped | Non-automatable (blocked, no criteria, etc.) | No — genuinely blocked |
@@ -273,11 +273,11 @@ After each wave, check for convergence BEFORE entering the next wave:
 
 ### Phase 5: Merge Accounting
 
-Merging happens **inline during waves** via the Unattended Merge Gate (see `unattended-merge`): a PR self-merges the moment /full-review is clean, ALL CI checks pass on the final commit, and ALL review threads are resolved — no `gh pr merge --auto`, no human pause, and the merge is verified `MERGED` before moving on. This unblocks dependent queue items mid-marathon. This phase is accounting only:
+Where Critical Rule 5 grants gated self-merge, merging happens **inline during waves** via the Unattended Merge Gate (see `unattended-merge`): a PR self-merges the moment /full-review is clean, ALL CI checks pass on the final commit, and ALL review threads are resolved — no `gh pr merge --auto`, no human pause, and the merge is verified `MERGED` before moving on. This unblocks dependent queue items mid-marathon. Where rule 5 withholds it, nothing merges inline and every finished PR is left open for review. This phase is accounting only:
 
 1. Collect every PR merged by the session — each MUST appear as an entry in the Morning Summary's "Merged by this session" table
 2. Any PR that passed review but failed a later gate (e.g. CI red at merge time) stays open — list it under Needs Attention with the failed gate named
-3. If `merge:off` was specified, no self-merges happened; note in the summary:
+3. If `merge:off` was specified, or Critical Rule 5 withholds merge authority for this repo, no self-merges happened; note in the summary:
 ```
 **Ready to merge:** Run `/batch-merge {PR_NUMS}` to merge completed PRs.
 ```
@@ -318,7 +318,7 @@ Output a comprehensive summary designed for the user to read when they return. T
 
 ### Merged by this session
 
-One entry per self-merged PR — MANDATORY (Unattended Merge Gate rule 6):
+One entry per self-merged PR — MANDATORY (Unattended Merge Gate rule 6). Omit the section entirely where Critical Rule 5 withholds merge authority: an empty table reads as though a merge happened:
 
 | PR | Issue | Review | Checks | Merge SHA |
 |----|-------|--------|--------|-----------|
@@ -388,14 +388,14 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 2. **TDD is mandatory** — RED → GREEN → REFACTOR for every issue, every wave. No skipping tests.
 3. **Branch from main every time** — Never stack branches. Fresh branch for every attempt, including retries.
 4. **One confirmation point** — The initial marathon queue approval. Everything after — including all waves and retries — is fully autonomous.
-5. **Merge only through the Unattended Merge Gate** — /full-review clean + ALL checks green on the final commit + ALL review threads resolved. No `gh pr merge --auto`, no protection overrides. `merge:off` disables self-merging (PRs accumulate for `/batch-merge`). Every self-merged PR MUST appear as an entry in the Morning Summary.
+5. **Self-merge authority for this repo** — {{CUSTOMIZE: This repo's self-merge posture, written as a directive. This is the SINGLE source of truth: every merge step in this skill defers to this rule, so write exactly one of the two below and delete the other. GATED (the usual choice): "Merge only through the Unattended Merge Gate — /full-review clean + ALL checks green on the final commit + ALL review threads resolved. No `gh pr merge --auto`, no protection overrides. `merge:off` disables self-merging for a single run (PRs accumulate for `/batch-merge`). Every self-merged PR MUST appear as an entry in the Morning Summary." WITHHELD, for repos where every merge must be a human act: "NEVER merge, however clean the PR is. This repo does not grant unattended merge authority, so the Unattended Merge Gate does not apply here and `merge:on` is NOT honoured — an invocation flag cannot grant authority the repo withholds. Every PR accumulates for `/batch-merge` or user review, so `merge:off` is redundant here rather than required."}}
 6. **Clean up failed attempts** — Close old PRs and delete old branches before retrying. Don't leave orphaned PRs.
 7. **Escalate strategy across waves** — Wave 1: standard approach. Wave 2: fresh context + address failures. Wave 3: alternative approach + scope reduction. Don't repeat the same failing approach.
 8. **Converge, don't loop forever** — If a wave produces zero new completions, stop. Further waves won't help.
 9. **Progress table after every issue** — The user may check in at any time. The table must show wave context.
 10. **Respect the hard cap** — Max 30 issues across all waves (including sub-issues from decomposition). Refuse larger queues.
 11. **Resume from GitHub state** — No local state files. Detect wave progress from closed/open PR counts per issue.
-12. **Compose existing skills** — `/full-review` is called as-is. The Unattended Merge Gate (`unattended-merge`) governs self-merges; `/batch-merge` handles leftovers under `merge:off`. Don't reinvent their logic.
+12. **Compose existing skills** — `/full-review` is called as-is. Where Critical Rule 5 grants self-merge, the Unattended Merge Gate (`unattended-merge`) governs it; `/batch-merge` handles leftovers under `merge:off` or where rule 5 withholds merge authority. Don't reinvent their logic.
 13. **Decompose in Wave 1 only** — High-complexity decomposition happens once. Retries work on the sub-issues, not the parent.
 14. **Comment on blocked issues** — Every issue that fails all waves gets a detailed GitHub comment with what was tried and why it failed.
 15. **Pre-Skill Checkpoint** — Re-read CLAUDE.md and skill files before running `/full-review` in every wave.

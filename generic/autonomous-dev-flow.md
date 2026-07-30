@@ -1,6 +1,6 @@
 # /autonomous-dev-flow
 
-Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, merge through the Unattended Merge Gate, and continue to the next issue. Gate-failing PRs accumulate for asynchronous user review while work continues.
+Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.
 
 ## Arguments
 
@@ -328,7 +328,7 @@ Capture results: verdict, findings counts, fixes committed, issues created/close
 
 **If critical findings exist:** Fix them (standard /full-review behavior handles this). Two fix attempts max — after that, flag the PR as "Needs attention" and move on.
 
-**Merge through the Unattended Merge Gate** (see `unattended-merge`). If the verdict is clean, ALL CI checks pass on the final commit, and ALL review threads are resolved, merge per repo convention, verify the PR reports `MERGED`, and record the merge as an entry in the final session report. NEVER use `gh pr merge --auto` or GitHub auto-merge — verify the gates first, then merge synchronously. If any gate fails, do NOT merge: flag the PR for the user with the failed gate named and keep working.
+**Merge — or don't — exactly as Critical Rule 5 directs.** Rule 5 records whether this repo grants unattended merge authority at all; it is the only place that decides, and nothing here overrides it. If rule 5 grants gated self-merge: when the verdict is clean, ALL CI checks pass on the final commit, and ALL review threads are resolved, merge per repo convention (see `unattended-merge`), verify the PR reports `MERGED`, and record the merge as an entry in the final session report. NEVER use `gh pr merge --auto` or GitHub auto-merge — verify the gates first, then merge synchronously. If any gate fails, do NOT merge: flag the PR for the user with the failed gate named and keep working. If rule 5 withholds merge authority, leave the PR open and flag it — a clean review is not a reason to revisit that.
 
 ### Phase 6: Assess, Report, and Continue
 
@@ -336,7 +336,7 @@ Based on /full-review results, classify the PR:
 
 | Verdict | Meaning | Action |
 |---------|---------|--------|
-| Clean | No critical findings, all comments addressed | Edit PR body: `Refs` → `Closes`. Merge via the Unattended Merge Gate, record the entry, mark issue done, continue |
+| Clean | No critical findings, all comments addressed | Edit PR body: `Refs` → `Closes`. Then follow Critical Rule 5: if this repo grants gated self-merge, merge and record the entry; if it withholds merge authority, flag the PR and leave it open. Mark the issue done, continue |
 | Needs attention | Critical findings or unresolved comments | Keep `Refs` (don't auto-close). Flag for user, continue |
 | Broken | Tests failing after review fixes | Keep `Refs` (don't auto-close). Flag for user, continue |
 
@@ -385,7 +385,7 @@ After all issues are processed (or the queue is exhausted), output final summary
 
 ### Merged by this session
 
-One entry per self-merged PR — MANDATORY (Unattended Merge Gate rule 6):
+One entry per self-merged PR — MANDATORY (Unattended Merge Gate rule 6). Omit this whole section when Critical Rule 5 withholds merge authority for this repo: there is nothing to report, and an empty "Merged by this session" table invites the reader to assume a merge happened:
 
 | PR | Issue | Review | Checks | Merge SHA |
 |----|-------|--------|--------|-----------|
@@ -431,7 +431,7 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 2. **TDD is mandatory** — RED → GREEN → REFACTOR for every issue. No skipping tests. If pure docs/config, note why tests are N/A.
 3. **Branch from main every time** — Never stack branches. Each PR is independently mergeable in any order.
 4. **One confirmation point** — The initial queue approval. Everything after is fully autonomous.
-5. **Merge only through the Unattended Merge Gate** — /full-review clean + ALL checks green on the final commit + ALL review threads resolved. No `gh pr merge --auto`, no GitHub auto-merge, no protection overrides. A failed gate means flag, don't merge. Every self-merged PR MUST appear as an entry in the final session report.
+5. **Self-merge authority for this repo** — {{CUSTOMIZE: This repo's self-merge posture, written as a directive. This is the SINGLE source of truth: every merge step in this skill defers to this rule, so write exactly one of the two below and delete the other. GATED (the usual choice): "Merge only through the Unattended Merge Gate — /full-review clean + ALL checks green on the final commit + ALL review threads resolved. No `gh pr merge --auto`, no GitHub auto-merge, no protection overrides. A failed gate means flag, don't merge. Every self-merged PR MUST appear as an entry in the final session report." WITHHELD, for repos where every merge must be a human act: "NEVER merge, however clean the PR is. This repo does not grant unattended merge authority and the Unattended Merge Gate does not apply here. PRs accumulate for user review — flag each finished PR in the session report and keep working. A clean gate is not permission, because there is no gate to pass."}}
 6. **Never block on review findings** — Flag and move on. The user handles flagged PRs during check-ins.
 7. **Two fix attempts max** — If /full-review finds critical issues, fix them. If a second attempt still fails, flag and move on.
 8. **Progress table after every issue** — The user may check in at any time. The table must be current.
