@@ -73,10 +73,13 @@ the skill's exact name plus the literal ` Customizations` suffix.>
   user review no matter how clean the review and checks are.
   ```
 
-  Omit the line and the install gets **gated**, which is the template default. Say it explicitly
-  in either direction if the answer matters for the repo — an omission reads as "nobody decided",
-  and the next `skill update` will quietly grant merge authority. A repo that withholds it also
-  does not honour `merge:on`: an invocation flag cannot grant authority the repo withholds.
+  Omit the line and the install gets **gated** — the template default, and the right outcome for a
+  repo that genuinely has no objection to gated self-merge. The failure mode is narrower than
+  "unstated": a repo that *intends* **withheld** but never pins it in the profile gets gated back on
+  its next `skill update`, silently re-enabling unattended merges that someone had deliberately
+  turned off. So pin `withheld` in the profile rather than relying on the installed file's current
+  wording; the file is regenerated, the profile is not. A repo that withholds it also does not honour
+  `merge:on`: an invocation flag cannot grant authority the repo withholds.
 - **No secrets.** Profiles are committed to the repo. Keys and tokens never go here.
 - **Keep it current.** When conventions change (a new required check, a renamed scope),
   update the profile so future `skill add` / `skill update` installs stay accurate.

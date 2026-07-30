@@ -86,7 +86,7 @@
     },
     {
       "label": "self-merge-posture",
-      "note": "Critical Rule 5 is the single source of truth for whether this repo grants unattended self-merge, and every merge step defers to it. The alternates are the two canonical wordings of that ONE rule — gated or withheld — so the guard fires when the rule line is gone, not when a repo picks the other posture. Do NOT relax this to a bare 'Unattended Merge Gate' substring: that phrase also appears in prose about the gate and would pass a file whose rule 5 had been deleted.",
+      "note": "Critical Rule 5 is the single source of truth for whether this repo grants unattended self-merge, and every merge step defers to it. The alternates are anchor substrings taken from the two canonical wordings of that ONE rule: the first anchors the gated wording, the second the withheld wording, and the third is a fragment both skills' withheld wording shares (autonomous-dev-flow and tackle-issues phrase the rest of that sentence differently). None is redundant — dropping any one leaves a legitimate posture unmatched. The guard fires when the rule line is gone, not when a repo picks the other posture. Do NOT relax this to a bare 'Unattended Merge Gate' substring: that phrase also appears in prose about the gate and would pass a file whose rule 5 had been deleted.",
       "anyOf": [
         "Merge only through the Unattended Merge Gate",
         "NEVER merge, however clean the PR is",
@@ -1490,7 +1490,7 @@
     },
     {
       "label": "self-merge-posture",
-      "note": "Critical Rule 5 is the single source of truth for whether this repo grants unattended self-merge, and every merge step defers to it. The alternates are the two canonical wordings of that ONE rule — gated or withheld — so the guard fires when the rule line is gone, not when a repo picks the other posture. Do NOT relax this to a bare 'Unattended Merge Gate' substring: that phrase also appears in prose about the gate and would pass a file whose rule 5 had been deleted.",
+      "note": "Critical Rule 5 is the single source of truth for whether this repo grants unattended self-merge, and every merge step defers to it. The alternates are anchor substrings taken from the two canonical wordings of that ONE rule: the first anchors the gated wording, the second the withheld wording, and the third is a fragment both skills' withheld wording shares (autonomous-dev-flow and tackle-issues phrase the rest of that sentence differently). None is redundant — dropping any one leaves a legitimate posture unmatched. The guard fires when the rule line is gone, not when a repo picks the other posture. Do NOT relax this to a bare 'Unattended Merge Gate' substring: that phrase also appears in prose about the gate and would pass a file whose rule 5 had been deleted.",
       "anyOf": [
         "Merge only through the Unattended Merge Gate",
         "NEVER merge, however clean the PR is",
