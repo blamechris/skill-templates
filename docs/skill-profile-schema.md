@@ -65,10 +65,16 @@ the skill's exact name plus the literal ` Customizations` suffix.>
   update the profile so future `skill add` / `skill update` installs stay accurate.
 - **`targets:` selects which agents a skill compiles for.** `compile-skill-targets.mjs` reads
   this line: `claude` → `.claude/skills/<name>/SKILL.md`, `gemini` → `.gemini/commands/<name>.toml`,
-  `codex` → `.codex/skills/<name>/SKILL.md`. All three emit **version-controlled, repo-tracked**
-  artifacts, so any combination is safe to commit (codex's repo folder can be copied/synced into
-  `~/.codex/skills` where repo-local discovery is unavailable). No line ⇒ the compiler falls back
-  to `claude`.
+  `codex` → `.codex/skills/<name>/SKILL.md`, `pi` → `~/.pi/agent/skills/<name>/SKILL.md`.
+  The first three emit **version-controlled, repo-tracked** artifacts, so any combination of them is
+  safe to commit (codex's repo folder can be copied/synced into `~/.codex/skills` where repo-local
+  discovery is unavailable). No line ⇒ the compiler falls back to `claude`.
+- **`pi` is the one target that writes outside the repo**, because Pi has no repo-local skill
+  discovery. Committing `pi` in `targets:` means every `skill add`/`update` in this repo writes into
+  the home directory of whoever ran it — fine for a solo repo whose owner drives Pi, wrong for a
+  shared one. Prefer leaving it out of the committed line and passing `--targets claude,pi` per
+  machine.
+  The compiler notices `~/.pi` and prints the flag to add; it never adds the target itself.
 
 ## History: migration from `customizations/<repo>.md`
 
