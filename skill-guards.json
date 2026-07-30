@@ -1284,6 +1284,47 @@
       ]
     }
   ],
+  "session-lifecycle": [
+    {
+      "label": "prs-split-by-author",
+      "anyOf": [
+        "split by author",
+        "-author:@me"
+      ]
+    },
+    {
+      "label": "rederive-not-trust",
+      "anyOf": [
+        "re-derived, not trusted",
+        "re-derives state rather than trusting",
+        "[Vv]erify the last claimed merge"
+      ]
+    },
+    {
+      "label": "reference-global-not-fork",
+      "anyOf": [
+        "single source of truth",
+        "do not restate or fork",
+        "[Ff]ollow (it|them) from there"
+      ]
+    },
+    {
+      "label": "end-checklist-order",
+      "anyOf": [
+        "[Ss]kip a step only by saying so",
+        "Run in order",
+        "checklist"
+      ]
+    },
+    {
+      "label": "careful-cleanup",
+      "anyOf": [
+        "leave other sessions' worktrees alone",
+        "prune branches only after verifying",
+        "MERGED"
+      ]
+    }
+  ],
   "skill": [
     {
       "label": "multi-target-compile",
