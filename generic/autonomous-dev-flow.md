@@ -415,15 +415,19 @@ One entry per self-merged PR — MANDATORY (Unattended Merge Gate rule 6). Omit 
 
 ## Session Boundaries
 
-Long autonomous runs are a sequence of bounded sessions, not one endless context — context re-reads dominate their cost, and a restart that halves context pays for itself within ~6–10 requests. When this skill runs inside a marathon (`/tackle-issues`), the wave boundary is the session boundary; run standalone, apply the same discipline at queue checkpoints:
+Long autonomous runs are a sequence of bounded sessions, not one endless context — context re-reads dominate their cost, and a restart that halves context pays for itself within ~6–10 requests. When this skill runs inside a marathon (`/tackle-issues`), the wave boundary is the session boundary; run standalone, apply the same discipline at wave boundaries of its own (queue checkpoints — every few issues, and always before starting a large one). How a session ends at a wave boundary is **mode-aware**:
 
-- **~150K main-thread context ceiling.** Past ~150K tokens of main-thread context, finish the current issue only, write a short handoff note (queue position, open blockers, awaiting-user items, last verified merge), and end the session. Resume Strategy below makes the fresh session lossless — it re-derives progress from GitHub state, so the handoff plus the queue is all the seed a restart needs.
-- **Cost circuit breaker at queue checkpoints.** Every few issues (and always before starting a large one), check session cost ({{CUSTOMIZE: cost source — e.g. the statusline computes it; name the per-session budget, e.g. "$X eq."}}). Over budget → write the handoff and **stop and notify** instead of continuing.
+- **Attended runs** — end the session at the wave boundary; the user/orchestrator relaunches the next segment seeded from the handoff note ({{CUSTOMIZE: handoff-note path — default `$CLAUDE_BRIEF_DIR/../handoffs/<repo>-<date>-handoff.md`}}) + the queue ({{CUSTOMIZE: queue path — default `scratchpad/autonomous-queue.json`}}).
+- **Unattended with a configured re-launcher** ({{CUSTOMIZE: wave re-launcher — e.g. chroxy scheduled trigger, cron/launchd job, /loop wrapper; leave "none" if absent}}) — end the session; the re-launcher starts the next segment from the same seeds.
+- **Unattended with no re-launcher** — do **NOT** end the session (nothing would relaunch it): write the handoff seed, force/await a compaction at the boundary so the next segment starts lean, and continue. The cost goal — shed context at the boundary — holds in every mode.
+
+- **~150K main-thread context ceiling.** Past ~150K tokens of main-thread context, finish the current issue only, write the short handoff note (queue position, open blockers, awaiting-user items, last verified merge), and end the session (unattended with no re-launcher: force a compaction instead). Resume Strategy below makes the fresh session lossless — it re-derives progress from GitHub state, so the handoff plus the queue is all the seed a restart needs.
+- **Cost circuit breaker at wave boundaries (queue checkpoints).** At each boundary, check session cost ({{CUSTOMIZE: cost source — e.g. the statusline computes it; name the per-session budget, e.g. "$X eq."}}). Over budget → write the handoff and **stop and notify** instead of continuing. This breaker is the sole sanctioned exception to Critical Rule 4's "everything after is fully autonomous".
 - **Verify state directly.** A background monitor ending is not a verdict — assert PR/CI state with a direct query before recording it, and re-check `mergeStateStatus` at the current head after any push.
 
 ## Resume Strategy
 
-This skill uses **GitHub state** for resume — no local state files.
+This skill resumes from **GitHub state** — GitHub remains the source of truth for issue/PR status. The wave handoff note (Session Boundaries) carries only session-boundary seeds — queue position, open blockers, awaiting-user items, last verified merge — and is disposable: everything in it is re-derivable from GitHub. It is a seed for the next segment, not a second source of truth.
 
 If a session is interrupted (crash, timeout, user stops it), re-running with the same arguments will:
 
@@ -438,13 +442,13 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 1. **NO attribution** — No Co-Authored-By, no "Generated with Claude", no AI mentions anywhere. Zero Attribution Policy.
 2. **TDD is mandatory** — RED → GREEN → REFACTOR for every issue. No skipping tests. If pure docs/config, note why tests are N/A.
 3. **Branch from main every time** — Never stack branches. Each PR is independently mergeable in any order.
-4. **One confirmation point** — The initial queue approval. Everything after is fully autonomous.
+4. **One confirmation point** — The initial queue approval. Everything after is fully autonomous; the sole sanctioned stop is the cost circuit breaker (see Session Boundaries).
 5. **Self-merge authority for this repo** — {{CUSTOMIZE: This repo's self-merge posture, written as a directive. This is the SINGLE source of truth: every merge step in this skill defers to this rule, so write exactly one of the two below and delete the other. GATED (the usual choice): "Merge only through the Unattended Merge Gate — /full-review clean + ALL checks green on the final commit + ALL review threads resolved. No `gh pr merge --auto`, no GitHub auto-merge, no protection overrides. A failed gate means flag, don't merge. Every self-merged PR MUST appear as an entry in the final session report." WITHHELD, for repos where every merge must be a human act: "NEVER merge, however clean the PR is. This repo does not grant unattended merge authority and the Unattended Merge Gate does not apply here. PRs accumulate for user review — flag each finished PR in the session report and keep working. A clean gate is not permission, because there is no gate to pass."}}
 6. **Never block on review findings** — Flag and move on. The user handles flagged PRs during check-ins.
 7. **Two fix attempts max** — If /full-review finds critical issues, fix them. If a second attempt still fails, flag and move on.
 8. **Progress table after every issue** — The user may check in at any time. The table must be current.
-9. **Respect the hard cap** — Max 15 issues per session. Refuse larger queues.
-10. **Resume from GitHub state** — No local state files. Query branches matching `BRANCH_PREFIX` and PR titles to detect prior work.
+9. **Respect the hard cap** — Max 15 issues per session segment (wave). Refuse larger queues.
+10. **Resume from GitHub state** — GitHub is the source of truth for issue/PR status; query branches matching `BRANCH_PREFIX` and PR titles to detect prior work. The wave handoff note is a disposable session-boundary seed, never a second source of truth.
 11. **Compose existing skills** — /full-review is called as-is (chains /agent-review → /check-pr). Don't reinvent their logic.
 12. **Decompose, don't skip** — High-complexity issues get broken into sub-issues, not skipped. Only skip truly non-automatable work.
 13. **Comment on skips** — Every skipped issue gets a GitHub comment explaining why. The user sees the reason.
@@ -468,3 +472,6 @@ Lines and sections marked with `{{CUSTOMIZE}}` need repo-specific adaptation:
 - **Smoke test UI rebuild command** (e.g., `npm run dashboard:build`)
 - **Smoke test invocation** — how to run the `/smoke-test` skill or script
 - **Cost source + per-session budget** — where session cost is read (e.g. the statusline) and the budget the circuit breaker enforces (Session Boundaries)
+- **Handoff-note path** — where wave handoff notes live, default `$CLAUDE_BRIEF_DIR/../handoffs/<repo>-<date>-handoff.md` (Session Boundaries)
+- **Queue path** — where the durable wave queue lives, default `scratchpad/autonomous-queue.json` (Session Boundaries)
+- **Wave re-launcher** — what restarts the next segment in unattended runs (scheduled trigger, cron/launchd job, /loop wrapper), or "none" (Session Boundaries)

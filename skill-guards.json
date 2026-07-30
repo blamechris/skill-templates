@@ -53,8 +53,8 @@
     {
       "label": "tiered-subagents",
       "anyOf": [
-        "sonnet by default",
-        "run on sonnet",
+        "workhorse tier by default",
+        "run at the workhorse tier",
         "Delegation tiers"
       ]
     }
@@ -236,8 +236,8 @@
     {
       "label": "tiered-subagents",
       "anyOf": [
-        "sonnet by default",
-        "run on sonnet",
+        "workhorse tier by default",
+        "run at the workhorse tier",
         "Delegation tiers"
       ]
     }
@@ -953,8 +953,8 @@
     {
       "label": "tiered-subagents",
       "anyOf": [
-        "sonnet by default",
-        "run on sonnet",
+        "workhorse tier by default",
+        "run at the workhorse tier",
         "Delegation tiers"
       ]
     }
@@ -1049,7 +1049,7 @@
     {
       "label": "session-boundaries",
       "anyOf": [
-        "[Ee]nd the session at each wave boundary",
+        "[Ss]hed context at (?:every|each) wave boundary",
         "wave boundaries double as session boundaries",
         "150K"
       ]
@@ -1126,8 +1126,8 @@
     {
       "label": "tiered-subagents",
       "anyOf": [
-        "sonnet by default",
-        "run on sonnet",
+        "workhorse tier by default",
+        "run at the workhorse tier",
         "Delegation tiers"
       ]
     }
@@ -1530,8 +1530,8 @@
     {
       "label": "tiered-subagents",
       "anyOf": [
-        "sonnet by default",
-        "run on sonnet",
+        "workhorse tier by default",
+        "run at the workhorse tier",
         "Delegation tiers"
       ]
     }
@@ -1623,13 +1623,13 @@
       "anyOf": [
         "STATE header",
         "only mandatory read",
-        "never re-read top-to-bottom"
+        "top-to-bottom re-read"
       ]
     },
     {
       "label": "session-boundaries",
       "anyOf": [
-        "[Ee]nd the session at each wave boundary",
+        "[Ss]hed context at (?:every|each) wave boundary",
         "[Ww]ave boundaries are session boundaries",
         "150K"
       ]
@@ -1702,7 +1702,7 @@
       ]
     },
     {
-      "label": "routine-orchestration-on-opus",
+      "label": "routine-orchestration-below-top-tier",
       "anyOf": [
         "Routine orchestration belongs on",
         "top-most tier",
