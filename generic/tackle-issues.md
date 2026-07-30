@@ -34,6 +34,18 @@ Morning Summary        → Structured report of everything that happened
 
 Each wave runs the full Phase 1-6 cycle from `/autonomous-dev-flow` for each issue. The difference is what happens between waves and how retries are handled.
 
+### Session Boundaries and the Session Ledger
+
+A marathon spans multiple *sessions*, not one endless context. Context re-reads dominate marathon cost, so wave boundaries double as session boundaries:
+
+- **Session ledger + STATE header.** Keep an append-only session ledger ({{CUSTOMIZE: ledger path, e.g. `autonomous-session-<date>.md` at repo root — gitignored, never commit}}). Its top carries a rolling **STATE header** — a compact block (~2K tokens, hard-capped, rewritten in place) holding: current wave + position, queue pointer, open blockers, awaiting-user list, and the last **verified** merge (PR + SHA). After a compaction or on a fresh session, the STATE header is the **only mandatory read**; the full history below it is consulted on-demand only (a prior decision, a retry's failure reason) — never re-read top-to-bottom as a ritual.
+- **End the session at each wave boundary.** When a wave completes (after Phase 2 replenishment and the Phase 4 convergence check), write/refresh the handoff note and STATE header, then end the session; the next wave starts fresh, seeded from handoff note + queue + STATE header — never the full history. A restart that halves context pays for itself within ~6–10 requests.
+- **~150K main-thread context ceiling.** Past ~150K tokens of main-thread context, finish the current issue only, write the handoff, end the session mid-wave if necessary.
+- **Per-wave cost circuit breaker.** At each wave boundary, check session cost ({{CUSTOMIZE: cost source — e.g. the statusline computes it; name the per-session budget, e.g. "$X eq."}}). Over budget → write the handoff and **stop and notify**; do not start the next wave.
+- **Verify state directly, never from a stale reading.** A monitor/watcher ending is **not** a verdict — assert PR/CI state with a direct query before recording it. And `mergeStateStatus` is only meaningful at the **current** head — re-check it after any push before acting on a BLOCKED/CLEAN reading.
+
+`MASTER_LOG` (below) lives in the ledger; the STATE header summarizes it, and Resume Strategy re-derives ground truth from GitHub regardless.
+
 ### Phase 0: Marathon Setup
 
 ```bash
@@ -401,6 +413,8 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 15. **Pre-Skill Checkpoint** — Re-read CLAUDE.md and skill files before running `/full-review` in every wave.
 16. **Sync before every branch** — Always `git checkout main && git pull` before starting each issue in each wave.
 17. **Morning summary is mandatory** — Even if interrupted, output the best summary possible with data collected so far.
+18. **Wave boundaries are session boundaries** — End the session at each wave boundary and restart fresh from handoff note + queue + the ledger's STATE header. Respect the ~150K main-thread context ceiling and the per-wave cost circuit breaker (see Session Boundaries and the Session Ledger).
+19. **STATE header over full re-reads** — After compaction, read only the ledger's STATE header; the full ledger history is on-demand reference, never a mandatory re-read.
 
 ## Customization Points
 
@@ -408,6 +422,8 @@ Lines and sections marked with `{{CUSTOMIZE}}` need repo-specific adaptation. Th
 
 - **Branch prefix** for NEW session branches (`BRANCH_PREFIX`, single prefix)
 - **Branch prefix regex** for merge/resume scans (`BRANCH_PREFIX_RE`) — list every prefix a session branch can carry so multi-prefix repos aren't missed
+- **Session-ledger path** — the gitignored ledger carrying the STATE header
+- **Cost source + per-session budget** — where session cost is read (e.g. the statusline) and the budget the per-wave circuit breaker enforces
 - **Branch naming convention**
 - **Decomposition trigger label**
 - **Test runner command**

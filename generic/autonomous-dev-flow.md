@@ -413,6 +413,14 @@ One entry per self-merged PR — MANDATORY (Unattended Merge Gate rule 6). Omit 
 - Review created issues for follow-up work
 ```
 
+## Session Boundaries
+
+Long autonomous runs are a sequence of bounded sessions, not one endless context — context re-reads dominate their cost, and a restart that halves context pays for itself within ~6–10 requests. When this skill runs inside a marathon (`/tackle-issues`), the wave boundary is the session boundary; run standalone, apply the same discipline at queue checkpoints:
+
+- **~150K main-thread context ceiling.** Past ~150K tokens of main-thread context, finish the current issue only, write a short handoff note (queue position, open blockers, awaiting-user items, last verified merge), and end the session. Resume Strategy below makes the fresh session lossless — it re-derives progress from GitHub state, so the handoff plus the queue is all the seed a restart needs.
+- **Cost circuit breaker at queue checkpoints.** Every few issues (and always before starting a large one), check session cost ({{CUSTOMIZE: cost source — e.g. the statusline computes it; name the per-session budget, e.g. "$X eq."}}). Over budget → write the handoff and **stop and notify** instead of continuing.
+- **Verify state directly.** A background monitor ending is not a verdict — assert PR/CI state with a direct query before recording it, and re-check `mergeStateStatus` at the current head after any push.
+
 ## Resume Strategy
 
 This skill uses **GitHub state** for resume — no local state files.
@@ -423,7 +431,7 @@ If a session is interrupted (crash, timeout, user stops it), re-running with the
 2. Skip issues that already have merged or open PRs
 3. Resume from the first issue without a PR
 
-This makes the skill **idempotent** — safe to re-run without duplicating work.
+This makes the skill **idempotent** — safe to re-run without duplicating work. The same idempotence is what makes deliberate session-boundary restarts (above) lossless.
 
 ## Critical Rules
 
@@ -459,3 +467,4 @@ Lines and sections marked with `{{CUSTOMIZE}}` need repo-specific adaptation:
 - **Smoke test condition** — file patterns that trigger the smoke test (e.g., `dashboard|\.tsx$|\.css$`)
 - **Smoke test UI rebuild command** (e.g., `npm run dashboard:build`)
 - **Smoke test invocation** — how to run the `/smoke-test` skill or script
+- **Cost source + per-session budget** — where session cost is read (e.g. the statusline) and the budget the circuit breaker enforces (Session Boundaries)

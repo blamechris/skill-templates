@@ -92,6 +92,22 @@
         "NEVER merge, however clean the PR is",
         "does not grant unattended merge authority"
       ]
+    },
+    {
+      "label": "session-boundaries",
+      "anyOf": [
+        "150K",
+        "sequence of bounded sessions",
+        "context ceiling"
+      ]
+    },
+    {
+      "label": "cost-circuit-breaker",
+      "anyOf": [
+        "circuit breaker",
+        "[Oo]ver budget",
+        "stop and notify"
+      ]
     }
   ],
   "batch-merge": [
@@ -997,6 +1013,30 @@
         "faked completion",
         "documented-blocked"
       ]
+    },
+    {
+      "label": "state-header",
+      "anyOf": [
+        "STATE header",
+        "only mandatory post-compaction read",
+        "only mandatory read"
+      ]
+    },
+    {
+      "label": "session-boundaries",
+      "anyOf": [
+        "[Ee]nd the session at each wave boundary",
+        "wave boundaries double as session boundaries",
+        "150K"
+      ]
+    },
+    {
+      "label": "cost-circuit-breaker",
+      "anyOf": [
+        "circuit breaker",
+        "[Oo]ver budget",
+        "stop and notify"
+      ]
     }
   ],
   "project-audit": [
@@ -1495,6 +1535,30 @@
         "Merge only through the Unattended Merge Gate",
         "NEVER merge, however clean the PR is",
         "does not grant unattended merge authority"
+      ]
+    },
+    {
+      "label": "state-header",
+      "anyOf": [
+        "STATE header",
+        "only mandatory read",
+        "never re-read top-to-bottom"
+      ]
+    },
+    {
+      "label": "session-boundaries",
+      "anyOf": [
+        "[Ee]nd the session at each wave boundary",
+        "[Ww]ave boundaries are session boundaries",
+        "150K"
+      ]
+    },
+    {
+      "label": "cost-circuit-breaker",
+      "anyOf": [
+        "circuit breaker",
+        "[Oo]ver budget",
+        "stop and notify"
       ]
     }
   ],
