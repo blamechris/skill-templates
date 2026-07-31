@@ -25,14 +25,18 @@ Run these in order; each step re-derives state rather than trusting memory:
    gh pr list --state open --search "-author:@me"
    ```
 4. **Skill drift** — run `/skill outdated` and report any drifted skills (fix now only if the session will use them).
-5. **Prior-session state** — if a handoff note, session ledger, or queue file exists ({{CUSTOMIZE: where this repo keeps handoff notes / session ledgers / queue files, e.g. `handoffs/`, `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this step's path list if the repo has none yet}}), read the ledger's STATE header (not the full history) and the handoff TL;DR. `/catchup` is the component skill for reconstructing a prior session where installed.
-6. **Verify the last claimed merge** — if the prior session's notes claim a merge, confirm it (`gh pr view <n>` reports `MERGED`) before building on it. State is re-derived, not trusted.
+5. **Global-conventions sync** — the canonical `~/.claude/CLAUDE.md` is version-controlled at
+   `~/Projects/skill-templates/assets/global-CLAUDE.md`; check `diff -q` between the two. If they
+   differ, surface the drift before long work: the registry copy wins unless the local delta is an
+   un-landed improvement — in that case land it in the registry first (PR), then copy out.
+6. **Prior-session state** — if a handoff note, session ledger, or queue file exists ({{CUSTOMIZE: where this repo keeps handoff notes / session ledgers / queue files, e.g. `handoffs/`, `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this step's path list if the repo has none yet}}), read the ledger's STATE header (not the full history) and the handoff TL;DR. `/catchup` is the component skill for reconstructing a prior session where installed.
+7. **Verify the last claimed merge** — if the prior session's notes claim a merge, confirm it (`gh pr view <n>` reports `MERGED`) before building on it. State is re-derived, not trusted.
 
 Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others), drifted skills, and what the session is picking up.
 
 ### During the session
 
-- **Every user-facing message ends with a bold `**Status:**` line** — one to three lines: done / in flight / blocked-on-named-thing. This is the global reporting rule in `~/.claude/CLAUDE.md` ("End-of-message summary"); follow it from there — do not restate or fork it here. Subagents' final messages carry their own `**Status:**` line.
+- **Every user-facing message ends with the mechanical `**Status:**` line** — four fixed slots (done · in flight · blocked · DECISION), `none` when empty. This is the global reporting rule in `~/.claude/CLAUDE.md` ("End-of-message summary"); follow it from there — do not restate or fork it here. Subagents' final messages carry their own `**Status:**` line.
 - **Session boundaries** — the global `~/.claude/CLAUDE.md` "Session boundaries" section governs when to end this session and restart fresh (wave boundaries, ~150K main-thread context, second compaction, work-class switches). Follow it from there.
 
 ### Session end — the checklist
