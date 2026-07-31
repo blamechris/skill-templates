@@ -142,7 +142,7 @@ Cap your findings at 6. Quality over quantity.
 
 **Delegation tiers (cost discipline — do not strip):**
 
-Roles per `/tiered-delegation`: **workhorse** = one tier below the session ceiling, **mechanical** = cheapest available tier. Concrete model names live only in that skill's `{{CUSTOMIZE}}` ladder — never here.
+Roles per `/tiered-delegation`: **workhorse** = one tier below the session ceiling, **mechanical** = cheapest available tier. Concrete model names live only in that skill's CUSTOMIZE-marker ladder — never here.
 
 - **Hunters run at the workhorse tier by default.** Bug-hunting breadth is workhorse work; do not spawn hunters at the ceiling. The orchestrator's dedup/triage (step 5) and the user-facing report are where the expensive judgment lives.
 - **Mechanical passes at the mechanical tier.** The step-5 dedup key matching, severity-floor filtering, and any pre-filter over candidate files run at the mechanical tier at low effort.
