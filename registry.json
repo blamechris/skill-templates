@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "8196307",
+  "generatedFromCommit": "a09dcc2",
   "skillCount": 38,
   "skills": [
     {
@@ -36,7 +36,7 @@
     },
     {
       "name": "agentic-audit",
-      "hash": "8196307",
+      "hash": "a09dcc2",
       "lines": 151,
       "description": "Launch a panel of specialized agents to audit a pull request from multiple perspectives before merge.",
       "guards": [
@@ -192,7 +192,7 @@
     },
     {
       "name": "bug-hunt",
-      "hash": "8196307",
+      "hash": "a09dcc2",
       "lines": 325,
       "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.",
       "guards": [
@@ -993,7 +993,7 @@
     },
     {
       "name": "parallel-dev",
-      "hash": "8196307",
+      "hash": "a09dcc2",
       "lines": 417,
       "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts.",
       "guards": [
@@ -1206,7 +1206,7 @@
     },
     {
       "name": "project-audit",
-      "hash": "8196307",
+      "hash": "a09dcc2",
       "lines": 524,
       "description": "Launch a comprehensive multi-agent audit of the entire project. Agents with diverse perspectives analyze the codebase in parallel, then findings are synthesized into a master assessment with actionable recommendations.",
       "guards": [
@@ -1705,7 +1705,7 @@
     },
     {
       "name": "swarm-audit",
-      "hash": "8196307",
+      "hash": "a09dcc2",
       "lines": 213,
       "description": "Launch a swarm of specialized agents to perform a multi-perspective audit of any design document, architecture, codebase, or proposal.",
       "guards": [
