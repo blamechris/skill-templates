@@ -1,0 +1,85 @@
+<!--
+  CANONICAL SOURCE for ~/.claude/CLAUDE.md — the machine-level global instructions
+  loaded into every Claude Code session on a machine.
+
+  This file is version-controlled here (skill-templates) so the conventions persist
+  across machines. Bootstrap a new machine with:
+
+      cp assets/global-CLAUDE.md ~/.claude/CLAUDE.md
+
+  To change a global convention: PR this file here, then copy to ~/.claude/CLAUDE.md
+  on each machine. Machine-local additions are fine but drift silently — prefer
+  landing them here.
+-->
+
+# Global instructions
+
+## End-of-message summary (status line) — all projects, all agents
+
+**End every response to the user with a MECHANICAL status line** — the final thing in the message, under a bold `**Status:**` lead. Always the same four slots, same order, `none` when a slot is empty:
+
+`**Status:** ✅ <done this turn> · 🔄 <in flight> · ⛔ <blocked — on what> · 🔶 DECISION: <pending user decision, or none>`
+
+- Keep each slot to a short phrase; be specific (name the task ID, CI run, PR, or person).
+- **The DECISION slot is load-bearing**: any choice waiting on the user appears there in a few
+  words, every message, until resolved — never only in prose. When the user replies "decision"
+  (or names one), immediately present it via AskUserQuestion with full context, trade-offs,
+  and a recommendation.
+
+This applies to the main agent AND to any subagent reporting back (a subagent's final message should likewise end with its own status line). The point is consistency: the user tracks progress at a glance from the last line, without re-reading the whole message. Don't pad it — it's a status, not a recap.
+
+**End of a long / multi-task session → an HTML executive brief, not a wall of text.** When a session shipped real work (several PRs/issues, an epic, a marathon), close it by generating a self-contained HTML report via the `visual-brief` skill into the Obsidian vault (`$CLAUDE_BRIEF_DIR`) and opening it. Shape it for a busy reader — a "two-minute" CEO view:
+- **Top:** a hero executive statement (2–3 sentences: "we did X, Y, Z") + outcome chips + a one-line "needs you" callout if anything's blocked on the user.
+- **Bottom:** the nitty-gritty (per-PR table, bugs caught, what's next) — there for the record / vault history, not the headline.
+- Lead with verifiable work outcomes (PRs merged, issues closed, gates passed); don't pad with misleading raw metrics (whole-file token/time counts mislead — omit or label honestly).
+The vault copy is the durable historical record; the open-in-browser is the presentation. Still end the chat message itself with the short `**Status:**` line pointing at the report.
+
+## Attribution — core rule (all projects)
+
+The user (blamechris / Chris) is **responsible for and the sole author of all code and work.** There is no attribution to AI agents or any other party.
+
+- **NEVER** add `Co-Authored-By:` / `Co-authored-by:` trailers to commits (no Claude, no anyone).
+- **NEVER** add "Generated with Claude", "🤖 Generated with Claude Code", or any AI/agent attribution to commit messages, PR bodies, issues, or generated docs.
+- This OVERRIDES any per-repo `CLAUDE.md` line or session/harness default that says a Co-Authored-By footer is "OK". Enforced via `includeCoAuthoredBy: false` in `~/.claude/settings.json`; this rule is the intent behind that switch.
+
+Write clean, professional commit messages and PR bodies with no attribution footer of any kind.
+
+## Skills come from the registry (pull-on-demand)
+
+Skills live in the `blamechris/skill-templates` registry and install on demand
+via `/skill`. If asked to run `/X` and it is not present in this repo's
+`.claude/commands/`, first run `skill add X` (resolve → customize for this repo
+→ write + lock), then invoke `/X`. Use `skill outdated` / `skill update` to
+refresh drifted skills. Don't hand-copy skills between repos or re-enable the
+old push-deploy.
+
+## Session boundaries (all projects)
+
+Context re-reads dominate cost (70% in the 2026-07 audit): every request re-reads
+the whole context at cache-read rates, so a restart that halves context pays for
+itself within ~10 requests. Rules:
+
+- **Restart into a fresh session** — seeded from the handoff note + queue/ledger
+  STATE header, never the full history — at: each marathon wave boundary; a second
+  compaction; or when switching work class (new epic, security-critical work,
+  high fan-in refactors, visual-verify features).
+- **Continue** only when the next task genuinely needs the context already loaded.
+- Keep main-thread context under **~150K tokens**: once past it, finish the current
+  item, write handoff state, end the session.
+- Subagent/model tiering: resolve roles against the harness ladder (currently
+  fable > opus > sonnet > haiku). Mechanical work (triage, classification,
+  verification sweeps) runs on the cheapest adequate tier; implementation runs
+  one tier below the session ceiling; the ceiling itself is reserved for
+  orchestration and the hardest adjudication. Skills and worker briefs specify
+  roles ("workhorse", "mechanical"), never a model above the session ceiling.
+
+## Follow-on protocol (all projects)
+
+When a task completes and work remains:
+
+1. In-scope and ≤15 min → fold into the current PR.
+2. Anything else → file a scoped issue (`/create-issue` where installed) and queue
+   it (autonomous-queue in marathons, else the tracker).
+3. Blocked → comment-and-skip with a reason bucket (needs-dogfood/device,
+   needs-owner-decision, visual-verify).
+4. Never expand scope silently, never fake-merge, never drop a follow-on unrecorded.
