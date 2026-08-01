@@ -65,21 +65,45 @@ the skill's exact name plus the literal ` Customizations` suffix.>
   this profile, and every merge step in those skills defers to it. State it in the skill's
   `Customizations` section as either **gated** (an autonomous session may merge its own PR once
   every Unattended Merge Gate condition is met) or **withheld** (PRs always accumulate for user
-  review, however clean):
+  review, however clean).
+
+  **The canonical form is a `### Self-merge posture` block whose first line is the bolded
+  declaration**, followed by the rationale. This is what every managed repo writes, and it is
+  the form `scripts/skill-lint.sh` parses:
 
   ```markdown
   ## autonomous-dev-flow Customizations
-  Self-merge posture: withheld — every merge in this repo is a human act. PRs accumulate for
-  user review no matter how clean the review and checks are.
+
+  ### Self-merge posture
+
+  **Withheld.** Every merge in this repo is a human act. However clean the review and the
+  checks are, PRs accumulate for the user rather than self-merging, so Critical Rule 5 must
+  be written in its WITHHELD form.
+
+  Recorded in the profile, not just in the installed skill: `.claude/commands/` is regenerated
+  on every `skill update`, this file is not.
   ```
 
-  Omit the line and the install gets **gated** — the template default, and the right outcome for a
+  The declaration is the block's **bold lead** — `**Withheld.**` or `**Gated.**`, on its own or
+  as a list item (`- **Withheld.** …`). Everything after it is prose the linter ignores, which
+  is deliberate: the rationale above names the *other* posture ("takes the template default —
+  gated self-merge"), so the posture cannot be read by searching the block for the word. A
+  one-line `Self-merge posture: withheld — …` inside the section is also accepted as shorthand.
+
+  Omit the block and the install gets **gated** — the template default, and the right outcome for a
   repo that genuinely has no objection to gated self-merge. The failure mode is narrower than
   "unstated": a repo that *intends* **withheld** but never pins it in the profile gets gated back on
   its next `skill update`, silently re-enabling unattended merges that someone had deliberately
   turned off. So pin `withheld` in the profile rather than relying on the installed file's current
   wording; the file is regenerated, the profile is not. A repo that withholds it also does not honour
   `merge:on`: an invocation flag cannot grant authority the repo withholds.
+
+  **The pin is enforced, not just recorded (#172).** `scripts/skill-lint.sh` compares the installed
+  Critical Rule 5 against this block and fails (exit 1) when they contradict — naming both what the
+  profile pins and what the file says. The registry's `self-merge-posture` guard cannot do this: it
+  is `anyOf: [<gated wording>, <withheld wording>, …]` by design, so it fires when Rule 5 is
+  *deleted* but accepts either posture, which left the withheld → gated flip passing every
+  mechanical check. Declaring nothing here stays entirely unenforced — absence is not a finding.
 - **No secrets.** Profiles are committed to the repo. Keys and tokens never go here.
 - **Keep it current.** When conventions change (a new required check, a renamed scope),
   update the profile so future `skill add` / `skill update` installs stay accurate.

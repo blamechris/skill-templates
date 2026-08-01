@@ -23,7 +23,7 @@ skill-templates/
 ├── skill-guards.json            # per-skill content guards (load-bearing markers)
 ├── scripts/
 │   ├── build-index.sh           # regenerates registry.json from generic/ + skill-guards.json
-│   └── skill-lint.sh            # mechanical gate: residual markers, attribution, version stamp, guards
+│   └── skill-lint.sh            # mechanical gate: residual markers, attribution, version stamp, guards, self-merge posture
 └── docs/skill-profile-schema.md # the .claude/skill-profile.md spec
 ```
 
@@ -55,6 +55,16 @@ In any managed repo, run `/skill`:
 
   Key on the exit code, not the output markers — `ERROR:` also appears on exit 1, and a
   usage error exits 2 printing none. Full guidance in `generic/skill.md` step 6.
+
+  The linter also checks one thing that is **not** per-file: for `autonomous-dev-flow` and
+  `tackle-issues` it compares the installed Critical Rule 5 against the self-merge posture the
+  repo pins in `.claude/skill-profile.md`, and reports a contradiction as a finding. The profile
+  is found automatically for a file at `<root>/.claude/commands/<name>.md`; pass it as an optional
+  4th argument when linting a copy staged elsewhere. A repo that pins no posture — most of them —
+  is unaffected: absence is never a finding. This closes a gap the `self-merge-posture` guard
+  cannot (#172): that guard is `anyOf: [<gated>, <withheld>, …]` on purpose, so it fires when
+  Rule 5 is *deleted* but passes either posture, leaving a withheld → gated flip invisible to
+  every mechanical check.
 - **`skill list`** — show installed skills and their registry status.
 - **`skill outdated`** — flag drift: **version** (template hash moved), **profile**
   (`.claude/skill-profile.md` changed), or **corruption** (a `guards` check fails).

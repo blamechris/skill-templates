@@ -25,14 +25,30 @@ trap 'rm -rf "$TMP"' EXIT
 # Hermetic registry for the shape cases: one guarded skill ("demo") plus the
 # real "create-pr" name, so guard behaviour is exercised without depending on
 # whatever guards the committed registry happens to carry today.
+#
+# autonomous-dev-flow / tackle-issues carry a copy of the real `self-merge-posture`
+# guard, because the posture section below needs the guard and the new check to
+# disagree in the right way: the guard is satisfied by EITHER wording (that is the
+# design, and the reason the flip was invisible), so a posture mismatch has to be
+# the only finding on a file the guard is perfectly happy with.
 cat > "$TMP/registry.json" <<'JSON'
 {
   "registry": "test",
-  "skillCount": 2,
+  "skillCount": 4,
   "skills": [
     { "name": "demo", "hash": "1234abc", "lines": 1, "description": "d",
       "guards": [ { "label": "load-bearing", "anyOf": ["LOAD BEARING MARKER"] } ] },
-    { "name": "create-pr", "hash": "1234abc", "lines": 1, "description": "d" }
+    { "name": "create-pr", "hash": "1234abc", "lines": 1, "description": "d" },
+    { "name": "autonomous-dev-flow", "hash": "1234abc", "lines": 1, "description": "d",
+      "guards": [ { "label": "self-merge-posture", "anyOf": [
+        "Merge only through the Unattended Merge Gate",
+        "NEVER merge, however clean the PR is",
+        "does not grant unattended merge authority" ] } ] },
+    { "name": "tackle-issues", "hash": "1234abc", "lines": 1, "description": "d",
+      "guards": [ { "label": "self-merge-posture", "anyOf": [
+        "Merge only through the Unattended Merge Gate",
+        "NEVER merge, however clean the PR is",
+        "does not grant unattended merge authority" ] } ] }
   ]
 }
 JSON
@@ -314,6 +330,315 @@ expect dirty 'prose quoting the stamp format is not proof of an install' \
 # must escape too or it reads "stamp names 'demo', expected 'demo'".
 expect dirty 'stamp name mismatch escapes both sides' -m '\u200b' \
   "$(printf '# /demo\n\nLOAD BEARING MARKER\n\n## Rules\n\nstuff\n<!-- skill-templates: de\xe2\x80\x8bmo 1234abc 2026-06-03 -->')"
+
+echo "self-merge posture: installed Critical Rule 5 vs the posture the profile PINS (#172)"
+
+# `self-merge-posture` is `anyOf: [<gated wording>, <withheld wording>, …]` BY DESIGN —
+# both postures are legitimate and repo-specific, so the guard fires when Critical
+# Rule 5 is DELETED, not when a repo picks the other one. The consequence was that the
+# one transition anyone cares about was invisible to every mechanical check: flipping a
+# withheld repo to the gated wording linted clean, reported no drift under `skill
+# outdated`, and diffed like a routine skill refresh. A per-file guard structurally
+# cannot see it, because the pinned intent lives in a different file. So the linter
+# reads that file. Every case here is asserted on the EXACT exit code: clean/dirty
+# alone cannot pin this, since the pre-fix behaviour was "clean" for the flip.
+
+# Verbatim from generic/autonomous-dev-flow.md's Critical Rule 5 — both branches of its
+# {{CUSTOMIZE}} marker. Using the real wording is the point: these strings ARE the
+# guard's alternates, so a case that passes here passes against a real installed file.
+R5_GATED='Merge only through the Unattended Merge Gate — /full-review clean + ALL checks green on the final commit + ALL review threads resolved.'
+R5_WITHHELD='NEVER merge, however clean the PR is. This repo does not grant unattended merge authority and the Unattended Merge Gate does not apply here.'
+
+# Verbatim from the fleet: rah6, medlens, no-it-all, readitation, repo-memory and
+# sovereign-storm all carry this exact block after #144's pass. The rationale paragraph
+# is load-bearing for these tests, not decoration — it contains the word "gated". A
+# parser that searches the block for "gated"/"withheld" reads this WITHHELD declaration
+# as GATED and inverts the check on six real repos, so the declaration has to be taken
+# from the block's BOLD LEAD and the rest treated as prose.
+PROFILE_WITHHELD=$(cat <<'MD'
+# demo skill profile
+
+## autonomous-dev-flow Customizations
+
+### Self-merge posture
+
+**Withheld.** Every merge in this repo is a human act. However clean the review and
+the checks are, PRs accumulate for the user rather than self-merging, so Critical
+Rule 5 must be written in its WITHHELD form.
+
+Recorded in the profile, not just in the installed skill: `.claude/commands/` is
+regenerated on every `skill update`, this file is not. Without this line the next
+update takes the template default — gated self-merge — and silently re-enables
+unattended merges that were deliberately withheld.
+
+### Branch Prefix
+auto/
+MD
+)
+
+PROFILE_GATED=$(cat <<'MD'
+# demo skill profile
+
+## autonomous-dev-flow Customizations
+
+### Self-merge posture
+
+**Gated.** An autonomous session may merge its own PR once every Unattended Merge Gate
+condition is met. Critical Rule 5 must be written in its GATED form. A repo that
+withheld merge authority would say so here instead.
+MD
+)
+
+# The list-item shape carebridge uses. Same declaration, one bullet deeper.
+PROFILE_WITHHELD_LIST=$(cat <<'MD'
+# demo skill profile
+
+## autonomous-dev-flow Customizations
+
+### Self-merge posture
+- **Withheld.** This repo does NOT grant unattended merge authority. Critical Rule 5
+  must be written in its WITHHELD form: the session never merges.
+MD
+)
+
+# The one-line shorthand documented in docs/skill-profile-schema.md.
+PROFILE_WITHHELD_INLINE=$(cat <<'MD'
+# demo skill profile
+
+## autonomous-dev-flow Customizations
+Self-merge posture: withheld — every merge in this repo is a human act.
+MD
+)
+
+# A profile that says plenty and says nothing about posture. The overwhelmingly common
+# case, and the one that must never become a failure.
+PROFILE_SILENT=$(cat <<'MD'
+# demo skill profile
+
+## autonomous-dev-flow Customizations
+
+### Branch Prefix
+auto/
+
+### Test Runner
+npm test
+MD
+)
+
+# Declares WITHHELD, but under a DIFFERENT skill's section.
+PROFILE_OTHER_SKILL=$(cat <<'MD'
+# demo skill profile
+
+## tackle-issues Customizations
+
+### Self-merge posture
+
+**Withheld.** Every merge in this repo is a human act.
+
+## autonomous-dev-flow Customizations
+
+### Branch Prefix
+auto/
+MD
+)
+
+# Declares a posture for a skill that has no posture concept.
+PROFILE_DEMO=$(cat <<'MD'
+# demo skill profile
+
+## demo Customizations
+
+### Self-merge posture
+
+**Withheld.** Every merge in this repo is a human act.
+MD
+)
+
+# make_repo <skill> <rule-5 body> <profile body, or "-" for no profile>
+#
+# Builds a repo-SHAPED fixture — <root>/.claude/commands/<skill>.md beside
+# <root>/.claude/skill-profile.md — so auto-discovery is exercised on the real
+# directory layout rather than mocked. Sets $SKILL_FILE and $POSTURE_SKILL.
+make_repo() {
+  POSTURE_SKILL="$1"
+  rm -rf "$TMP/repo"
+  mkdir -p "$TMP/repo/.claude/commands"
+  SKILL_FILE="$TMP/repo/.claude/commands/$1.md"
+  printf '# /%s\n\n## Critical Rules\n\n5. **Self-merge authority for this repo** — %s\n\n<!-- skill-templates: %s 1234abc 2026-06-03 -->\n' \
+    "$1" "$2" "$1" > "$SKILL_FILE"
+  # An `if`, not `[ … ] && printf` — an and-list as a function's last command exports
+  # the failed test's status, so every "no profile" case would return 1.
+  if [ "$3" != "-" ]; then
+    printf '%s\n' "$3" > "$TMP/repo/.claude/skill-profile.md"
+  fi
+}
+
+# posture_case <label> <want-rc> <want-msg|-|!want-absent> [extra linter args…]
+# Lints the fixture make_repo last built. Extra args land after the registry, i.e. in
+# the optional 4th (profile) position. Callable twice on one fixture to assert both
+# that something IS reported and that something else is NOT.
+posture_case() {
+  local label="$1" want_rc="$2" want_msg="$3"; shift 3
+  local out rc
+  out="$($LINT "$POSTURE_SKILL" "$SKILL_FILE" "$TMP/registry.json" "$@" 2>&1)"; rc=$?
+  if [ "$rc" -ne "$want_rc" ]; then
+    printf '  FAIL - %s\n    wanted exit %s, got %s:\n%s\n' \
+      "$label" "$want_rc" "$rc" "$(printf '%s\n' "$out" | sed 's/^/      /')"
+    FAIL=$((FAIL + 1)); return
+  fi
+  local why=""
+  case "$want_msg" in
+    -)  : ;;
+    !*) printf '%s' "$out" | grep -qF -- "${want_msg#!}" &&
+          why="output must NOT mention $(printf %q "${want_msg#!}")" ;;
+    *)  printf '%s' "$out" | grep -qF -- "$want_msg" ||
+          why="output did not mention $(printf %q "$want_msg")" ;;
+  esac
+  if [ -n "$why" ]; then
+    printf '  FAIL - %s\n    %s:\n%s\n' \
+      "$label" "$why" "$(printf '%s\n' "$out" | sed 's/^/      /')"
+    FAIL=$((FAIL + 1)); return
+  fi
+  printf '  ok - %s\n' "$label"
+  PASS=$((PASS + 1))
+}
+
+# THE case. This is the verifier's exact mutation from #172: take a withheld repo's
+# installed skill and rewrite Critical Rule 5 to the gated wording. Before this check
+# the file linted `✓ clean` at exit 0 — the guard is satisfied by the gated alternate,
+# which is what it is for. The profile is the only thing that knows better.
+make_repo autonomous-dev-flow "$R5_GATED" "$PROFILE_WITHHELD"
+posture_case 'withheld profile + GATED installed rule 5 is a finding' \
+  1 'pins WITHHELD for autonomous-dev-flow, but the installed file states GATED'
+
+# ...and the guard it slipped past is still green on that same file, which is why the
+# finding cannot come from the guard: exactly one issue is reported, the posture one.
+posture_case 'the flipped file passes its guard — the posture check is the only finding' \
+  1 '!guard miss'
+
+# The mirror. A repo that pins GATED and receives the withheld wording has also drifted
+# from its stated intent; the check is symmetric, not a one-way withheld defender.
+make_repo autonomous-dev-flow "$R5_WITHHELD" "$PROFILE_GATED"
+posture_case 'gated profile + WITHHELD installed rule 5 is a finding' \
+  1 'pins GATED for autonomous-dev-flow, but the installed file states WITHHELD'
+
+echo "self-merge posture: agreement is silent, and absence is never a failure"
+
+# Agreement. Also the rationale-trap test: PROFILE_WITHHELD's body contains "gated
+# self-merge", so a parser that greps the block rather than reading its bold lead
+# would call this a mismatch and fail six real repos on their correct configuration.
+make_repo autonomous-dev-flow "$R5_WITHHELD" "$PROFILE_WITHHELD"
+posture_case 'withheld profile + WITHHELD installed rule 5 is clean' \
+  0 'posture withheld matches the profile'
+
+make_repo autonomous-dev-flow "$R5_GATED" "$PROFILE_GATED"
+posture_case 'gated profile + GATED installed rule 5 is clean' \
+  0 'posture gated matches the profile'
+
+# The three shapes that must stay silent. Auto-discovery runs on every invocation, so
+# a false positive in any of them breaks repos that never opted into anything — most
+# repos have no profile, and having none is correct, not a finding.
+make_repo autonomous-dev-flow "$R5_GATED" -
+posture_case 'no profile at all: unchanged behaviour, not a failure' 0 '!posture'
+
+make_repo autonomous-dev-flow "$R5_GATED" "$PROFILE_SILENT"
+posture_case 'profile with no posture block: unchanged behaviour' 0 '!posture'
+
+make_repo autonomous-dev-flow "$R5_GATED" "$PROFILE_OTHER_SKILL"
+posture_case "a posture pinned under ANOTHER skill's section does not bind this one" \
+  0 '!posture'
+
+# Scoped to the skills that HAVE the concept. Critical Rule 5 exists only in
+# autonomous-dev-flow and tackle-issues; no posture is invented for anything else, even
+# when a profile writes a posture block for it and the file contradicts it outright.
+make_repo demo "LOAD BEARING MARKER. $R5_GATED" "$PROFILE_DEMO"
+posture_case 'a skill with no posture concept is never posture-checked' 0 '!posture'
+
+echo "self-merge posture: parsing the shapes real profiles are written in"
+
+make_repo autonomous-dev-flow "$R5_GATED" "$PROFILE_WITHHELD_LIST"
+posture_case 'declaration as a list item (carebridge shape)' \
+  1 'pins WITHHELD for autonomous-dev-flow'
+
+make_repo autonomous-dev-flow "$R5_GATED" "$PROFILE_WITHHELD_INLINE"
+posture_case 'one-line "Self-merge posture: withheld" shorthand (schema doc shape)' \
+  1 'pins WITHHELD for autonomous-dev-flow'
+
+# A file carrying BOTH wordings has no coherent posture, whatever the profile says.
+# Naming both is the useful output — it says the rule was edited, not replaced.
+make_repo autonomous-dev-flow "$R5_WITHHELD Also: $R5_GATED" "$PROFILE_WITHHELD"
+posture_case 'a file stating BOTH postures is a mismatch naming both' \
+  1 'the installed file states GATED and WITHHELD'
+
+echo "self-merge posture: deletion stays the guard's job, not this check's"
+
+# The division of labour. Rule 5 deleted outright is what `self-merge-posture` was
+# built for and it fires; this check adds nothing there, because a second finding on
+# an already-loud file is noise. So: guard miss reported, posture mismatch not.
+make_repo autonomous-dev-flow "see the merge phase for details." "$PROFILE_WITHHELD"
+posture_case 'a DELETED rule 5 is reported by the guard' 1 'guard miss: self-merge-posture'
+posture_case 'a DELETED rule 5 does not also raise a posture mismatch' 1 '!posture mismatch'
+
+echo "self-merge posture: how the profile is located"
+
+# The 4th argument, for a file linted somewhere other than its repo (a temp dir, a
+# pre-commit staging area) where auto-discovery has nothing to find.
+make_repo autonomous-dev-flow "$R5_GATED" -
+printf '%s\n' "$PROFILE_WITHHELD" > "$TMP/external-profile.md"
+posture_case 'explicit 4th argument supplies a profile auto-discovery cannot find' \
+  1 'pins WITHHELD for autonomous-dev-flow' "$TMP/external-profile.md"
+
+# An explicitly requested check that cannot run is an environment error, never a pass.
+posture_case 'an explicit profile path that does not exist exits 2' \
+  2 'ERROR: skill profile not found' "$TMP/no-such-profile.md"
+
+# Auto-discovery is deliberately narrow: <root>/.claude/commands/<name>.md only. A
+# skill file sitting beside a skill-profile.md in some other layout is NOT a repo
+# install, and guessing there would invent findings for files that never opted in.
+mkdir -p "$TMP/flat"
+POSTURE_SKILL=autonomous-dev-flow
+SKILL_FILE="$TMP/flat/autonomous-dev-flow.md"
+printf '# /autonomous-dev-flow\n\n5. **Self-merge authority for this repo** — %s\n\n<!-- skill-templates: autonomous-dev-flow 1234abc 2026-06-03 -->\n' \
+  "$R5_GATED" > "$SKILL_FILE"
+printf '%s\n' "$PROFILE_WITHHELD" > "$TMP/flat/skill-profile.md"
+posture_case 'a profile outside .claude/ is not auto-discovered' 0 '!posture'
+
+echo "self-merge posture: the anchor table stays in sync with skill-guards.json"
+
+# POSTURE_ANCHORS in skill-lint.sh splits the guard's alternates by which posture each
+# one belongs to — the mapping the guard JSON has no way to express, and the whole
+# reason the flip was undetectable. Two files, one fact. If an alternate is added to
+# skill-guards.json and not classified in the linter, a file carrying only that new
+# wording becomes unclassifiable and the flip is invisible again, silently.
+sync_missing=""; sync_seen=0
+while IFS= read -r alt; do
+  sync_seen=$((sync_seen + 1))
+  grep -qF -- "$alt" "$LINT" || sync_missing="$sync_missing$alt"$'\n'
+done < <(python3 - "$ROOT/skill-guards.json" <<'PY'
+import json, sys
+guards = json.load(open(sys.argv[1], encoding="utf-8"))
+seen = set()
+for skill in ("autonomous-dev-flow", "tackle-issues"):
+    for g in guards.get(skill, []):
+        if g.get("label") == "self-merge-posture":
+            for alt in g.get("anyOf", []):
+                if alt not in seen:
+                    seen.add(alt)
+                    print(alt)
+PY
+)
+if [ "$sync_seen" -eq 0 ]; then
+  # Vacuous success is the failure mode a set-comparison test is most prone to.
+  printf '  FAIL - every self-merge-posture alternate is classified in skill-lint.sh\n    found NO alternates in skill-guards.json — the test would pass on an empty set\n'
+  FAIL=$((FAIL + 1))
+elif [ -n "$sync_missing" ]; then
+  printf '  FAIL - every self-merge-posture alternate is classified in skill-lint.sh\n    unclassified in POSTURE_ANCHORS:\n%s\n' \
+    "$(printf '%s' "$sync_missing" | sed 's/^/      /')"
+  FAIL=$((FAIL + 1))
+else
+  printf '  ok - all %d self-merge-posture alternate(s) are classified in skill-lint.sh\n' "$sync_seen"
+  PASS=$((PASS + 1))
+fi
 
 echo "network-only install path: the linter run as a fetched copy outside the repo"
 
