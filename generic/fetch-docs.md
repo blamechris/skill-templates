@@ -19,12 +19,22 @@ notices, because the docs still read as plausible.
 DOCS_REPO="owner/project-docs"
 DOCS_PATH="$HOME/path/to/project-docs"
 
+# A failed sync must ABORT. The whole point of this step is that an unrefreshed
+# clone silently serves stale docs — and a `pull` that fails (no network, a
+# conflicted rebase, auth expiry) leaves exactly that, only now you have also
+# printed "Pulling latest docs..." and look current.
 if [ -d "$DOCS_PATH/.git" ]; then
   echo "Pulling latest docs..."
-  git -C "$DOCS_PATH" pull --rebase 2>&1
+  git -C "$DOCS_PATH" pull --rebase 2>&1 || {
+    echo "STOP: docs pull failed — the clone at $DOCS_PATH is stale. Fix it before citing docs." >&2
+    exit 1
+  }
 else
   echo "Cloning docs repo..."
-  git clone "https://github.com/${DOCS_REPO}.git" "$DOCS_PATH" 2>&1
+  git clone "https://github.com/${DOCS_REPO}.git" "$DOCS_PATH" 2>&1 || {
+    echo "STOP: docs clone failed — there is nothing to read." >&2
+    exit 1
+  }
 fi
 ```
 

@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "81343ed",
+  "generatedFromCommit": "cbb846d",
   "skillCount": 38,
   "skills": [
     {
@@ -720,8 +720,8 @@
     },
     {
       "name": "fetch-docs",
-      "hash": "c3d7447",
-      "lines": 96,
+      "hash": "cbb846d",
+      "lines": 106,
       "description": "Sync a companion documentation repo (e.g., Obsidian vault) so agents can reference design docs, architecture notes, and project knowledge during development.",
       "guards": [
         {
@@ -1059,8 +1059,8 @@
     },
     {
       "name": "merge",
-      "hash": "c3d7447",
-      "lines": 265,
+      "hash": "cbb846d",
+      "lines": 270,
       "description": "Merge PRs, verify post-merge version bump, and run post-merge actions (build, deploy, etc.).",
       "guards": [
         {
@@ -1799,7 +1799,7 @@
     },
     {
       "name": "smoke-test",
-      "hash": "c3d7447",
+      "hash": "dda8a88",
       "lines": 229,
       "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results.",
       "guards": [

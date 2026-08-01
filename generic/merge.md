@@ -32,8 +32,13 @@ If no review exists, run `/full-review ${PR_NUM}` **before proceeding to merge**
 
 **Exception list — exhaustive. Anything not on it gets reviewed.**
 
-1. The version-bump PR that Phase 2.5 opens: its diff is produced by the bump script,
-   not authored, and it is the one PR this skill creates itself.
+1. The version-bump PR that **Phase 2b** opens, and only when its diff touches
+   nothing but {{CUSTOMIZE: the version manifest paths this repo bumps — e.g.
+   `package.json`, `package-lock.json`, `CHANGELOG.md`. List them; "the version
+   files" is not a path.}}. Provenance is deliberately NOT the test: "the bump
+   script produced it" is not checkable from a diff, and a hand-authored
+   version-only PR must land on the same side of the gate as a scripted one.
+   If the diff touches anything outside that list, it gets reviewed.
 2. {{CUSTOMIZE: Repo-declared path-based exceptions, or the sentence "None — every PR gets reviewed, including documentation." E.g., "Pure documentation/skill file changes (.md files) with zero code changes may skip review."}}
 
 ### Phase 1: Pre-Merge Preparation
