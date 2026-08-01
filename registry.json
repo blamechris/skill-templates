@@ -818,9 +818,10 @@
         {
           "label": "deduplication",
           "anyOf": [
-            "Deduplicate",
-            "dedup"
-          ]
+            "check all memory sources for existing coverage BEFORE",
+            "[Dd]eduplicate against existing memory[^\\n]{0,40}before proposing"
+          ],
+          "note": "Vacuity fix found by scripts/guard-audit.py: Was ['Deduplicate','dedup'] — both matched only the `### 2. Deduplicate Against Existing Memory` HEADING, so deleting the rule beneath it left the guard green. Anchored on the rule itself. Confirmed by mutation — before the fix, deleting every non-heading line the alternates matched removed ZERO lines, because they matched no rule text at all."
         },
         {
           "label": "approval-gate",
@@ -953,9 +954,10 @@
         {
           "label": "review-gate",
           "anyOf": [
-            "Mandatory Review Gate",
-            "Review Gate"
-          ]
+            "[Ee]very PR MUST be reviewed before merging",
+            "MUST be reviewed before merging"
+          ],
+          "note": "Vacuity fix found by scripts/guard-audit.py: Was ['Mandatory Review Gate','Review Gate'] — both matched only the `### Phase 0` HEADING. Anchored on the CRITICAL line that states the rule. Confirmed by mutation — before the fix, deleting every non-heading line the alternates matched removed ZERO lines, because they matched no rule text at all."
         },
         {
           "label": "resolve-threads",
@@ -1712,8 +1714,10 @@
         {
           "label": "core-panel",
           "anyOf": [
-            "Core Panel"
-          ]
+            "Core Panel \\(always included\\)[\\s\\S]{0,400}\\| Agent \\| Nickname",
+            "\\| Agent \\| Nickname \\| Lens \\| Personality \\|"
+          ],
+          "note": "Vacuity fix found by scripts/guard-audit.py: Was ['Core Panel'] — matched only the `#### Core Panel (always included)` heading, so the panel TABLE could be deleted with the guard green. Now requires the table itself. Confirmed by mutation — before the fix, deleting every non-heading line the alternates matched removed ZERO lines, because they matched no rule text at all."
         },
         {
           "label": "master-assessment",
@@ -1730,8 +1734,10 @@
         {
           "label": "consensus-section",
           "anyOf": [
-            "Consensus Findings"
-          ]
+            "Items where 4\\+ agents agree",
+            "[Cc]onsensus [Ff]indings[\\s\\S]{0,120}agents agree"
+          ],
+          "note": "Vacuity fix found by scripts/guard-audit.py: Was ['Consensus Findings'] — matched only the bold heading. Anchored on the rule that defines what consensus means. Confirmed by mutation — before the fix, deleting every non-heading line the alternates matched removed ZERO lines, because they matched no rule text at all."
         },
         {
           "label": "tiered-subagents",
