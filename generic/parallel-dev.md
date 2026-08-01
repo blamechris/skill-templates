@@ -284,6 +284,25 @@ SLUG=$(printf '%s' "<issue title>" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-
 # {{CUSTOMIZE: Branch naming convention — e.g., auto/<number>-<slug> vs feat/<number>-<slug>}}
 BRANCH="<branch_prefix><issue_number>-${SLUG}"
 git checkout -b "${BRANCH}"
+SESSION_BRANCH="${BRANCH}"
+
+**Assert the branch before you write.** Your worktree is meant to be private, but that is a
+property of how you were launched, not something you can assume — a stray `git checkout`
+(yours, or another agent's if you are not actually isolated) moves HEAD, and `git` HEAD is
+global to whatever working copy you are standing in. So record the branch you created as
+`SESSION_BRANCH` above, and re-check it immediately before your first edit AND again
+immediately before staging. Re-check, never remember. If it fails, stop and re-establish
+`SESSION_BRANCH` — never write to a branch this session did not create.
+
+assert_branch() {
+  local now; now="$(git branch --show-current)"
+  [ "${now}" = "${SESSION_BRANCH}" ] || {
+    echo "STOP: on '${now}', expected '${SESSION_BRANCH}' — HEAD moved. Do not edit, do not stage." >&2
+    return 1
+  }
+}
+
+assert_branch || exit 1   # before the first edit
 
 ### RED — Write Failing Tests
 
@@ -306,8 +325,17 @@ With green tests: remove duplication, improve naming, simplify logic, follow pro
 
 ### Commit and PR
 
-Stage specific files (never git add -A or git add .):
+**Stage explicit paths.** `git status --short` first, then `git add` the files you changed,
+by name. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a` —
+a bulk add commits whatever else happens to be in the tree. `-u` is not the safe one: it
+restages every *tracked* file whose worktree copy differs, including files a clean/smudge
+filter rewrote without you touching them — that is how `git add -u` turned a tracked 21KB
+`.docx` into a git-lfs pointer and committed it as an edit.
 
+assert_branch || exit 1   # second mandatory check — before staging
+                          # (defined under "Create Branch"; re-declare in a fresh shell)
+
+git status --short
 git add <specific-files>
 
 git commit -m "$(cat <<'EOF'
@@ -348,10 +376,11 @@ EOF
 1. NO attribution — no Co-Authored-By, no "Generated with Claude", no AI mentions anywhere
 2. TDD is mandatory — RED → GREEN → REFACTOR. No skipping tests.
 3. Branch from main (your worktree HEAD)
-4. Stage specific files only — never `git add -A` or `git add .`
-5. Do NOT run /full-review — the coordinator handles reviews after you finish
-6. Do NOT merge the PR
-7. If you cannot implement the issue (missing requirements, blocked, etc.), output status "failed" with the reason instead of forcing bad code
+4. Stage specific files by name — never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. `-u` is not the safe one: it restages tracked files a clean/smudge filter rewrote behind your back, which is how a tracked 21KB `.docx` was committed as a git-lfs pointer.
+5. Assert the branch before you write — re-check `git branch --show-current` against `SESSION_BRANCH` immediately before your first edit and again immediately before staging. Never write to a branch this session did not create.
+6. Do NOT run /full-review — the coordinator handles reviews after you finish
+7. Do NOT merge the PR
+8. If you cannot implement the issue (missing requirements, blocked, etc.), output status "failed" with the reason instead of forcing bad code
 
 ## Output
 
@@ -400,6 +429,8 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 13. **Comment on skips** — Every skipped issue gets a GitHub comment explaining why.
 14. **Pre-Skill Checkpoint** — Re-read CLAUDE.md and skill files before each /full-review run.
 15. **Compose existing skills** — /full-review is called as-is. Don't reinvent its logic.
+16. **Explicit-path staging** — every agent stages the changed files by name. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. `-u` is not the safe one: it restages tracked files a clean/smudge filter rewrote behind your back, which is how a tracked 21KB `.docx` was committed as a git-lfs pointer.
+17. **Assert the branch before writing** — an agent records the branch it creates as `SESSION_BRANCH` and re-checks `git branch --show-current` against it before its first edit and again before staging. Worktree isolation is the plan, not a guarantee; a stray checkout still moves HEAD.
 
 ## Customization Points
 

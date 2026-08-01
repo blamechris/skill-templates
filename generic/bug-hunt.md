@@ -250,8 +250,17 @@ EOF
 
 ### 8. Commit Candidate List (only if files were written)
 
+**Stage explicit paths.** `git status --short` first, then `git add` the report files you just
+wrote, **by name**. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or
+`git commit -a`. A trailing-slash directory add is a bulk add: the working copy is shared with
+concurrent sessions, so `${OUTPUT_DIR}/` may also hold a stale report from another run or a file
+that is not yours. `-u` is not the safe one: it restages every *tracked* file whose worktree copy
+differs, including files a clean/smudge filter rewrote without you touching them — that is how
+`git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as an edit.
+
 ```bash
-git add "${OUTPUT_DIR}/"
+git status --short "${OUTPUT_DIR}"
+git add "${OUTPUT_DIR}/<report-file-1>.md" "${OUTPUT_DIR}/<report-file-2>.md"   # name each file you wrote
 git commit -m "docs: bug-hunt of <target> (<N> candidates, <M> filed)"
 ```
 

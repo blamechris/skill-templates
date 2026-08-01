@@ -103,6 +103,18 @@ When authoring or customizing a skill whose output is shown to the user, include
   properly as #133. Branch, push the branch, open a PR.
 - Commit format: `type(scope): description`
 - Types: feat, fix, refactor, docs, chore
+- **Assert the branch before you write** (#163) — record the branch you create or check out
+  as `SESSION_BRANCH`, then re-check `git branch --show-current` against it immediately
+  before your first edit and again immediately before staging. `git` HEAD is global to
+  `~/Projects/skill-templates`, several sessions share it, and this repo has already had one
+  session's edits land on another's branch. Re-check, never remember.
+- **Stage explicit paths** (#163) — `git status --short`, then `git add` the files you
+  changed, by name. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or
+  `git commit -a`. Three incidents in one week: twice `git add -A` swept an unrelated
+  untracked file into a PR, and once `git add -u` committed a tracked 21KB `.docx` as a
+  git-lfs pointer because the LFS filter had rewritten it in the worktree. `-u` is not
+  the safe one.
+- Prefer a per-session `git worktree` over sharing the checkout whenever a session will write.
 
 ## Repo Memory MCP
 

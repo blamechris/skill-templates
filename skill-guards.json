@@ -116,6 +116,35 @@
         "[Oo]ver budget",
         "stop and notify"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
+        "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
+        "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+      ],
+      "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "batch-merge": [
@@ -411,6 +440,35 @@
         "Closes tags go in the body",
         "only auto-closes from the body"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
+        "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
+        "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+      ],
+      "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "decide": [
@@ -648,6 +706,35 @@
         "[Zz]ero[- ][Aa]ttribution",
         "[Ff]ollow[^.\\n]{0,30}[Aa]ttribution [Pp]olicy"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
+        "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
+        "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+      ],
+      "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "full-review": [
@@ -872,14 +959,6 @@
       ]
     },
     {
-      "label": "explicit-staging-only",
-      "anyOf": [
-        "never `git add -A`",
-        "never git add -A",
-        "[Ss]tage specific files"
-      ]
-    },
-    {
       "label": "never-merge",
       "anyOf": [
         "[Nn]ever merge",
@@ -957,6 +1036,35 @@
         "run at the workhorse tier",
         "Delegation tiers"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
+        "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
+        "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+      ],
+      "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "prime-directive": [
@@ -1061,6 +1169,35 @@
         "[Oo]ver budget",
         "stop and notify"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
+        "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
+        "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+      ],
+      "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "project-audit": [
@@ -1323,6 +1460,35 @@
         "prune branches only after verifying",
         "MERGED"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
+        "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
+        "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+      ],
+      "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "skill": [
@@ -1641,6 +1807,35 @@
         "[Oo]ver budget",
         "stop and notify"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
+        "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
+        "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
+        "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+      ],
+      "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "tiered-delegation": [

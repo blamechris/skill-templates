@@ -184,9 +184,27 @@ SLUG=$(printf '%s' "${ISSUE_TITLE}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a
 # {{CUSTOMIZE: Branch naming convention — e.g., auto/<number>-<slug> vs feat/<number>-<slug>}}
 BRANCH="${BRANCH_PREFIX}${ISSUE_NUM}-${SLUG}"
 git checkout -b "${BRANCH}"
+
+# This is the branch THIS session created. Record it, and from here on assert it
+# rather than trusting it — `git` HEAD is global to the working copy, so a
+# concurrent session sharing this checkout can move it out from under you.
+SESSION_BRANCH="${BRANCH}"
+assert_branch() {
+  local now; now="$(git branch --show-current)"
+  [ "${now}" = "${SESSION_BRANCH}" ] || {
+    echo "STOP: on '${now}', expected '${SESSION_BRANCH}' — HEAD moved under this session. Do not edit, do not stage." >&2
+    return 1
+  }
+}
 ```
 
 **CRITICAL: Always branch from main.** Never stack branches — each PR must be independently mergeable in any order.
+
+**Assert the branch before you write.** Call `assert_branch` immediately before the first edit of this issue **and again immediately before staging** (Phase 4). A checkout from ten minutes ago proves nothing: another session sharing this working copy may have checked out its own branch since, and edits made in that state land on *its* branch. Re-check, never remember. If the assertion fails, stop and re-establish `SESSION_BRANCH` — do not edit, do not stage. Refuse to write to a branch this session did not create: if HEAD is some other session's branch, `git checkout "${SESSION_BRANCH}"` (or re-create it from main) first.
+
+```bash
+assert_branch || exit 1   # before the first edit
+```
 
 #### RED — Write Failing Tests First
 
@@ -231,10 +249,18 @@ ${LINT_COMMAND}
 
 ### Phase 4: Commit and PR Creation
 
+**Stage explicit paths.** `git status --short` first, then `git add` the files you changed, **by name**. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. The working copy is shared with concurrent sessions, so a bulk add commits whatever else happens to be in the tree. `-u` is not the safe one: it restages every *tracked* file whose worktree copy differs, including files a clean/smudge filter rewrote without you touching them — that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as an edit.
+
 Stage and commit with conventional format:
 
 ```bash
-# Stage relevant files (never git add -A)
+# Re-assert the branch — this is the second mandatory check, and the one that
+# stops another session's work being swept into this PR. (`assert_branch` is
+# defined in Phase 3; re-declare it if this runs in a fresh shell.)
+assert_branch || exit 1
+
+# Look at what is actually there, then stage those paths by name.
+git status --short
 git add <specific-files>
 
 # Commit with issue reference — NO attribution
@@ -454,6 +480,8 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 13. **Comment on skips** — Every skipped issue gets a GitHub comment explaining why. The user sees the reason.
 14. **Pre-Skill Checkpoint** — Re-read CLAUDE.md and skill files before running /full-review to prevent context drift.
 15. **Sync before branching** — Always `git checkout main && git pull` before starting each issue. Check for merged PRs first.
+16. **Explicit-path staging** — `git status --short`, then `git add` the changed files by name. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. `-u` is not the safe one: it restages tracked files a clean/smudge filter rewrote behind your back, which is how a tracked 21KB `.docx` was committed as a git-lfs pointer.
+17. **Assert the branch before you write** — record the branch you create as `SESSION_BRANCH` and re-check `git branch --show-current` against it immediately before the first edit and again immediately before staging. HEAD is global to the working copy; a concurrent session can move it after you branched. Never write to a branch this session did not create.
 
 ## Customization Points
 

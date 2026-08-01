@@ -124,11 +124,35 @@ Bump version? (patch → vX.Y.(Z+1), or skip)
 
 If yes:
 
+**Stage explicit paths, and assert the branch first.** The bump script may touch more than
+the version files (a lockfile, a changelog, a generated header), and the working copy is
+shared with concurrent sessions — so name the version files, do not sweep. `git status --short`
+first, then `git add` those paths. Never `git add -A`, `git add .`, `git add -u`,
+`git add <dir>/`, or `git commit -a`. `-u` is not the safe one: it restages every *tracked*
+file whose worktree copy differs, including files a clean/smudge filter rewrote without you
+touching them — that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer
+and committed it as an edit. And because HEAD is global to the working copy, re-check
+`git branch --show-current` against the bump branch immediately before running the script and
+again immediately before staging: a checkout from a minute ago proves nothing.
+
 ```bash
 # {{CUSTOMIZE: Version bump command and files to commit}}
-bash scripts/bump-version.sh
 git checkout -b chore/bump-version main
-git add [version files]
+SESSION_BRANCH=chore/bump-version
+assert_branch() {
+  local now; now="$(git branch --show-current)"
+  [ "${now}" = "${SESSION_BRANCH}" ] || {
+    echo "STOP: on '${now}', expected '${SESSION_BRANCH}' — HEAD moved. Do not edit, do not stage." >&2
+    return 1
+  }
+}
+
+assert_branch || exit 1   # before the bump writes anything
+bash scripts/bump-version.sh
+
+assert_branch || exit 1   # again before staging
+git status --short
+git add [version files, named individually]
 NEXT=[read new version]
 git commit -m "chore: bump version to v${NEXT}"
 git push -u origin chore/bump-version
