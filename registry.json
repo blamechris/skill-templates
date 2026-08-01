@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "a60ffaf",
+  "generatedFromCommit": "169a5b2",
   "skillCount": 38,
   "skills": [
     {
@@ -1985,8 +1985,8 @@
     },
     {
       "name": "visual-brief",
-      "hash": "a85c799",
-      "lines": 215,
+      "hash": "6a93e98",
+      "lines": 237,
       "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together.",
       "guards": [
         {
@@ -2030,6 +2030,14 @@
             "Honesty surfaces",
             "don't bury it",
             "mark it\\s*\\n?\\s*visually"
+          ]
+        },
+        {
+          "label": "respects-reader-colour-scheme",
+          "note": "#135: the skeleton shipped a hardcoded dark palette with no prefers-color-scheme query, so every brief rendered dark whatever the reader's system setting. Each alternate must match the CSS RULE BLOCK — the query plus its opening brace and :root — not the query string alone. Two earlier versions failed: listing the prose rules as alternates passed when only the query was deleted (anyOf matches ANY one), and matching the bare query still passed because Customization Points quotes '@media (prefers-color-scheme:light)' verbatim in backticks, so the guard matched the documentation instead of the code. Both partial mutants now fail. The two alternates are one claim in its two legitimate spellings: dark default with a light query, or light default with a dark one.",
+          "anyOf": [
+            "@media\\s*\\(\\s*prefers-color-scheme\\s*:\\s*light\\s*\\)\\s*\\{\\s*:root",
+            "@media\\s*\\(\\s*prefers-color-scheme\\s*:\\s*dark\\s*\\)\\s*\\{\\s*:root"
           ]
         }
       ]
