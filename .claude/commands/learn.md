@@ -4,7 +4,7 @@ Capture genuinely novel learnings from the current session and persist them to t
 
 ## Arguments
 
-- `$ARGUMENTS` - Optional: either a focus hint (e.g., "the caching bug", "auth architecture") to narrow extraction, or a direct insight to record (e.g., "React Native doesn't support ReadableStream -- use arraybuffer response type"). If the argument is a complete, actionable statement, skip discovery and go straight to placement (step 2).
+- `$ARGUMENTS` - Optional: either a focus hint (e.g., "the caching bug", "auth architecture") to narrow extraction, or a direct insight to record (e.g., "bash 3.x on macOS doesn't support associative arrays -- use parallel indexed arrays"). If the argument is a complete, actionable statement, skip discovery and go straight to placement (step 2).
 
 ## Instructions
 
@@ -231,11 +231,11 @@ Apply?
 ### Example: Direct argument
 
 ```
-User: /learn React Native doesn't support ReadableStream -- use arraybuffer response type instead
+User: /learn bash 3.x on macOS has no associative arrays -- use parallel indexed arrays
 
-1. RN ReadableStream constraint --> .claude/rules/react-native.md -- awaiting approval
+1. bash 3.x constraint --> .claude/rules/bash-portability.md -- awaiting approval
 
-+ React Native does not support `ReadableStream`. Use `arraybuffer` response type as the workaround for streaming data.
++ macOS ships bash 3.2, which has no associative arrays (`declare -A`). Scripts in `scripts/` must use parallel indexed arrays instead, or they break for every macOS consumer.
 
 Apply?
 ```
