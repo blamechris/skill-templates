@@ -140,22 +140,20 @@
         {
           "label": "explicit-path-staging",
           "anyOf": [
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
-            "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
-            "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+            "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+            "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
           ],
-          "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+          "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
         },
         {
           "label": "lfs-filter-failure-mode",
           "anyOf": [
             "`-u` is not the safe one",
             "-u`? (?:is the trap|only looks safe|looks safe)",
-            "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
-            "(?:git-)?[Ll][Ff][Ss] pointer"
+            "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+            "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
           ],
-          "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+          "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
         },
         {
           "label": "assert-branch-before-write",
@@ -485,7 +483,7 @@
     {
       "name": "create-pr",
       "hash": "8591e2a",
-      "lines": 196,
+      "lines": 200,
       "description": "Create a pull request with auto-detected issue closures and proper formatting.",
       "guards": [
         {
@@ -506,22 +504,20 @@
         {
           "label": "explicit-path-staging",
           "anyOf": [
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
-            "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
-            "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+            "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+            "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
           ],
-          "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+          "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
         },
         {
           "label": "lfs-filter-failure-mode",
           "anyOf": [
             "`-u` is not the safe one",
             "-u`? (?:is the trap|only looks safe|looks safe)",
-            "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
-            "(?:git-)?[Ll][Ff][Ss] pointer"
+            "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+            "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
           ],
-          "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+          "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
         },
         {
           "label": "assert-branch-before-write",
@@ -808,22 +804,20 @@
         {
           "label": "explicit-path-staging",
           "anyOf": [
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
-            "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
-            "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+            "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+            "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
           ],
-          "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+          "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
         },
         {
           "label": "lfs-filter-failure-mode",
           "anyOf": [
             "`-u` is not the safe one",
             "-u`? (?:is the trap|only looks safe|looks safe)",
-            "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
-            "(?:git-)?[Ll][Ff][Ss] pointer"
+            "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+            "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
           ],
-          "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+          "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
         },
         {
           "label": "assert-branch-before-write",
@@ -1174,22 +1168,20 @@
         {
           "label": "explicit-path-staging",
           "anyOf": [
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
-            "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
-            "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+            "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+            "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
           ],
-          "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+          "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
         },
         {
           "label": "lfs-filter-failure-mode",
           "anyOf": [
             "`-u` is not the safe one",
             "-u`? (?:is the trap|only looks safe|looks safe)",
-            "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
-            "(?:git-)?[Ll][Ff][Ss] pointer"
+            "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+            "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
           ],
-          "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+          "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
         },
         {
           "label": "assert-branch-before-write",
@@ -1313,22 +1305,20 @@
         {
           "label": "explicit-path-staging",
           "anyOf": [
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
-            "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
-            "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+            "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+            "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
           ],
-          "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+          "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
         },
         {
           "label": "lfs-filter-failure-mode",
           "anyOf": [
             "`-u` is not the safe one",
             "-u`? (?:is the trap|only looks safe|looks safe)",
-            "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
-            "(?:git-)?[Ll][Ff][Ss] pointer"
+            "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+            "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
           ],
-          "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+          "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
         },
         {
           "label": "assert-branch-before-write",
@@ -1634,22 +1624,20 @@
         {
           "label": "explicit-path-staging",
           "anyOf": [
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
-            "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
-            "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+            "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+            "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
           ],
-          "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+          "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
         },
         {
           "label": "lfs-filter-failure-mode",
           "anyOf": [
             "`-u` is not the safe one",
             "-u`? (?:is the trap|only looks safe|looks safe)",
-            "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
-            "(?:git-)?[Ll][Ff][Ss] pointer"
+            "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+            "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
           ],
-          "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+          "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
         },
         {
           "label": "assert-branch-before-write",
@@ -1706,7 +1694,7 @@
     {
       "name": "skill",
       "hash": "7b4d37f",
-      "lines": 349,
+      "lines": 353,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs.",
       "guards": [
         {
@@ -2023,22 +2011,20 @@
         {
           "label": "explicit-path-staging",
           "anyOf": [
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}git add -u",
-            "[Nn]ever[^\\n]{0,60}git add -A[^\\n]{0,90}`-u`",
-            "[Nn]ever (?:use )?`?git add`? with[^\\n]{0,60}-u",
-            "[Ss]tage[^\\n]{0,60}by name[^\\n]{0,200}[Nn]ever[^\\n]{0,90}-u"
+            "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+            "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
           ],
-          "note": "Binds the SENTENCE that bans bulk staging, and binds it only if `-u` is still in the ban list. `-A` and `.` were already widely written down; `-u` is the one a customizing agent drops, because it reads as the safe flag (tracked files only) — and it is the one that corrupted a tracked .docx via the git-lfs filter (#163). A guard on `-A` alone would have passed the file that caused the incident, so every alternate requires `-u` to be named as prohibited. Deleting the ban sentence fires the guard; deleting only the surrounding `git add <specific-files>` line or the heading does not."
+          "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
         },
         {
           "label": "lfs-filter-failure-mode",
           "anyOf": [
             "`-u` is not the safe one",
             "-u`? (?:is the trap|only looks safe|looks safe)",
-            "(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
-            "(?:git-)?[Ll][Ff][Ss] pointer"
+            "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+            "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
           ],
-          "note": "Rewordings of the ONE sentence explaining WHY `git add -u` is banned: it restages tracked files a clean/smudge filter rewrote in the worktree, which turned a tracked 21KB .docx into a git-lfs pointer (#163). Guarded separately from explicit-path-staging because the rationale is what makes the rule survive: a customizing agent that keeps the ban but strips the reason leaves the next agent free to rationalise `-u` back in as 'the safe one'. Every alternate names either `-u`-is-not-safe, the filter, or the pointer."
+          "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
         },
         {
           "label": "assert-branch-before-write",

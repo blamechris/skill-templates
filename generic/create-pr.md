@@ -132,6 +132,10 @@ Ask: "Ready to create this PR?" — wait for confirmation.
 ```bash
 # Re-assert the branch: the PR body was drafted from the diff of SESSION_BRANCH,
 # and HEAD may have moved while you were drafting.
+# SESSION_BRANCH was set in step 1 — this step runs AFTER a user-confirmation gate,
+# so it is necessarily a fresh shell: re-declare it here or the test below compares
+# against an empty string and trips on every run.
+SESSION_BRANCH="${SESSION_BRANCH:?re-declare the branch you started on before pushing}"
 NOW=$(git branch --show-current)
 [ "${NOW}" = "${SESSION_BRANCH}" ] || {
   echo "STOP: on '${NOW}', expected '${SESSION_BRANCH}' — HEAD moved. Do not push." >&2
