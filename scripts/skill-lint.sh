@@ -283,8 +283,15 @@ profile_path = (profile_arg or discover_profile(path)) if name in POSTURE_SKILLS
 if profile_path:
     try:
         ptext = open(profile_path, encoding="utf-8").read()
-    except OSError:
-        ptext = ""      # unreadable auto-discovered profile: an absence, not a finding
+    except OSError as e:
+        # An AUTO-DISCOVERED profile that cannot be read is an absence — most repos have
+        # none and that is correct. An EXPLICITLY passed one is different: the caller asked
+        # for a check that then could not run, so reporting clean at exit 0 would let "not
+        # verified" read as "passed", which is the whole reason exit 2 exists.
+        if profile_arg:
+            print(f"ERROR: skill profile '{profile_path}' could not be read: {e}", file=sys.stderr)
+            sys.exit(2)
+        ptext = ""
     declared = profile_posture(ptext, name)
     if declared:
         found = {p for p, anchors in POSTURE_ANCHORS.items()

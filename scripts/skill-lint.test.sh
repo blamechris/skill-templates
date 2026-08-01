@@ -579,6 +579,22 @@ make_repo autonomous-dev-flow "see the merge phase for details." "$PROFILE_WITHH
 posture_case 'a DELETED rule 5 is reported by the guard' 1 'guard miss: self-merge-posture'
 posture_case 'a DELETED rule 5 does not also raise a posture mismatch' 1 '!posture mismatch'
 
+# An EXPLICITLY passed profile that exists but cannot be read must be exit 2, never a
+# clean 0. The caller asked for a check that then could not run, and "not verified"
+# reported as "passed" is exactly what the three-outcome contract exists to prevent.
+# The auto-discovered path stays an absence — most repos have no profile, correctly.
+make_repo autonomous-dev-flow "NEVER merge, however clean the PR is." "$PROFILE_WITHHELD"
+chmod 000 "$TMP/repo/.claude/skill-profile.md"
+posture_case 'an unreadable EXPLICIT profile is exit 2, not clean' 2 'could not be read' \
+  "$TMP/repo/.claude/skill-profile.md"
+chmod 644 "$TMP/repo/.claude/skill-profile.md"
+
+# ...but an unreadable AUTO-DISCOVERED profile is still just an absence: no finding.
+make_repo autonomous-dev-flow "NEVER merge, however clean the PR is." "$PROFILE_WITHHELD"
+chmod 000 "$TMP/repo/.claude/skill-profile.md"
+posture_case 'an unreadable auto-discovered profile stays an absence' 0 '-'
+chmod 644 "$TMP/repo/.claude/skill-profile.md"
+
 echo "self-merge posture: how the profile is located"
 
 # The 4th argument, for a file linted somewhere other than its repo (a temp dir, a
