@@ -400,19 +400,6 @@ Report to the user:
 
 Do NOT commit the corpus unless the user asks. Do NOT push.
 
-## Customization Points
-
-- **Default corpus directory** (section: Output location) — where generated
-  plans live in this repo.
-- **Target shell(s)** (section 2) — what maintainers and testers actually run,
-  so `shell=auto` has a documented fallback.
-- **Extra surface areas** (section 3) — real areas this repo has that the
-  generic taxonomy misses. Only ones the repo actually has.
-- **The real-side-effect gate** (section 6) — the env var / credential / flag
-  separating test-mode from live, plus anything never safe to exercise here.
-- **Existing automated coverage** (section 7) — what the suite already covers
-  and the command that runs it, so `suite` cases are genuine gaps.
-
 ## Comparison to sister skills
 
 | Need | Use |
@@ -427,3 +414,16 @@ Do NOT commit the corpus unless the user asks. Do NOT push.
 
 A typical pipeline: `/recon` → `/test-plan` → `/smoke-form` for the human-visual
 stream, `/create-issue` for the `suite` stream.
+
+## Customization Points
+
+- **Default corpus directory** (section: Output location) — where generated
+  plans live in this repo.
+- **Target shell(s)** (section 2) — what maintainers and testers actually run,
+  so `shell=auto` has a documented fallback.
+- **Extra surface areas** (section 3) — real areas this repo has that the
+  generic taxonomy misses. Only ones the repo actually has.
+- **The real-side-effect gate** (section 6) — the env var / credential / flag
+  separating test-mode from live, plus anything never safe to exercise here.
+- **Existing automated coverage** (section 7) — what the suite already covers
+  and the command that runs it, so `suite` cases are genuine gaps.
