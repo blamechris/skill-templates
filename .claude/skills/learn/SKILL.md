@@ -1,3 +1,7 @@
+---
+description: "Capture genuinely novel learnings from the current session and persist them to the correct memory layer."
+---
+
 # /learn
 
 Capture genuinely novel learnings from the current session and persist them to the correct memory layer. Designed to produce "nothing to persist" on most sessions -- that is the skill working correctly, not a failure.
@@ -293,4 +297,3 @@ This skill is repo-agnostic by default. Per-repo customizations:
 - **Rules file naming convention:** kebab-case in `.claude/rules/` (e.g. `bash-compat.md`, `gh-actions.md`).
 - **Domain-specific quality bar:** durable insights here are about *the registry mechanism*, not application code — bash 3.2 vs bash 5.x portability traps, `registry.json` freshness/reindex-after-squash behaviour, guard regexes that silently stop matching, `{{CUSTOMIZE}}` substitution edge cases, and `gh`/GitHub Actions quirks. A one-off template wording tweak is **not** a durable insight.
 - **paths: frontmatter patterns:** use real paths from this repo — `generic/*.md`, `scripts/*.sh`, `assets/*.mjs`, `.github/workflows/*.yml`, `skill-guards.json`. Do **not** write rules against `deploy.sh`, `sync.sh`, `deploy.conf`, `customizations/`, or `values/`: the push-deploy model is retired (#68/#75) and those paths no longer exist.
-<!-- skill-templates: learn df2de5e 2026-08-01 -->

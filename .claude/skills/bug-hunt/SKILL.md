@@ -1,3 +1,7 @@
+---
+description: "Launch a swarm of bug-hunting agents against a target file, module, or topic."
+---
+
 # /bug-hunt
 
 Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.
@@ -318,4 +322,3 @@ Output a final summary:
 | "Review this PR before merge" | `/agentic-audit` |
 
 A typical pipeline: `/recon src/payments` → `/bug-hunt src/payments` → `/tackle-issues` on the newly-filed issues.
-<!-- skill-templates: bug-hunt a09dcc2 2026-08-01 -->
