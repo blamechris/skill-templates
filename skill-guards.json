@@ -1861,6 +1861,69 @@
       "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
+  "test-plan": [
+    {
+      "label": "never-fabricate-omit-instead",
+      "anyOf": [
+        "[Nn]ever fabricate",
+        "OMIT the case",
+        "an invented command is worse than a missing one",
+        "[Oo]mit the case rather than invent"
+      ]
+    },
+    {
+      "label": "file-line-grounding-per-case",
+      "anyOf": [
+        "MUST carry at least one `file:line` grounding entry",
+        "[Nn]o grounding, no case",
+        "must trace back to one of",
+        "[Ee]very case must cite `file:line`"
+      ],
+      "note": "Binds the grounding RULE sentence in section 4, not the `grounding:` field in the schema block or the `grounding` column in the report table — those are the decoration that survives when an agent rewrites the rule."
+    },
+    {
+      "label": "safe-vs-live-tagging-and-gate",
+      "anyOf": [
+        "[Tt]ag every case `safe` or `live`",
+        "the default on doubt is `live`",
+        "[Ww]hen in doubt, tag it `live`"
+      ],
+      "note": "The `risk: safe | live` schema row and the counts block both survive deletion of the rule, so none of these alternates may match them."
+    },
+    {
+      "label": "no-backend-cases-to-humans",
+      "anyOf": [
+        "[Nn]ever route a purely back-end case to a human",
+        "never onto a `/smoke-form` checklist",
+        "only when its `expected` names something"
+      ],
+      "note": "smoke-form's own LIVE/VISUAL-ONLY rule is quoted just above this one as context; the alternates are deliberately worded so the quotation cannot satisfy the guard on its own."
+    },
+    {
+      "label": "shell-aware-commands",
+      "anyOf": [
+        "[Dd]efault to Git Bash on Windows",
+        "LABEL any PowerShell-only command",
+        "[Ll]abel PowerShell-only commands"
+      ]
+    },
+    {
+      "label": "emit-data-not-html",
+      "anyOf": [
+        "[Nn]ever render the corpus as HTML",
+        "`/smoke-form` owns the rendering",
+        "[Tt]his skill emits data, not a document"
+      ]
+    },
+    {
+      "label": "no-secrets-in-cases",
+      "anyOf": [
+        "[Nn]ever embed a real secret",
+        "by name \\(cited\\), never the value",
+        "[Nn]ever put a real credential in a case"
+      ]
+    }
+  ],
   "tiered-delegation": [
     {
       "label": "no-up-tier-delegation",
