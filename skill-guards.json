@@ -1882,15 +1882,6 @@
       "note": "Binds the grounding RULE sentence in section 4, not the `grounding:` field in the schema block or the `grounding` column in the report table — those are the decoration that survives when an agent rewrites the rule."
     },
     {
-      "label": "safe-vs-live-tagging-and-gate",
-      "anyOf": [
-        "[Tt]ag every case `safe` or `live`",
-        "the default on doubt is `live`",
-        "[Ww]hen in doubt, tag it `live`"
-      ],
-      "note": "The `risk: safe | live` schema row and the counts block both survive deletion of the rule, so none of these alternates may match them."
-    },
-    {
       "label": "no-backend-cases-to-humans",
       "anyOf": [
         "[Nn]ever route a purely back-end case to a human",
@@ -1898,14 +1889,6 @@
         "only when its `expected` names something"
       ],
       "note": "smoke-form's own LIVE/VISUAL-ONLY rule is quoted just above this one as context; the alternates are deliberately worded so the quotation cannot satisfy the guard on its own."
-    },
-    {
-      "label": "shell-aware-commands",
-      "anyOf": [
-        "[Dd]efault to Git Bash on Windows",
-        "LABEL any PowerShell-only command",
-        "[Ll]abel PowerShell-only commands"
-      ]
     },
     {
       "label": "emit-data-not-html",
@@ -1921,6 +1904,39 @@
         "[Nn]ever embed a real secret",
         "by name \\(cited\\), never the value",
         "[Nn]ever put a real credential in a case"
+      ]
+    },
+    {
+      "label": "safe-vs-live-tagging",
+      "note": "Binds the FAIL-SAFE DIRECTION, not just the existence of tagging. The rule is one sentence with two clauses — tag every case, and default to `live` on doubt — and the second is the safety-critical half: flipping it to `safe` makes the generator emit live-effect cases as safe. A bare `[Tt]ag every case` alternate stayed green through exactly that inversion, so every alternate now requires the `live`-on-doubt direction.",
+      "anyOf": [
+        "the default on doubt is `live`",
+        "[Ww]hen in doubt, tag it `live`",
+        "[Tt]ag every case `safe` or `live`[\\s\\S]{0,200}doubt is `live`"
+      ]
+    },
+    {
+      "label": "safe-mode-gate",
+      "note": "Binds the safe-mode GATE, which #107 requires alongside tagging and which the old combined guard did not protect. Anchored on the refusal behaviour, not on the section heading.",
+      "anyOf": [
+        "[Uu]nder `mode=safe`[^\\n]{0,200}refus",
+        "the refusal is machine-checkable",
+        "corpus header records `mode:`"
+      ]
+    },
+    {
+      "label": "shell-default-git-bash",
+      "note": "Binds ONLY the shell DEFAULT — a named #107 requirement. Split from shell-aware-commands, where the labeling alternates kept the guard green when the default was flipped to PowerShell.",
+      "anyOf": [
+        "Default to Git Bash on Windows"
+      ]
+    },
+    {
+      "label": "shell-label-powershell-only",
+      "note": "Binds ONLY the labeling rule, which is a different requirement from the default shell.",
+      "anyOf": [
+        "LABEL any PowerShell-only command",
+        "[Ll]abel PowerShell-only commands"
       ]
     }
   ],

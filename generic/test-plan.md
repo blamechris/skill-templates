@@ -194,7 +194,7 @@ field names exactly as written.
   area: api
   executor: agent                  # human-visual | agent | suite — section 7
   risk: safe                       # safe | live — section 6
-  shell: bash                      # bash | powershell | both — section 2
+  shell: bash                      # bash | git-bash | zsh | powershell | both — section 2
   prereqs:
     - "dev server on 127.0.0.1:8787 — `npm run dev`"
   steps:
