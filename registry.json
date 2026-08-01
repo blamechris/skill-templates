@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "169a5b2",
+  "generatedFromCommit": "b6ef0bc",
   "skillCount": 38,
   "skills": [
     {
@@ -1985,7 +1985,7 @@
     },
     {
       "name": "visual-brief",
-      "hash": "6a93e98",
+      "hash": "b6ef0bc",
       "lines": 237,
       "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together.",
       "guards": [
