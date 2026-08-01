@@ -13,7 +13,13 @@ Run an automated visual smoke test of the application using Playwright. Launches
 
 ### 0. Prerequisites
 
-Verify Playwright is installed and the test script exists:
+Verify Playwright is installed and the test script exists.
+
+**A missing script is not a dead end — it is the cue to write one.** If the script
+does not exist yet, the failure message MUST point at the "Writing the Smoke Test
+Script" section below, which is the recipe for creating it. A bare "not found" +
+`exit 1` makes this skill unusable in every repo that has not written the script
+yet, which is exactly the repo that needs the recipe most.
 
 ```bash
 # Check Playwright is available
@@ -23,8 +29,17 @@ node -e "require('playwright')" 2>/dev/null || {
   npx playwright install chromium
 }
 
-# Check smoke test script exists
-{{CUSTOMIZE: Path to smoke test script}}
+# Check the smoke test script exists. Customize only the path — keep the message
+# actionable, pointing at "Writing the Smoke Test Script" below.
+SMOKE_SCRIPT="{{CUSTOMIZE: Path to smoke test script — e.g. e2e/smoke.spec.ts}}"
+test -f "$SMOKE_SCRIPT" || {
+  echo "Smoke test script not found at $SMOKE_SCRIPT."
+  echo "This is expected on first run. Write it now: follow the 'Writing the Smoke"
+  echo "Test Script' section of this skill (script structure, check patterns,"
+  echo "selector strategy, connection handling), save it to the path above, then"
+  echo "re-run /smoke-test."
+  exit 1
+}
 ```
 
 ### 1. Ensure Application is Running
@@ -111,7 +126,9 @@ If the application was started by this skill (not already running), stop it.
 
 ## Writing the Smoke Test Script
 
-If the test script doesn't exist yet, create it following these patterns:
+This is where step 0 sends you when the script is missing. If the test script
+doesn't exist yet, create it following these patterns, save it at the path step 0
+checks, then re-run the skill from step 0:
 
 ### Script Structure
 
