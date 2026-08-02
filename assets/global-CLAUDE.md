@@ -66,6 +66,11 @@ itself within ~10 requests. Rules:
 - **Continue** only when the next task genuinely needs the context already loaded.
 - Keep main-thread context under **~150K tokens**: once past it, finish the current
   item, write handoff state, end the session.
+- **Applies to orchestrator/chat sessions too**, not just repo marathons: a wave ends →
+  write the handoff → end the session (recommend it explicitly when attended). For
+  autonomous continuity, create a one-time scheduled task at the boundary that fires a
+  fresh session seeded from the handoff — the wave, not the session, is the unit of
+  continuity (skill-templates#181).
 - Subagent/model tiering: resolve roles against the harness ladder (currently
   fable > opus > sonnet > haiku). Mechanical work (triage, classification,
   verification sweeps) runs on the cheapest adequate tier; implementation runs
