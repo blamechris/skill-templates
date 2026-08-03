@@ -22,7 +22,6 @@ cat CLAUDE.md
 
 # Get PR info
 PR_NUM=${1:-$(gh pr view --json number -q .number)}
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 gh pr view ${PR_NUM}
 gh pr diff ${PR_NUM}
 ```
