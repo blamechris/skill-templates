@@ -258,7 +258,7 @@ def profile_posture(profile_text, skill):
     body = sec.group(1)
 
     # The `### Self-merge posture` block, up to the next heading of any level.
-    blk = re.search(r'^#{3,4}[ \t]+Self-merge posture[ \t]*$(.*?)(?=^#{1,4}[ \t]|\Z)',
+    blk = re.search(r'^#{3,4}[ \t]+Self-merge posture[ \t]*$(.*?)(?=^#{1,6}[ \t]|\Z)',
                     body, re.M | re.S | re.I)
     if blk:
         # The declaration is the block's BOLD LEAD — `**Withheld.**` / `**Gated.**`,

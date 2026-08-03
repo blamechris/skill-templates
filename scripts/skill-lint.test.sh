@@ -593,6 +593,27 @@ chmod 644 "$TMP/repo/.claude/skill-profile.md"
 make_repo autonomous-dev-flow "NEVER merge, however clean the PR is." "$PROFILE_WITHHELD"
 chmod 000 "$TMP/repo/.claude/skill-profile.md"
 posture_case 'an unreadable auto-discovered profile stays an absence' 0 '-'
+
+# The block terminator must stop at ANY heading level. It matched only #{1,4}, so a
+# ##### or ###### heading after the posture block was swallowed INTO it — and a later
+# "**Gated.**" under such a heading would be read as this skill's posture.
+PROFILE_DEEP_HEADING=$(cat <<'MD'
+# demo skill profile
+
+## autonomous-dev-flow Customizations
+
+### Self-merge posture
+
+**Withheld.** Every merge in this repo is a human act.
+
+##### Historical note
+
+**Gated.** This repo allowed self-merge before 2026-07; it does not now.
+MD
+)
+make_repo autonomous-dev-flow "NEVER merge, however clean the PR is." "$PROFILE_DEEP_HEADING"
+posture_case 'a ##### heading terminates the posture block' 0 '-'
+posture_case 'prose under a deeper heading is not read as the posture' 0 '!posture mismatch'
 chmod 644 "$TMP/repo/.claude/skill-profile.md"
 
 echo "self-merge posture: how the profile is located"
