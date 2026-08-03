@@ -35,7 +35,8 @@ When `gh pr merge` fails with "base branch policy prohibits the merge":
    instead of assuming, and never override.
 1. **Still blocked at the current head? Do NOT investigate further.** The step-0 re-read is the ONLY diagnostic allowed — beyond it, don't run more commands or reason about causes. The cause is almost always unresolved review threads.
 2. **Immediately respond with exactly this** (filling in the PR number):
-   > Merge blocked — unresolved review threads. Please resolve them here:
+   > Merge blocked — most likely unresolved review threads (the merge box on the PR
+   > page names the exact blocker). If it's threads, resolve them here:
    > https://github.com/{OWNER}/{REPO}/pull/{N}/files
    >
    > Say "done" when resolved.

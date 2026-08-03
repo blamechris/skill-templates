@@ -1023,7 +1023,7 @@
     {
       "name": "merge-gate",
       "hash": "c6b6860",
-      "lines": 67,
+      "lines": 68,
       "description": "Short-circuit token-expensive diagnostic reasoning when `gh pr merge` fails due to branch protection. The most common blocker is unresolved review threads, which **only a human can resolve** via GitHub UI. This pattern turns a multi-step investigation into a 2-line handoff.",
       "guards": [
         {
