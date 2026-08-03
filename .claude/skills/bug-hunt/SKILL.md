@@ -1,3 +1,7 @@
+---
+description: "Launch a swarm of bug-hunting agents against a target file, module, or topic."
+---
+
 # /bug-hunt
 
 Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.
@@ -65,7 +69,6 @@ All hunters share the same job (find bugs) but bring different lenses. Always in
 | Security | "Adversary" | Injection, auth bypass, SSRF, path traversal, secret leakage, attack surface | Target touches auth, network code, user input, external APIs, file operations |
 | UX | "Operator" | User-facing regressions, broken error messages, accessibility, confusing states, broken links/buttons | Target touches UI, output formatting, user-facing strings, error flows |
 | Perf | "Profiler" | N+1 queries, accidental quadratic loops, missing indexes, unbounded growth, memory leaks, sync-in-async | Target touches data access, hot paths, request handling, large collections |
-| Template Critic | "Auditor" | Generic templates that produce defective customized output (residual markers, attribution leaks, heading drift, length runaway, hallucinated examples) | Target is `generic/*.md` |
 
 #### Selection Algorithm
 
@@ -319,4 +322,3 @@ Output a final summary:
 | "Review this PR before merge" | `/agentic-audit` |
 
 A typical pipeline: `/recon src/payments` → `/bug-hunt src/payments` → `/tackle-issues` on the newly-filed issues.
-<!-- skill-templates: bug-hunt a09dcc2 2026-08-01 -->

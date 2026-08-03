@@ -1,9 +1,37 @@
 {
   "registry": "blamechris/skill-templates",
   "skills": {
+    "agent-review": {
+      "hash": "5c35725",
+      "installed": "2026-08-01",
+      "targets": [
+        "claude"
+      ]
+    },
+    "bug-hunt": {
+      "hash": "a09dcc2",
+      "installed": "2026-08-01",
+      "targets": [
+        "claude"
+      ]
+    },
+    "learn": {
+      "hash": "df2de5e",
+      "installed": "2026-08-01",
+      "targets": [
+        "claude"
+      ]
+    },
     "prime-directive": {
       "hash": "d318c59",
       "installed": "2026-07-26",
+      "targets": [
+        "claude"
+      ]
+    },
+    "recon": {
+      "hash": "7f5fa28",
+      "installed": "2026-05-19",
       "targets": [
         "claude"
       ]

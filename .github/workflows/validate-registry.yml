@@ -101,6 +101,32 @@ jobs:
         # reindex-after-merge.yml's `paths:` filter.
         run: ./scripts/check-index-fresh.test.sh
 
+      - name: this repo's own installed skills lint clean
+        run: |
+          # #156: the registry was invisible to its own drift detection — nothing ran
+          # skill-lint against .claude/commands/*.md, so every regression it fixes could
+          # silently return. `if` blocks, not `[ … ] && …`: an and-list as the last
+          # command exports the failed test's status.
+          rc=0
+          # A skill listed in the lockfile whose file has been DELETED is the failure the
+          # loop below cannot see — it iterates over files that exist. Check presence first.
+          python3 - <<'EOF' || rc=1
+          import json, os, sys
+          lock = json.load(open('.claude/skills.lock'))
+          missing = [n for n in lock.get('skills', {}) if not os.path.exists(f'.claude/commands/{n}.md')]
+          for n in missing:
+              print(f"::error::{n} is in .claude/skills.lock but .claude/commands/{n}.md does not exist")
+          sys.exit(1 if missing else 0)
+          EOF
+          for f in .claude/commands/*.md; do
+            name=$(basename "$f" .md)
+            if ! ./scripts/skill-lint.sh "$name" "$f" ./registry.json; then
+              echo "::error file=$f::$name fails its own registry guards"
+              rc=1
+            fi
+          done
+          if [ "$rc" -ne 0 ]; then exit 1; fi
+
       - name: skill-lint regression tests
         # Covers the attribution check's line-anchored semantics — prose that
         # FORBIDS a footer (create-pr's first Critical Rule) must not be mistaken

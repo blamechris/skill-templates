@@ -1,10 +1,14 @@
+---
+description: "Capture genuinely novel learnings from the current session and persist them to the correct memory layer."
+---
+
 # /learn
 
 Capture genuinely novel learnings from the current session and persist them to the correct memory layer. Designed to produce "nothing to persist" on most sessions -- that is the skill working correctly, not a failure.
 
 ## Arguments
 
-- `$ARGUMENTS` - Optional: either a focus hint (e.g., "the caching bug", "auth architecture") to narrow extraction, or a direct insight to record (e.g., "bash 3.x on macOS doesn't support associative arrays -- use parallel indexed arrays"). If the argument is a complete, actionable statement, skip discovery and go straight to placement (step 2).
+- `$ARGUMENTS` - Optional: either a focus hint (e.g., "the caching bug", "auth architecture") to narrow extraction, or a direct insight to record (e.g., "React Native doesn't support ReadableStream -- use arraybuffer response type"). If the argument is a complete, actionable statement, skip discovery and go straight to placement (step 2).
 
 ## Instructions
 
@@ -231,11 +235,11 @@ Apply?
 ### Example: Direct argument
 
 ```
-User: /learn bash 3.x on macOS has no associative arrays -- use parallel indexed arrays
+User: /learn React Native doesn't support ReadableStream -- use arraybuffer response type instead
 
-1. bash 3.x constraint --> .claude/rules/bash-portability.md -- awaiting approval
+1. RN ReadableStream constraint --> .claude/rules/react-native.md -- awaiting approval
 
-+ macOS ships bash 3.2, which has no associative arrays (`declare -A`). Scripts in `scripts/` must use parallel indexed arrays instead, or they break for every macOS consumer.
++ React Native does not support `ReadableStream`. Use `arraybuffer` response type as the workaround for streaming data.
 
 Apply?
 ```
@@ -293,4 +297,3 @@ This skill is repo-agnostic by default. Per-repo customizations:
 - **Rules file naming convention:** kebab-case in `.claude/rules/` (e.g. `bash-compat.md`, `gh-actions.md`).
 - **Domain-specific quality bar:** durable insights here are about *the registry mechanism*, not application code — bash 3.2 vs bash 5.x portability traps, `registry.json` freshness/reindex-after-squash behaviour, guard regexes that silently stop matching, `{{CUSTOMIZE}}` substitution edge cases, and `gh`/GitHub Actions quirks. A one-off template wording tweak is **not** a durable insight.
 - **paths: frontmatter patterns:** use real paths from this repo — `generic/*.md`, `scripts/*.sh`, `assets/*.mjs`, `.github/workflows/*.yml`, `skill-guards.json`. Do **not** write rules against `deploy.sh`, `sync.sh`, `deploy.conf`, `customizations/`, or `values/`: the push-deploy model is retired (#68/#75) and those paths no longer exist.
-<!-- skill-templates: learn df2de5e 2026-08-01 -->
