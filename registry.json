@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "cbb846d",
-  "skillCount": 38,
+  "generatedFromCommit": "39d693b",
+  "skillCount": 39,
   "skills": [
     {
       "name": "agent-review",
@@ -720,7 +720,7 @@
     },
     {
       "name": "fetch-docs",
-      "hash": "cbb846d",
+      "hash": "8913398",
       "lines": 106,
       "description": "Sync a companion documentation repo (e.g., Obsidian vault) so agents can reference design docs, architecture notes, and project knowledge during development.",
       "guards": [
@@ -1059,7 +1059,7 @@
     },
     {
       "name": "merge",
-      "hash": "cbb846d",
+      "hash": "8913398",
       "lines": 270,
       "description": "Merge PRs, verify post-merge version bump, and run post-merge actions (build, deploy, etc.).",
       "guards": [
@@ -1799,7 +1799,7 @@
     },
     {
       "name": "smoke-test",
-      "hash": "dda8a88",
+      "hash": "8913398",
       "lines": 229,
       "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results.",
       "guards": [
@@ -2071,6 +2071,91 @@
             "before (?:your |the )?first edit[^\\n]{0,120}before staging"
           ],
           "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
+        }
+      ]
+    },
+    {
+      "name": "test-plan",
+      "hash": "39d693b",
+      "lines": 429,
+      "description": "Walk a codebase, enumerate every testable surface, and emit a structured, code-grounded corpus of test cases — a generator, not a renderer. The output is DATA: a YAML (or JSON) corpus plus a markdown index, sized for a whole repo (~6-10 surface areas, ~100 cases) rather than for one change set. Every case carries a stable id, copy-pasteable prereqs / steps / expected / gotchas, a `safe` or `live` risk tag, shell-aware commands, and at least one `file:line` citation to the code that establishes it. An **executor** consumes the corpus: `/smoke-form` renders the human-visual subset into an interactive HTML pass for a person, while an agent or the test suite runs everything else.",
+      "guards": [
+        {
+          "label": "never-fabricate-omit-instead",
+          "anyOf": [
+            "[Nn]ever fabricate",
+            "OMIT the case",
+            "an invented command is worse than a missing one",
+            "[Oo]mit the case rather than invent"
+          ]
+        },
+        {
+          "label": "file-line-grounding-per-case",
+          "anyOf": [
+            "MUST carry at least one `file:line` grounding entry",
+            "[Nn]o grounding, no case",
+            "must trace back to one of",
+            "[Ee]very case must cite `file:line`"
+          ],
+          "note": "Binds the grounding RULE sentence in section 4, not the `grounding:` field in the schema block or the `grounding` column in the report table — those are the decoration that survives when an agent rewrites the rule."
+        },
+        {
+          "label": "no-backend-cases-to-humans",
+          "anyOf": [
+            "[Nn]ever route a purely back-end case to a human",
+            "never onto a `/smoke-form` checklist",
+            "only when its `expected` names something"
+          ],
+          "note": "smoke-form's own LIVE/VISUAL-ONLY rule is quoted just above this one as context; the alternates are deliberately worded so the quotation cannot satisfy the guard on its own."
+        },
+        {
+          "label": "emit-data-not-html",
+          "anyOf": [
+            "[Nn]ever render the corpus as HTML",
+            "`/smoke-form` owns the rendering",
+            "[Tt]his skill emits data, not a document"
+          ]
+        },
+        {
+          "label": "no-secrets-in-cases",
+          "anyOf": [
+            "[Nn]ever embed a real secret",
+            "by name \\(cited\\), never the value",
+            "[Nn]ever put a real credential in a case"
+          ]
+        },
+        {
+          "label": "safe-vs-live-tagging",
+          "note": "Binds the FAIL-SAFE DIRECTION, not just the existence of tagging. The rule is one sentence with two clauses — tag every case, and default to `live` on doubt — and the second is the safety-critical half: flipping it to `safe` makes the generator emit live-effect cases as safe. A bare `[Tt]ag every case` alternate stayed green through exactly that inversion, so every alternate now requires the `live`-on-doubt direction.",
+          "anyOf": [
+            "the default on doubt is `live`",
+            "[Ww]hen in doubt, tag it `live`",
+            "[Tt]ag every case `safe` or `live`[\\s\\S]{0,200}doubt is `live`"
+          ]
+        },
+        {
+          "label": "safe-mode-gate",
+          "note": "Binds the safe-mode GATE, which #107 requires alongside tagging and which the old combined guard did not protect. Anchored on the refusal behaviour, not on the section heading.",
+          "anyOf": [
+            "[Uu]nder `mode=safe`[^\\n]{0,200}refus",
+            "the refusal is machine-checkable",
+            "corpus header records `mode:`"
+          ]
+        },
+        {
+          "label": "shell-default-git-bash",
+          "note": "Binds ONLY the shell DEFAULT — a named #107 requirement. Split from shell-aware-commands, where the labeling alternates kept the guard green when the default was flipped to PowerShell.",
+          "anyOf": [
+            "Default to Git Bash on Windows"
+          ]
+        },
+        {
+          "label": "shell-label-powershell-only",
+          "note": "Binds ONLY the labeling rule, which is a different requirement from the default shell.",
+          "anyOf": [
+            "LABEL any PowerShell-only command",
+            "[Ll]abel PowerShell-only commands"
+          ]
         }
       ]
     },
