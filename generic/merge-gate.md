@@ -31,7 +31,7 @@ When `gh pr merge` fails with "base branch policy prohibits the merge":
    Treat an unexpectedly contradictory reading with equal suspicion: `BLOCKED` + green
    CI + "0 unresolved threads" is self-contradictory when protection blocks on
    unresolved conversations, so one of those readings is wrong.
-1. **Do NOT investigate, reason about, or run diagnostic commands.** The cause is almost always unresolved review threads.
+1. **Still blocked at the current head? Do NOT investigate further.** The step-0 re-read is the ONLY diagnostic allowed — beyond it, don't run more commands or reason about causes. The cause is almost always unresolved review threads.
 2. **Immediately respond with exactly this** (filling in the PR number):
    > Merge blocked — unresolved review threads. Please resolve them here:
    > https://github.com/{OWNER}/{REPO}/pull/{N}/files
