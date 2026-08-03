@@ -42,6 +42,26 @@ If check-pr pushed any fix commits in Phase 2, CI needs to pass on the new HEAD 
 
 **Capture the results:** CI status, any action taken (retrigger/fix/escalate).
 
+### Phase 2.6: Fix-Delta Verify
+
+Fix rounds get their own review. If Phase 2 pushed fix commits, adversarially verify the
+**fix delta itself** — not just re-check the original diff. The characteristic escaped
+defect is in the code written to fix the previous finding, and the test written alongside
+a fix is often structurally blind to it (a fixture that cannot produce the failure it
+guards; a test asserting only the case where the claim was already true; deletions the
+suite never notices).
+
+1. Diff the fix commits alone (`git diff <pre-fix-sha>..HEAD`).
+2. Spawn a verifier scoped to that delta's behavior changes, prompted to REFUTE the fixes.
+3. Tell the verifier explicitly that **"nothing found" is a valid result** — it must not
+   manufacture findings to justify the pass.
+4. A real finding loops back through Phase 2 (fix → reply → resolve → re-verify the new
+   delta); "nothing found" proceeds to merge.
+
+If Phase 2 pushed no commits, skip (nothing new to verify).
+
+**Capture the results:** verified/skipped, findings looped back (if any).
+
 ### Phase 3: Combined Summary
 
 Output a **single combined summary table** covering both phases. This is the PRIMARY output.

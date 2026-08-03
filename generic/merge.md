@@ -82,7 +82,15 @@ Display summary table (no confirmation gate — user invoked the command explici
 For each PR:
 
 1. **Check CI** — if any checks are pending, poll every 30s up to 3 min. If failed, run `/fix-ci` once and retry.
-2. **Check merge state** — if BLOCKED, diagnose:
+2. **Check merge state** — if BLOCKED, first **re-read the gate at the CURRENT head**:
+   `mergeStateStatus` is a function of the head SHA, so a block recorded before a push
+   (yours, update-branch's, or fix-ci's) is often already gone — re-run
+   `gh pr view ${PR_NUM} --json mergeable,mergeStateStatus` after every push and never
+   escalate to the user (or propose an override) off a stale reading. `UNKNOWN` means
+   GitHub is recomputing, not that a blocker exists — poll it. Treat an unexpectedly
+   contradictory reading with equal suspicion (e.g. `BLOCKED` + green CI + 0 unresolved
+   threads when protection blocks on threads — one of those readings is wrong). Then, if
+   still BLOCKED, diagnose:
 
    | Error Pattern | Action | Max Retries |
    |---|---|---|

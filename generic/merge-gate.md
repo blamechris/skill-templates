@@ -23,7 +23,15 @@ Add this to your repo's CLAUDE.md in the PR Workflow / merge section:
 **Merge Gate — MANDATORY short-circuit when merge is blocked:**
 
 When `gh pr merge` fails with "base branch policy prohibits the merge":
-1. **Do NOT investigate, reason about, or run diagnostic commands.** The cause is almost always unresolved review threads.
+0. **Re-read the gate at the CURRENT head first.** `mergeStateStatus` is a function of
+   the head SHA — a block recorded before a push is often already gone. Re-run
+   `gh pr view {N} --json mergeable,mergeStateStatus` after every push, and never
+   escalate to the user (or propose an override) off a stale reading. `UNKNOWN` means
+   GitHub is recomputing after a base change, not that a blocker exists — poll it.
+   Treat an unexpectedly contradictory reading with equal suspicion: `BLOCKED` + green
+   CI + "0 unresolved threads" is self-contradictory when protection blocks on
+   unresolved conversations, so one of those readings is wrong.
+1. **Still blocked at the current head? Do NOT investigate further.** The step-0 re-read is the ONLY diagnostic allowed — beyond it, don't run more commands or reason about causes. The cause is almost always unresolved review threads.
 2. **Immediately respond with exactly this** (filling in the PR number):
    > Merge blocked — unresolved review threads. Please resolve them here:
    > https://github.com/{OWNER}/{REPO}/pull/{N}/files
