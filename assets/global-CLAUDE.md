@@ -52,7 +52,19 @@ Each repo has **one** working copy at `~/Projects/<repo>`, and `git` state — t
 
 **Stage explicit paths.** `git status --short` first, then `git add` the files you changed, **by name**. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. A bulk add commits whatever else is in the tree — three separate incidents in one week trace to exactly that. `-u` is not the safe one, and this is the failure mode worth remembering: it looks harmless because it only touches *tracked* files, but "tracked and modified" includes every file a clean/smudge filter rewrote in the worktree without you touching it. A git-lfs filter doing precisely that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as a legitimate edit.
 
-Prefer a per-session `git worktree` over sharing `~/Projects/<repo>` whenever a session will write; where the harness has not given you one, these two rules are the whole of your protection.
+**Work in your own worktree — this is the default, not a preference.** Before writing to a
+repo, if the harness has not already placed you in one, create one:
+
+```bash
+git -C ~/Projects/<repo> fetch origin
+git -C ~/Projects/<repo> worktree add -b <your-branch> <scratch>/<repo>-<slug> origin/main
+```
+
+It shares one object store, so it is cheap, and it makes the collision *structurally*
+impossible instead of merely prohibited. Remove it when the work lands
+(`git worktree remove --force <path>`). The two rules above are the fallback for when you
+genuinely cannot have one — they are advisory, and advisory is how three separate incidents
+happened in one week, the third of them *while fixing the second*.
 
 ## Skills come from the registry (pull-on-demand)
 
