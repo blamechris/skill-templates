@@ -87,10 +87,12 @@ For each PR:
    (yours, update-branch's, or fix-ci's) is often already gone — re-run
    `gh pr view ${PR_NUM} --json mergeable,mergeStateStatus` after every push and never
    escalate to the user (or propose an override) off a stale reading. `UNKNOWN` means
-   GitHub is recomputing, not that a blocker exists — poll it. Treat an unexpectedly
-   contradictory reading with equal suspicion (e.g. `BLOCKED` + green CI + 0 unresolved
-   threads when protection blocks on threads — one of those readings is wrong). Then, if
-   still BLOCKED, diagnose:
+   GitHub is recomputing, not that a blocker exists — poll it. Treat contradictory
+   readings with equal suspicion: `BLOCKED` + green CI + 0 unresolved threads means a
+   reading is stale or a requirement is missing from your view (an unreported required
+   check, a ruleset such as a pending Copilot review, required approvals) — re-derive
+   each gate input at the current head instead of assuming. Then, if still BLOCKED,
+   diagnose:
 
    | Error Pattern | Action | Max Retries |
    |---|---|---|
