@@ -138,7 +138,9 @@ again immediately before staging: a checkout from a minute ago proves nothing.
 ```bash
 # {{CUSTOMIZE: Version bump command and files to commit}}
 git checkout -b chore/bump-version main
-SESSION_BRANCH=chore/bump-version
+# Derive it from the actual checkout — a duplicated literal drifts the moment
+# someone customizes the branch name and misses one of the two places.
+SESSION_BRANCH="$(git branch --show-current)"
 assert_branch() {
   local now; now="$(git branch --show-current)"
   [ "${now}" = "${SESSION_BRANCH}" ] || {

@@ -18,7 +18,7 @@ This skill is a **bundle head**: it does not re-implement the components, it dri
 Run these in order; each step re-derives state rather than trusting memory:
 
 1. **Conventions** — read `CLAUDE.md` (project root). If the repo has none, note it and continue.
-2. **Working tree** — `git status && git log --oneline -5`. Name anything dirty; never assume a clean tree. Record the branch you will work on as `SESSION_BRANCH` — this is the session's *claim*, and every write from here on is checked against it (see "During the session"). Dirty files you did not create belong to another session sharing this working copy: report them, leave them alone, and never stage them.
+2. **Working tree** — `git status && git log --oneline -5`. Name anything dirty; never assume a clean tree. Record the branch you will work on as `SESSION_BRANCH` — this is the session's *claim*, and every write from here on is checked against it (see "During the session"). Dirty files you did not create belong to another session sharing this working copy: report them, leave them alone, and never stage them. Re-claim it whenever you deliberately switch branches — creating the feature branch you will write to is a legitimate switch, and a SESSION_BRANCH still pinned to `main` would make every later write assertion fail on correct work. The assertion exists to catch a branch that moved under you, not one you moved on purpose.
 3. **Open PRs, split by author** — the split matters so external contributions aren't lost before autonomous work starts:
    ```bash
    gh pr list --state open --author "@me"

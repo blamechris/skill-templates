@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "8591e2a",
+  "generatedFromCommit": "85060c4",
   "skillCount": 38,
   "skills": [
     {
@@ -482,7 +482,7 @@
     },
     {
       "name": "create-pr",
-      "hash": "8591e2a",
+      "hash": "85060c4",
       "lines": 200,
       "description": "Create a pull request with auto-detected issue closures and proper formatting.",
       "guards": [
@@ -1028,7 +1028,7 @@
     {
       "name": "merge",
       "hash": "8591e2a",
-      "lines": 254,
+      "lines": 256,
       "description": "Merge PRs, verify post-merge version bump, and run post-merge actions (build, deploy, etc.).",
       "guards": [
         {
@@ -1693,7 +1693,7 @@
     },
     {
       "name": "skill",
-      "hash": "7b4d37f",
+      "hash": "85060c4",
       "lines": 353,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs.",
       "guards": [
