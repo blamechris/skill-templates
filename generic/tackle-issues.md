@@ -118,8 +118,8 @@ For each issue in the current wave's queue, run the full `/autonomous-dev-flow` 
 
 1. **Sync Check** — `git checkout main && git pull origin main`
 2. **Issue Understanding** — Read issue, identify files, plan approach
-3. **Implementation (TDD)** — Branch, RED-GREEN-REFACTOR
-4. **Commit and PR** — Push, create PR
+3. **Implementation (TDD)** — Branch, record it as `SESSION_BRANCH`, re-assert it against `git branch --show-current` immediately before the first edit, then RED-GREEN-REFACTOR
+4. **Commit and PR** — Re-assert `SESSION_BRANCH`, `git status --short`, stage the changed files **by name** (never `-A` / `.` / `-u` / a bare directory), commit, push, create PR
 5. **Full Review** — `/full-review` with pre-skill checkpoint
 6. **Assess and Report** — Classify verdict, update progress
 
@@ -420,6 +420,8 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 17. **Morning summary is mandatory** — Even if interrupted, output the best summary possible with data collected so far.
 18. **Wave boundaries are session boundaries** — Shed context at each wave boundary, mode-aware: end + restart fresh from handoff note + queue + the ledger's STATE header where the user or a configured re-launcher will relaunch; force a boundary compaction and continue where nothing would. Respect the ~150K main-thread context ceiling and the per-wave cost circuit breaker (see Session Boundaries and the Session Ledger).
 19. **STATE header over full re-reads** — After compaction, read only the ledger's STATE header; the full ledger history is on-demand reference, never a mandatory re-read.
+20. **Explicit-path staging** — `git status --short`, then `git add` the changed files by name. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. A marathon runs for hours in a working copy other sessions also use, so a bulk add commits their files into your PR. `-u` is not the safe one: it restages tracked files a clean/smudge filter rewrote behind your back, which is how a tracked 21KB `.docx` was committed as a git-lfs pointer.
+21. **Assert the branch before you write** — record each issue's branch as `SESSION_BRANCH` and re-check `git branch --show-current` against it immediately before the first edit and again immediately before staging. HEAD is global to the working copy, so a checkout from earlier in the wave proves nothing. Never write to a branch this session did not create.
 
 ## Customization Points
 

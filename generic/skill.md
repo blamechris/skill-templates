@@ -121,8 +121,12 @@ note in the report that hashes may be stale. Record which source you used.
      the customized output. A guard miss means customization stripped a load-bearing
      section; restore it. (These are the content checks ported from `sync.sh`.)
    - If any check fails, fix and re-check before writing. Never write defective output.
-5. **Write + stamp.** Create `.claude/commands/` if absent, strip any pre-existing
-   `<!-- skill-templates: … -->` lines from the body, then write to
+5. **Write + stamp.** This writes into the repo's shared working copy, which another
+   session may have moved to its own branch since this one started — so re-check first:
+   `git branch --show-current`. If it is not the branch you started on, STOP and tell the
+   user rather than writing; a skill install landing on someone else's branch is how it
+   gets swept into their commit. Then create `.claude/commands/` if absent, strip any
+   pre-existing `<!-- skill-templates: … -->` lines from the body, and write to
    `.claude/commands/<name>.md` ending with exactly:
    `<!-- skill-templates: <name> <hash> <date> -->` (today's date, `YYYY-MM-DD`).
 6. **Lint (deterministic gate).** Run the registry's mechanical linter on the file just

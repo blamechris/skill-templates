@@ -397,10 +397,19 @@ EOF
 
 ### 9. Commit Results
 
-Stage and commit all audit files:
+Stage and commit the audit files **by name**.
+
+**Stage explicit paths.** `git status --short` first, then `git add` each report you just wrote.
+Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. A
+trailing-slash directory add is a bulk add: the working copy is shared with concurrent sessions,
+so `${OUTPUT_DIR}/` may also hold a stale report from another run or a file that is not yours.
+`-u` is not the safe one: it restages every *tracked* file whose worktree copy differs, including
+files a clean/smudge filter rewrote without you touching them — that is how `git add -u` turned a
+tracked 21KB `.docx` into a git-lfs pointer and committed it as an edit.
 
 ```bash
-git add "${OUTPUT_DIR}/"
+git status --short "${OUTPUT_DIR}"
+git add "${OUTPUT_DIR}/<agent-1>.md" "${OUTPUT_DIR}/<agent-2>.md" "${OUTPUT_DIR}/master-assessment.md"
 git commit -m "docs: project audit (${AGENT_COUNT} agents, aggregate ${AGGREGATE_RATING}/5)
 
 Agents: ${AGENT_NICKNAMES_COMMA_SEPARATED}

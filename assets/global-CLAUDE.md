@@ -44,6 +44,16 @@ The user (blamechris / Chris) is **responsible for and the sole author of all co
 
 Write clean, professional commit messages and PR bodies with no attribution footer of any kind.
 
+## Writing to a shared working copy (all projects)
+
+Each repo has **one** working copy at `~/Projects/<repo>`, and `git` state — the current branch, the index, the working tree — is **global to that directory**. Several sessions run at once, so a file you did not write, sitting in the tree, is the normal case and not an anomaly. Two rules follow, and neither is optional.
+
+**Assert the branch before you write.** Record the branch you create or check out as `SESSION_BRANCH`, then re-check `git branch --show-current` against it **immediately before your first edit** and **again immediately before staging**. A checkout from ten minutes ago proves nothing: another session can move HEAD in between, and your edits then land on its branch. Re-check, never remember. If HEAD is not `SESSION_BRANCH`, stop — do not edit, do not stage — and re-establish the branch first.
+
+**Stage explicit paths.** `git status --short` first, then `git add` the files you changed, **by name**. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. A bulk add commits whatever else is in the tree — three separate incidents in one week trace to exactly that. `-u` is not the safe one, and this is the failure mode worth remembering: it looks harmless because it only touches *tracked* files, but "tracked and modified" includes every file a clean/smudge filter rewrote in the worktree without you touching it. A git-lfs filter doing precisely that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as a legitimate edit.
+
+Prefer a per-session `git worktree` over sharing `~/Projects/<repo>` whenever a session will write; where the harness has not given you one, these two rules are the whole of your protection.
+
 ## Skills come from the registry (pull-on-demand)
 
 Skills live in the `blamechris/skill-templates` registry and install on demand

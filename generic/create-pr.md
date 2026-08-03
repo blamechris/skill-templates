@@ -20,12 +20,19 @@ if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
   exit 1
 fi
 
+# The branch this PR is for. Record it now; step 5 re-asserts it before pushing.
+SESSION_BRANCH="${BRANCH}"
+
 git status
 git log main..HEAD --oneline
 git diff main --stat
 ```
 
 Review the commits and changed files. Understand the full scope of work before drafting the PR.
+
+**Assert the branch before you write.** Everything below — the diff you summarize, the issues you detect, the branch you push — is derived from HEAD *at this moment*. HEAD is global to the working copy, so a concurrent session can move it while you are drafting, and a PR body written from one branch's diff pushed onto another is silently wrong. Re-check `git branch --show-current` against `SESSION_BRANCH` immediately before any edit to the working tree and again immediately before the push in step 5. Re-check, never remember.
+
+If this skill amends the branch at all (a fixup commit, a rebase, a README touch-up before opening the PR), **stage explicit paths**: `git status --short`, then `git add` the files you changed by name. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a` — a bulk add sweeps another session's file into the PR you are about to open. `-u` is not the safe one: it restages every *tracked* file whose worktree copy differs, including files a clean/smudge filter rewrote without you touching them — that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as an edit.
 
 ### 2. Detect Closable Issues
 
@@ -123,6 +130,18 @@ Ask: "Ready to create this PR?" — wait for confirmation.
 ### 5. Push and Create PR
 
 ```bash
+# Re-assert the branch: the PR body was drafted from the diff of SESSION_BRANCH,
+# and HEAD may have moved while you were drafting.
+# SESSION_BRANCH was set in step 1 — this step runs AFTER a user-confirmation gate,
+# so it is necessarily a fresh shell: re-declare it here or the test below compares
+# against an empty string and trips on every run.
+SESSION_BRANCH="${SESSION_BRANCH:?re-declare the branch you started on before pushing}"
+NOW=$(git branch --show-current)
+[ "${NOW}" = "${SESSION_BRANCH}" ] || {
+  echo "STOP: on '${NOW}', expected '${SESSION_BRANCH}' — HEAD moved. Do not push." >&2
+  exit 1
+}
+
 # Push branch
 git push -u origin ${BRANCH}
 
@@ -170,6 +189,8 @@ Then below the table:
 5. **Verify after creation** — Check that `closingIssuesReferences` matches expected issues.
 6. **Target main** — Always create PRs against `main` unless the user specifies otherwise.
 7. **Don't fabricate** — Only add `Closes #N` for issues the PR's changes actually address. If unsure, ask.
+8. **Assert the branch before you write** — record the branch as `SESSION_BRANCH` in step 1 and re-check `git branch --show-current` against it before any working-tree edit and again before the push. HEAD is global to the working copy; a concurrent session can move it while you draft.
+9. **Explicit-path staging** — if you stage anything at all, `git status --short` then `git add` the changed files by name. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. `-u` is not the safe one: it restages tracked files a clean/smudge filter rewrote behind your back, which is how a tracked 21KB `.docx` was committed as a git-lfs pointer.
 
 ## Customization Points
 

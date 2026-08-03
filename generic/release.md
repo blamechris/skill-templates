@@ -79,6 +79,8 @@ If `--dry-run`, skip. Otherwise tag the exact released commit:
 - **Bump landed via PR:** the version bump is already in the release branch's history — create the annotated tag on that merged commit and push **only the tag**.
 - **Direct-push repos:** commit the version bump if the bump tool did not, create the annotated tag, and push the commit and the tag together.
 
+**Stage explicit paths.** When you commit the bump yourself, `git status --short` first and then `git add` the version files **by name** — a bump tool often leaves more in the tree than the version (a lockfile, a generated header), and the working copy is shared with concurrent sessions. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`; a release commit that carries someone else's file is published, tagged, and unfixable. `-u` is not the safe one: it restages every *tracked* file whose worktree copy differs, including files a clean/smudge filter rewrote without you touching them — that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as an edit. Re-check `git branch --show-current` against the release branch immediately before staging: HEAD is global to the working copy, so the checkout you made at step 1 proves nothing now.
+
 {{CUSTOMIZE: remote/branch, e.g. "origin <release branch>"; state whether direct pushes are allowed, or the bump lands via PR and only the tag is pushed.}}
 
 Do not force-push.

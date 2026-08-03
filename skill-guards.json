@@ -116,6 +116,33 @@
         "[Oo]ver budget",
         "stop and notify"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+        "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
+      ],
+      "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "batch-merge": [
@@ -411,6 +438,33 @@
         "Closes tags go in the body",
         "only auto-closes from the body"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+        "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
+      ],
+      "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "decide": [
@@ -648,6 +702,33 @@
         "[Zz]ero[- ][Aa]ttribution",
         "[Ff]ollow[^.\\n]{0,30}[Aa]ttribution [Pp]olicy"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+        "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
+      ],
+      "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "full-review": [
@@ -874,14 +955,6 @@
       ]
     },
     {
-      "label": "explicit-staging-only",
-      "anyOf": [
-        "never `git add -A`",
-        "never git add -A",
-        "[Ss]tage specific files"
-      ]
-    },
-    {
       "label": "never-merge",
       "anyOf": [
         "[Nn]ever merge",
@@ -959,6 +1032,33 @@
         "run at the workhorse tier",
         "Delegation tiers"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+        "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
+      ],
+      "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "prime-directive": [
@@ -1063,6 +1163,33 @@
         "[Oo]ver budget",
         "stop and notify"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+        "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
+      ],
+      "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "project-audit": [
@@ -1325,6 +1452,33 @@
         "prune branches only after verifying",
         "MERGED"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+        "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
+      ],
+      "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "skill": [
@@ -1647,6 +1801,33 @@
         "[Oo]ver budget",
         "stop and notify"
       ]
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+        "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
+      ],
+      "note": "#163: binds the PROHIBITION LIST, not the rationale. Both alternates require `git add -u` and `git add -A` to be named together as banned. Three earlier alternates were removed because they matched the sentence that EXPLAINS the ban ('`-u` is not the safe one: ...'), which sits on the same physical line — so deleting `git add -u` from the ban list still passed on 4 of 7 templates while the rule was gone. Never anchor on a bare `-u`: it appears in `sort -u`, `git push -u origin`, and the rationale. The two alternates are the same claim with the list order swapped."
+    },
+    {
+      "label": "lfs-filter-failure-mode",
+      "anyOf": [
+        "`-u` is not the safe one",
+        "-u`? (?:is the trap|only looks safe|looks safe)",
+        "-u[^\\n]{0,160}(?:clean/smudge|smudge/clean|git-?lfs|LFS) filter",
+        "-u[^\\n]{0,160}(?:git-)?[Ll][Ff][Ss] pointer"
+      ],
+      "note": "#163: binds the RATIONALE for banning `-u` specifically — that it restages a tracked file the clean/smudge filter rewrote, turning a binary into an LFS pointer. Alternates 3 and 4 previously matched a bare mention of an LFS filter or pointer anywhere in the file, so an unrelated LFS sentence satisfied the guard with the rationale deleted. They now require `-u` on the same line, which is what makes them rewordings of the same sentence rather than keyword hits."
+    },
+    {
+      "label": "assert-branch-before-write",
+      "anyOf": [
+        "[Aa]ssert the branch before (?:you )?writ",
+        "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
+        "before (?:your |the )?first edit[^\\n]{0,120}before staging"
+      ],
+      "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
     }
   ],
   "tiered-delegation": [
