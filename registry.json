@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "39d693b",
+  "generatedFromCommit": "c96f8da",
   "skillCount": 39,
   "skills": [
     {
@@ -2076,7 +2076,7 @@
     },
     {
       "name": "test-plan",
-      "hash": "39d693b",
+      "hash": "c96f8da",
       "lines": 429,
       "description": "Walk a codebase, enumerate every testable surface, and emit a structured, code-grounded corpus of test cases — a generator, not a renderer. The output is DATA: a YAML (or JSON) corpus plus a markdown index, sized for a whole repo (~6-10 surface areas, ~100 cases) rather than for one change set. Every case carries a stable id, copy-pasteable prereqs / steps / expected / gotchas, a `safe` or `live` risk tag, shell-aware commands, and at least one `file:line` citation to the code that establishes it. An **executor** consumes the corpus: `/smoke-form` renders the human-visual subset into an interactive HTML pass for a person, while an agent or the test suite runs everything else.",
       "guards": [
