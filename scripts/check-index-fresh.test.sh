@@ -49,14 +49,35 @@ expect() {
 }
 
 # mutate <src> <dst> <python-expr-on-`reg`> — edit a copy of an index doc.
+#
+# A mutation that changes nothing is FATAL, not a quiet pass. Two fixtures below
+# select their target by scanning `reg["skills"]` for a property ("the first skill
+# with no guards"), so a change to the real registry can turn one into a no-op.
+#
+# Today that degrades LOUDLY, not silently: both such fixtures are `expect stale`,
+# and comparing a file with itself yields rc=0 where the case wants rc=1, so it
+# reports a failure. Verified by running the pre-guard version of this file against
+# a registry where the last unguarded skill had gained guards: `1 FAILED, 20 passed`.
+#
+# This check is therefore defence in depth, not a fix for an observed silent pass.
+# It matters because the loud failure is an accident of these two cases being
+# `expect stale`; an `expect fresh` fixture that became a no-op WOULD pass silently,
+# and the fixture set is not frozen.
 mutate() {
   local src="$1" dst="$2" expr="$3"
-  python3 - "$src" "$dst" "$expr" <<'PY'
+  python3 - "$src" "$dst" "$expr" <<'PY' || { echo "FATAL: fixture mutation failed"; exit 1; }
 import json, sys
 src, dst, expr = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(src, encoding="utf-8") as f:
     reg = json.load(f)
+before = json.dumps(reg, sort_keys=True)
 exec(expr)
+if json.dumps(reg, sort_keys=True) == before:
+    sys.stderr.write(
+        "  no-op mutation — the fixture matched nothing in the real registry, so "
+        "the case it feeds would compare a file with itself:\n" + expr + "\n"
+    )
+    sys.exit(1)
 with open(dst, "w", encoding="utf-8") as f:
     json.dump(reg, f, indent=2, ensure_ascii=False)
 PY
@@ -122,13 +143,17 @@ for s in reg["skills"]:
 expect stale "a guard changed in skill-guards.json without reindexing" \
   "$REAL" "$TMP/guards.json" -m "guards"
 
+# Built by STRIPPING guards, then passed as the committed side — so the fixture is
+# the index as it stood before the guards were written, and $REAL is the rebuild.
+# Selecting a skill that already has guards keeps this case alive now that every
+# skill has them; the old "find one with none" form is unsatisfiable (#120).
 mutate "$REAL" "$TMP/guardgain.json" '
 for s in reg["skills"]:
-    if "guards" not in s:
-        s["guards"] = [{"label": "x", "anyOf": ["X"]}]; break
+    if "guards" in s:
+        del s["guards"]; break
 '
 expect stale "a skill gained guards without reindexing" \
-  "$REAL" "$TMP/guardgain.json" -m "guards"
+  "$TMP/guardgain.json" "$REAL" -m "guards"
 
 mutate "$REAL" "$TMP/order.json" 'reg["skills"].reverse()'
 expect stale "skills[] reordered away from build-index.sh's sort" \
@@ -211,10 +236,20 @@ else
   done
 fi
 
+# The no-op guard itself: a mutation expression that changes nothing must abort the
+# run, not sail past. Without this, the guard is an untested claim.
+noop_out=$(mutate "$REAL" "$TMP/noop.json" 'reg' 2>&1); noop_rc=$?
+if [ "$noop_rc" -ne 0 ] && printf '%s' "$noop_out" | grep -q 'FATAL'; then
+  ok "a no-op mutation aborts the run"
+else
+  bad "a no-op mutation should abort with FATAL; got rc=$noop_rc: $noop_out"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
   echo "check-index-fresh.test: ALL PASS ($PASS tests)"
   exit 0
 fi
+
 echo "check-index-fresh.test: $FAIL FAILED, $PASS passed"
 exit 1

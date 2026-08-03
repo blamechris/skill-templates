@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "af9c1e4",
+  "generatedFromCommit": "cbb846d",
   "skillCount": 38,
   "skills": [
     {
@@ -720,9 +720,40 @@
     },
     {
       "name": "fetch-docs",
-      "hash": "410e202",
-      "lines": 68,
-      "description": "Sync a companion documentation repo (e.g., Obsidian vault) so agents can reference design docs, architecture notes, and project knowledge during development."
+      "hash": "cbb846d",
+      "lines": 106,
+      "description": "Sync a companion documentation repo (e.g., Obsidian vault) so agents can reference design docs, architecture notes, and project knowledge during development.",
+      "guards": [
+        {
+          "label": "refresh-existing-clone",
+          "note": "Binds the refresh of an ALREADY-CLONED docs repo, not the clone-if-absent branch — a missing clone fails loudly, a never-refreshed one serves stale docs silently. Deliberately excludes the neighbouring `Pulling latest docs...` echo, which survives deletion of the git command. The `nothing to clone or pull` alternate is the same instruction as restated by a repo whose docs live in-tree (no-it-all), where there is no clone to refresh.",
+          "anyOf": [
+            "pull --rebase",
+            "git -C .{0,60} pull",
+            "git pull",
+            "[Nn]othing to clone or pull"
+          ]
+        },
+        {
+          "label": "classify-arguments-before-use",
+          "note": "Binds the step-3 sentence requiring $ARGUMENTS to be resolved to a path or a search term before DOC_PATH/SEARCH_TERM are referenced. Must NOT match the `## Arguments` bullet ('specific doc path or search term') or the in-code comment, both of which describe the input and survive deletion of the rule — matching those is how this guard would become vacuous.",
+          "anyOf": [
+            "[Cc]lassify .{0,20}ARGUMENTS.{0,100}(?:filesystem|path branch)",
+            "\\$ARGUMENTS.? is (?:either )?a path .{0,80}search term",
+            "[Dd]etermine whether .{0,20}ARGUMENTS.{0,60}is a path",
+            "[Rr]esolve .{0,20}ARGUMENTS.{0,80}against the filesystem"
+          ]
+        },
+        {
+          "label": "key-docs-table",
+          "note": "Binds the instruction to emit the doc inventory. Excludes the `## Docs Synced` heading and the `| Doc | Path |` header row of the example block — those are the decoration that survives when the instruction is cut.",
+          "anyOf": [
+            "table of key docs",
+            "table of the key .{0,12}docs",
+            "[Tt]abulate the .{0,6}key docs"
+          ]
+        }
+      ]
     },
     {
       "name": "fix-ci",
@@ -1028,8 +1059,8 @@
     },
     {
       "name": "merge",
-      "hash": "af9c1e4",
-      "lines": 256,
+      "hash": "cbb846d",
+      "lines": 270,
       "description": "Merge PRs, verify post-merge version bump, and run post-merge actions (build, deploy, etc.).",
       "guards": [
         {
@@ -1768,8 +1799,8 @@
     },
     {
       "name": "smoke-test",
-      "hash": "21fa678",
-      "lines": 212,
+      "hash": "dda8a88",
+      "lines": 229,
       "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results.",
       "guards": [
         {

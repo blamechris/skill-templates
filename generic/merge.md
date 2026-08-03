@@ -15,7 +15,11 @@ Merge PRs, verify post-merge version bump, and run post-merge actions (build, de
 
 ### Phase 0: Mandatory Review Gate
 
-**CRITICAL: Every PR MUST be reviewed before merging. No exceptions for "obvious" fixes.**
+**CRITICAL: Every PR MUST be reviewed before merging, unless it matches an exception
+written in the list below.** The gate is never a judgement call: "it's obvious",
+"it's a one-liner", "I already read it", "it's low risk" are not exceptions and never
+become one. An exception must be decidable from the diff's file paths alone. If the
+list below says there are none, then there are none.
 
 For each PR to be merged, check if `/full-review` has already been run:
 
@@ -26,7 +30,16 @@ gh api repos/${REPO}/issues/${PR_NUM}/comments --jq '[.[] | select(.body | test(
 
 If no review exists, run `/full-review ${PR_NUM}` **before proceeding to merge**. For multiple PRs, run reviews in parallel (background agents), then merge sequentially after all reviews complete.
 
-{{CUSTOMIZE: Review skip exceptions — e.g., "Pure documentation/skill file changes (.md files) with zero code changes may skip review." Adjust based on your repo's review requirements.}}
+**Exception list — exhaustive. Anything not on it gets reviewed.**
+
+1. The version-bump PR that **Phase 2b** opens, and only when its diff touches
+   nothing but {{CUSTOMIZE: the version manifest paths this repo bumps — e.g.
+   `package.json`, `package-lock.json`, `CHANGELOG.md`. List them; "the version
+   files" is not a path.}}. Provenance is deliberately NOT the test: "the bump
+   script produced it" is not checkable from a diff, and a hand-authored
+   version-only PR must land on the same side of the gate as a scripted one.
+   If the diff touches anything outside that list, it gets reviewed.
+2. {{CUSTOMIZE: Repo-declared path-based exceptions, or the sentence "None — every PR gets reviewed, including documentation." E.g., "Pure documentation/skill file changes (.md files) with zero code changes may skip review."}}
 
 ### Phase 1: Pre-Merge Preparation
 
@@ -161,7 +174,8 @@ git push -u origin chore/bump-version
 gh pr create --title "chore: bump version to v${NEXT}" --body "Patch version bump."
 ```
 
-Merge after CI passes (version-only change, review gate exception).
+Merge after CI passes — this is exception 1 in the Phase 0 list (script-generated
+version-only diff), the one PR that may merge unreviewed by default.
 
 If `--skip-version-check` is set, skip this phase.
 
