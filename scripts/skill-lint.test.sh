@@ -604,7 +604,7 @@ PROFILE_DEEP_HEADING=$(cat <<'MD'
 
 ### Self-merge posture
 
-**Withheld.** Every merge in this repo is a human act.
+The posture for this repo is recorded in the subsection below.
 
 ##### Historical note
 
