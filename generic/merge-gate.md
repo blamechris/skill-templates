@@ -28,9 +28,11 @@ When `gh pr merge` fails with "base branch policy prohibits the merge":
    `gh pr view {N} --json mergeable,mergeStateStatus` after every push, and never
    escalate to the user (or propose an override) off a stale reading. `UNKNOWN` means
    GitHub is recomputing after a base change, not that a blocker exists — poll it.
-   Treat an unexpectedly contradictory reading with equal suspicion: `BLOCKED` + green
-   CI + "0 unresolved threads" is self-contradictory when protection blocks on
-   unresolved conversations, so one of those readings is wrong.
+   Treat contradictory readings with equal suspicion: `BLOCKED` + green CI +
+   "0 unresolved threads" means a reading is stale or a requirement is missing from
+   your view (an unreported required check, a ruleset such as a pending Copilot
+   review, required approvals) — re-derive each gate input at the current head
+   instead of assuming, and never override.
 1. **Still blocked at the current head? Do NOT investigate further.** The step-0 re-read is the ONLY diagnostic allowed — beyond it, don't run more commands or reason about causes. The cause is almost always unresolved review threads.
 2. **Immediately respond with exactly this** (filling in the PR number):
    > Merge blocked — unresolved review threads. Please resolve them here:
