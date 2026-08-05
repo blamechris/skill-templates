@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "b2dd587",
+  "generatedFromCommit": "e053400",
   "skillCount": 40,
   "skills": [
     {
@@ -961,7 +961,7 @@
     },
     {
       "name": "look-approve",
-      "hash": "b2dd587",
+      "hash": "e053400",
       "lines": 470,
       "description": "Get a visual deliverable **approved** — by showing it, not describing it. Runs the real app from an isolated worktree of the approval target, captures **moving** evidence (an animated GIF tour plus one still per feature under review), emits a SHORT one-screen approval card as a self-contained HTML file, puts a single approve / approve-with-notes / reject question to the owner, and records the verdict on the tracking issue. The deliverable is a visual and a *\"we gotta do this\"* — never six pages of prose. Reach for it when a UI/art/feel change is sitting on `main` waiting for a human to say yes.",
       "guards": [
