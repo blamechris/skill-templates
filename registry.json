@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "5488e23",
+  "generatedFromCommit": "f61c715",
   "skillCount": 41,
   "skills": [
     {
@@ -2429,7 +2429,7 @@
     },
     {
       "name": "weekly-review",
-      "hash": "5488e23",
+      "hash": "f61c715",
       "lines": 271,
       "description": "The **Monday TPM pass over everything on this machine**: scan every repo for the trailing week's git activity, fan out one read-only scan agent per active repo, sweep the quiet tail, aggregate local session usage from the transcripts, and write a dated Markdown note plus a self-contained HTML brief into the vault. The chat message it ends with is **a short list of decisions waiting on the owner and one pointer to the note** — never a recap of the week, which is what the note is for. Reach for it at the top of the week, or any time \"what happened across all my projects, and what needs me?\" is the actual question.",
       "guards": [
