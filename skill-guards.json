@@ -848,6 +848,82 @@
       ]
     }
   ],
+  "look-approve": [
+    {
+      "label": "honesty-callout-mandatory",
+      "note": "The card's entire worth is that a staged beat is declared ON IT. Alternates must reword the rule sentence itself — never the '### Honesty callouts are mandatory' heading or the 'Staged for the camera:' callout label in the HTML skeleton, both of which survive deleting the rule.",
+      "anyOf": [
+        "[Aa]nything staged, forced, or not actually exercised",
+        "[Ss]taged, forced or unexercised[^\\n]{0,60}declared on the card",
+        "[Ee]very staged action MUST be declared on the card"
+      ]
+    },
+    {
+      "label": "isolated-worktree-always",
+      "anyOf": [
+        "[Nn]ever capture from the shared checkout",
+        "[Cc]apture from an isolated worktree, never the shared",
+        "[Nn]ever run the capture (in|from|against) the shared checkout"
+      ]
+    },
+    {
+      "label": "capture-only-never-commits",
+      "anyOf": [
+        "[Nn]o commits, no pushes, no branch creation",
+        "never commits to the repo it photographs",
+        "[Tt]he capture commits nothing to the target repo"
+      ]
+    },
+    {
+      "label": "backup-and-restore-real-user-data",
+      "note": "The prototype overwrote a live save on its first run. The rule is the backup-plus-restore pair, not the mere mention of a save path — an alternate matching only the SAVE_DIR assignment would sit inside a code fence and survive deletion of the rule.",
+      "anyOf": [
+        "Back it up and restore it, every run",
+        "-restore is mandatory, every run",
+        "[Bb]ack up and restore the (app|game)'s (real )?(user )?data"
+      ]
+    },
+    {
+      "label": "stills-map-one-to-one-to-the-review-set",
+      "anyOf": [
+        "[Ee]ach surviving item earns \\*\\*exactly one still\\*\\*",
+        "still ↔ feature/PR",
+        "every review-set item has a still and every still has an item"
+      ]
+    },
+    {
+      "label": "card-is-one-screen-not-prose",
+      "anyOf": [
+        "\\*\\*no prose section\\*\\*",
+        "screen, one ask",
+        "[Nn]o prose section, no per-PR narrative"
+      ]
+    },
+    {
+      "label": "wait-on-completion-sentinel",
+      "anyOf": [
+        "[Ww]ait on the sentinel, never on CPU or log activity",
+        "wait on `_DONE.txt`, not on CPU",
+        "[Nn]ever gate completion on CPU or log activity"
+      ]
+    },
+    {
+      "label": "single-structured-verdict-ask",
+      "anyOf": [
+        "[Nn]ever a paragraph ending in a",
+        "[Oo]ne call, immediately after the card opens",
+        "one `AskUserQuestion` call carrying the three options"
+      ]
+    },
+    {
+      "label": "no-answer-is-not-approval",
+      "anyOf": [
+        "silence is never consent",
+        "a visual approval with no answer is not an",
+        "[Nn]o answer means the change does not ship"
+      ]
+    }
+  ],
   "manual-testing-mode": [
     {
       "label": "default-to-filing",
