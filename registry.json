@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "e053400",
-  "skillCount": 40,
+  "generatedFromCommit": "5488e23",
+  "skillCount": 41,
   "skills": [
     {
       "name": "agent-review",
@@ -2423,6 +2423,102 @@
           "anyOf": [
             "@media\\s*\\(\\s*prefers-color-scheme\\s*:\\s*light\\s*\\)\\s*\\{\\s*:root",
             "@media\\s*\\(\\s*prefers-color-scheme\\s*:\\s*dark\\s*\\)\\s*\\{\\s*:root"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "weekly-review",
+      "hash": "5488e23",
+      "lines": 271,
+      "description": "The **Monday TPM pass over everything on this machine**: scan every repo for the trailing week's git activity, fan out one read-only scan agent per active repo, sweep the quiet tail, aggregate local session usage from the transcripts, and write a dated Markdown note plus a self-contained HTML brief into the vault. The chat message it ends with is **a short list of decisions waiting on the owner and one pointer to the note** — never a recap of the week, which is what the note is for. Reach for it at the top of the week, or any time \"what happened across all my projects, and what needs me?\" is the actual question.",
+      "guards": [
+        {
+          "label": "report-only-no-state-changes",
+          "note": "The review is read-only by construction: a weekly report that mutates the state it describes cannot be trusted the following week. Alternates must match the prohibition sentence itself — never the '## Report-only' heading, which survives deleting the rule beneath it.",
+          "anyOf": [
+            "[Nn]othing in this run merges a PR, pushes a branch",
+            "[Tt]he review reads; it never writes",
+            "[Nn]ever merge, push, or change issue state during (a|the) review"
+          ]
+        },
+        {
+          "label": "scan-agents-are-read-only",
+          "note": "The per-repo agents run against the owner's shared working copies, in parallel. A fetch or checkout inside one mutates the state the scan was sent to describe and races every other session in that directory.",
+          "anyOf": [
+            "[Ee]very scan agent is read-only",
+            "[Ss]can agents (must )?never fetch, check ?out, or write",
+            "[Aa] scan agent that fetches or checks out"
+          ]
+        },
+        {
+          "label": "dedup-repos-sharing-a-remote",
+          "note": "Double-counting a 40-PR series across two working copies of one repo is the single most misleading error this report can make. The rule is the counting instruction, not the CUSTOMIZE bullet listing the known pairs — that bullet is stripped at install time.",
+          "anyOf": [
+            "[Tt]wo directories with the same `origin` remote are one repo",
+            "[Dd]edup(licate)? (on|by) (the )?remote, not (on|by) directory name",
+            "one GitHub repo[^\\n]{0,40}[Cc]ount (its|their) PRs once"
+          ]
+        },
+        {
+          "label": "automated-sync-waves-are-not-work",
+          "note": "Fleet-wide skill-registry waves land identical commits in fifteen repos within minutes. Counting them as activity inflates a two-product week into a fifteen-repo week, which is how a status report stops being read.",
+          "anyOf": [
+            "[Aa]n automated skill-registry sync wave is not a week of work",
+            "[Aa] repo whose entire diff is (a|an automated) sync wave is [^\\n]{0,20}quiet",
+            "[Ss]eparate automated sync (waves|commits) from real work"
+          ]
+        },
+        {
+          "label": "usage-numbers-carry-their-honesty-labels",
+          "note": "Cache-inclusive input read as fresh spend overstates the week by orders of magnitude, and a wall-clock transcript span read as focused time overstates it again. The label must travel WITH the number, so alternates match the rule sentence rather than the word 'cache-inclusive' wherever it happens to appear.",
+          "anyOf": [
+            "[Pp]ublish no usage number bare",
+            "every (one|number) carries its caveat in the same sentence",
+            "[Ee]very usage figure ships with its honesty label"
+          ]
+        },
+        {
+          "label": "final-message-leads-with-the-decision-list",
+          "note": "The owner reads this to find what needs them. Alternates must match the ordering rule, not the '**Needs you**' string in the example block, which survives deleting the rule.",
+          "anyOf": [
+            "[Tt]he final chat message opens with the decision list",
+            "[Dd]ecisions first, then one pointer line",
+            "[Ll]ead the final message with what needs the owner"
+          ]
+        },
+        {
+          "label": "every-needs-user-item-reaches-the-owner",
+          "anyOf": [
+            "if an item appeared there, it appears here",
+            "[Ee]very `needs_user` item (goes|belongs) in the (chat )?message",
+            "no open owner decision is dropped between the scan and the message"
+          ]
+        },
+        {
+          "label": "final-message-is-not-a-prose-wall",
+          "note": "The week is written up twice already (note + HTML). A third telling in chat is the failure mode the skill exists to prevent.",
+          "anyOf": [
+            "[Aa] prose recap in chat is the failure mode this skill exists to prevent",
+            "[Tt]he report is the note; the message is the ask",
+            "[Nn]ever restate the note.s contents in chat"
+          ]
+        },
+        {
+          "label": "zero-attribution",
+          "anyOf": [
+            "carries AI or agent attribution of any kind",
+            "[Nn]o AI attribution in the note, the HTML",
+            "[Nn]ever attribute any part of the week to an agent"
+          ]
+        },
+        {
+          "label": "series-number-continues-the-previous-note",
+          "note": "A second 'Weekly Review #1' silently breaks the series the owner navigates the year by. The rule is 'derive it from the folder', not the mere presence of a `series:` key in the frontmatter example.",
+          "anyOf": [
+            "[Tt]he series number continues the previous note",
+            "never restart at #1 because you did not look",
+            "[Rr]ead the last note.s series number and add one"
           ]
         }
       ]
