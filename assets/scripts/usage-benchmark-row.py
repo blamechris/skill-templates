@@ -26,7 +26,7 @@ def pick_transcript():
             return a
         hits = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{a}*.jsonl"))
         if hits:
-            return hits[0]
+            return max(hits, key=os.path.getmtime)
         sys.exit(f"no transcript matching {a!r}")
     files = [f for f in glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
              if os.path.getsize(f) > 50_000]
