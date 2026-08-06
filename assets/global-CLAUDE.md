@@ -93,6 +93,15 @@ itself within ~10 requests. Rules:
   autonomous continuity, create a one-time scheduled task at the boundary that fires a
   fresh session seeded from the handoff — the wave, not the session, is the unit of
   continuity (skill-templates#181).
+- **Ending a session = two artifacts, every time:** ① the session's row appended to
+  the usage benchmark (`~/Obsidian/no-it-all/briefs/usage-benchmark.md`) — generate it
+  with `python3 ~/.claude/scripts/usage-benchmark-row.py` and replace the placeholder
+  with a one-line workload note (duration + workload class make rows comparable);
+  ② a **copy-paste seed block** presented to Chris in the final message, fenced so
+  it's one click to copy: files to read first (ledger/handoff paths), a 2–4 line
+  state summary (done / held / open follow-ons), a `Today's task:` placeholder, and
+  the closing line instructing the new session to repeat this same end-of-session
+  protocol. The seed block — not memory, not history — is the continuity mechanism.
 - Subagent/model tiering: resolve roles against the harness ladder (currently
   fable > opus > sonnet > haiku). Mechanical work (triage, classification,
   verification sweeps) runs on the cheapest adequate tier; implementation runs
