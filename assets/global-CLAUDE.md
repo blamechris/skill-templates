@@ -81,8 +81,9 @@ Context re-reads dominate cost (70% in the 2026-07 audit): every request re-read
 the whole context at cache-read rates, so a restart that halves context pays for
 itself within ~10 requests. Rules:
 
-- **Restart into a fresh session** — seeded from the handoff note + queue/ledger
-  STATE header, never the full history — at: each marathon wave boundary; a second
+- **Restart into a fresh session** — seeded from `~/Obsidian/no-it-all/handoffs/NEXT.md`
+  (the handoff note; paste its path as the opening message) plus any queue/ledger
+  STATE header it points to, never the full history — at: each marathon wave boundary; a second
   compaction; or when switching work class (new epic, security-critical work,
   high fan-in refactors, visual-verify features).
 - **Continue** only when the next task genuinely needs the context already loaded.
