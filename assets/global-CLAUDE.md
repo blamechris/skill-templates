@@ -14,25 +14,44 @@
 
 # Global instructions
 
-## End-of-message summary (status line) — all projects, all agents
+## End-of-message summary (status block) — all projects, all agents
 
-**End every response to the user with a MECHANICAL status line** — the final thing in the message, under a bold `**Status:**` lead. Always the same four slots, same order, `none` when a slot is empty:
+**End every response to the user with a MECHANICAL status block** — the final thing in the message. A bold `**Status:**` lead on its own line, then the same four slots in the same order, one bullet each, `none` when a slot is empty:
 
-`**Status:** ✅ <done this turn> · 🔄 <in flight> · ⛔ <blocked — on what> · 🔶 DECISION: <pending user decision, or none>`
+```
+**Status:**
+- ✅ <done this turn>
+- 🔄 <in flight — enumerated, see below>
+- ⛔ <blocked — on what>
+- 🔶 DECISION: <pending user decision, or none>
+```
 
-- Keep each slot to a short phrase; be specific (name the task ID, CI run, PR, or person).
+- Keep each slot to short specific phrases (name the PR, issue, CI run, task ID, or person).
+  Several outcomes in ✅ are separated by `·` — outcomes, not narrative.
+- **The 🔄 slot enumerates, never summarizes.** Every agent/task still running gets its own
+  indented sub-bullet, `<agent/task> — <state> (<target>)`:
+
+  ```
+  - 🔄 2 in flight:
+    - bug-hunt — running (auth module)
+    - agent-review — done, merging results (PR #53)
+  ```
+
+  A bare summary phrase ("agents working", "3 tasks in flight") is exactly the failure this
+  slot exists to prevent — the reader must see at a glance which agents are working and which
+  are finished. When nothing is in flight, the slot is just `- 🔄 none`.
 - **The DECISION slot is load-bearing**: any choice waiting on the user appears there in a few
   words, every message, until resolved — never only in prose. When the user replies "decision"
   (or names one), immediately present it via AskUserQuestion with full context, trade-offs,
   and a recommendation.
 
-This applies to the main agent AND to any subagent reporting back (a subagent's final message should likewise end with its own status line). The point is consistency: the user tracks progress at a glance from the last line, without re-reading the whole message. Don't pad it — it's a status, not a recap.
+This applies to the main agent AND to any subagent reporting back (a subagent's final message should likewise end with its own status block). The point is consistency: the user tracks progress at a glance from the last lines, without re-reading the whole message. In the desktop/mobile app a block of short bullets scans; the old one-`·`-separated-line format does not and is **retired** — don't emit it. Don't pad the block — it's a status, not a recap.
 
 **End of a long / multi-task session → an HTML executive brief, not a wall of text.** When a session shipped real work (several PRs/issues, an epic, a marathon), close it by generating a self-contained HTML report via the `visual-brief` skill into the Obsidian vault (`$CLAUDE_BRIEF_DIR`) and opening it. Shape it for a busy reader — a "two-minute" CEO view:
 - **Top:** a hero executive statement (2–3 sentences: "we did X, Y, Z") + outcome chips + a one-line "needs you" callout if anything's blocked on the user.
 - **Bottom:** the nitty-gritty (per-PR table, bugs caught, what's next) — there for the record / vault history, not the headline.
 - Lead with verifiable work outcomes (PRs merged, issues closed, gates passed); don't pad with misleading raw metrics (whole-file token/time counts mislead — omit or label honestly).
-The vault copy is the durable historical record; the open-in-browser is the presentation. Still end the chat message itself with the short `**Status:**` line pointing at the report.
+The vault copy is the durable historical record; the open-in-browser is the presentation. Still end the chat message itself with the short `**Status:**` block pointing at the report.
 
 ## Attribution — core rule (all projects)
 

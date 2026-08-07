@@ -66,21 +66,28 @@ model — each carries its own `.claude/skill-profile.md` + `.claude/skills.lock
 
 ## End-of-message summary (cross-skill convention)
 
-**Every skill that reports back to the user — and every agent a skill spawns — ends its output with a MECHANICAL status line.** This is a registry-wide standard so reporting is consistent and scannable across skills/agents. Always the same four slots, same order, `none` when a slot is empty:
+**Every skill that reports back to the user — and every agent a skill spawns — ends its output with a MECHANICAL status block.** This is a registry-wide standard so reporting is consistent and scannable across skills/agents. A bold `**Status:**` lead on its own line, then the same four slots in the same order, one bullet each, `none` when a slot is empty:
 
-`**Status:** ✅ <done this turn> · 🔄 <in flight> · ⛔ <blocked — on what> · 🔶 DECISION: <pending user decision, or none>`
+```
+**Status:**
+- ✅ <done this turn>
+- 🔄 <in flight — enumerated, see below>
+- ⛔ <blocked — on what>
+- 🔶 DECISION: <pending user decision, or none>
+```
 
-- The status is the **last thing** in the message; keep each slot to a short specific phrase (name the task ID, CI run, PR, or person).
+- The status block is the **last thing** in the message; keep each slot to short specific phrases (name the PR, issue, CI run, task ID, or person). Several outcomes in ✅ are separated by `·`.
+- **The 🔄 slot enumerates, never summarizes** — every agent/task still running gets its own indented sub-bullet, `<agent/task> — <state> (<target>)` (e.g. `bug-hunt — running (auth module)`). A bare summary phrase ("agents working") is exactly the failure this slot exists to prevent: the reader must see at a glance which agents are working and which are finished. When nothing is in flight, the slot is just `- 🔄 none`.
 - **The DECISION slot is load-bearing**: any choice waiting on the user appears there, every message, until resolved — never only in prose. When the user replies "decision" (or names one), immediately present it via AskUserQuestion with full context, trade-offs, and a recommendation.
-- A subagent's final message (which is its return value to the orchestrator) likewise ends with its own status line.
-- It's a status, not a recap — don't pad it.
+- A subagent's final message (which is its return value to the orchestrator) likewise ends with its own status block.
+- It's a status, not a recap — don't pad it. The old one-line `·`-separated format is **retired** — it doesn't scan in the desktop/mobile app; don't emit it.
 
 > The canonical machine-level `~/.claude/CLAUDE.md` (which carries this convention plus the
 > attribution, session-boundary, follow-on, and tiering rules) lives in this repo at
 > [`assets/global-CLAUDE.md`](assets/global-CLAUDE.md) — bootstrap new machines from it and
 > land changes to it here via PR, then copy to `~/.claude/CLAUDE.md`.
 
-**End of a long / multi-task run → an HTML executive brief, not a wall of text.** When a session shipped real work (several PRs/issues, an epic), close it with a `visual-brief` HTML report into the Obsidian vault (`$CLAUDE_BRIEF_DIR`), opened in the browser — a "two-minute" CEO view: a hero executive statement + outcome chips + a one-line "needs you" callout on top; the nitty-gritty (per-PR table, bugs caught, what's next) at the bottom for the vault record. Lead with verifiable outcomes (PRs merged, issues closed, gates passed); don't pad with misleading whole-file token/time metrics. Still end the chat message with the short `**Status:**` line pointing at the report.
+**End of a long / multi-task run → an HTML executive brief, not a wall of text.** When a session shipped real work (several PRs/issues, an epic), close it with a `visual-brief` HTML report into the Obsidian vault (`$CLAUDE_BRIEF_DIR`), opened in the browser — a "two-minute" CEO view: a hero executive statement + outcome chips + a one-line "needs you" callout on top; the nitty-gritty (per-PR table, bugs caught, what's next) at the bottom for the vault record. Lead with verifiable outcomes (PRs merged, issues closed, gates passed); don't pad with misleading whole-file token/time metrics. Still end the chat message with the short `**Status:**` block pointing at the report.
 
 When authoring or customizing a skill whose output is shown to the user, include this instruction (and pass it through to any subagent prompt the skill issues).
 
