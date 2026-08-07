@@ -1,0 +1,79 @@
+name: Repo Relay
+
+on:
+  pull_request:
+    types: [opened, closed, reopened, synchronize, edited, ready_for_review, converted_to_draft]
+  # No pull_request_review trigger (blamechris/chroxy#6749): GitHub's
+  # bot-triggered-workflow approval policy gates the run BEFORE job-level
+  # `if` conditions evaluate, so a Copilot-authored review still spawns a
+  # run held in action_required forever (the REST approve endpoint 403s on
+  # these) — the check suite never completes and green PRs read UNSTABLE.
+  # Actor filters can't reach far enough upstream to prevent it, so the
+  # trigger itself has to go. repo-relay's piggyback review detection
+  # already surfaces a missed review on the next pull_request event, so
+  # this only trades notification latency for a PR that never gets stuck.
+  issue_comment:
+    types: [created, edited, deleted]
+  issues:
+    types: [opened, closed, reopened, labeled, unlabeled, edited]
+  release:
+    types: [published, created, edited, deleted]
+
+# Serialize runs — concurrent jobs would race on the state cache
+concurrency:
+  group: repo-relay-${{ github.repository }}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    # Cap hung runs: the concurrency group serializes runs, so an unbounded
+    # hang would queue later notifications behind it for up to the 6h default
+    timeout-minutes: 10
+    # Least-privilege token: piggyback review detection reads the pulls and
+    # issues APIs; an explicit block zeroes every unlisted scope
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    # Skip this workflow's own actor (prevent self-trigger cascades) and
+    # fork PRs (no secrets access). Other bots (dependabot, Copilot) relay
+    # on purpose — their activity belongs in the channel.
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    # The secrets context isn't readable in a job-level `if`, so surface
+    # "are the Discord secrets configured?" through env and gate each step
+    # on it — an unconfigured repo (or fork) skips cleanly instead of
+    # failing every PR with a red notify check
+    env:
+      DISCORD_CONFIGURED: ${{ secrets.DISCORD_BOT_TOKEN != '' && secrets.DISCORD_CHANNEL_PRS != '' }}
+    steps:
+      - name: Note missing Discord configuration
+        if: env.DISCORD_CONFIGURED != 'true'
+        run: echo "::notice::DISCORD_BOT_TOKEN / DISCORD_CHANNEL_PRS repo secrets are not set — skipping Discord notification."
+
+      # Persist SQLite state between runs. Per-run key: cache entries are
+      # immutable, so a constant key would freeze state at the first run.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: env.DISCORD_CONFIGURED == 'true'
+        with:
+          path: ~/.repo-relay
+          key: repo-relay-state-${{ github.repository }}-${{ github.run_id }}
+          restore-keys: |
+            repo-relay-state-${{ github.repository }}-
+
+      # best_effort replaces the old blanket continue-on-error: transient
+      # infra failures (Discord 5xx, timeouts, session budget) exit 0 with a
+      # warning annotation, while definitive config errors (revoked token,
+      # deleted channel, missing permissions) still fail loudly. Note the
+      # cache post-step saves on job success, so relay state persists across
+      # tolerated-failure runs — intended (state writes are incremental).
+      - uses: blamechris/repo-relay@3fa58908bfb9e6f69fed5236ddae4ff2180a1d54 # v1.2.0
+        if: env.DISCORD_CONFIGURED == 'true'
+        with:
+          discord_bot_token: ${{ secrets.DISCORD_BOT_TOKEN }}
+          channel_prs: ${{ secrets.DISCORD_CHANNEL_PRS }}
+          channel_issues: ${{ secrets.DISCORD_CHANNEL_ISSUES || secrets.DISCORD_CHANNEL_PRS }}
+          channel_releases: ${{ secrets.DISCORD_CHANNEL_RELEASES || secrets.DISCORD_CHANNEL_PRS }}
+          best_effort: 'true'
