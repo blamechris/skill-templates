@@ -101,7 +101,7 @@ Run a **SOLID + DRY** whole-project audit ({{CUSTOMIZE: audit skill, e.g. `/swar
 ## State / where things live
 
 - **Session log + decision log:** {{CUSTOMIZE: session-log path, e.g. `autonomous-session-<date>.md` at repo root — gitignored, never commit}}. Source of truth for progress + decisions to present on interrupt. Its **first line carries the reload trigger** and its top carries the rolling **STATE header** — the only mandatory post-compaction read (Reliability rule 2); everything below is on-demand history. Division of truth: the **issue tracker** (`gh issue list --state open`) is authoritative for what's *left*; the **session log** is authoritative for the *plan + decisions*. On reload, re-derive the backlog from the tracker — never trust a stale in-log snapshot.
-- **Wave handoff note:** {{CUSTOMIZE: handoff-note path — default `$CLAUDE_BRIEF_DIR/../handoffs/<repo>-<date>-handoff.md`}}. The session-boundary seed: queue position, open blockers, the awaiting-user list, the last verified merge. It is **disposable by design** — everything in it is re-derivable from GitHub — a seed for the next wave's session, never a second source of truth.
+- **Wave handoff note:** {{CUSTOMIZE: handoff-note path — default `docs/handoffs/<date>-<slug>.md`}}. The session-boundary seed: queue position, open blockers, the awaiting-user list, the last verified merge. It is **disposable by design** — everything in it is re-derivable from GitHub — a seed for the next wave's session, never a second source of truth. Each wave boundary **adds a dated file**; it never rewrites an earlier one, and a relaunch task must name that exact dated file, never a pointer that can move.
 - **Queue:** {{CUSTOMIZE: queue path — default `scratchpad/autonomous-queue.json`}}. The durable wave queue the next session is seeded from.
 - **This directive:** invoke `/prime-directive` (compiled live artifact: `.claude/skills/prime-directive/SKILL.md`). Do not depend on the `.claude/commands/` path resolving (Reliability rule 1).
 - **Issue list:** `gh issue list --state open`.
@@ -121,7 +121,7 @@ Lines and blocks marked `{{CUSTOMIZE}}` need repo-specific adaptation:
 - **Executive-brief mechanism + destination** — e.g. `visual-brief` → `$CLAUDE_BRIEF_DIR` (Report guardrail).
 - **Project-specific build-breaking invariants** — the repo's never-strip CI/state invariants (Hard guardrails).
 - **Session-log path** — the gitignored progress/decision log (State).
-- **Handoff-note path** — where wave handoff notes live, default `$CLAUDE_BRIEF_DIR/../handoffs/<repo>-<date>-handoff.md` (State).
+- **Handoff-note path** — where wave handoff notes live, default `docs/handoffs/<date>-<slug>.md` (State).
 - **Queue path** — where the durable wave queue lives, default `scratchpad/autonomous-queue.json` (State).
 - **Wave re-launcher** — what restarts the next wave in unattended runs (scheduled trigger, cron/launchd job, /loop wrapper), or "none" (Session boundaries).
 - **Context-size source** — how this harness reports main-thread context size for the ~150K ceiling (Session boundaries).
