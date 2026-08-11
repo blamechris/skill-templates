@@ -1,110 +1,74 @@
 ---
-type: handoff
-date: 2026-08-11T09:20Z
-repo: skill-templates
-picks_up_at: "issue #203 — the ~/.claude/CLAUDE.md copy-out, blocked behind #208"
-sensitivity: public
+type: pr-record
+date: 2026-08-11T13:40Z
+pr: 210
 ---
-# Handoff — layered session continuity landed (#205)
+# Vault-anchored session seeds (#205, as amended)
 
-- **Boundary reason:** work-class switch — the registry change is done; what remains is
-  machine-side surgery on `~/.claude/` and the vault, which is a different kind of work
-  with a different blast radius.
-- **Picks up at:** #208 first (reconcile the two-way `global-CLAUDE.md` drift), then #203's
-  copy-out. Not before: copying out today drops the machine's un-landed `**Next:**` rule.
+**This file is a narrative artifact of PR #210 — a record of what the change was for. It is
+NOT a session seed and nothing is resumed from it.** The seed this repo's sessions actually
+read is `$CLAUDE_HANDOFF_DIR/NEXT-skill-templates.md`, an absolute path in the vault, outside
+every git workspace. Confusing the two is the mistake this PR exists to correct.
 
-## STATE
+## What changed, and why the previous three rounds did not work
 
-- **Branch:** `feat/layered-session-continuity`, branched from `origin/main` @ `b20c42f`.
-- **Working tree:** clean at each commit; every path staged by name, no bulk adds.
-- **Worked in:** a linked worktree under `/private/tmp/...`, never
-  `~/Projects/skill-templates` (whose checkout sits at `e053400`, an ancestor of `main`).
-- **CI:** all six existing `validate-registry` steps pass locally, plus the new one.
-- **PR:** #210 — open at the time this seed was written, not merged. Treat everything below
-  as *proposed* until you have confirmed otherwise with the first command in the next block.
-- **Open, related:** #205 (this), #204 (closed by this), #203 / #207 / #208 / #209 (open),
-  #181 and #198 (unchanged, referenced).
+The seed used to live inside a git workspace: first the shared vault file `NEXT.md`, then a
+committed `<repo>/docs/handoffs/YYYY-MM-DD-<slug>.md`. Every round of review found the same
+defect class again, because an in-workspace seed has four independent ways to disappear and a
+fix has to reason about all of them at once:
 
-## Verify before building on any of this — re-derive, don't trust
+1. **Worktree teardown** — `git worktree remove --force` deletes untracked files silently.
+2. **Branch reachability** — a seed committed on a feature branch is invisible from the main
+   checkout, and its paste-path dies when another session moves that checkout's HEAD.
+3. **Staged vs committed** — round 3's own durability proof used `git cat-file -e ":path"`,
+   which is *index* syntax: it passed on a merely-staged file, and the seed was then destroyed
+   by `worktree remove --force`.
+4. **An unset `$SESSION_BRANCH`** — every `origin/$SESSION_BRANCH:...` check degrades to
+   something that either errors or, worse, resolves to the wrong ref.
 
-```bash
-gh pr view 210 --repo blamechris/skill-templates --json state,mergeStateStatus
-# expect state=MERGED before treating the doctrine below as landed
+An absolute path in the vault has no worktree to be torn down with, no branch to be
+unreachable from, and no index to be confused with. The surface is removed rather than
+guarded, which is why End step 3 shrank from a commit-push-prove sequence to a single
+`[ -f "$SEED" ]`. The vault is now git-backed and pushed
+(`blamechris/no-it-all-vault`, private), so durability no longer depends on being inside a
+repo — and the seed is private by construction, which the public registry repo could not offer.
 
-grep -rn "no-it-all/handoffs" generic assets              # expect: no matches
-grep -rln "docs/handoffs/YYYY-MM-DD-<slug>.md" generic   # expect: 3 files, 6 sites
+## The shape
 
-python3 -c "import json;r=json.load(open('registry.json'));\
-print(r['skillCount'], len([s for s in r['skills'] if s['name']=='session-lifecycle'][0]['guards']))"
-# expect: 41 11   (8 pre-existing guards + the 3 added here)
+| Thing | Value |
+|---|---|
+| Repo-scoped seed | `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir `~/Obsidian/no-it-all/handoffs/`) |
+| Non-repo session | `NEXT-fleet.md`, or `NEXT-fleet-<topic>.md` for a named topic |
+| Scope key | the **main worktree's directory basename**, from `git rev-parse --path-format=absolute --git-common-dir` |
+| Collision | archive the incumbent to `NEXT-<scope>.<UTC>-<sid>.md`, then write |
+| Ranking | `/next` ranks canonical seeds by frontmatter `date:`; undated seeds are grouped, never silently sorted |
 
-shasum -a 256 ~/Obsidian/no-it-all/handoffs/NEXT.md
-# expect: still PR #206's generated index — the tombstone is NOT done yet
-```
+The scope key is the directory basename and not the origin slug because `chroxy` and
+`chroxy-daemon` share one origin URL and are separate projects with separate work; keying on
+the remote would merge their seeds and let each overwrite the other's.
 
-## TL;DR — what shipped
+Archive-on-collide rather than per-session-unique filenames: unique names would also preserve
+the incumbent, and would destroy the *"one line to paste"* affordance that makes the handoff
+usable at all. One canonical name per scope, and a parked seed keeps its bytes under a name
+that says when it was parked.
 
-The global `~/Obsidian/no-it-all/handoffs/NEXT.md`, overwritten at every session end, is
-retired in the registry's text. Session seeds are now per-repo, dated, append-only and
-committed at `<repo>/docs/handoffs/YYYY-MM-DD-<slug>.md`; "NEXT" is a query — the newest
-entry — not a file. `/next` (`assets/next.md`) derives a fleet ranking at read time from
-those seeds plus a hand-written `~/Projects/PRIORITIES.md`, holds no state, and ends every
-row with the one line to paste.
+## Amendment to #205
 
-- `generic/session-lifecycle.md` — Resume step 6 reads the newest seed (filename date, then
-  frontmatter timestamp, never mtime); the end checklist goes 5 steps → 7 and names both
-  ending artifacts; Resume step 5 now drift-checks `next.md` alongside `global-CLAUDE.md`.
-- `skill-guards.json` — three new `session-lifecycle` guards: `append-only-handoff`,
-  `both-end-artifacts`, `newest-wins-not-mtime`.
-- `generic/{prime-directive,tackle-issues,autonomous-dev-flow}.md` — the wave-handoff
-  default moves out of the vault, each wave seed carries the End-step-1 frontmatter and is
-  **committed and pushed the moment it is written**, and relaunch tasks must name the dated
-  file. Moving the default *into* a worktree is what makes the commit non-optional:
-  `git worktree remove --force` deletes an uncommitted seed silently, so teardown is gated
-  on it there, in `session-lifecycle` End step 6, in `look-approve`, and in `global-CLAUDE.md`.
-- `assets/global-CLAUDE.md` — the "Session boundaries" restart bullet and artifact ②.
-- `assets/next.md` — new. `newest_seed` returns **1** for "no seeds here" and **2** for an
-  unresolvable tie (same day, and either a shared timestamp or any candidate without a usable
-  `date:`), printing every candidate: a headerless seed must never lose silently to a headed
-  one, and most seeds in the fleet today have no frontmatter at all. Fleet rows disclose the
-  branch each shared checkout was read on.
-- `.github/workflows/validate-registry.yml` — one step locking all of the above. The scope
-  needle is anchored on `git rev-parse … --git-common-dir` **inside a code fence**, because
-  the bare substring also appears in prose and a `$PWD`-prefix mutant passed it.
+Issue #205 specified the opposite — seeds committed inside each repo at
+`<repo>/docs/handoffs/`. **That part of #205 is superseded.** `docs/handoffs/` survives only
+as what this file is: an optional per-repo narrative record of a change. It is not the
+continuity mechanism, and no session is seeded from it.
 
-## Next task
+## Also in this PR
 
-**#208, then #203.** #208 reconciles `global-CLAUDE.md` in both directions (the machine copy
-carries an un-landed `**Next:**` rule; the registry copy is ahead on #194's status-block
-reformat). Only after that does the copy-out to `~/.claude/CLAUDE.md` land #203's acceptance
-criterion — a clean `diff -q` between the two.
-
-Alternatives if #208 is not the right size: **#207** (the registry's
-`usage-benchmark-row.py` is missing the machine copy's dedup fix and overcounts ~2.2x — it
-is artifact ① of the very checklist this PR rewrote), or **#209** (`assets/scripts/*.py` has
-no test coverage; this PR deliberately added no executable assets to keep it out of scope).
-
-## Left undone, deliberately
-
-- **The copy-out to `~/.claude/CLAUDE.md`.** Ordering is: merge this → land #208 → copy out
-  once. #203 is therefore **not** closed by this PR.
-- **The vault `NEXT.md` tombstone.** Post-merge, machine-side, copy-first: `shasum` it,
-  `cp -p` it to `NEXT-index-2026-08-11.bak.md`, verify the hashes match, and only then write
-  the five-line redirect over it. The vault is not git-tracked; there is no undo.
-- **The 19 existing vault handoff files.** Left exactly where they are, as history. No moves,
-  no deletes, no bulk migration — including the six unconsumed seeds and the two hand-rescued
-  ones. Per-repo adoption is lazy: each repo's own next session copies its vault seed into
-  `docs/handoffs/`, commits it, and leaves the original untouched — **renaming it to
-  `YYYY-MM-DD-<slug>.md` on the way in.** The vault's `<repo>-<date>-handoff.md` shape does
-  not match the newest-seed glob, so a verbatim copy lands a seed no selector can see.
-- **`~/.claude/scripts/handoff-index.py`.** Retired by disuse, not deletion. It is the only
-  copy of PR #206's read-before-overwrite guard, and the branch `fix/per-project-handoff-seeds`
-  is the only home of that PR's artifact. Leave both byte-for-byte.
-- **`~/Projects/PRIORITIES.md`.** Owner-written only. `/next` prints a starter template when
-  it is missing and never writes it.
-
-## Records
-
-Nothing here graduated to `docs/records/` — the durable conclusions of this session are the
-doctrine itself, which lives in the templates rather than in a record. If #198's convention
-lands in this repo, the `--git-common-dir`-not-`$PWD` finding is the candidate.
+- `assets/scripts/fleet-check.py` — class-split drift detection between the two **authored**
+  copies of the global conventions. Five FLOOR rules must match (exit 1); everything else is
+  DEFAULT and reports a direction (exit 0). `git fetch` is a hard precondition, exit 2 when it
+  fails — never 0, because a check that cannot see the registry copy must not report agreement.
+  Tested by `assets/scripts/fleet-check.test.sh`, including the case where origin moves a floor
+  rule under an unfetched clone.
+- Rule-class tokens (`<!--floor:id-->` / `<!--default:id-->`) on rules rather than sections:
+  the floor rule `seed-written-outside-any-worktree` lives inside a section that is otherwise
+  all defaults, and headings get renamed.
+- `assets/global-CLAUDE.md` gains **Rule precedence (all projects)** and the machine-only
+  `**Next:**` rule (#208), so a single copy-out is now lossless in both directions.

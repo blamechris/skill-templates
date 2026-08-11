@@ -443,24 +443,14 @@ One entry per self-merged PR — MANDATORY (Unattended Merge Gate rule 6). Omit 
 
 Long autonomous runs are a sequence of bounded sessions, not one endless context — context re-reads dominate their cost, and a restart that halves context pays for itself within ~6–10 requests. When this skill runs inside a marathon (`/tackle-issues`), the wave boundary is the session boundary; run standalone, apply the same discipline at wave boundaries of its own (queue checkpoints — every few issues, and always before starting a large one). How a session ends at a wave boundary is **mode-aware**:
 
-- **Attended runs** — end the session at the wave boundary; the user/orchestrator relaunches the next segment seeded from a **new** dated handoff note ({{CUSTOMIZE: handoff-note path — default `docs/handoffs/YYYY-MM-DD-<slug>.md`}}) — add a file, never rewrite the previous boundary's — plus the queue ({{CUSTOMIZE: queue path — default `scratchpad/autonomous-queue.json`}}).
-- **Unattended with a configured re-launcher** ({{CUSTOMIZE: wave re-launcher — e.g. chroxy scheduled trigger, cron/launchd job, /loop wrapper; leave "none" if absent}}) — end the session; the re-launcher starts the next segment from the same seeds, and its task text **names the dated handoff file explicitly, never a pointer that can move**.
+- **Attended runs** — end the session at the wave boundary; the user/orchestrator relaunches the next segment seeded from this scope's handoff seed (`$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`) plus the queue ({{CUSTOMIZE: queue path — default `scratchpad/autonomous-queue.json`}}).
+- **Unattended with a configured re-launcher** ({{CUSTOMIZE: wave re-launcher — e.g. chroxy scheduled trigger, cron/launchd job, /loop wrapper; leave "none" if absent}}) — end the session; the re-launcher starts the next segment from the same seeds. The seed path is identical at every boundary of this scope, so the relaunch task can be written before the boundary it fires at.
 - **Unattended with no re-launcher** — do **NOT** end the session (nothing would relaunch it): write the handoff seed, force/await a compaction at the boundary so the next segment starts lean, and continue. The cost goal — shed context at the boundary — holds in every mode.
-- **A boundary seed is not written until it is committed — and it carries the header the selector reads.** Two non-optional halves, in every mode above:
+- **The boundary seed is written outside every worktree, and it archives rather than overwrites.** Both halves come from `/session-lifecycle` End step 1 and neither is optional:
 
-  **① The header.** Several boundaries can fall on one day, so the filename date cannot order them and the frontmatter timestamp is the only thing that can. Write the header `/session-lifecycle` End step 1 prescribes — `type: handoff`, `date:` as a **full unquoted UTC timestamp** (`2026-08-11T21:40Z`), `repo:`, `picks_up_at:`, `sensitivity:` — and name the file `YYYY-MM-DD-<slug>.md` with zero-padded fields. A seed with no header, or a name in any other shape, is one the newest-seed rule cannot place: it does not lose quietly, it forces the next session to stop and disambiguate by hand.
+  **① The path.** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, where `<scope>` is the main worktree's directory basename from `git rev-parse --path-format=absolute --git-common-dir`. Never inside the segment's worktree: `git worktree remove --force` — the fleet's standard teardown — deletes untracked files silently, which is how three earlier versions of this rule lost a seed. Outside every workspace there is nothing to commit, nothing to push, and nothing to gate teardown on.
 
-  **② The commit.** Immediately after writing it, before the queue refresh and before anything else touches git:
-
-  ```bash
-  git status --short
-  git add docs/handoffs/<file>        # by name — never -A, -u, . or a directory
-  git commit -m "docs(handoffs): record the <date> session boundary"
-  git push
-  git cat-file -e "origin/$(git branch --show-current):docs/handoffs/<file>" && echo durable
-  ```
-
-  Until `durable` prints, the seed is an untracked file in this segment's worktree and nowhere else, and `git worktree remove --force` — the fleet's standard teardown — deletes it silently and unrecoverably. **Never tear down the worktree, and never end the session, before that line prints.**
+  **② The header, and archive-on-collide.** Write the frontmatter End step 1 prescribes — `type`, `date` (full UTC timestamp), `scope`, `session`, `picks_up_at`, `sensitivity`. If the canonical file already exists carrying a **different** `session:`, rename it to `NEXT-<scope>.<UTC>-<sid>.md` before writing; a seed this segment did not write is never overwritten, and a segment re-writing its own seed overwrites in place.
 
 - **~150K main-thread context ceiling.** Past ~150K tokens of main-thread context, finish the current issue only, write the short handoff note (queue position, open blockers, awaiting-user items, last verified merge), and end the session (unattended with no re-launcher: force a compaction instead). Resume Strategy below makes the fresh session lossless — it re-derives progress from GitHub state, so the handoff plus the queue is all the seed a restart needs.
 - **Cost circuit breaker at wave boundaries (queue checkpoints).** At each boundary, check session cost ({{CUSTOMIZE: cost source — e.g. the statusline computes it; name the per-session budget, e.g. "$X eq."}}). Over budget → write the handoff and **stop and notify** instead of continuing. This breaker is the sole sanctioned exception to Critical Rule 4's "everything after is fully autonomous".
@@ -515,6 +505,5 @@ Lines and sections marked with `{{CUSTOMIZE}}` need repo-specific adaptation:
 - **Smoke test UI rebuild command** (e.g., `npm run dashboard:build`)
 - **Smoke test invocation** — how to run the `/smoke-test` skill or script
 - **Cost source + per-session budget** — where session cost is read (e.g. the statusline) and the budget the circuit breaker enforces (Session Boundaries)
-- **Handoff-note path** — where wave handoff notes live, default `docs/handoffs/YYYY-MM-DD-<slug>.md`, committed, with the `/session-lifecycle` End-step-1 frontmatter (Session Boundaries)
 - **Queue path** — where the durable wave queue lives, default `scratchpad/autonomous-queue.json` (Session Boundaries)
 - **Wave re-launcher** — what restarts the next segment in unattended runs (scheduled trigger, cron/launchd job, /loop wrapper), or "none" (Session Boundaries)

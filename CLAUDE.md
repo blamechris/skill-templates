@@ -21,13 +21,15 @@ skill-templates/
 ├── assets/                      # files distributed verbatim to consumer repos
 │   └── compile-skill-targets.mjs # generic→native compiler (claude/gemini/codex), copied into a repo's scripts/
 ├── scripts/build-index.sh       # regenerates registry.json
-├── docs/handoffs/               # one note per session boundary, YYYY-MM-DD-<slug>.md
+├── docs/handoffs/               # narrative records of changes — NOT session seeds
 └── docs/skill-profile-schema.md # the .claude/skill-profile.md spec
 ```
 
-`docs/handoffs/` is where a session ends and the next one starts: append-only, committed,
-newest-wins. A fresh session reads the newest entry there and nothing else — see
-`/session-lifecycle`.
+`docs/handoffs/` holds narrative records of individual changes — what a PR was for, kept for
+the reader who arrives later. **It is not the continuity mechanism.** A session's seed is
+written outside every git workspace, at `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir
+`~/Obsidian/no-it-all/handoffs/`), and that absolute path — not anything in this repo — is
+what a fresh session is started from. See `/session-lifecycle`.
 
 **Using skills (consumer side)** — in any repo, run `/skill`:
 - `skill add <name>` — resolve from `registry.json` → fetch `generic/<name>.md` → the

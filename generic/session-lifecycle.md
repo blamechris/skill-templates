@@ -25,14 +25,22 @@ Run these in order; each step re-derives state rather than trusting memory:
    gh pr list --state open --search "-author:@me"
    ```
 4. **Skill drift** — run `/skill outdated` and report any drifted skills (fix now only if the session will use them).
-5. **Global-conventions sync** — the canonical `~/.claude/CLAUDE.md` is version-controlled at
-   `~/Projects/skill-templates/assets/global-CLAUDE.md`; check `diff -q` between the two. If they
-   differ, surface the drift before long work: the registry copy wins unless the local delta is an
-   un-landed improvement — in that case land it in the registry first (PR), then copy out. Check
-   `~/.claude/commands/next.md` against `~/Projects/skill-templates/assets/next.md` the same way —
-   same rule, same direction. Both files are distributed verbatim, so this `diff -q` is their only
-   drift detector; there is no CI gate behind it.
-6. **Prior-session state** — read the **newest** note in {{CUSTOMIZE: this repo's handoff directory — default `docs/handoffs/` (`YYYY-MM-DD-<slug>.md`, one file per session boundary); add any session ledger or queue file this repo keeps, e.g. `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json`}}. **Newest wins**, resolved by the filename date first and, for two seeds sharing a date, by the `date:` timestamp in the frontmatter — never by mtime, which git does not preserve and which has already misordered production files. If two same-day seeds still tie, read both and say so rather than guessing. A seed whose `date:` is missing or unparseable — every seed written before this convention landed, and every one written by a template that forgot the header — **cannot be ordered against a same-day sibling at all**: that is a tie, not a loss. Read both and say so. A missing header must never be what decides which session you resume. Read the seed's header and TL;DR plus the ledger's STATE header — not the full history. Handoff notes are **perishable**: each is superseded by the next, and anything in one still worth reading after it is consumed belongs in `docs/records/`, linked from the seed. `/catchup` is the component skill for reconstructing a prior session where installed.
+5. **Global-conventions sync** — `~/.claude/CLAUDE.md` and `assets/global-CLAUDE.md` in the registry
+   are **both authored**, so they drift in both directions at once and a bare `diff -q` cannot say
+   which side is right. Run the class-split check instead:
+
+   ```bash
+   python3 ~/.claude/scripts/fleet-check.py    # 0 = floor intact · 1 = FLOOR drift · 2 = could not verify
+   ```
+
+   Exit 1 is a stop: reconcile the named floor rule before long work (land the machine's delta in
+   the registry, then copy out). Exit 0 with default drift is information — it names the direction,
+   act on it when convenient. Exit 2 means it could not see the registry copy (the `git fetch` is a
+   hard precondition, never softened) — that is *not* agreement; say so rather than proceeding as if
+   it passed. Check `~/.claude/commands/next.md` against `~/Projects/skill-templates/assets/next.md`
+   with `diff -q`: it is distributed verbatim, carries no rule classes, and that diff is its only
+   drift detector.
+6. **Prior-session state** — read this scope's seed, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir `~/Obsidian/no-it-all/handoffs/`), plus {{CUSTOMIZE: any session ledger or queue file this repo keeps, e.g. `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this list if the repo has none}}. `<scope>` is the main worktree's directory basename, resolved from git (End step 1 carries the snippet), so every worktree of a repo resolves to the same seed and no `$PWD` test is involved. There is exactly **one** canonical seed per scope, so nothing has to be ranked: no newest-wins rule, no mtime, no tie to resolve. Sibling files named `NEXT-<scope>.<UTC>-<sid>.md` are **archived** seeds — a previous session's, parked when this one collided with it. Do not read them by default, but if the canonical seed is missing, say so and list them: the newest archive is usually an unconsumed handoff, and a session that silently starts from nothing is how work gets repeated. Read the seed's header and TL;DR plus the ledger's STATE header — not the full history. Seeds are **perishable**: each is superseded by the next, and anything in one still worth reading after it is consumed belongs in `docs/records/`, linked from the seed. `/catchup` is the component skill for reconstructing a prior session where installed.
 7. **Verify the last claimed merge** — if the prior session's notes claim a merge, confirm it (`gh pr view <n>` reports `MERGED`) before building on it. State is re-derived, not trusted.
 
 Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others), drifted skills, and what the session is picking up.
@@ -47,23 +55,48 @@ Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others)
 
 ### Session end — the checklist
 
-Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the two ending artifacts and the commit that lands them; a session that skips either artifact has not ended.**
+Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the two ending artifacts and the one check that proves the seed is where the next session looks; a session that skips either artifact has not ended.**
 
-1. **Handoff seed (artifact ②)** — write a **new** file at {{CUSTOMIZE: handoff directory — default `docs/handoffs/`}}`YYYY-MM-DD-<slug>.md`: what shipped, what remains, and *why* each remaining item is blocked or deferred. **Append-only: add a file, never rewrite, rename, or delete an existing one** — two sessions ending on one repo write two files instead of racing, so no session's *write* can destroy another's seed. That is the only destruction this scheme rules out, and it is worth being precise about the rest: until step 3 commits it, the seed is an ordinary untracked file, and `git worktree remove --force` — the registry's own teardown idiom — deletes it without a prompt, unrecoverably, as does `git clean -fd` in a shared checkout. Step 3 is therefore not bookkeeping; it is what makes the seed exist, and step 6 may not run before it has. It lives in the repo, committed, so the next session reads it with no external dependency; the vault brief is the presentation copy, never the source of truth. A line that cannot be public has exactly two outlets — the vault brief, or the repo stays private. There is no third: no redaction-by-gitignore, no side file.
+1. **Handoff seed (artifact ②)** — **the seed is written outside every worktree, at an absolute path:** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`. It holds what shipped, what remains, and *why* each remaining item is blocked or deferred. Not in the repo, not in this session's worktree, not on a branch — an absolute path outside every git workspace has **no worktree to be torn down with, no branch to be unreachable from, and no index to be confused with**, which is why nothing downstream has to be gated on it. Three earlier attempts to keep the seed inside a workspace failed on exactly those surfaces, the last of them on a "committed" proof that had only staged the file.
 
-   `<slug>` is 2–5 kebab-case words naming the *outcome* (`e2-inline-write-path`), never a date and never the word `handoff`. `repo:` is the repo **directory** name, resolved from git rather than convention so two sessions cannot diverge on it:
+   `<scope>` is the **main worktree's directory basename**, resolved from git — not the origin slug, which two different repos can share (`chroxy` and `chroxy-daemon` do), and never a `$PWD` prefix test, which reports the wrong answer from a linked worktree:
 
    ```bash
-   basename "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=
+   if [ -n "$common" ]; then SCOPE=$(basename "$(dirname "$common")"); else SCOPE=fleet; fi
+   HANDOFF_DIR=${CLAUDE_HANDOFF_DIR:-$HOME/Obsidian/no-it-all/handoffs}
+   SEED="$HANDOFF_DIR/NEXT-$SCOPE.md"
    ```
 
-   Required header — the only part `/next` reads:
+   A session that is not in a repo at all resolves to `fleet` — or `NEXT-fleet-<topic>.md` when it has a named topic. Every worktree, subdirectory, and detached HEAD of one repo resolves to one seed.
+
+   **Archive on collide — never overwrite a seed this session did not write.** Before writing, if the canonical file exists and its `session:` is not this session's, rename the incumbent out of the way, then write:
+
+   ```bash
+   if [ -f "$SEED" ]; then
+     prev=$(awk 'NR>1 && /^---[[:space:]]*$/ {exit}
+                 /^session:[[:space:]]*/ { sub(/^session:[[:space:]]*/,"");
+                                           sub(/[[:space:]]*#.*$/,"");
+                                           sub(/[[:space:]]+$/,""); print; exit }' "$SEED")
+     prev=${prev#\"}; prev=${prev%\"}; prev=${prev#\'}; prev=${prev%\'}   # quoted scalars are legal YAML
+     [ -n "$prev" ] || prev=unknown       # unidentifiable is a reason to keep it, not to clobber it
+     if [ "$prev" != "$SID" ]; then
+       mv "$SEED" "$HANDOFF_DIR/NEXT-$SCOPE.$(date -u +%Y%m%dT%H%M%SZ)-$prev.md"
+     fi
+   fi
+   # then write $SEED
+   ```
+
+   `mv` preserves the incumbent byte for byte, and the canonical name is free again immediately — so *"one line to paste"* keeps working. Per-session-unique filenames would preserve the old seed too, and would destroy that affordance: the next session would have to be told which of N files to read, which is the thing the seed exists to avoid. Re-running the same session's own write is not a collision and overwrites in place.
+
+   Required header — the `session:` field is what makes archive-on-collide decidable, and `picks_up_at:` is the only line `/next` quotes:
 
    ```markdown
    ---
    type: handoff
-   date: 2026-08-11T21:40Z          # full UTC timestamp; breaks same-day ties
-   repo: skill-templates            # the repo directory name
+   date: 2026-08-11T21:40Z          # full UTC timestamp
+   scope: skill-templates           # the main worktree's directory basename, or fleet
+   session: a1b2c3d4                # this session's id — the one usage-benchmark-row.py prints
    picks_up_at: "issue #205 — implement the layered continuity scheme"
    sensitivity: public              # public | vault
    ---
@@ -75,32 +108,24 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
 
    Then, in order: `## STATE` (branch/HEAD, working tree, CI, tests, open PRs/issues) · a **"Verify before building on any of this — re-derive, don't trust"** bash block where every command carries its expected answer as a comment · `## TL;DR — what shipped` · the next task · `## Left undone, deliberately`.
 
+   The seed's own home is private, so `sensitivity: vault` needs no separate outlet; what still may not go in is a secret, in any file, ever.
+
 2. **Benchmark row (artifact ①)** — append this session's row to `~/Obsidian/no-it-all/briefs/usage-benchmark.md` via `python3 ~/.claude/scripts/usage-benchmark-row.py`, replacing the placeholder with a one-line workload note. If the script resolves to a session ID that already has a row, **neither append nor overwrite** — the transcript counters are cumulative, so both actions corrupt the record; say so instead.
-3. **Land the seed** — `git status --short`, stage the file **by name**, commit `docs(handoffs): record the <date> session boundary`, **push the branch**, and include it in this session's PR — or open a docs-only PR if there is none. Never a direct push to a protected `main`. Then prove the seed survives this session's disk:
+3. **Prove the seed is where the next session will look** — one check, and it is about *location*, not about git:
 
    ```bash
-   git cat-file -e "$SESSION_BRANCH:docs/handoffs/<file>" && echo "committed"
-   git cat-file -e "origin/$SESSION_BRANCH:docs/handoffs/<file>" && echo "pushed"
+   [ -f "$SEED" ] && echo "seed: $SEED"
+   TREE=$(git rev-parse --show-toplevel 2>/dev/null)
+   case "$SEED" in "${TREE:-/nonexistent}"/*) echo "REFUSE: the seed is inside this worktree";; esac
    ```
 
-   Both must print before step 6 runs. An unpushed seed inside a per-session worktree exists in exactly one place, and step 6 deletes that place. If the PR is still open at the close, the final status line names the file path **and** the PR number.
+   `seed:` must print and `REFUSE:` must not. There is no commit to make, no branch to push, and no `cat-file` to run — the previous three rounds of this checklist all failed inside that machinery. Whether the vault repo itself is committed and pushed is ordinary vault hygiene, not a precondition: the seed already exists at a stable absolute path that nothing this session does can delete.
 4. **Executive brief** — for a session that shipped real work (several PRs/issues, an epic), run `/visual-brief` into the vault (`$CLAUDE_BRIEF_DIR`). Skip for small sessions — say so.
 5. **Capture learnings** — run `/learn` for genuinely novel lessons; "nothing novel" is a valid outcome, stated.
-6. **Cleanup — gated on step 3** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
+6. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
 
-   **Never remove a worktree that holds this session's seed until step 3's two checks have both printed.** `git worktree remove` refuses on a tree with untracked files; `--force` is exactly the flag that turns that refusal into a silent, unrecoverable delete, and the seed is an untracked file in that tree until it is committed. If either check fails, **skip this step, say so, and leave the worktree standing** — a stale worktree costs disk, a deleted seed costs the next session.
-
-   The seed also needs somewhere to be read from *after* the removal. Before deleting the worktree, resolve which of step 7's two legal paste-lines applies; if it is form (a), confirm it now:
-
-   ```bash
-   REPO_ROOT=$(git rev-parse --path-format=absolute --git-common-dir); REPO_ROOT=$(dirname "$REPO_ROOT")
-   git -C "$REPO_ROOT" cat-file -e "HEAD:docs/handoffs/<file>" && echo "(a) live in the main checkout"
-   ```
-7. **Final `**Status:**` line** — the last message ends with the short status and **the one line to paste, which must still resolve after step 6 ran**. Exactly two forms are legal:
-   - **(a)** the seed's absolute path in the repo's **main checkout** — legal only once the seed's commit is reachable from the branch that checkout has checked out (the `cat-file -e` in step 6 printed).
-   - **(b)** the seed's absolute path **in a worktree step 6 deliberately left standing** — the case when the seed is committed and pushed on a branch that has not landed in the main checkout yet. Name the PR number alongside it, and say the worktree is being kept for that reason.
-
-   A path inside a worktree step 6 removed is not a third form; it is a dead paste-line, and the seed's entire delivery mechanism is that line. Where neither form is available, the fallback is a branch-qualified reference the next session can read from any tree — `git -C <repo> show <branch>:docs/handoffs/<file>` — stated as such, never dressed up as a path. If more waves remain, the relaunch task names that exact dated file — never a pointer that can move.
+   This step is **ungated on purpose**: `git worktree remove --force` deletes untracked files without prompting, and the seed is not in any worktree to be deleted. Anything else durable that got written into a worktree is committed and pushed before removal, or it is lost — so do not write durable things there.
+7. **Final `**Status:**` line** — the last message ends with the short status and **the one line to paste**: the seed's absolute path, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, expanded. There is exactly one legal form, it is the same string at every boundary of this scope, and cleanup cannot invalidate it — which is what makes a relaunch task safe to write in advance. If a PR is still open at the close, name its number alongside the path.
 
 ### Follow-on protocol (when a task completes and work remains)
 
@@ -121,7 +146,8 @@ Installing `session-lifecycle` should be followed by installing any missing comp
 
 Lines and blocks marked `{{CUSTOMIZE}}` need repo-specific adaptation:
 
-- **Handoff directory** — where this repo keeps its append-only session seeds, default
-  `docs/handoffs/` (Resume step 6 **and** End step 1 — one marker text, two sites; keep them
-  identical, and add any ledger/queue path this repo carries to the Resume-step copy).
+- **Ledger / queue paths** — the repo-local state files a resuming session reads *alongside* the
+  seed (Resume step 6). The seed's own path is **not** customizable: it is
+  `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` in every repo, which is what lets one relaunch task, one
+  `/next` dispatcher, and one paste-line work across the whole fleet.
 - **Repo-specific cleanup** — daemons, test-env restores (End step 6).

@@ -97,9 +97,9 @@ git -C "$REPO" worktree add --detach "$WT" "${TARGET_REF:-origin/main}"
   ```
 - Remove it when the pass is done: `git -C "$REPO" worktree remove --force "$WT"`. `--force`
   deletes every untracked file in `$WT` without prompting, which is fine for frames and fatal
-  for anything durable — if a session handoff seed (`docs/handoffs/`) or any other keeper was
-  written here, commit and push it **first**, and confirm with
-  `git -C "$REPO" cat-file -e <branch>:<path>`.
+  for anything durable — so nothing durable is written here. The session handoff seed lives at
+  an absolute path outside every worktree (`$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`), which is why
+  this teardown needs no gate; anything else worth keeping is committed and pushed first.
 
 ### 3. Protect the owner's real data — before anything launches
 
