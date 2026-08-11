@@ -31,8 +31,8 @@ sensitivity: public
 gh pr view 210 --repo blamechris/skill-templates --json state,mergeStateStatus
 # expect state=MERGED before treating the doctrine below as landed
 
-grep -rn "no-it-all/handoffs/NEXT" generic assets      # expect: no matches
-grep -rln "docs/handoffs/<date>-<slug>.md" generic     # expect: 3 files, 6 sites
+grep -rn "no-it-all/handoffs" generic assets              # expect: no matches
+grep -rln "docs/handoffs/YYYY-MM-DD-<slug>.md" generic   # expect: 3 files, 6 sites
 
 python3 -c "import json;r=json.load(open('registry.json'));\
 print(r['skillCount'], len([s for s in r['skills'] if s['name']=='session-lifecycle'][0]['guards']))"
@@ -57,10 +57,20 @@ row with the one line to paste.
 - `skill-guards.json` — three new `session-lifecycle` guards: `append-only-handoff`,
   `both-end-artifacts`, `newest-wins-not-mtime`.
 - `generic/{prime-directive,tackle-issues,autonomous-dev-flow}.md` — the wave-handoff
-  default moves out of the vault, and relaunch tasks must name the dated file.
+  default moves out of the vault, each wave seed carries the End-step-1 frontmatter and is
+  **committed and pushed the moment it is written**, and relaunch tasks must name the dated
+  file. Moving the default *into* a worktree is what makes the commit non-optional:
+  `git worktree remove --force` deletes an uncommitted seed silently, so teardown is gated
+  on it there, in `session-lifecycle` End step 6, in `look-approve`, and in `global-CLAUDE.md`.
 - `assets/global-CLAUDE.md` — the "Session boundaries" restart bullet and artifact ②.
-- `assets/next.md` — new.
-- `.github/workflows/validate-registry.yml` — one step locking all of the above.
+- `assets/next.md` — new. `newest_seed` returns **1** for "no seeds here" and **2** for an
+  unresolvable tie (same day, and either a shared timestamp or any candidate without a usable
+  `date:`), printing every candidate: a headerless seed must never lose silently to a headed
+  one, and most seeds in the fleet today have no frontmatter at all. Fleet rows disclose the
+  branch each shared checkout was read on.
+- `.github/workflows/validate-registry.yml` — one step locking all of the above. The scope
+  needle is anchored on `git rev-parse … --git-common-dir` **inside a code fence**, because
+  the bare substring also appears in prose and a `$PWD`-prefix mutant passed it.
 
 ## Next task
 
@@ -84,7 +94,9 @@ no test coverage; this PR deliberately added no executable assets to keep it out
 - **The 19 existing vault handoff files.** Left exactly where they are, as history. No moves,
   no deletes, no bulk migration — including the six unconsumed seeds and the two hand-rescued
   ones. Per-repo adoption is lazy: each repo's own next session copies its vault seed into
-  `docs/handoffs/`, commits it, and leaves the original untouched.
+  `docs/handoffs/`, commits it, and leaves the original untouched — **renaming it to
+  `YYYY-MM-DD-<slug>.md` on the way in.** The vault's `<repo>-<date>-handoff.md` shape does
+  not match the newest-seed glob, so a verbatim copy lands a seed no selector can see.
 - **`~/.claude/scripts/handoff-index.py`.** Retired by disuse, not deletion. It is the only
   copy of PR #206's read-before-overwrite guard, and the branch `fix/per-project-handoff-seeds`
   is the only home of that PR's artifact. Leave both byte-for-byte.

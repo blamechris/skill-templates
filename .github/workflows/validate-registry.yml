@@ -77,9 +77,9 @@ jobs:
           # Inline rather than scripts/*.sh on purpose: house style wants a
           # sibling .test.sh for every non-trivial script, and #209 is open
           # precisely because untested script assets exist. This is three
-          # substring scans.
+          # scans.
           python3 - <<'PY'
-          import os, sys
+          import os, re, sys
 
           ok = True
 
@@ -102,29 +102,59 @@ jobs:
                     'NEXT.md with; an absent or stubbed dispatcher is the regression')
               ok = False
           else:
-              for needle, why in (
-                  ('--git-common-dir',
-                   'the scope test must stay `git rev-parse --git-common-dir` — a $PWD '
-                   'prefix match against ~/Projects reports fleet scope from inside a '
-                   'linked worktree, which is where sessions actually run'),
-                  ('docs/handoffs/',
-                   "/next ranks on each repo's in-repo handoff seeds"),
-              ):
-                  if needle not in nxt:
-                      print(f'::error file=assets/next.md::assets/next.md no longer '
-                            f'mentions `{needle}` — {why}')
+              # Anchor on the COMMAND, inside a fenced code block — not on the bare
+              # string `--git-common-dir`, which also appears in the prose sentence
+              # explaining why the command is the test. A substring scan therefore
+              # passes a mutant that rewrites only the executable block (swapping the
+              # git call for `case "$PWD" in "$HOME"/Projects/*)`) while leaving the
+              # prose untouched: the needle is still "present" and the scope test is
+              # gone. Requiring `git rev-parse` and `--git-common-dir` on one line
+              # inside a ``` fence is what makes deleting the command fail the step.
+              in_fence, fenced_lines = False, []
+              for ln in nxt.splitlines():
+                  if ln.lstrip().startswith('```'):
+                      in_fence = not in_fence
+                      continue
+                  if in_fence:
+                      fenced_lines.append(ln)
+              SCOPE_CMD = re.compile(r'git\s+rev-parse\b[^\n]*--git-common-dir')
+              if not any(SCOPE_CMD.search(ln) for ln in fenced_lines):
+                  print('::error file=assets/next.md::assets/next.md has no executable '
+                        '`git rev-parse … --git-common-dir` scope test — a $PWD prefix '
+                        'match against ~/Projects reports fleet scope from inside a linked '
+                        'worktree, which is where sessions actually run. Prose mentioning '
+                        'the flag does not count; the command has to be in the code block')
+                  ok = False
+              # And the specific mutant, stated positively as a ban: the scope block must
+              # not decide on a $PWD/$HOME prefix, in a fence or out of one.
+              PWD_SCOPE = re.compile(r'(case\s+"?\$PWD|\$PWD"?\s*==|\$HOME/Projects/\*\))')
+              for ln in fenced_lines:
+                  if PWD_SCOPE.search(ln):
+                      print(f'::error file=assets/next.md::assets/next.md resolves scope '
+                            f'from a $PWD/$HOME prefix (`{ln.strip()}`) — that is the #205 '
+                            f'regression itself: worktrees live outside ~/Projects')
                       ok = False
+              if 'docs/handoffs/' not in nxt:
+                  print("::error file=assets/next.md::assets/next.md no longer mentions "
+                        "`docs/handoffs/` — /next ranks on each repo's in-repo handoff seeds")
+                  ok = False
 
           # 2+3. Two dead defaults that must not come back. Scoped to generic/ and
           #      assets/, the files this repo authors: .claude/commands/*.md are
           #      version-stamped installed snapshots, updated by `skill update`, and
           #      are deliberately out of scope.
+          # Both needles are the DIRECTORY, not the old filename: reverting to
+          # `no-it-all/handoffs/<repo>-<date>-handoff.md` satisfies neither a
+          # `.../NEXT` needle nor a `$CLAUDE_BRIEF_DIR` one, and is the same
+          # untracked-vault regression. Both are scoped to generic/ AND assets/;
+          # narrowing either to one root exempted the file whose overwrite
+          # instruction caused the #204 near-loss. Neither has a baseline hit.
           BANNED = (
-              ('no-it-all/handoffs/NEXT', ('generic', 'assets'),
+              ('no-it-all/handoffs', ('generic', 'assets'),
                'the global overwrite-every-session seed is retired — seeds live at '
                '<repo>/docs/handoffs/YYYY-MM-DD-<slug>.md, append-only and committed'),
-              ('BRIEF_DIR/../handoffs', ('generic',),
-               'wave handoffs default to docs/handoffs/<date>-<slug>.md; the vault is '
+              ('BRIEF_DIR/../handoffs', ('generic', 'assets'),
+               'wave handoffs default to docs/handoffs/YYYY-MM-DD-<slug>.md; the vault is '
                'machine-local and not git-tracked, so a seed written there is invisible '
                'to a fresh clone and unrecoverable if overwritten'),
           )
