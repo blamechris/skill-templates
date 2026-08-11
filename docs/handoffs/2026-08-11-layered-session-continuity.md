@@ -20,13 +20,15 @@ sensitivity: public
 - **Worked in:** a linked worktree under `/private/tmp/...`, never
   `~/Projects/skill-templates` (whose checkout sits at `e053400`, an ancestor of `main`).
 - **CI:** all six existing `validate-registry` steps pass locally, plus the new one.
+- **PR:** #210 — open at the time this seed was written, not merged. Treat everything below
+  as *proposed* until you have confirmed otherwise with the first command in the next block.
 - **Open, related:** #205 (this), #204 (closed by this), #203 / #207 / #208 / #209 (open),
   #181 and #198 (unchanged, referenced).
 
 ## Verify before building on any of this — re-derive, don't trust
 
 ```bash
-gh pr view <n> --repo blamechris/skill-templates --json state,mergeStateStatus
+gh pr view 210 --repo blamechris/skill-templates --json state,mergeStateStatus
 # expect state=MERGED before treating the doctrine below as landed
 
 grep -rn "no-it-all/handoffs/NEXT" generic assets      # expect: no matches
