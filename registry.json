@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "15c0ffa",
+  "generatedFromCommit": "110a238",
   "skillCount": 41,
   "skills": [
     {
@@ -76,8 +76,8 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "15c0ffa",
-      "lines": 520,
+      "hash": "110a238",
+      "lines": 509,
       "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
       "guards": [
         {
@@ -961,7 +961,7 @@
     },
     {
       "name": "look-approve",
-      "hash": "15c0ffa",
+      "hash": "110a238",
       "lines": 474,
       "description": "Get a visual deliverable **approved** — by showing it, not describing it. Runs the real app from an isolated worktree of the approval target, captures **moving** evidence (an animated GIF tour plus one still per feature under review), emits a SHORT one-screen approval card as a self-contained HTML file, puts a single approve / approve-with-notes / reject question to the owner, and records the verdict on the tracking issue. The deliverable is a visual and a *\"we gotta do this\"* — never six pages of prose. Reach for it when a UI/art/feel change is sitting on `main` waiting for a human to say yes.",
       "guards": [
@@ -1311,8 +1311,8 @@
     },
     {
       "name": "prime-directive",
-      "hash": "15c0ffa",
-      "lines": 130,
+      "hash": "110a238",
+      "lines": 129,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
         {
@@ -1693,8 +1693,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "15c0ffa",
-      "lines": 127,
+      "hash": "110a238",
+      "lines": 153,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
@@ -1764,29 +1764,29 @@
           "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
         },
         {
-          "label": "append-only-handoff",
+          "label": "archive-on-collide",
           "anyOf": [
-            "[Aa]ppend-only: add a file, never rewrite",
-            "never rewrite, rename, or delete an existing one",
-            "two sessions ending on one repo write two files"
+            "[Aa]rchive on collide — never overwrite a seed this session did not write",
+            "rename the incumbent out of the way",
+            "`mv` preserves the incumbent byte for byte"
           ],
-          "note": "#205: the whole design is that no session ever overwrites a seed — a global NEXT.md came within one write of destroying an unconsumed seed. Alternates must reword the rule sentence, never the heading above it; each requires the prohibition itself, not the word `handoff`."
+          "note": "#205 as amended: one canonical seed per scope means a write CAN land on someone else's seed, so the write is preceded by an archive rather than made non-destructive by uniquifying the filename (which would destroy the one-line-to-paste affordance). Alternates reword the rule sentence or its rationale; none matches the step heading, which survives a gutting."
         },
         {
           "label": "both-end-artifacts",
           "anyOf": [
             "a session that skips either artifact has not ended",
-            "the two ending artifacts and the commit that lands them"
+            "the two ending artifacts and the one check that proves the seed"
           ],
           "note": "#204 defect 1: the end checklist used to omit both ending artifacts (the handoff seed and the benchmark row) entirely, so a customized copy could drop them without tripping anything. Binds the intro sentence that names them as mandatory, not the step headings — headings survive a gutting."
         },
         {
-          "label": "newest-wins-not-mtime",
+          "label": "seed-outside-any-worktree",
           "anyOf": [
-            "\\*\\*[Nn]ewest wins\\*\\*, resolved by the filename date",
-            "never by mtime, which git does not preserve"
+            "outside every worktree, at an absolute path",
+            "the seed is not in any worktree to be deleted"
           ],
-          "note": "#206 S1: mtime ordering already misordered production files (a 2026-08-11 seed rendered as 08-10), and git does not preserve mtime at all, so a fresh clone would order seeds by checkout order. Binds the ordering key, which is what makes 'newest wins' executable."
+          "note": "The floor rule `seed-written-outside-any-worktree`, bound where it is executable. Three rounds put the seed inside a git workspace and lost it to worktree teardown, branch reachability and a staged-not-committed file in turn; the fix is the location, so the location is what a customized copy must not be able to drop. Alternate 2 is on a different line (End step 6) so deleting one sentence cannot satisfy both."
         }
       ]
     },
@@ -2043,8 +2043,8 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "15c0ffa",
-      "lines": 459,
+      "hash": "110a238",
+      "lines": 448,
       "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
       "guards": [
         {
