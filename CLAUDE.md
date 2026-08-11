@@ -21,8 +21,13 @@ skill-templates/
 ├── assets/                      # files distributed verbatim to consumer repos
 │   └── compile-skill-targets.mjs # generic→native compiler (claude/gemini/codex), copied into a repo's scripts/
 ├── scripts/build-index.sh       # regenerates registry.json
+├── docs/handoffs/               # one note per session boundary, YYYY-MM-DD-<slug>.md
 └── docs/skill-profile-schema.md # the .claude/skill-profile.md spec
 ```
+
+`docs/handoffs/` is where a session ends and the next one starts: append-only, committed,
+newest-wins. A fresh session reads the newest entry there and nothing else — see
+`/session-lifecycle`.
 
 **Using skills (consumer side)** — in any repo, run `/skill`:
 - `skill add <name>` — resolve from `registry.json` → fetch `generic/<name>.md` → the
