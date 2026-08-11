@@ -66,9 +66,14 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
    if [ -n "$common" ]; then SCOPE=$(basename "$(dirname "$common")"); else SCOPE=fleet; fi
    HANDOFF_DIR=${CLAUDE_HANDOFF_DIR:-$HOME/Obsidian/no-it-all/handoffs}
    SEED="$HANDOFF_DIR/NEXT-$SCOPE.md"
+   SID=$(python3 "$HOME/.claude/scripts/usage-benchmark-row.py" 2>/dev/null |
+         awk -F'|' '{ gsub(/[[:space:]]/,"",$3); if ($3 != "") { print $3; exit } }')
+   [ -n "$SID" ] || { echo "REFUSE: this session has no id — no seed is written"; exit 1; }
    ```
 
    A session that is not in a repo at all resolves to `fleet` — or `NEXT-fleet-<topic>.md` when it has a named topic. Every worktree, subdirectory, and detached HEAD of one repo resolves to one seed.
+
+   `$SID` is **derived, never remembered**. It is what archive-on-collide decides on and what step 3 gates on, so a checklist that merely *mentions* it leaves both to run on an empty string — the archive arm then compares against nothing and step 3 has nothing to compare. The one thing that already computes an id for this session is step 2's benchmark row, whose second column *is* the id; reading it here is what keeps the seed's `session:` and artifact ① the same string instead of two ids that only look related. A session that cannot resolve one stops **before** the archive rather than writing an anonymous seed: `session:` missing is a seed the next session cannot archive (it reads as `unknown`) and this session cannot prove, so an empty id is a reason to halt, not a value to carry.
 
    **Archive on collide — never overwrite a seed this session did not write.** Before writing, if the canonical file exists and its `session:` is not this session's, rename the incumbent out of the way, then write. **The archive is what earns the right to write, so the write is conditional on it: an `mv` that fails aborts the step rather than falling through.** Unchecked, this destroys the incumbent without a race and without a hostile actor — `rename(2)` needs the write bit on the *directory* while overwriting a file inside it does not, so a read-only handoff dir silently turns "archive then write" into "write over it".
 
@@ -120,9 +125,19 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
    The seed's own home is private, so `sensitivity: vault` needs no separate outlet; what still may not go in is a secret, in any file, ever.
 
 2. **Benchmark row (artifact ①)** — append this session's row to `~/Obsidian/no-it-all/briefs/usage-benchmark.md` via `python3 ~/.claude/scripts/usage-benchmark-row.py`, replacing the placeholder with a one-line workload note. If the script resolves to a session ID that already has a row, **neither append nor overwrite** — the transcript counters are cumulative, so both actions corrupt the record; say so instead.
-3. **Prove the seed the next session will read is *this* session's** — two checks, authorship then location, and neither is about git:
+3. **Prove the seed the next session will read is *this* session's** — re-derive the path from scratch, then check authorship, then location; none of it is about git history:
 
    ```bash
+   # Re-derived, NOT carried over from step 1. Every line down to $SID is step 1's
+   # verbatim, repeated on purpose: a check handed step 1's variables can only
+   # confirm step 1's own arithmetic, and the path is the half most worth doubting.
+   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=
+   if [ -n "$common" ]; then SCOPE=$(basename "$(dirname "$common")"); else SCOPE=fleet; fi
+   HANDOFF_DIR=${CLAUDE_HANDOFF_DIR:-$HOME/Obsidian/no-it-all/handoffs}
+   SEED="$HANDOFF_DIR/NEXT-$SCOPE.md"
+   SID=$(python3 "$HOME/.claude/scripts/usage-benchmark-row.py" 2>/dev/null |
+         awk -F'|' '{ gsub(/[[:space:]]/,"",$3); if ($3 != "") { print $3; exit } }')
+
    mine=$(awk 'NR>1 && /^---[[:space:]]*$/ {exit}
                /^session:[[:space:]]*/ { sub(/^session:[[:space:]]*/,"");
                                          sub(/[[:space:]]*#.*$/,"");
@@ -137,7 +152,12 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
    case "$SEED" in "${TREE:-/nonexistent}"/*) echo "REFUSE: the seed is inside this worktree";; esac
    ```
 
-   `seed:` must print and `REFUSE:` must not. **Existence is not the property worth proving** — a file is at `$SEED` in every failure mode this checklist has: when step 1's archive was destroyed and overwritten, and equally when this session keyed `<scope>` on the *linked* worktree's basename instead of the main worktree's, wrote `NEXT-<wrong>.md`, and never touched the canonical file the next session will actually open. Both leave the previous session's stale seed sitting there, and `[ -f "$SEED" ]` calls both a pass. Reading the `session:` field back is what distinguishes "I wrote the seed" from "a seed exists": it is the same field step 1 archives on, used a second time as the proof rather than only as the decision. An unset `$SID` is a REFUSE too — otherwise an empty id matches a seed with no `session:` line and the check passes on nothing. There is no commit to make, no branch to push, and no `cat-file` to run — the previous three rounds of this checklist all failed inside that machinery. Whether the vault repo itself is committed and pushed is ordinary vault hygiene, not a precondition: the seed already exists at a stable absolute path that nothing this session does can delete.
+   `seed:` must print and `REFUSE:` must not. **Existence is not the property worth proving** — a file is at `$SEED` in every failure mode this checklist has, and the two that matter fail in different halves, so the check has to be re-derived *and* read back:
+
+   - **Wrong file.** This session keyed `<scope>` on the *linked* worktree's basename instead of the main worktree's, wrote `NEXT-<wrong>.md`, and never touched the canonical file the next session will actually open. Its own seed is perfectly well-formed; it is simply not at the path anybody reads, while the previous session's stale seed still sits there. Re-deriving `$SEED` is the only thing that catches this — a check handed step 1's `$SEED` reads back the very file step 1 misfiled, finds its own id, and passes. **Reusing step 1's variables here would make the check structurally incapable of failing for the mistake it exists to catch.**
+   - **Right file, wrong author.** Step 1's archive was destroyed and overwritten, so the canonical path holds someone else's seed. Reading the `session:` field back is what distinguishes "I wrote the seed" from "a seed exists": it is the same field step 1 archives on, used a second time as the proof rather than only as the decision.
+
+   `[ -f "$SEED" ]` calls both a pass. An unset `$SID` is a REFUSE too — otherwise an empty id matches a seed with no `session:` line and the check passes on nothing; step 1 has already halted on that, so reaching it here means the id source went away mid-session. There is no commit to make, no branch to push, and no `cat-file` to run — the previous three rounds of this checklist all failed inside that machinery. Whether the vault repo itself is committed and pushed is ordinary vault hygiene, not a precondition: the seed already exists at a stable absolute path that nothing this session does can delete.
 4. **Executive brief** — for a session that shipped real work (several PRs/issues, an epic), run `/visual-brief` into the vault (`$CLAUDE_BRIEF_DIR`). Skip for small sessions — say so.
 5. **Capture learnings** — run `/learn` for genuinely novel lessons; "nothing novel" is a valid outcome, stated.
 6. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).

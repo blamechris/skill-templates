@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "110a238",
+  "generatedFromCommit": "9a78713",
   "skillCount": 41,
   "skills": [
     {
@@ -1693,8 +1693,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "110a238",
-      "lines": 171,
+      "hash": "9a78713",
+      "lines": 191,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
