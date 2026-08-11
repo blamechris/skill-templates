@@ -29,7 +29,10 @@ Run these in order; each step re-derives state rather than trusting memory:
    `~/Projects/skill-templates/assets/global-CLAUDE.md`; check `diff -q` between the two. If they
    differ, surface the drift before long work: the registry copy wins unless the local delta is an
    un-landed improvement — in that case land it in the registry first (PR), then copy out.
-6. **Prior-session state** — if a handoff note, session ledger, or queue file exists ({{CUSTOMIZE: where this repo keeps handoff notes / session ledgers / queue files, e.g. `handoffs/`, `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this step's path list if the repo has none yet}}), read the ledger's STATE header (not the full history) and the handoff TL;DR. `/catchup` is the component skill for reconstructing a prior session where installed.
+6. **Prior-session state** — read the vault seed for **this** project,
+   `~/Obsidian/no-it-all/handoffs/NEXT-<project>.md` (its sibling `NEXT.md` is an index of
+   every project's seed — use it to find the file, don't read it as one). Then, if a
+   repo-local handoff note, session ledger, or queue file exists ({{CUSTOMIZE: where this repo keeps handoff notes / session ledgers / queue files, e.g. `handoffs/`, `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this step's path list if the repo has none yet}}), read the ledger's STATE header (not the full history) and the handoff TL;DR. `/catchup` is the component skill for reconstructing a prior session where installed.
 7. **Verify the last claimed merge** — if the prior session's notes claim a merge, confirm it (`gh pr view <n>` reports `MERGED`) before building on it. State is re-derived, not trusted.
 
 Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others), drifted skills, and what the session is picking up.
@@ -44,13 +47,18 @@ Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others)
 
 ### Session end — the checklist
 
-Run in order; skip a step only by saying so with a reason:
+Run in order; skip a step only by saying so with a reason. Steps 4 and 5 are the **two vault
+artifacts** the global `~/.claude/CLAUDE.md` requires at every session end — a run that skips
+them ships an incomplete handoff no matter how complete the rest looks:
 
-1. **Convergence note** — write what shipped, what remains, and *why* each remaining item is blocked or deferred, into {{CUSTOMIZE: where session state lives in this repo — the session ledger if one exists, else the closing chat message}}.
+1. **Convergence note** — write what shipped, what remains, and *why* each remaining item is blocked or deferred, into {{CUSTOMIZE: where session state lives in this repo — the session ledger if one exists, else the closing chat message}}. This is the repo-local record and is **not** the handoff seed — step 5 is, and it is written even when this note is thorough.
 2. **Executive brief** — for a session that shipped real work (several PRs/issues, an epic), run `/visual-brief` into the vault (`$CLAUDE_BRIEF_DIR`). Skip for small sessions — say so.
 3. **Capture learnings** — run `/learn` for genuinely novel lessons; "nothing novel" is a valid outcome, stated.
-4. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
-5. **Final `**Status:**` line** — the last message ends with the short status pointing at the brief (if one was produced) and naming anything left for the user.
+4. **Vault artifact ① — usage-benchmark row.** Run `python3 ~/.claude/scripts/usage-benchmark-row.py`, replace the placeholder with a one-line workload note (duration + workload class, so rows stay comparable), and append it to `~/Obsidian/no-it-all/briefs/usage-benchmark.md`. If the script resolves to a session ID that already has a row, do **not** append or overwrite — say so and leave it for the user, because the transcript's counters are cumulative and either action corrupts the record.
+5. **Vault artifact ② — the next-session seed.** Write `~/Obsidian/no-it-all/handoffs/NEXT-<project>.md`: files to read first, a 2–4 line state summary (done / held / open follow-ons), a recommended `Today's task:` with alternatives, and a closing line telling the next session to repeat this protocol. Then regenerate the index with `python3 ~/.claude/scripts/handoff-index.py --write`.
+   - **Write only your own project's file.** Projects run concurrently and cannot see each other, so a shared seed path is a race — the later write destroys the earlier seed, and the vault is not git-tracked, so nothing recovers it. Never write a bare `NEXT.md` seed (it is the generated index), and never edit or delete another project's `NEXT-*.md`.
+6. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
+7. **Final `**Status:**` block, then the one line to paste** — the last message ends with the short status pointing at the brief (if one was produced) and naming anything left for the user, and hands over the single line that seeds the next session: the `NEXT-<project>.md` path.
 
 ### Follow-on protocol (when a task completes and work remains)
 
@@ -71,6 +79,8 @@ Installing `session-lifecycle` should be followed by installing any missing comp
 
 Lines and blocks marked `{{CUSTOMIZE}}` need repo-specific adaptation:
 
-- **Handoff/ledger/queue paths** — where this repo keeps prior-session state (Resume step 5).
+- **Handoff/ledger/queue paths** — where this repo keeps *repo-local* prior-session state
+  (Resume step 6). The vault seed path is global and not customizable: it is always
+  `~/Obsidian/no-it-all/handoffs/NEXT-<project>.md`.
 - **Convergence-note destination** — session ledger vs closing message (End step 1).
-- **Repo-specific cleanup** — daemons, test-env restores (End step 4).
+- **Repo-specific cleanup** — daemons, test-env restores (End step 6).

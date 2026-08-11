@@ -100,11 +100,14 @@ Context re-reads dominate cost (70% in the 2026-07 audit): every request re-read
 the whole context at cache-read rates, so a restart that halves context pays for
 itself within ~10 requests. Rules:
 
-- **Restart into a fresh session** — seeded from `~/Obsidian/no-it-all/handoffs/NEXT.md`
-  (the handoff note; paste its path as the opening message) plus any queue/ledger
+- **Restart into a fresh session** — seeded from
+  `~/Obsidian/no-it-all/handoffs/NEXT-<project>.md` (that project's handoff note; paste
+  its path as the opening message) plus any queue/ledger
   STATE header it points to, never the full history — at: each marathon wave boundary; a second
   compaction; or when switching work class (new epic, security-critical work,
-  high fan-in refactors, visual-verify features).
+  high fan-in refactors, visual-verify features). `NEXT.md` alongside it is an
+  **index** of every project's seed, not a seed itself — use it to find the file
+  when you don't know the project's exact name.
 - **Continue** only when the next task genuinely needs the context already loaded.
 - Keep main-thread context under **~150K tokens**: once past it, finish the current
   item, write handoff state, end the session.
@@ -117,12 +120,27 @@ itself within ~10 requests. Rules:
   the usage benchmark (`~/Obsidian/no-it-all/briefs/usage-benchmark.md`) — generate it
   with `python3 ~/.claude/scripts/usage-benchmark-row.py` and replace the placeholder
   with a one-line workload note (duration + workload class make rows comparable);
-  ② the **next-session seed written to `~/Obsidian/no-it-all/handoffs/NEXT.md`**
-  (overwrite it each time — history lives in the vault): files to read first, a 2–4
+  ② the **next-session seed written to `~/Obsidian/no-it-all/handoffs/NEXT-<project>.md`**
+  — **one file per project, and you write only your own**: files to read first, a 2–4
   line state summary (done / held / open follow-ons), a recommended `Today's task:`
   with alternatives, and the closing line instructing the new session to repeat this
-  protocol. Then hand Chris **one line to paste**: the NEXT.md path. The seed file —
-  not memory, not chat history — is the continuity mechanism.
+  protocol. Overwrite *that* file freely; it is yours. Then regenerate the index
+  (below) and hand Chris **one line to paste**: the `NEXT-<project>.md` path. The seed
+  file — not memory, not chat history — is the continuity mechanism.
+- **Never write a shared seed file.** Sessions for different projects run concurrently
+  and cannot see each other, so a single shared `NEXT.md` is a race: the later session's
+  write destroys the earlier one's seed, unrecoverably — the vault is not git-tracked.
+  That happened three times in three days before the per-project split; the third
+  casualty survived only because a session noticed and preserved it by hand. The
+  project name in the path is what makes the collision impossible, so never fall back
+  to a bare `NEXT.md`, and never "tidy up" another project's seed.
+- **`NEXT.md` is a generated INDEX, not a seed** — a table of project → seed file →
+  last-updated → one-line state, derived from the directory listing by
+  `python3 ~/.claude/scripts/handoff-index.py --write` (canonical source:
+  `skill-templates:assets/scripts/handoff-index.py`). Regenerate it after writing your seed;
+  never hand-author it. Because every field is derived, two sessions regenerating it
+  concurrently converge instead of clobbering, and a lost index costs one command
+  rather than a session's state.
 - Subagent/model tiering: resolve roles against the harness ladder (currently
   fable > opus > sonnet > haiku). Mechanical work (triage, classification,
   verification sweeps) runs on the cheapest adequate tier; implementation runs
