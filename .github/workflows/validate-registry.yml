@@ -68,6 +68,84 @@ jobs:
           print(f"OK: {len(file_names)} templates, registry in sync (names + count + descriptions).")
           PY
 
+      - name: continuity doctrine has not regressed
+        run: |
+          # skill-templates#205. Three properties the session-continuity scheme
+          # rests on, none of which the guard mechanism can hold: guards bind
+          # generic/*.md, and two of the three live in assets/ or span files.
+          #
+          # Inline rather than scripts/*.sh on purpose: house style wants a
+          # sibling .test.sh for every non-trivial script, and #209 is open
+          # precisely because untested script assets exist. This is three
+          # substring scans.
+          python3 - <<'PY'
+          import os, sys
+
+          ok = True
+
+          # 1. The dispatcher exists and still selects scope the way #205 requires.
+          #    A stub, or a swap of --git-common-dir for a $PWD prefix match, both
+          #    read as "still there" to anything coarser than this.
+          try:
+              nxt = open('assets/next.md', encoding='utf-8').read()
+          except FileNotFoundError:
+              nxt = None
+
+          # `None` (missing) and `''` (truncated to nothing) are one failure, reported
+          # once. Do NOT gate the needle checks below on `if nxt` — an empty string is
+          # falsy, so that spelling silently skips every check for the one file state
+          # this step most needs to catch. It shipped that way for one commit and the
+          # local negative test caught it.
+          if not (nxt or '').strip():
+              print('::error file=assets/next.md::assets/next.md is missing or empty — '
+                    '/next is the read-time dispatcher this scheme replaces the global '
+                    'NEXT.md with; an absent or stubbed dispatcher is the regression')
+              ok = False
+          else:
+              for needle, why in (
+                  ('--git-common-dir',
+                   'the scope test must stay `git rev-parse --git-common-dir` — a $PWD '
+                   'prefix match against ~/Projects reports fleet scope from inside a '
+                   'linked worktree, which is where sessions actually run'),
+                  ('docs/handoffs/',
+                   "/next ranks on each repo's in-repo handoff seeds"),
+              ):
+                  if needle not in nxt:
+                      print(f'::error file=assets/next.md::assets/next.md no longer '
+                            f'mentions `{needle}` — {why}')
+                      ok = False
+
+          # 2+3. Two dead defaults that must not come back. Scoped to generic/ and
+          #      assets/, the files this repo authors: .claude/commands/*.md are
+          #      version-stamped installed snapshots, updated by `skill update`, and
+          #      are deliberately out of scope.
+          BANNED = (
+              ('no-it-all/handoffs/NEXT', ('generic', 'assets'),
+               'the global overwrite-every-session seed is retired — seeds live at '
+               '<repo>/docs/handoffs/YYYY-MM-DD-<slug>.md, append-only and committed'),
+              ('BRIEF_DIR/../handoffs', ('generic',),
+               'wave handoffs default to docs/handoffs/<date>-<slug>.md; the vault is '
+               'machine-local and not git-tracked, so a seed written there is invisible '
+               'to a fresh clone and unrecoverable if overwritten'),
+          )
+          for needle, roots, why in BANNED:
+              for root in roots:
+                  for dirpath, _, filenames in os.walk(root):
+                      for fn in filenames:
+                          p = os.path.join(dirpath, fn)
+                          try:
+                              body = open(p, encoding='utf-8').read()
+                          except (UnicodeDecodeError, OSError):
+                              continue
+                          if needle in body:
+                              print(f'::error file={p}::{p} contains `{needle}` — {why}')
+                              ok = False
+
+          if not ok:
+              sys.exit(1)
+          print('OK: /next dispatcher intact; no retired handoff path in generic/ or assets/.')
+          PY
+
       - name: registry.json is freshly generated
         run: |
           # Subsumes the old "build-index runs cleanly" smoke step: it still runs
