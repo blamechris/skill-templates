@@ -70,20 +70,30 @@ jobs:
 
       - name: continuity doctrine has not regressed
         run: |
-          # skill-templates#205. Three properties the session-continuity scheme
-          # rests on, none of which the guard mechanism can hold: guards bind
-          # generic/*.md, and two of the three live in assets/ or span files.
+          # skill-templates#205, as amended: the session seed lives at an ABSOLUTE
+          # path outside every git workspace ($CLAUDE_HANDOFF_DIR/NEXT-<scope>.md).
+          # Four properties, none of which the guard mechanism can hold: guards bind
+          # generic/*.md, and every one of these lives in assets/ or spans files.
           #
           # Inline rather than scripts/*.sh on purpose: house style wants a
           # sibling .test.sh for every non-trivial script, and #209 is open
-          # precisely because untested script assets exist. This is three
-          # scans.
+          # precisely because untested script assets exist. This is four scans.
           python3 - <<'PY'
           import os, re, sys
 
           ok = True
 
-          # 1. The dispatcher exists and still selects scope the way #205 requires.
+          def files_under(*roots):
+              for root in roots:
+                  for dirpath, _, filenames in os.walk(root):
+                      for fn in filenames:
+                          p = os.path.join(dirpath, fn)
+                          try:
+                              yield p, open(p, encoding='utf-8').read()
+                          except (UnicodeDecodeError, OSError):
+                              continue
+
+          # 1. The dispatcher exists and still selects scope the way the design requires.
           #    A stub, or a swap of --git-common-dir for a $PWD prefix match, both
           #    read as "still there" to anything coarser than this.
           try:
@@ -98,8 +108,8 @@ jobs:
           # local negative test caught it.
           if not (nxt or '').strip():
               print('::error file=assets/next.md::assets/next.md is missing or empty — '
-                    '/next is the read-time dispatcher this scheme replaces the global '
-                    'NEXT.md with; an absent or stubbed dispatcher is the regression')
+                    '/next is the read-time dispatcher this scheme replaces a maintained '
+                    'status file with; an absent or stubbed dispatcher is the regression')
               ok = False
           else:
               # Anchor on the COMMAND, inside a fenced code block — not on the bare
@@ -131,50 +141,145 @@ jobs:
               for ln in fenced_lines:
                   if PWD_SCOPE.search(ln):
                       print(f'::error file=assets/next.md::assets/next.md resolves scope '
-                            f'from a $PWD/$HOME prefix (`{ln.strip()}`) — that is the #205 '
-                            f'regression itself: worktrees live outside ~/Projects')
+                            f'from a $PWD/$HOME prefix (`{ln.strip()}`) — that is the '
+                            f'regression this design exists to prevent: worktrees live '
+                            f'outside ~/Projects')
                       ok = False
-              if 'docs/handoffs/' not in nxt:
-                  print("::error file=assets/next.md::assets/next.md no longer mentions "
-                        "`docs/handoffs/` — /next ranks on each repo's in-repo handoff seeds")
+              for needle, why in (
+                  ('CLAUDE_HANDOFF_DIR', 'the seed directory the dispatcher reads'),
+                  ('NEXT-', 'the per-scope seed filename it ranks'),
+              ):
+                  if needle not in nxt:
+                      print(f'::error file=assets/next.md::assets/next.md no longer mentions '
+                            f'`{needle}` — {why}')
+                      ok = False
+
+          # 2. The seed path itself, in the file that defines it. A revert here is the
+          #    whole regression, so it is asserted positively rather than by absence.
+          gcm = ''
+          try:
+              gcm = open('assets/global-CLAUDE.md', encoding='utf-8').read()
+          except OSError:
+              print('::error::assets/global-CLAUDE.md is missing')
+              ok = False
+          for needle in ('CLAUDE_HANDOFF_DIR', 'NEXT-<scope>.md'):
+              if gcm and needle not in gcm:
+                  print(f'::error file=assets/global-CLAUDE.md::the seed path lost `{needle}` — '
+                        f'the seed is written outside every worktree, at '
+                        f'$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md')
                   ok = False
 
-          # 2+3. Two dead defaults that must not come back. Scoped to generic/ and
-          #      assets/, the files this repo authors: .claude/commands/*.md are
-          #      version-stamped installed snapshots, updated by `skill update`, and
-          #      are deliberately out of scope.
-          # Both needles are the DIRECTORY, not the old filename: reverting to
-          # `no-it-all/handoffs/<repo>-<date>-handoff.md` satisfies neither a
-          # `.../NEXT` needle nor a `$CLAUDE_BRIEF_DIR` one, and is the same
-          # untracked-vault regression. Both are scoped to generic/ AND assets/;
-          # narrowing either to one root exempted the file whose overwrite
-          # instruction caused the #204 near-loss. Neither has a baseline hit.
-          BANNED = (
-              ('no-it-all/handoffs', ('generic', 'assets'),
-               'the global overwrite-every-session seed is retired — seeds live at '
-               '<repo>/docs/handoffs/YYYY-MM-DD-<slug>.md, append-only and committed'),
-              ('BRIEF_DIR/../handoffs', ('generic', 'assets'),
-               'wave handoffs default to docs/handoffs/YYYY-MM-DD-<slug>.md; the vault is '
-               'machine-local and not git-tracked, so a seed written there is invisible '
-               'to a fresh clone and unrecoverable if overwritten'),
-          )
-          for needle, roots, why in BANNED:
-              for root in roots:
-                  for dirpath, _, filenames in os.walk(root):
-                      for fn in filenames:
-                          p = os.path.join(dirpath, fn)
-                          try:
-                              body = open(p, encoding='utf-8').read()
-                          except (UnicodeDecodeError, OSError):
-                              continue
-                          if needle in body:
-                              print(f'::error file={p}::{p} contains `{needle}` — {why}')
-                              ok = False
+          # 3. Dead seed locations that must not come back, scoped to generic/ and
+          #    assets/ — the files this repo authors. .claude/commands/*.md are
+          #    version-stamped installed snapshots updated by `skill update`, and are
+          #    deliberately out of scope.
+          #
+          #    `docs/handoffs` is banned as a seed location, NOT as a word: the amended
+          #    design keeps it as a repo's optional narrative artifact, so an occurrence
+          #    is legal only on a line that also says it is not the seed. That whitelist
+          #    is one exact phrase, which no revert-to-in-repo-seeds mutant carries.
+          NARRATIVE_OK = 'NOT the continuity mechanism'
+          for p, body in files_under('generic', 'assets'):
+              for i, ln in enumerate(body.splitlines(), 1):
+                  if 'docs/handoffs' in ln and NARRATIVE_OK not in ln:
+                      print(f'::error file={p},line={i}::{p}:{i} places a handoff under '
+                            f'`docs/handoffs` — an in-repo seed dies with the worktree, the '
+                            f'branch, or the index (three rounds, four loss paths). The seed '
+                            f'is $CLAUDE_HANDOFF_DIR/NEXT-<scope>.md; docs/handoffs may only '
+                            f'appear on a line stating it is {NARRATIVE_OK}')
+                      ok = False
+                  if 'handoffs/NEXT.md' in ln:
+                      print(f'::error file={p},line={i}::{p}:{i} names the retired single '
+                            f'global seed `NEXT.md` — one file for ~17 repos serialised the '
+                            f'owner and made every session end a destructive write. Seeds are '
+                            f'per-scope: NEXT-<scope>.md, archive-on-collide')
+                      ok = False
+
+          # 4. The floor is exactly five rules, and the two files that encode it agree.
+          #    fleet-check.py compares by class, so a floor rule that silently loses its
+          #    token is a floor rule that stops being checked.
+          FLOOR = {'no-agent-attribution', 'explicit-path-staging', 'worktree-by-default',
+                   'no-secrets-in-committed-files', 'seed-written-outside-any-worktree'}
+          TOKEN = re.compile(r'^\s*<!--\s*(floor|default)\s*:\s*([a-z0-9][a-z0-9._-]*)\s*-->\s*$')
+          doc_floor, seen = set(), []
+          for ln in gcm.splitlines():
+              m = TOKEN.match(ln)
+              if not m:
+                  continue
+              seen.append(m.group(2))
+              if m.group(1) == 'floor':
+                  doc_floor.add(m.group(2))
+          dups = sorted({i for i in seen if seen.count(i) > 1})
+          if dups:
+              print(f'::error file=assets/global-CLAUDE.md::duplicate rule-class token id(s) '
+                    f'{dups} — fleet-check cannot compare a rule that appears twice')
+              ok = False
+          if doc_floor != FLOOR:
+              print(f'::error file=assets/global-CLAUDE.md::floor tokens are {sorted(doc_floor)}, '
+                    f'expected {sorted(FLOOR)}')
+              ok = False
+          try:
+              fc = open('assets/scripts/fleet-check.py', encoding='utf-8').read()
+          except OSError:
+              fc = ''
+          if not fc.strip():
+              print('::error::assets/scripts/fleet-check.py is missing or empty — it is the only '
+                    'thing that can tell machine-ahead from registry-ahead drift')
+              ok = False
+          else:
+              script_floor = set(re.findall(r'"([a-z][a-z0-9-]+)",', fc.split('FLOOR_IDS = (', 1)[-1]
+                                            .split(')', 1)[0]))
+              if script_floor != FLOOR:
+                  print(f'::error file=assets/scripts/fleet-check.py::FLOOR_IDS is '
+                        f'{sorted(script_floor)}, expected {sorted(FLOOR)}')
+                  ok = False
+              # The fetch precondition, checked STRUCTURALLY and by NAME. A substring ban
+              # on `|| true` is the trap this repo already fell into once: the phrase also
+              # appears in the paragraph explaining why the fetch may not be softened, so
+              # the needle is satisfied by prose and says nothing about the code.
+              #
+              # Binding to the call's own result variable is the other half. A window scan
+              # for "some returncode test nearby" passes the real mutant — deleting the
+              # fetch's `if` block leaves the NEXT command's returncode test inside the
+              # window. So: find `<name> = subprocess.run([... "fetch" ...])`, then require
+              # `<name>.returncode` and an exit that follows it.
+              fcl = fc.splitlines()
+              fetch_calls = []
+              for i, ln in enumerate(fcl):
+                  m = re.match(r'\s*(\w+)\s*=\s*subprocess\.run\(', ln)
+                  if m and re.search(r'["\']fetch["\']', '\n'.join(fcl[i:i + 6])):
+                      fetch_calls.append((m.group(1), i))
+              if not fetch_calls:
+                  print('::error file=assets/scripts/fleet-check.py::no `git fetch` call — the '
+                        'comparison must refresh origin before reading it, or it is a confident '
+                        'wrong answer about a stale clone')
+                  ok = False
+              for name, i in fetch_calls:
+                  window = fcl[i:i + 14]
+                  hit = [j for j, ln in enumerate(window) if re.search(rf'\b{name}\.returncode\b', ln)]
+                  aborts = hit and re.search(r'\bdie\(|sys\.exit\(',
+                                             '\n'.join(window[hit[0]:hit[0] + 6]))
+                  if not aborts:
+                      print(f'::error file=assets/scripts/fleet-check.py,line={i + 1}::the fetch '
+                            f'result `{name}` is never tested for failure — `git fetch` is a hard '
+                            f'precondition, so a failed fetch must exit, not fall through to a '
+                            f'comparison against a stale clone')
+                      ok = False
+          if not os.access('assets/scripts/fleet-check.test.sh', os.X_OK):
+              print('::error::assets/scripts/fleet-check.test.sh is missing or not executable')
+              ok = False
 
           if not ok:
               sys.exit(1)
-          print('OK: /next dispatcher intact; no retired handoff path in generic/ or assets/.')
+          print('OK: /next dispatcher intact; seed anchored outside every worktree; '
+                'floor is the five rules in both files.')
           PY
+
+      - name: fleet-check regression tests
+        # Proves the class split can still fail for its named regressions: a floor
+        # difference exits 1, a default difference exits 0 naming the direction, and
+        # an unfetchable origin refuses rather than reporting agreement.
+        run: ./assets/scripts/fleet-check.test.sh
 
       - name: registry.json is freshly generated
         run: |
