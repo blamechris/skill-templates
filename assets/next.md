@@ -96,8 +96,17 @@ degrades the ranking, it does not stop the run:
 which one repo can have several live at once — out of the listing. `-e` rather than `-d`
 because a linked worktree's `.git` is a file.
 
+Record the **branch each checkout is parked on** while enumerating — it is not decoration, see
+below:
+
 ```bash
-for d in ~/Projects/*/; do [ -e "$d.git" ] || continue; printf '%s\n' "${d%/}"; done
+for d in ~/Projects/*/; do
+  [ -e "$d.git" ] || continue
+  br=$(git -C "$d" branch --show-current 2>/dev/null); [ -n "$br" ] || br='(detached)'
+  def=$(git -C "$d" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  def=${def#origin/}; [ -n "$def" ] || def='(default unknown)'   # no `remote set-head` here
+  printf '%s\t%s\t%s\n' "${d%/}" "$br" "$def"
+done
 ```
 
 No `gh`, no network, no GitHub API. A repo that is not cloned locally cannot be ranked — that
@@ -109,30 +118,84 @@ owner asks about a repo that did not appear.
 For each repo, find the newest seed in `<repo>/docs/handoffs/`, then read `head -20` of it:
 frontmatter + H1 + the `Picks up at:` bullet. That is the whole read. Do not open the body.
 
+**Say which branch you read it from — every row, not just the interesting ones.** Repo scope
+already discloses this (§0 branch 2); fleet scope needs it more, not less. `~/Projects/<repo>`
+is a *shared* checkout: other sessions move its HEAD, and right now several of the fleet's
+checkouts sit on feature branches. A seed committed on a branch that checkout is not on is
+invisible here, and a seed visible only because it is on that branch vanishes the moment
+another session switches away — so the row's `paste:` path can be dead thirty seconds after
+`/next` prints it. The disclosure is the whole mitigation: append `· read on <branch>` to every
+row, and when `<branch>` is not that repo's default, say so explicitly and add *"seeds on other
+branches were not read"*. Where the default is `(default unknown)` — a clone that never ran
+`git remote set-head` — still print the branch and skip the comparison; an unverifiable claim
+about which branch is canonical is worse than none. Never silently present a branch-scoped read
+as the repo's state.
+
 **Newest wins, resolved by the filename date first and then by the frontmatter `date:`
 timestamp — never by mtime.** git does not preserve mtime, so a fresh clone orders seeds by
 checkout order; and mtime ordering has already misordered production files in this fleet.
 
+The filename date decides **alone**; only when two seeds share it does the frontmatter `date:`
+get a vote. A seed with no parseable one **cannot be ordered against a same-day sibling at
+all** — that is a *tie*, never a loss. Most seeds in the fleet today predate this convention and
+carry no frontmatter at all, so ranking a headerless seed below a headed one would silently
+resume the wrong session; an empty field sorting before every digit (and a legally quoted
+`"2026-…"` doing the same) is exactly how that happens. Ties exit **2** and print every
+candidate.
+
 ```bash
 newest_seed() {                       # $1 = a docs/handoffs directory
+                                      # 0: one winner on stdout   1: no seeds here
+                                      # 2: unresolvable tie — every candidate on stdout
   d=$1
   [ -d "$d" ] || return 1
-  for f in "$d"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md; do
-    [ -e "$f" ] || return 1           # glob matched nothing: no seeds here
-    base=${f##*/}
-    ts=$(awk 'NR>1 && /^---[[:space:]]*$/ {exit}
-              /^date:[[:space:]]*/ {sub(/^date:[[:space:]]*/,""); print; exit}' "$f")
-    printf '%s\t%s\t%s\n' "${base:0:10}" "$ts" "$f"
-  done | LC_ALL=C sort                # last line is the newest; field 3 is the path
+  # `find`, not a glob: an unmatched glob is a literal in bash and a hard error in zsh,
+  # and the `[ -e ]` guard that papers over the first never runs under the second.
+  rows=$(find "$d" -maxdepth 1 -type f \
+              -name '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md' |
+         while IFS= read -r f; do
+           base=${f##*/}
+           ts=$(awk 'NR>1 && /^---[[:space:]]*$/ {exit}
+                     /^date:[[:space:]]*/ {
+                       sub(/^date:[[:space:]]*/,"");     # strip the key
+                       sub(/[[:space:]]*#.*$/,"");       # trailing comment
+                       sub(/[[:space:]]+$/,"");          # trailing whitespace
+                       print; exit }' "$f")
+           ts=${ts#\"}; ts=${ts%\"}          # a quoted scalar is valid YAML — and an
+           ts=${ts#\'}; ts=${ts%\'}          # unstripped quote sorts before every digit
+           # `grep`, not `case`: bash 3.2 (the /bin/bash macOS ships) cannot parse a
+           # `case` nested inside `$( )`. Anything not shaped like a timestamp is
+           # treated as MISSING, never as "early".
+           printf '%s' "$ts" |
+             grep -q '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T' || ts=
+           printf '%s\t%s\t%s\n' "${base:0:10}" "$ts" "$f"
+         done)
+  [ -n "$rows" ] || return 1          # directory exists, holds no conforming seed
+  day=$(printf '%s\n' "$rows" | cut -f1 | LC_ALL=C sort | tail -1)
+  cand=$(printf '%s\n' "$rows" | awk -F'\t' -v d="$day" '$1==d')
+  [ "$(printf '%s\n' "$cand" | wc -l)" -eq 1 ] && { printf '%s\n' "$cand"; return 0; }
+  # >1 seed on the newest day: the frontmatter timestamp is the only tiebreak there is.
+  printf '%s\n' "$cand" | awk -F'\t' '$2==""' | grep -q . && {
+    printf '%s\n' "$cand"; return 2; }              # any headerless candidate: unresolvable
+  best=$(printf '%s\n' "$cand" | LC_ALL=C sort | tail -1 | cut -f2)
+  won=$(printf '%s\n' "$cand" | awk -F'\t' -v t="$best" '$2==t')
+  [ "$(printf '%s\n' "$won" | wc -l)" -eq 1 ] || { printf '%s\n' "$won"; return 2; }
+  printf '%s\n' "$won"
 }
 ```
 
-Two seeds sharing **both** the filename date and the frontmatter timestamp are a genuine tie —
-two sessions ended on one repo at the same minute, which is normal under this scheme. Read both
-and say so in the row; never pick one silently.
+**Exit 2 is loud, and it is never resolved silently.** Two seeds sharing both the filename date
+and the timestamp — two sessions ending on one repo in the same minute, normal under this scheme
+— and any same-day pair where one lacks a usable header are the same outcome: read **every**
+line the function printed, say in the row that the day is ambiguous and why, and let the reader
+pick. Sorting by path, by length, or by "the one with frontmatter looks more official" is
+exactly the silent wrong answer this branch exists to prevent.
 
-**No `docs/handoffs/` at all?** Fall back to `git -C "$d" log -1 --format='%cI %s'` and rank on
-that. Seeds are the better signal; a repo without them is not thereby invisible.
+**No `docs/handoffs/` at all — or one holding no conforming seed?** Both return **1**, and the
+`rows` check is what makes the second one signal: a `return` from inside a pipeline exits only
+its subshell, so a status set there never reaches the caller. Fall back to
+`git -C "$d" log -1 --format='%cI %s'` and rank on that. Seeds are the better signal; a repo
+without them is not thereby invisible.
 
 ### 4. Rank
 
@@ -150,17 +213,20 @@ Cap the listing at 8 rows.
 ```
 PRIORITIES.md — last edited 2026-08-08 (3 days ago)
 
-1. stock-keep — seed 2026-08-11 (today) · priority #1
+1. stock-keep — seed 2026-08-11 (today) · priority #1 · read on main
    picks up: issue #209 — assets/scripts has no test coverage
    paste: /Users/blamechris/Projects/stock-keep/docs/handoffs/2026-08-11-wave-16.md
 
-2. aeolus — seed 2026-08-11 (today)
+2. aeolus — seed 2026-08-11 (today) · read on feat/117-review-fixes (NOT main;
+   seeds on other branches were not read, and this path dies if that checkout moves)
    picks up: PR #117 — owner must review before merge
    paste: /Users/blamechris/Projects/Aeolus/docs/handoffs/2026-08-11-gate-on-117.md
 
-3. duskwright — seed 2026-08-03 (8 days ago) · parked
+3. duskwright — seed 2026-08-03 (8 days ago) · parked · read on main
    picks up: issue #20 — implement ADR 0007
    paste: /Users/blamechris/Projects/duskwright/docs/handoffs/2026-08-03-adr-0007-and-housekeeping.md
+   AMBIGUOUS: 2026-08-03 carries two seeds and neither has a usable `date:` —
+   the other is …/2026-08-03-queue-drain.md; read both before choosing.
 
 9 other repos: no seed, no commits in 14 days — not listed.
 
@@ -169,10 +235,13 @@ nothing. The repo re-derives on arrival — /session-lifecycle start re-reads do
 re-runs git status, and verifies the last claimed merge before building on any of it.
 ```
 
-The `picks up:` line is the seed's `picks_up_at:` value, lifted **verbatim** — `/next` does not
-summarize it, and it is the only claim about a repo's state that leaves this skill. The closing
-paragraph is **required output on every run**, not a flourish: it is what tells the reader (and
-any agent chaining off this output) that these rows are not authority.
+The `picks up:` line is the seed's `picks_up_at:` frontmatter value — or, for the many seeds
+that have no frontmatter, its `Picks up at:` bullet — lifted **verbatim**. `/next` does not
+summarize it, and it is the only claim about a repo's state that leaves this skill. `read on
+<branch>` is likewise required on every row, and an `AMBIGUOUS:` block is required wherever
+`newest_seed` exited 2. The closing paragraph is **required output on every run**, not a
+flourish: it is what tells the reader (and any agent chaining off this output) that these rows
+are not authority.
 
 ### What `/next` must never do
 
