@@ -112,14 +112,19 @@ jobs:
                     'status file with; an absent or stubbed dispatcher is the regression')
               ok = False
           else:
-              # Anchor on the COMMAND, inside a fenced code block — not on the bare
-              # string `--git-common-dir`, which also appears in the prose sentence
-              # explaining why the command is the test. A substring scan therefore
-              # passes a mutant that rewrites only the executable block (swapping the
-              # git call for `case "$PWD" in "$HOME"/Projects/*)`) while leaving the
-              # prose untouched: the needle is still "present" and the scope test is
-              # gone. Requiring `git rev-parse` and `--git-common-dir` on one line
-              # inside a ``` fence is what makes deleting the command fail the step.
+              # Anchor on the COMMAND, inside a fenced code block — not on a bare
+              # mention of the script, which also appears in the prose explaining why
+              # the dispatcher does not re-implement the key. A substring scan passes
+              # a mutant that rewrites only the executable block (swapping the call
+              # for `case "$PWD" in "$HOME"/Projects/*)`) while leaving the prose
+              # untouched: the needle is still "present" and the scope test is gone.
+              # Requiring the invocation inside a ``` fence is what makes deleting the
+              # command fail the step.
+              #
+              # `/next` used to carry its own `git rev-parse --git-common-dir` block.
+              # It now asks session-seed.py, so the WRITER and the READER of a seed
+              # resolve the scope through one implementation — two hand-written copies
+              # of that derivation is how a defect landed on only one side of it.
               in_fence, fenced_lines = False, []
               for ln in nxt.splitlines():
                   if ln.lstrip().startswith('```'):
@@ -127,13 +132,14 @@ jobs:
                       continue
                   if in_fence:
                       fenced_lines.append(ln)
-              SCOPE_CMD = re.compile(r'git\s+rev-parse\b[^\n]*--git-common-dir')
+              SCOPE_CMD = re.compile(r'session-seed\.py\s+(scope|path)\b')
               if not any(SCOPE_CMD.search(ln) for ln in fenced_lines):
                   print('::error file=assets/next.md::assets/next.md has no executable '
-                        '`git rev-parse … --git-common-dir` scope test — a $PWD prefix '
-                        'match against ~/Projects reports fleet scope from inside a linked '
-                        'worktree, which is where sessions actually run. Prose mentioning '
-                        'the flag does not count; the command has to be in the code block')
+                        '`session-seed.py scope|path` call — a $PWD prefix match against '
+                        '~/Projects reports fleet scope from inside a linked worktree, '
+                        'which is where sessions actually run, and a second hand-written '
+                        'copy of the git derivation is what this replaced. Prose naming '
+                        'the script does not count; the command has to be in the code block')
                   ok = False
               # And the specific mutant, stated positively as a ban: the scope block must
               # not decide on a $PWD/$HOME prefix, in a fence or out of one.
@@ -269,23 +275,85 @@ jobs:
               print('::error::assets/scripts/fleet-check.test.sh is missing or not executable')
               ok = False
 
+          # 5. The seed logic is a SCRIPT, and the checklist INVOKES it.
+          #
+          #    #210: the End step was prose containing bash, transcribed and executed
+          #    by an agent and tested by extracting the fenced blocks back out. Five
+          #    adversarial rounds each fixed their findings and each introduced new
+          #    ones, because every fix added more shell to a document. Two things have
+          #    to hold or that arrangement comes back: the script and its suite exist,
+          #    and the doc calls it inside a fence rather than restating it.
+          for path, why in (
+              ('assets/scripts/session-seed.py',
+               'it owns scope resolution, the session id, archive-on-collide, the write '
+               'and the proof — the logic that must not go back into prose'),
+              ('assets/scripts/session-seed.test.sh',
+               'house style wants a sibling suite for every shipped script, and these '
+               'assertions are the only thing that can fail for a seed-destroying bug'),
+          ):
+              try:
+                  if not open(path, encoding='utf-8').read().strip():
+                      raise OSError
+              except OSError:
+                  print(f'::error::{path} is missing or empty — {why}')
+                  ok = False
+          if not os.access('assets/scripts/session-seed.test.sh', os.X_OK):
+              print('::error::assets/scripts/session-seed.test.sh is not executable')
+              ok = False
+
+          try:
+              slc = open('generic/session-lifecycle.md', encoding='utf-8').read()
+          except OSError:
+              slc = ''
+              print('::error::generic/session-lifecycle.md is missing')
+              ok = False
+          in_fence, fenced = False, []
+          for ln in slc.splitlines():
+              if ln.lstrip().startswith('```'):
+                  in_fence = not in_fence
+                  continue
+              if in_fence:
+                  fenced.append(ln)
+          if not any(re.search(r'session-seed\.py\s+write\b', ln) for ln in fenced):
+              print('::error file=generic/session-lifecycle.md::End step 1 no longer '
+                    'INVOKES `session-seed.py write` inside a code fence. Prose naming the '
+                    'script does not count: a checklist that describes the write instead of '
+                    'calling it is the transcribed-bash arrangement returning, and that is '
+                    'the regression #210 removed')
+              ok = False
+          # The shell that moved OUT must not creep back in. These are the two blocks
+          # the retired doctrine harness used to extract and run; either one reappearing
+          # in the checklist means there are two implementations again.
+          for pat, what in ((r'git\s+rev-parse\b[^\n]*--git-common-dir', 'the scope derivation'),
+                            (r'\bmv\s+"\$SEED"', 'the archive rename')):
+              for i, ln in enumerate(fenced, 1):
+                  if re.search(pat, ln):
+                      print(f'::error file=generic/session-lifecycle.md::{what} is inlined in a '
+                            f'code fence again (`{ln.strip()}`) — it belongs to session-seed.py, '
+                            f'which is tested; a second copy in the checklist is what drifted')
+                      ok = False
+
           if not ok:
               sys.exit(1)
           print('OK: /next dispatcher intact; seed anchored outside every worktree; '
-                'floor is the five rules in both files.')
+                'floor is the five rules in both files; the seed logic is a tested '
+                'script and the checklist invokes it.')
           PY
 
-      - name: session-lifecycle doctrine regression tests
-        # The seed-destroying pair, pinned by EXECUTION rather than by grep: the
-        # harness extracts End step 1's archive-on-collide block and End step 3's
-        # authorship proof out of generic/session-lifecycle.md and runs them.
+      - name: session-seed regression tests
+        # REPLACES scripts/session-lifecycle-doctrine.test.sh, which extracted the
+        # fenced bash out of generic/session-lifecycle.md and ran it. That harness
+        # existed only because the logic lived in prose: extraction was the sole way
+        # to execute a document. The logic is a script now, so the tests call it
+        # directly and the doc's remaining job — the doctrine — is held by
+        # skill-guards.json, which is what guards are for.
         #
-        # A scan cannot hold either property. "Archive, then write" was two
-        # independent statements with a comment between them, and every substring
-        # a scan could look for was already present in the broken version; step 3's
-        # `[ -f "$SEED" ]` is likewise indistinguishable from a real proof until you
-        # point it at another session's file and watch it pass.
-        run: ./scripts/session-lifecycle-doctrine.test.sh
+        # The properties are the same ones and they still cannot be held by a scan:
+        # "archive, then write" was two independent statements with a comment
+        # between them, and every substring a scan could look for was present in the
+        # broken version; a `[ -f "$SEED" ]` proof is indistinguishable from a real
+        # one until you point it at another session's file and watch it pass.
+        run: ./assets/scripts/session-seed.test.sh
 
       - name: fleet-check regression tests
         # Proves the class split can still fail for its named regressions: a floor
