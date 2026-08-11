@@ -153,11 +153,25 @@ put_seed() {            # $1 = case dir, $2 = filename, $3 = `session:` ('-' = n
   } > "$d/handoffs/$2"
 }
 
-run_end() {             # $1 = case dir, $2 = '' | 'nohome'; runs End step 1, echoes rc via $rc
-  local d="$TMP/$1" home=$FAKE_HOME
+# A `date` that answers the archive stamp with a constant, so "two archives inside
+# one UTC second" is a property of the fixture instead of a race the suite has to
+# win. Everything else it is asked falls through to the real one.
+mkdir -p "$TMP/frozen-clock"
+cat > "$TMP/frozen-clock/date" <<'CLOCK'
+#!/bin/sh
+case "$*" in
+  *"+%Y%m%dT%H%M%SZ"*) echo 20260811T000000Z ;;
+  *) exec /bin/date "$@" ;;
+esac
+CLOCK
+chmod +x "$TMP/frozen-clock/date"
+
+run_end() {             # $1 = case dir, $2 = '' | 'nohome' | 'frozen'; runs End step 1, echoes rc via $rc
+  local d="$TMP/$1" home=$FAKE_HOME path=$PATH
   # `nohome` removes the id source and nothing else: the doc still has a scope, a
   # handoff dir and an incumbent — it just cannot name itself.
   if [ "${2:-}" = nohome ]; then home="$d/nohome"; mkdir -p "$home"; fi
+  if [ "${2:-}" = frozen ]; then path="$TMP/frozen-clock:$PATH"; fi
   cat > "$d/run.sh" <<RUNNER
 set -u
 $RESOLVE
@@ -169,7 +183,8 @@ $ARCHIVE
 printf -- '---\ntype: handoff\nscope: %s\nsession: %s\n---\nSEED WRITTEN BY %s\n' \\
   "\$SCOPE" "\$SID" "\$SID" > "\$SEED"
 RUNNER
-  out=$(cd "$d/demo" && HOME="$home" CLAUDE_HANDOFF_DIR="$d/handoffs" bash "$d/run.sh" 2>&1); rc=$?
+  out=$(cd "$d/demo" && HOME="$home" CLAUDE_HANDOFF_DIR="$d/handoffs" PATH="$path" \
+        bash "$d/run.sh" 2>&1); rc=$?
 }
 
 run_prove() {           # $1 = case dir, $2 = worktree to run in (default demo), $3 = 'poison'
@@ -353,6 +368,34 @@ if printf '%s' "$out" | grep -q '^seed: .*/NEXT-demo\.md$'; then
   ok "3 wrong scope: step 3 discards inherited SCOPE/HANDOFF_DIR/SEED/SID"
 else bad "3 wrong scope: step 3 discards inherited SCOPE/HANDOFF_DIR/SEED/SID" \
         "$(printf '%s' "$out" | tr '\n' '|')"; fi
+
+# ================================================================= FINDING 4
+# The archive name is stamped to the second and slugged from the incumbent's id,
+# so two archives of the same id inside one second name the same file — and `mv`
+# onto an existing file overwrites it. That destroys the earlier archive silently,
+# by the very step whose job is to preserve it. Two ends in one second is normal
+# (a wave boundary that restarts immediately), so the clock is pinned rather than
+# raced: both runs below stamp 20260811T000000Z.
+new_case f4
+put_seed f4 NEXT-demo.md d00dfeed 'the FIRST incumbent'
+run_end f4 frozen
+put_seed f4 NEXT-demo.md d00dfeed 'the SECOND incumbent'
+run_end f4 frozen
+if preserved f4 'the FIRST incumbent' && preserved f4 'the SECOND incumbent'; then
+  ok "4 same UTC second: the earlier archive is not overwritten by the later one"
+else bad "4 same UTC second: the earlier archive is not overwritten by the later one" \
+        "$(ls "$TMP/f4/handoffs" | tr '\n' ' ')"; fi
+if [ "$(archives f4)" -eq 2 ]; then ok "4 same UTC second: two collisions leave two archives"
+else bad "4 same UTC second: two collisions leave two archives" \
+        "$(archives f4) archive(s): $(ls "$TMP/f4/handoffs" | tr '\n' ' ')"; fi
+# Whatever distinguishes the two names has to keep them looking like archives to
+# /next, which tells an archive from a canonical seed by `.<UTC>-<sid>.md` (the
+# regex below is that discriminator). A second dot would read as part of the scope
+# key and hang a phantom repo off the dispatcher's list.
+stray=$(ls "$TMP/f4/handoffs" | grep -v '^NEXT-demo\.md$' |
+        grep -Ev '^NEXT-demo\.[0-9]{8}T[0-9]{6}Z-[^.]+\.md$')
+if [ -z "$stray" ]; then ok "4 same UTC second: both archives still read as archives to /next"
+else bad "4 same UTC second: both archives still read as archives to /next" "$(printf '%s' "$stray" | tr '\n' ' ')"; fi
 
 # ============================================================ the happy paths
 # The point of the fix is to keep these working, so they are asserted too.

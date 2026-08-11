@@ -40,7 +40,7 @@ Run these in order; each step re-derives state rather than trusting memory:
    it passed. Check `~/.claude/commands/next.md` against `~/Projects/skill-templates/assets/next.md`
    with `diff -q`: it is distributed verbatim, carries no rule classes, and that diff is its only
    drift detector.
-6. **Prior-session state** — read this scope's seed, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir `~/Obsidian/no-it-all/handoffs/`), plus {{CUSTOMIZE: any session ledger or queue file this repo keeps, e.g. `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this list if the repo has none}}. `<scope>` is the main worktree's directory basename, resolved from git (End step 1 carries the snippet), so every worktree of a repo resolves to the same seed and no `$PWD` test is involved. There is exactly **one** canonical seed per scope, so nothing has to be ranked: no newest-wins rule, no mtime, no tie to resolve. Sibling files named `NEXT-<scope>.<UTC>-<sid>.md` are **archived** seeds — a previous session's, parked when this one collided with it. Do not read them by default, but if the canonical seed is missing, say so and list them: the newest archive is usually an unconsumed handoff, and a session that silently starts from nothing is how work gets repeated. Read the seed's header and TL;DR plus the ledger's STATE header — not the full history. Seeds are **perishable**: each is superseded by the next, and anything in one still worth reading after it is consumed belongs in `docs/records/`, linked from the seed. `/catchup` is the component skill for reconstructing a prior session where installed.
+6. **Prior-session state** — read this scope's seed, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir `~/Obsidian/no-it-all/handoffs/`), plus {{CUSTOMIZE: any session ledger or queue file this repo keeps, e.g. `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this list if the repo has none}}. `<scope>` is the main worktree's directory basename, resolved from git (End step 1 carries the snippet), so every worktree of a repo resolves to the same seed and no `$PWD` test is involved. There is exactly **one** canonical seed per scope, so nothing has to be ranked: no newest-wins rule, no mtime, no tie to resolve. Sibling files named `NEXT-<scope>.<UTC>-<sid>.md`, or `…-<sid>-<n>.md` when two archives landed in one second, are **archived** seeds — a previous session's, parked when this one collided with it. Do not read them by default, but if the canonical seed is missing, say so and list them: the newest archive is usually an unconsumed handoff, and a session that silently starts from nothing is how work gets repeated. Read the seed's header and TL;DR plus the ledger's STATE header — not the full history. Seeds are **perishable**: each is superseded by the next, and anything in one still worth reading after it is consumed belongs in `docs/records/`, linked from the seed. `/catchup` is the component skill for reconstructing a prior session where installed.
 7. **Verify the last claimed merge** — if the prior session's notes claim a merge, confirm it (`gh pr view <n>` reports `MERGED`) before building on it. State is re-derived, not trusted.
 
 Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others), drifted skills, and what the session is picking up.
@@ -90,7 +90,19 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
        # the id to one filename component before it is interpolated anywhere.
        slug=$(printf '%s' "$prev" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-40)
        case "$slug" in ''|.|..) slug=unknown;; esac
-       mv "$SEED" "$HANDOFF_DIR/NEXT-$SCOPE.$(date -u +%Y%m%dT%H%M%SZ)-$slug.md" || {
+       # The stamp is a second and the slug is the incumbent's id, so two archives
+       # of the same id inside one second name the same file — and `mv` onto it
+       # overwrites the archive this step just made. Step past a taken name, with
+       # `-$n` rather than `.$n`: /next tells an archive from a canonical seed by
+       # `.<UTC>-<sid>.md`, so a second dot would read as part of the scope key.
+       base="$HANDOFF_DIR/NEXT-$SCOPE.$(date -u +%Y%m%dT%H%M%SZ)-$slug"
+       arch="$base.md"; n=0
+       while [ -e "$arch" ]; do
+         n=$((n+1))
+         [ "$n" -lt 100 ] || { echo "REFUSE: no free archive name for $SEED — the incumbent stays"; exit 1; }
+         arch="$base-$n.md"
+       done
+       mv "$SEED" "$arch" || {
          echo "REFUSE: could not archive $SEED — the incumbent stays, the seed is not written"
          exit 1
        }
@@ -102,6 +114,8 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
    The guard and the sanitiser fix different halves and neither replaces the other. The guard is what makes the incumbent safe: any `mv` that fails now stops the step instead of being followed by the write. The sanitiser is what keeps the step *usable* — `session:` is sourced from an id documented as `[session-id-or-jsonl-path]`, so a slash in one is a plausible agent choice rather than an attack, and interpolated raw it names a directory that does not exist. With the guard alone that id is no longer data loss, but it is a session that can never write a seed at all, on a value it read out of someone else's file. Reduce the id to one filename component and the archive path is always constructible. (Containment is separately structural: `$slug` sits behind the `NEXT-$SCOPE.<UTC>-` prefix, so it is never the leading component of a path element and a `..` in it cannot climb anywhere. Keep it in that position.)
 
    `mv` preserves the incumbent byte for byte, and the canonical name is free again immediately — so *"one line to paste"* keeps working. Per-session-unique filenames would preserve the old seed too, and would destroy that affordance: the next session would have to be told which of N files to read, which is the thing the seed exists to avoid. Re-running the same session's own write is not a collision and overwrites in place.
+
+   The **archive name has to be free before it is used**, because it is not unique on its own: a stamp resolved to the second plus the incumbent's id repeats whenever the same incumbent is archived twice inside one second, and a wave boundary that ends one session and starts the next does exactly that. `mv` onto a name already taken overwrites it, so the unguarded form destroys the archive it made a moment earlier — the same loss the guard above prevents, arriving by the other door. Stepping to the first free `-<n>` keeps both, and the separator is a dash because `/next` reads a second dot as part of the scope key. This is a check, not a lock: two sessions racing on one seed can still both see the name free, which is the non-atomicity `mv` has always had here and is a different problem from the sequential one this closes.
 
    Required header — the `session:` field is what makes archive-on-collide decidable *and* what step 3 reads back to prove this session wrote the seed, so it is never decorative; `picks_up_at:` is the only line `/next` quotes:
 
