@@ -12,11 +12,15 @@ Usage:
   python3 ~/.claude/scripts/session-seed.py header PATH
 
 The seed is the fleet's continuity mechanism: the one file the NEXT session opens.
-It lives at an absolute path OUTSIDE every git workspace —
+It lives at an absolute path OUTSIDE EVERY SESSION'S WORKSPACE —
 `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`
-— because an absolute path there has no worktree to be torn down with, no branch to
-be unreachable from, and no index to be confused with. Three earlier designs put it
-inside a workspace and lost it to exactly those three surfaces.
+— because a path no session works in has no worktree to be torn down with, no
+branch to be unreachable from, and no index to be confused with. Three earlier
+designs put it inside a session's own workspace and lost it to exactly those three
+surfaces. The default dir is itself a git repo (the vault is versioned), which is
+fine and is the point of the wording: what the seed must be outside is the tree a
+session edits, branches and tears down — not "any directory git knows about".
+The write enforces exactly that, against this session's worktree roots.
 
 This script exists because the fourth failure was different in kind: the logic was
 PROSE CONTAINING BASH, transcribed and executed by an agent, and every fix added
@@ -36,8 +40,13 @@ WHAT IT REFUSES TO GUESS
 Exit codes:
   0  the operation succeeded (for `write` and `verify`: the canonical seed for this
      scope exists, carries this session's id, and sits outside every worktree).
-  1  REFUSE — stated on stderr, and for `write` nothing was written and no incumbent
-     seed was moved or destroyed.
+  1  REFUSE — stated on stderr. NO REFUSE EVER DESTROYS AN INCUMBENT SEED: the
+     archive is what earns the right to write, so a failed archive aborts before
+     the write. That is not the same as "nothing happened", and `write` must not be
+     read that way — its LAST act is to run its own proof, so a REFUSE from there
+     is emitted after the seed is already on disk. What the write did is on stdout,
+     in order: an `archived: <path>` line iff an incumbent was moved, then `seed:
+     <path>` iff the proof passed. Read those; do not infer them from the exit code.
   2  usage error.
 """
 import argparse
@@ -98,6 +107,51 @@ def _git(*args):
             "which scope this is', not 'this must be the fleet'.")
 
 
+def _orphaned_worktree():
+    """The path of an ORPHANED linked worktree at or above cwd, else None.
+
+    A linked worktree's `.git` is a FILE holding `gitdir: <main>/.git/worktrees/<n>`
+    (a submodule's points into `<super>/.git/modules/<n>`). Remove or move the
+    checkout it points at — which is what `git worktree remove` on the wrong
+    directory, or a cleaned-up scratch dir, does — and `git rev-parse` answers
+    "not a git repository" from inside a tree that is plainly still a repo-scoped
+    session's workspace.
+
+    That is the ONE not-a-repo answer that must not become `fleet`. Silently, a
+    repo session would then write and prove NEXT-fleet.md: the proof passes (it
+    re-derives the same wrong scope), the repo's own seed is left stale, and the
+    fleet's seed is overwritten by work that has nothing to do with it. It is the
+    `_elsewhere()` hint's mirror image — a misfiled seed that looks like success.
+
+    A real `.git` DIRECTORY stops the walk: if git could not open that, the answer
+    is git's own to give and this is not the orphan case.
+    """
+    try:
+        d = os.getcwd()
+    except OSError:
+        return None
+    while True:
+        dot = os.path.join(d, ".git")
+        if os.path.isdir(dot):
+            return None
+        if os.path.isfile(dot):
+            try:
+                with open(dot, encoding="utf-8", errors="replace") as f:
+                    m = re.search(r"^gitdir:\s*(.+?)\s*$", f.read(8192), re.M)
+            except OSError:
+                return d
+            if not m:
+                return d
+            target = m.group(1)
+            if not os.path.isabs(target):
+                target = os.path.join(d, target)
+            return None if os.path.exists(target) else d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
 def resolve_scope(topic=None):
     """The scope key: the MAIN worktree's directory basename, or `fleet`.
 
@@ -123,6 +177,16 @@ def resolve_scope(topic=None):
         if "not a git repository" not in (r.stderr or "").lower():
             die("cannot resolve scope: git failed for a reason other than 'not a "
                 "repository' — %s" % ((r.stderr or "").strip() or "no stderr"))
+        orphan = _orphaned_worktree()
+        if orphan is not None:
+            die("cannot resolve scope: %s is a linked worktree whose main checkout "
+                "is gone, so git reports 'not a repository' from inside what is "
+                "still a repo-scoped session's tree. That is not the fleet: "
+                "answering `fleet` here writes this repo's handoff over the fleet's "
+                "seed and leaves the repo's own seed stale, and the proof passes "
+                "because it re-derives the same wrong scope. Restore the main "
+                "checkout, or run the write from a worktree of the repo it belongs "
+                "to." % orphan)
         if topic is not None and not TOPIC_OK.match(topic):
             die("--topic %r is not one filename component of [A-Za-z0-9_-]" % topic)
         return "fleet-" + topic if topic else "fleet"
@@ -176,7 +240,7 @@ def handoff_dir():
         # live. Refuse rather than silently re-creating the failure this design
         # exists to remove.
         die("CLAUDE_HANDOFF_DIR=%r is relative. The seed's whole property is that "
-            "it sits at an absolute path outside every git workspace." % d)
+            "it sits at an absolute path outside every session's workspace." % d)
     return d
 
 
@@ -598,14 +662,21 @@ def cmd_list(a):
     for n in names:
         if not (n.startswith("NEXT-") and n.endswith(".md")):
             continue
-        if bool(ARCHIVE_SUFFIX.search(n)) != bool(a.archives):
+        arch = ARCHIVE_SUFFIX.search(n)
+        if bool(arch) != bool(a.archives):
             continue
         p = os.path.join(d, n)
         if not os.path.isfile(p):
             continue
-        scope = n[len("NEXT-"):-len(".md")]
-        if a.archives:
-            scope = scope.split(".", 1)[0]
+        # The scope key ends where the ARCHIVE SUFFIX begins, decided by the same
+        # match that classified the file one line above — not by a second rule.
+        # The second rule was `scope.split(".", 1)[0]`, and it truncated at the
+        # first dot: `NEXT-blamechris.github.io.<UTC>-<sid>.md` reported the scope
+        # `blamechris`, which is not a scope that exists. `/next` runs exactly this
+        # command when a canonical seed is missing, so that phantom was printed to
+        # the user at the one moment they are being told where their work went.
+        # A dotted scope key is legal — it is why ARCHIVE_SUFFIX ends in `[^.]+\.md$`.
+        scope = n[len("NEXT-"):arch.start() if arch else -len(".md")]
         ts = read_frontmatter(p).get("date", "").strip()
         if not re.match(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T", ts):
             ts = ""

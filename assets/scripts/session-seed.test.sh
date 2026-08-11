@@ -183,6 +183,36 @@ printf '%s' "$out" | grep -q 'REFUSE.*git.*not on PATH' \
   && ok "no git on PATH REFUSES (it is 'I do not know', not 'this is the fleet')" \
   || bad "no git on PATH REFUSES (it is 'I do not know', not 'this is the fleet')" "$(flat "$out")"
 
+# AN ORPHANED LINKED WORKTREE. Its `.git` is a FILE pointing at the main checkout;
+# delete that checkout and git says "not a git repository" from inside a tree that
+# is plainly still a repo session's workspace. This is the one not-a-repo answer
+# that must not be `fleet` — silently, this repo's handoff overwrites the FLEET's
+# seed, the repo's own seed is left stale, and the proof passes because it
+# re-derives the same wrong scope. Every other case in group A reaches its verdict
+# through git; this one is invisible to git by construction.
+new_case a7
+git -C "$TMP/a7/demo" worktree add -q "$TMP/a7/demo-wt" -b wt
+run a7 demo-wt scope
+[ "$out" = demo ] && ok "orphan check: a HEALTHY linked worktree still resolves normally" \
+  || bad "orphan check: a HEALTHY linked worktree still resolves normally" "rc=$rc $(flat "$out")"
+rm -rf "$TMP/a7/demo"                          # the main checkout is gone
+run a7 demo-wt scope
+[ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'REFUSE.*main checkout is gone' \
+  && ok "an ORPHANED linked worktree REFUSES — it is not the fleet" \
+  || bad "an ORPHANED linked worktree REFUSES — it is not the fleet" "rc=$rc $(flat "$out")"
+write a7 demo-wt
+[ "$rc" -ne 0 ] && [ ! -f "$TMP/a7/handoffs/NEXT-fleet.md" ] \
+  && ok "an orphaned linked worktree writes NO fleet seed" \
+  || bad "an orphaned linked worktree writes NO fleet seed" \
+         "rc=$rc $(ls "$TMP/a7/handoffs" 2>/dev/null | tr '\n' ' ')"
+# The negative half: `fleet` must stay reachable from a directory that is genuinely
+# outside every repo. A guard that refuses everywhere would satisfy the two above.
+mkdir -p "$TMP/a7/outside"
+run a7 outside scope
+[ "$rc" -eq 0 ] && [ "$out" = fleet ] \
+  && ok "the orphan guard does not break the ordinary fleet case" \
+  || bad "the orphan guard does not break the ordinary fleet case" "rc=$rc $(flat "$out")"
+
 # ==================================================== GROUP B — the handoff dir
 echo; echo "B. the handoff dir"
 
@@ -656,6 +686,22 @@ run h2 blamechris.github.io list
 printf '%s' "$out" | grep -q '^blamechris.github.io	' \
   && ok "a dotted scope key is listed as CANONICAL, not mistaken for an archive" \
   || bad "a dotted scope key is listed as CANONICAL, not mistaken for an archive" "$(flat "$out")"
+
+# ...and the SAME key must survive `--archives`, which is the listing `/next` runs
+# when a canonical seed is missing. The scope column there was cut at the first dot
+# by a second, hand-rolled definition of where the scope key ends — six lines below
+# the ARCHIVE_SUFFIX regex that is supposed to be the only one. It reported the
+# scope `blamechris`, a scope that does not exist, at the one moment the user is
+# being told where their unconsumed handoff went.
+put_seed h2 NEXT-blamechris.github.io.md f0f0f0f0 'the dotted incumbent'
+run h2 blamechris.github.io write --session "$MINE" --now "$STAMP" --picks-up-at 'collide'
+run h2 blamechris.github.io list --archives
+[ "$(nrows "$out")" -eq 1 ] && printf '%s' "$out" | grep -q '^blamechris.github.io	' \
+  && ok "list --archives keeps a dotted scope key whole (no phantom scope)" \
+  || bad "list --archives keeps a dotted scope key whole (no phantom scope)" "$(flat "$out")"
+! printf '%s' "$out" | grep -q '^blamechris	' \
+  && ok "list --archives reports no truncated scope that does not exist" \
+  || bad "list --archives reports no truncated scope that does not exist" "$(flat "$out")"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
