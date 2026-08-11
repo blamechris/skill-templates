@@ -100,29 +100,38 @@ Context re-reads dominate cost (70% in the 2026-07 audit): every request re-read
 the whole context at cache-read rates, so a restart that halves context pays for
 itself within ~10 requests. Rules:
 
-- **Restart into a fresh session** — seeded from `~/Obsidian/no-it-all/handoffs/NEXT.md`
-  (the handoff note; paste its path as the opening message) plus any queue/ledger
+- **Restart into a fresh session** — seeded from the newest note in that repo's
+  `docs/handoffs/` (paste its path as the opening message) plus any queue/ledger
   STATE header it points to, never the full history — at: each marathon wave boundary; a second
   compaction; or when switching work class (new epic, security-critical work,
-  high fan-in refactors, visual-verify features).
+  high fan-in refactors, visual-verify features). Outside a repo, `/next` derives the
+  ranking from those same seeds.
 - **Continue** only when the next task genuinely needs the context already loaded.
 - Keep main-thread context under **~150K tokens**: once past it, finish the current
   item, write handoff state, end the session.
 - **Applies to orchestrator/chat sessions too**, not just repo marathons: a wave ends →
   write the handoff → end the session (recommend it explicitly when attended). For
   autonomous continuity, create a one-time scheduled task at the boundary that fires a
-  fresh session seeded from the handoff — the wave, not the session, is the unit of
+  fresh session seeded from the handoff — **naming that dated file explicitly, never a
+  pointer that can move** — the wave, not the session, is the unit of
   continuity (skill-templates#181).
 - **Ending a session = two artifacts, every time:** ① the session's row appended to
   the usage benchmark (`~/Obsidian/no-it-all/briefs/usage-benchmark.md`) — generate it
   with `python3 ~/.claude/scripts/usage-benchmark-row.py` and replace the placeholder
-  with a one-line workload note (duration + workload class make rows comparable);
-  ② the **next-session seed written to `~/Obsidian/no-it-all/handoffs/NEXT.md`**
-  (overwrite it each time — history lives in the vault): files to read first, a 2–4
-  line state summary (done / held / open follow-ons), a recommended `Today's task:`
-  with alternatives, and the closing line instructing the new session to repeat this
-  protocol. Then hand Chris **one line to paste**: the NEXT.md path. The seed file —
-  not memory, not chat history — is the continuity mechanism.
+  with a one-line workload note (duration + workload class make rows comparable); if it
+  resolves to a session ID that already has a row, neither append nor overwrite — the
+  counters are cumulative and both corrupt the record;
+  ② the **next-session seed written to a new file at
+  `<repo>/docs/handoffs/YYYY-MM-DD-<slug>.md`, committed**: the frontmatter header,
+  files to read first, a 2–4 line state summary (done / held / open follow-ons), a
+  recommended `Today's task:` with alternatives, and the closing line instructing the
+  new session to repeat this protocol. **Append-only — add a file, never rewrite or
+  delete one; two sessions ending on one repo write two files.** *"NEXT" is a query,
+  not a file:* the newest entry in `docs/handoffs/`. Then hand Chris **one line to
+  paste**: that file's absolute path. The seed file — not memory, not chat history —
+  is the continuity mechanism. Anything in a seed still worth reading after it is
+  consumed belongs in `docs/records/`, with the seed linking it. The vault stays
+  presentational (briefs, benchmark rows), never canonical.
 - Subagent/model tiering: resolve roles against the harness ladder (currently
   fable > opus > sonnet > haiku). Mechanical work (triage, classification,
   verification sweeps) runs on the cheapest adequate tier; implementation runs
