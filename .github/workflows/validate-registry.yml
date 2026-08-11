@@ -275,6 +275,18 @@ jobs:
                 'floor is the five rules in both files.')
           PY
 
+      - name: session-lifecycle doctrine regression tests
+        # The seed-destroying pair, pinned by EXECUTION rather than by grep: the
+        # harness extracts End step 1's archive-on-collide block and End step 3's
+        # authorship proof out of generic/session-lifecycle.md and runs them.
+        #
+        # A scan cannot hold either property. "Archive, then write" was two
+        # independent statements with a comment between them, and every substring
+        # a scan could look for was already present in the broken version; step 3's
+        # `[ -f "$SEED" ]` is likewise indistinguishable from a real proof until you
+        # point it at another session's file and watch it pass.
+        run: ./scripts/session-lifecycle-doctrine.test.sh
+
       - name: fleet-check regression tests
         # Proves the class split can still fail for its named regressions: a floor
         # difference exits 1, a default difference exits 0 naming the direction, and
