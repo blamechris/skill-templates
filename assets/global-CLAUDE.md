@@ -59,15 +59,26 @@ wrong answer delivered confidently.
 depends on, and every other placement put it somewhere a teardown, a branch, or an index
 could destroy it. It lives at an absolute path in the vault —
 `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/` — and
-`<scope>` is the **main worktree's directory basename**, resolved from git:
+`<scope>` is the **main worktree's directory basename**, resolved from git. **Ask the script.
+Never re-derive it here:**
 
 ```bash
-common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=
-if [ -n "$common" ]; then SCOPE=$(basename "$(dirname "$common")"); else SCOPE=fleet; fi
+python3 ~/.claude/scripts/session-seed.py scope     # `fleet` outside any repo
 ```
 
 Never a `$PWD` prefix test (worktrees live outside `~/Projects`), and never the origin slug:
 `chroxy` and `chroxy-daemon` share one origin URL and are separate scopes with separate work.
+Those are properties the script already holds, not a specification to reimplement — along
+with several a two-line snippet cannot carry: a bare repo, a git failure that is not "not a
+repository", and a linked worktree whose main checkout is gone are each a REFUSE rather than
+a guess at `fleet`.
+
+This paragraph carried a hand-written `git rev-parse` copy of that derivation until #210 —
+a *second* implementation, in the file every agent reads, added four commits after the
+extraction whose entire purpose was to have one. That is how this defect class works: the
+copy is always the convenient thing to write and always the thing that drifts, and the copy
+in the most-read file is the one that wins the drift. CI now fails on a second derivation
+anywhere in `generic/` or `assets/`.
 
 ## End-of-message summary (status block) — all projects, all agents
 
@@ -209,14 +220,16 @@ itself within ~10 requests. Rules:
 **The seed is written outside any worktree, at an absolute path:**
 `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` — default dir `~/Obsidian/no-it-all/handoffs/`,
 which is git-backed and private. `<scope>` is the **main worktree's directory basename**
-(the `git rev-parse --path-format=absolute --git-common-dir` snippet under "Rule
-precedence"), or `fleet` — `fleet-<topic>` for a named topic — for a session that is not
-in a repo. Never inside a repo working tree, never a path that a worktree teardown, a
-branch switch, or an unmerged PR can put out of reach. Three consecutive attempts to put
-the seed inside a git workspace failed on four independent loss paths — worktree teardown,
-branch reachability, staged-vs-committed, an unset `$SESSION_BRANCH` — so the surface is
-removed rather than guarded: an absolute vault path has no worktree to be torn down with,
-no branch to be unreachable from, and no index to be confused with.
+(`session-seed.py scope` — the one derivation, see "Rule precedence"), or `fleet` —
+`fleet-<topic>` for a named topic — for a session that is not in a repo. Never inside a repo
+working tree, never a path that a worktree teardown, a branch switch, or an unmerged PR can
+put out of reach. Three consecutive attempts to put the seed inside a session's own workspace
+failed on four independent loss paths — worktree teardown, branch reachability,
+staged-vs-committed, an unset `$SESSION_BRANCH` — so the surface is removed rather than
+guarded: a vault path no session works in has no worktree to be torn down with, no branch to
+be unreachable from, and no index to be confused with. That the vault is *itself* versioned
+is not a hole in the rule: nobody branches or tears down the vault mid-session, and the write
+enforces the rule it actually needs by checking the seed against this session's worktrees.
 
 The seed carries the frontmatter header (`type`, `date` as a full UTC timestamp, `scope`,
 `session`, `picks_up_at`, `sensitivity`), files to read first, a 2–4 line state summary
