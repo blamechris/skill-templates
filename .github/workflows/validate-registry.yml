@@ -71,8 +71,11 @@ jobs:
       - name: continuity doctrine has not regressed
         run: |
           # skill-templates#205, as amended: the session seed lives at an ABSOLUTE
-          # path outside every git workspace ($CLAUDE_HANDOFF_DIR/NEXT-<scope>.md).
-          # Four properties, none of which the guard mechanism can hold: guards bind
+          # path outside every SESSION'S workspace ($CLAUDE_HANDOFF_DIR/NEXT-<scope>.md).
+          # The default dir is itself a git repo — the vault is versioned — so the
+          # property is not "outside anything git tracks"; it is that no worktree
+          # teardown and no branch checkout a session performs can reach the seed.
+          # Properties none of which the guard mechanism can hold: guards bind
           # generic/*.md, and every one of these lives in assets/ or spans files.
           #
           # Inline rather than scripts/*.sh on purpose: house style wants a
@@ -333,11 +336,77 @@ jobs:
                             f'which is tested; a second copy in the checklist is what drifted')
                       ok = False
 
+          # 6. EXACTLY ONE SCOPE DERIVATION, repo-wide.
+          #
+          #    The step above holds only generic/session-lifecycle.md, which is where
+          #    the extraction removed the copy. #210 then put a NEW one somewhere it
+          #    does not look: assets/global-CLAUDE.md grew a hand-written
+          #    `git rev-parse --path-format=absolute --git-common-dir` block four
+          #    commits after the extraction whose entire purpose was to have one
+          #    implementation — in the file every agent on every machine reads, which
+          #    is the copy that wins a drift. So the scan is repo-wide now.
+          #
+          #    A DERIVATION IS EXECUTABLE; a mention is not. In markdown that line is
+          #    the code fence, and it is not a technicality: assets/next.md's prose
+          #    explains WHY the script uses --git-common-dir, which is exactly the
+          #    documentation that should stay, and session-seed.py's own docstring
+          #    does the same. Banning the string would delete the explanation and
+          #    leave the duplication rule unstated. In a code file, a `#` comment is
+          #    prose by the same test.
+          DERIVES = '--git-common-dir'
+          IMPL = 'assets/scripts/session-seed.py'
+          # session-seed.test.sh's fake `git` matches on the flag to change a repo's
+          # identity mid-run (the F3B proof case). It derives nothing; it intercepts.
+          ALLOWED = {IMPL, 'assets/scripts/session-seed.test.sh'}
+          for p, body in files_under('generic', 'assets'):
+              if p.replace(os.sep, '/') in ALLOWED or DERIVES not in body:
+                  continue
+              in_f = False
+              for i, ln in enumerate(body.splitlines(), 1):
+                  if p.endswith('.md'):
+                      if ln.lstrip().startswith('```'):
+                          in_f = not in_f
+                          continue
+                      executable = in_f
+                  else:
+                      executable = not ln.lstrip().startswith('#')
+                  if executable and DERIVES in ln:
+                      print(f'::error file={p},line={i}::{p}:{i} is a SECOND scope '
+                            f'derivation (`{ln.strip()[:80]}`). The scope key is derived in '
+                            f'{IMPL} and nowhere else — that extraction is what #210 is; a '
+                            f'copy here drifts from it and the copy in the most-read file is '
+                            f'the one that wins. Call `session-seed.py scope` instead. Prose '
+                            f'outside a code fence may still explain the flag')
+                      ok = False
+
+          #    The positive half. Without it the ban above is satisfied by DELETING the
+          #    derivation — zero copies passes a "no second copy" scan perfectly.
+          try:
+              seed_src = open(IMPL, encoding='utf-8').read()
+          except OSError:
+              seed_src = ''
+          rs = seed_src.split('\ndef resolve_scope(', 1)[-1].split('\n\ndef ', 1)[0]
+          if not re.search(r'_git\([^)]*' + re.escape(DERIVES), rs):
+              print(f'::error file={IMPL}::resolve_scope() no longer passes '
+                    f'`{DERIVES}` to git — the scope key is the MAIN worktree\'s directory '
+                    f'basename, and --git-common-dir is the only thing that reports it from '
+                    f'a linked worktree, a nested subdirectory and a detached HEAD alike')
+              ok = False
+          #    ...and the global file, which used to hold the copy, must point AT the
+          #    script. Deleting the snippet without leaving the pointer passes the ban
+          #    and leaves every agent's most-read file with no answer at all.
+          if gcm and 'session-seed.py scope' not in gcm:
+              print('::error file=assets/global-CLAUDE.md::the seed-path rule no longer names '
+                    '`session-seed.py scope`. The snippet it replaced was a second '
+                    'implementation; removing it without the pointer leaves the file every '
+                    'agent reads defining a scope key it cannot resolve')
+              ok = False
+
           if not ok:
               sys.exit(1)
           print('OK: /next dispatcher intact; seed anchored outside every worktree; '
                 'floor is the five rules in both files; the seed logic is a tested '
-                'script and the checklist invokes it.')
+                'script, the checklist invokes it, and the scope is derived once.')
           PY
 
       - name: session-seed regression tests
@@ -354,6 +423,22 @@ jobs:
         # broken version; a `[ -f "$SEED" ]` proof is indistinguishable from a real
         # one until you point it at another session's file and watch it pass.
         run: ./assets/scripts/session-seed.test.sh
+
+      - name: usage-benchmark-row regression tests
+        # #207: this script shipped in the registry WITHOUT the message.id dedup the
+        # machine copy had, so the documented bootstrap
+        # (`cp assets/scripts/usage-benchmark-row.py ~/.claude/scripts/`) handed a new
+        # machine a version that counted every content block as a turn — ~2.2x on real
+        # transcripts, 3x on the fixture here. It was found by reading the two files
+        # side by side; nothing could fail for it, because nothing ran this script.
+        #
+        # A row is not a standalone number: session-lifecycle End step 2 is "neither
+        # append nor overwrite" once a session has a row, so an inflated row is an
+        # unrepairable column in a table read across sessions. The dedup case builds
+        # its own un-deduped mutant and asserts the fixture tells the two apart —
+        # without that, the assertion also passes on a transcript with no duplicate
+        # lines, which is the shape every earlier eyeball check used.
+        run: ./assets/scripts/usage-benchmark-row.test.sh
 
       - name: fleet-check regression tests
         # Proves the class split can still fail for its named regressions: a floor
