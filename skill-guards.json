@@ -1586,6 +1586,31 @@
         "before (?:your |the )?first edit[^\\n]{0,120}before staging"
       ],
       "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
+    },
+    {
+      "label": "append-only-handoff",
+      "anyOf": [
+        "[Aa]ppend-only: add a file, never rewrite",
+        "never rewrite, rename, or delete an existing one",
+        "two sessions ending on one repo write two files"
+      ],
+      "note": "#205: the whole design is that no session ever overwrites a seed — a global NEXT.md came within one write of destroying an unconsumed seed. Alternates must reword the rule sentence, never the heading above it; each requires the prohibition itself, not the word `handoff`."
+    },
+    {
+      "label": "both-end-artifacts",
+      "anyOf": [
+        "a session that skips either artifact has not ended",
+        "the two ending artifacts and the commit that lands them"
+      ],
+      "note": "#204 defect 1: the end checklist used to omit both ending artifacts (the handoff seed and the benchmark row) entirely, so a customized copy could drop them without tripping anything. Binds the intro sentence that names them as mandatory, not the step headings — headings survive a gutting."
+    },
+    {
+      "label": "newest-wins-not-mtime",
+      "anyOf": [
+        "\\*\\*[Nn]ewest wins\\*\\*, resolved by the filename date",
+        "never by mtime, which git does not preserve"
+      ],
+      "note": "#206 S1: mtime ordering already misordered production files (a 2026-08-11 seed rendered as 08-10), and git does not preserve mtime at all, so a fresh clone would order seeds by checkout order. Binds the ordering key, which is what makes 'newest wins' executable."
     }
   ],
   "skill": [

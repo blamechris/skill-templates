@@ -28,8 +28,11 @@ Run these in order; each step re-derives state rather than trusting memory:
 5. **Global-conventions sync** — the canonical `~/.claude/CLAUDE.md` is version-controlled at
    `~/Projects/skill-templates/assets/global-CLAUDE.md`; check `diff -q` between the two. If they
    differ, surface the drift before long work: the registry copy wins unless the local delta is an
-   un-landed improvement — in that case land it in the registry first (PR), then copy out.
-6. **Prior-session state** — if a handoff note, session ledger, or queue file exists ({{CUSTOMIZE: where this repo keeps handoff notes / session ledgers / queue files, e.g. `handoffs/`, `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this step's path list if the repo has none yet}}), read the ledger's STATE header (not the full history) and the handoff TL;DR. `/catchup` is the component skill for reconstructing a prior session where installed.
+   un-landed improvement — in that case land it in the registry first (PR), then copy out. Check
+   `~/.claude/commands/next.md` against `~/Projects/skill-templates/assets/next.md` the same way —
+   same rule, same direction. Both files are distributed verbatim, so this `diff -q` is their only
+   drift detector; there is no CI gate behind it.
+6. **Prior-session state** — read the **newest** note in {{CUSTOMIZE: this repo's handoff directory — default `docs/handoffs/` (`YYYY-MM-DD-<slug>.md`, one file per session boundary); add any session ledger or queue file this repo keeps, e.g. `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json`}}. **Newest wins**, resolved by the filename date first and, for two seeds sharing a date, by the `date:` timestamp in the frontmatter — never by mtime, which git does not preserve and which has already misordered production files. If two same-day seeds still tie, read both and say so rather than guessing. Read the seed's header and TL;DR plus the ledger's STATE header — not the full history. Handoff notes are **perishable**: each is superseded by the next, and anything in one still worth reading after it is consumed belongs in `docs/records/`, linked from the seed. `/catchup` is the component skill for reconstructing a prior session where installed.
 7. **Verify the last claimed merge** — if the prior session's notes claim a merge, confirm it (`gh pr view <n>` reports `MERGED`) before building on it. State is re-derived, not trusted.
 
 Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others), drifted skills, and what the session is picking up.
@@ -44,13 +47,40 @@ Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others)
 
 ### Session end — the checklist
 
-Run in order; skip a step only by saying so with a reason:
+Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the two ending artifacts and the commit that lands them; a session that skips either artifact has not ended.**
 
-1. **Convergence note** — write what shipped, what remains, and *why* each remaining item is blocked or deferred, into {{CUSTOMIZE: where session state lives in this repo — the session ledger if one exists, else the closing chat message}}.
-2. **Executive brief** — for a session that shipped real work (several PRs/issues, an epic), run `/visual-brief` into the vault (`$CLAUDE_BRIEF_DIR`). Skip for small sessions — say so.
-3. **Capture learnings** — run `/learn` for genuinely novel lessons; "nothing novel" is a valid outcome, stated.
-4. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
-5. **Final `**Status:**` line** — the last message ends with the short status pointing at the brief (if one was produced) and naming anything left for the user.
+1. **Handoff seed (artifact ②)** — write a **new** file at {{CUSTOMIZE: handoff directory — default `docs/handoffs/`}}`YYYY-MM-DD-<slug>.md`: what shipped, what remains, and *why* each remaining item is blocked or deferred. **Append-only: add a file, never rewrite, rename, or delete an existing one** — two sessions ending on one repo write two files instead of racing, and no destructive write exists anywhere in this system. It lives in the repo, committed, so the next session reads it with no external dependency; the vault brief is the presentation copy, never the source of truth. A line that cannot be public has exactly two outlets — the vault brief, or the repo stays private. There is no third: no redaction-by-gitignore, no side file.
+
+   `<slug>` is 2–5 kebab-case words naming the *outcome* (`e2-inline-write-path`), never a date and never the word `handoff`. `repo:` is the repo **directory** name, resolved from git rather than convention so two sessions cannot diverge on it:
+
+   ```bash
+   basename "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+   ```
+
+   Required header — the only part `/next` reads:
+
+   ```markdown
+   ---
+   type: handoff
+   date: 2026-08-11T21:40Z          # full UTC timestamp; breaks same-day ties
+   repo: skill-templates            # the repo directory name
+   picks_up_at: "issue #205 — implement the layered continuity scheme"
+   sensitivity: public              # public | vault
+   ---
+   # Handoff — <what this session actually landed>
+
+   - **Boundary reason:** <which global session-boundary rule fired>
+   - **Picks up at:** <the one thing the next session starts on>
+   ```
+
+   Then, in order: `## STATE` (branch/HEAD, working tree, CI, tests, open PRs/issues) · a **"Verify before building on any of this — re-derive, don't trust"** bash block where every command carries its expected answer as a comment · `## TL;DR — what shipped` · the next task · `## Left undone, deliberately`.
+
+2. **Benchmark row (artifact ①)** — append this session's row to `~/Obsidian/no-it-all/briefs/usage-benchmark.md` via `python3 ~/.claude/scripts/usage-benchmark-row.py`, replacing the placeholder with a one-line workload note. If the script resolves to a session ID that already has a row, **neither append nor overwrite** — the transcript counters are cumulative, so both actions corrupt the record; say so instead.
+3. **Land the seed** — `git status --short`, stage the file **by name**, commit `docs(handoffs): record the <date> session boundary`, and include it in this session's PR — or open a docs-only PR if there is none. Never a direct push to a protected `main`. Prefer landing it before the session ends; if the PR is still open at the close, the final status line names the file path **and** the PR number.
+4. **Executive brief** — for a session that shipped real work (several PRs/issues, an epic), run `/visual-brief` into the vault (`$CLAUDE_BRIEF_DIR`). Skip for small sessions — say so.
+5. **Capture learnings** — run `/learn` for genuinely novel lessons; "nothing novel" is a valid outcome, stated.
+6. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
+7. **Final `**Status:**` line** — the last message ends with the short status and **the seed's absolute path as the one line to paste**. If more waves remain, the relaunch task names that exact dated file — never a pointer that can move.
 
 ### Follow-on protocol (when a task completes and work remains)
 
@@ -71,6 +101,7 @@ Installing `session-lifecycle` should be followed by installing any missing comp
 
 Lines and blocks marked `{{CUSTOMIZE}}` need repo-specific adaptation:
 
-- **Handoff/ledger/queue paths** — where this repo keeps prior-session state (Resume step 5).
-- **Convergence-note destination** — session ledger vs closing message (End step 1).
-- **Repo-specific cleanup** — daemons, test-env restores (End step 4).
+- **Handoff directory** — where this repo keeps its append-only session seeds, default
+  `docs/handoffs/` (Resume step 6 **and** End step 1 — one marker text, two sites; keep them
+  identical, and add any ledger/queue path this repo carries to the Resume-step copy).
+- **Repo-specific cleanup** — daemons, test-env restores (End step 6).
