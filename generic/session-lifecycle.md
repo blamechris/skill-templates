@@ -37,17 +37,29 @@ Run these in order; each step re-derives state rather than trusting memory:
    the registry, then copy out). Exit 0 with default drift is information — it names the direction,
    act on it when convenient. Exit 2 means it could not see the registry copy (the `git fetch` is a
    hard precondition, never softened) — that is *not* agreement; say so rather than proceeding as if
-   it passed. Check `~/.claude/commands/next.md` against `~/Projects/skill-templates/assets/next.md`
-   with `diff -q`: it is distributed verbatim, carries no rule classes, and that diff is its only
-   drift detector.
-6. **Prior-session state** — read this scope's seed, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir `~/Obsidian/no-it-all/handoffs/`), plus {{CUSTOMIZE: any session ledger or queue file this repo keeps, e.g. `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this list if the repo has none}}. `<scope>` is the main worktree's directory basename, resolved from git (End step 1 carries the snippet), so every worktree of a repo resolves to the same seed and no `$PWD` test is involved. There is exactly **one** canonical seed per scope, so nothing has to be ranked: no newest-wins rule, no mtime, no tie to resolve. Sibling files named `NEXT-<scope>.<UTC>-<sid>.md`, or `…-<sid>-<n>.md` when two archives landed in one second, are **archived** seeds — a previous session's, parked when this one collided with it. Do not read them by default, but if the canonical seed is missing, say so and list them: the newest archive is usually an unconsumed handoff, and a session that silently starts from nothing is how work gets repeated. Read the seed's header and TL;DR plus the ledger's STATE header — not the full history. Seeds are **perishable**: each is superseded by the next, and anything in one still worth reading after it is consumed belongs in `docs/records/`, linked from the seed. `/catchup` is the component skill for reconstructing a prior session where installed.
+   it passed.
+
+   Then `/next` itself, which is distributed **verbatim** (no rule classes, no `{{CUSTOMIZE}}`), so a
+   plain `diff -q` is its whole drift detector — and **a missing file is not drift**:
+
+   ```bash
+   if [ ! -f ~/.claude/commands/next.md ]; then
+     echo "/next is not installed on this machine — cp assets/next.md ~/.claude/commands/next.md"
+   else
+     diff -q ~/.claude/commands/next.md ~/Projects/skill-templates/assets/next.md
+   fi
+   ```
+
+   Without the guard `diff` just errors on a machine that has never installed `/next`, which reads
+   as a failed check rather than as "install it". Install (or copy) first, then compare.
+6. **Prior-session state** — read this scope's seed, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir `~/Obsidian/no-it-all/handoffs/`), plus {{CUSTOMIZE: any session ledger or queue file this repo keeps, e.g. `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this list if the repo has none}}. `<scope>` is the main worktree's directory basename, resolved from git — `python3 ~/.claude/scripts/session-seed.py path` prints the exact file to open — so every worktree of a repo resolves to the same seed and no `$PWD` test is involved. There is exactly **one** canonical seed per scope, so nothing has to be ranked: no newest-wins rule, no mtime, no tie to resolve. Sibling files named `NEXT-<scope>.<UTC>-<sid>.md`, or `…-<sid>-<n>.md` when two archives landed in one second, are **archived** seeds — a previous session's, parked when this one collided with it. Do not read them by default, but if the canonical seed is missing, say so and list them: the newest archive is usually an unconsumed handoff, and a session that silently starts from nothing is how work gets repeated. Read the seed's header and TL;DR plus the ledger's STATE header — not the full history. Seeds are **perishable**: each is superseded by the next, and anything in one still worth reading after it is consumed belongs in `docs/records/`, linked from the seed. `/catchup` is the component skill for reconstructing a prior session where installed.
 7. **Verify the last claimed merge** — if the prior session's notes claim a merge, confirm it (`gh pr view <n>` reports `MERGED`) before building on it. State is re-derived, not trusted.
 
 Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others), drifted skills, and what the session is picking up.
 
 ### During the session
 
-- **Every user-facing message ends with the mechanical `**Status:**` line** — four fixed slots (done · in flight · blocked · DECISION), `none` when empty. This is the global reporting rule in `~/.claude/CLAUDE.md` ("End-of-message summary"); follow it from there — do not restate or fork it here. Subagents' final messages carry their own `**Status:**` line.
+- **Every user-facing message ends with the mechanical `**Status:**` block** — a `**Status:**` lead on its own line, then four fixed slots as one bullet each (done · in flight · blocked · DECISION), `none` when empty. This is the global reporting rule in `~/.claude/CLAUDE.md` ("End-of-message summary"); follow it from there — do not restate or fork it here, and in particular do not emit the retired one-line `·`-separated form. Subagents' final messages carry their own `**Status:**` block.
 - **Session boundaries** — the global `~/.claude/CLAUDE.md` "Session boundaries" section governs when to end this session and restart fresh (wave boundaries, ~150K main-thread context, second compaction, work-class switches). Follow it from there.
 - **Assert the branch before you write.** `git` state is global to the working copy and several sessions share it, so re-check `git branch --show-current` against `SESSION_BRANCH` (claimed at start, step 2) **immediately before your first edit** and **again immediately before staging**. A checkout from earlier in the session proves nothing — another session can move HEAD in between, and your edits then land on its branch. Re-check, never remember; if HEAD has moved, stop and re-establish the branch before writing anything.
 - **Stage explicit paths.** `git status --short`, then `git add` the files you changed, **by name**. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a` — a foreign file in a shared tree is the normal case, so a bulk add commits someone else's work into your PR. `-u` is not the safe one: it restages every *tracked* file whose worktree copy differs, including files a clean/smudge filter rewrote without you touching them — that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as an edit.
@@ -59,125 +71,63 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
 
 1. **Handoff seed (artifact ②)** — **the seed is written outside every worktree, at an absolute path:** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`. It holds what shipped, what remains, and *why* each remaining item is blocked or deferred. Not in the repo, not in this session's worktree, not on a branch — an absolute path outside every git workspace has **no worktree to be torn down with, no branch to be unreachable from, and no index to be confused with**, which is why nothing downstream has to be gated on it. Three earlier attempts to keep the seed inside a workspace failed on exactly those surfaces, the last of them on a "committed" proof that had only staged the file.
 
-   `<scope>` is the **main worktree's directory basename**, resolved from git — not the origin slug, which two different repos can share (`chroxy` and `chroxy-daemon` do), and never a `$PWD` prefix test, which reports the wrong answer from a linked worktree:
+   **One command writes it.** It resolves the scope, resolves this session's id, archives whatever it collides with, writes the seed, and proves the result — all of it in `session-seed.py`, none of it transcribed here:
 
    ```bash
-   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=
-   if [ -n "$common" ]; then SCOPE=$(basename "$(dirname "$common")"); else SCOPE=fleet; fi
-   HANDOFF_DIR=${CLAUDE_HANDOFF_DIR:-$HOME/Obsidian/no-it-all/handoffs}
-   SEED="$HANDOFF_DIR/NEXT-$SCOPE.md"
-   SID=$(python3 "$HOME/.claude/scripts/usage-benchmark-row.py" 2>/dev/null |
-         awk -F'|' '{ gsub(/[[:space:]]/,"",$3); if ($3 != "") { print $3; exit } }')
-   [ -n "$SID" ] || { echo "REFUSE: this session has no id — no seed is written"; exit 1; }
+   python3 ~/.claude/scripts/session-seed.py write \
+     --picks-up-at "issue #209 — assets/scripts has no test coverage" \
+     --boundary-reason "wave boundary" \
+     --body-file /tmp/handoff-body.md
    ```
 
-   A session that is not in a repo at all resolves to `fleet` — or `NEXT-fleet-<topic>.md` when it has a named topic. Every worktree, subdirectory, and detached HEAD of one repo resolves to one seed.
+   It prints `seed: <absolute path>` — which is step 7's one line to paste — or a `REFUSE:` line with a nonzero exit, and **a REFUSE means nothing was written and no existing seed was moved.** Add `--topic <name>` for a fleet session with a named topic; never anywhere else.
 
-   `$SID` is **derived, never remembered**. It is what archive-on-collide decides on and what step 3 gates on, so a checklist that merely *mentions* it leaves both to run on an empty string — the archive arm then compares against nothing and step 3 has nothing to compare. The one thing that already computes an id for this session is step 2's benchmark row, whose second column *is* the id; reading it here is what keeps the seed's `session:` and artifact ① the same string instead of two ids that only look related. A session that cannot resolve one stops **before** the archive rather than writing an anonymous seed: `session:` missing is a seed the next session cannot archive (it reads as `unknown`) and this session cannot prove, so an empty id is a reason to halt, not a value to carry.
+   `--body-file` is the seed's body, written first to a scratch path (`-` reads stdin). Omit it and the script writes a skeleton to fill in: `## STATE` (branch/HEAD, working tree, CI, tests, open PRs and issues) · a **"Verify before building on any of this — re-derive, don't trust"** block where every command carries its expected answer as a comment · `## TL;DR — what shipped` · `## Today's task` · `## Left undone, deliberately`.
 
-   **Archive on collide — never overwrite a seed this session did not write.** Before writing, if the canonical file exists and its `session:` is not this session's, rename the incumbent out of the way, then write. **The archive is what earns the right to write, so the write is conditional on it: an `mv` that fails aborts the step rather than falling through.** Unchecked, this destroys the incumbent without a race and without a hostile actor — `rename(2)` needs the write bit on the *directory* while overwriting a file inside it does not, so a read-only handoff dir silently turns "archive then write" into "write over it".
+   **Why a script and not a snippet.** This step was prose containing bash, transcribed and executed by an agent, and tested by extracting the fenced blocks back out and running them. Five rounds of review each fixed their findings and each introduced new ones, because every fix added more shell to a document: scope resolution, path sanitising, collision archiving, id resolution and a re-derivation of all three appeared twice, in near-copies that drifted. The logic is one implementation now, with its own test suite; what stays here is the doctrine, which is the part a customized copy must not be able to drop. **Do not hand-write the seed** or re-derive the scope, the id, the archive name or the proof by hand at the boundary — a second implementation is the drift that cost five rounds.
 
-   ```bash
-   if [ -f "$SEED" ]; then
-     prev=$(awk 'NR>1 && /^---[[:space:]]*$/ {exit}
-                 /^session:[[:space:]]*/ { sub(/^session:[[:space:]]*/,"");
-                                           sub(/[[:space:]]*#.*$/,"");
-                                           sub(/[[:space:]]+$/,""); print; exit }' "$SEED")
-     prev=${prev#\"}; prev=${prev%\"}; prev=${prev#\'}; prev=${prev%\'}   # quoted scalars are legal YAML
-     [ -n "$prev" ] || prev=unknown       # unidentifiable is a reason to keep it, not to clobber it
-     if [ "$prev" != "$SID" ]; then
-       # The incumbent's own bytes must never steer the path that protects it: reduce
-       # the id to one filename component before it is interpolated anywhere.
-       slug=$(printf '%s' "$prev" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-40)
-       case "$slug" in ''|.|..) slug=unknown;; esac
-       # The stamp is a second and the slug is the incumbent's id, so two archives
-       # of the same id inside one second name the same file — and `mv` onto it
-       # overwrites the archive this step just made. Step past a taken name, with
-       # `-$n` rather than `.$n`: /next tells an archive from a canonical seed by
-       # `.<UTC>-<sid>.md`, so a second dot would read as part of the scope key.
-       base="$HANDOFF_DIR/NEXT-$SCOPE.$(date -u +%Y%m%dT%H%M%SZ)-$slug"
-       arch="$base.md"; n=0
-       while [ -e "$arch" ]; do
-         n=$((n+1))
-         [ "$n" -lt 100 ] || { echo "REFUSE: no free archive name for $SEED — the incumbent stays"; exit 1; }
-         arch="$base-$n.md"
-       done
-       mv "$SEED" "$arch" || {
-         echo "REFUSE: could not archive $SEED — the incumbent stays, the seed is not written"
-         exit 1
-       }
-     fi
-   fi
-   # then write $SEED
-   ```
+   **`<scope>` is the main worktree's directory basename**, resolved from git. Not the origin slug, which two different repos can share (`chroxy` and `chroxy-daemon` do), and never a `$PWD` prefix test, which reports the wrong answer from a linked worktree — where sessions actually run. Every worktree, subdirectory and detached HEAD of one repo therefore resolves to one seed. A session that is not in a repo at all is `fleet`, or `NEXT-fleet-<topic>.md` with `--topic`. Anything that is *not* "this is not a git repository" — a dubious-ownership refusal, a git too old for the flag — is a REFUSE rather than a fallback to `fleet`: filing the seed under a scope nobody reads looks exactly like success.
 
-   The guard and the sanitiser fix different halves and neither replaces the other. The guard is what makes the incumbent safe: any `mv` that fails now stops the step instead of being followed by the write. The sanitiser is what keeps the step *usable* — `session:` is sourced from an id documented as `[session-id-or-jsonl-path]`, so a slash in one is a plausible agent choice rather than an attack, and interpolated raw it names a directory that does not exist. With the guard alone that id is no longer data loss, but it is a session that can never write a seed at all, on a value it read out of someone else's file. Reduce the id to one filename component and the archive path is always constructible. (Containment is separately structural: `$slug` sits behind the `NEXT-$SCOPE.<UTC>-` prefix, so it is never the leading component of a path element and a `..` in it cannot climb anywhere. Keep it in that position.)
+   **The session id is `--session`, else `$CLAUDE_CODE_SESSION_ID`, else a REFUSE.** There is no third source, and specifically no "most recently modified transcript" pick: that is fleet-wide, so on a machine running several sessions it names whichever session last wrote a turn — neither stable across the two places the id is used nor necessarily this session at all. A session that cannot name itself writes nothing: an anonymous seed is one the next session cannot archive (it reads as `unknown`) and this one cannot prove, so an unresolvable id is a reason to halt, not a value to carry. `$CLAUDE_CODE_SESSION_ID` truncated to 8 characters is exactly what `usage-benchmark-row.py` prints in artifact ①'s id column, so the seed and the benchmark row name the session with the same string.
 
-   `mv` preserves the incumbent byte for byte, and the canonical name is free again immediately — so *"one line to paste"* keeps working. Per-session-unique filenames would preserve the old seed too, and would destroy that affordance: the next session would have to be told which of N files to read, which is the thing the seed exists to avoid. Re-running the same session's own write is not a collision and overwrites in place.
+   **Archive on collide — never overwrite a seed this session did not write.** If the canonical file exists carrying a different `session:`, the incumbent is renamed to `NEXT-<scope>.<UTC>-<sid>.md` (`-<n>` appended when two archives land in one second) and only then is the seed written. **The archive is what earns the right to write, so the write is conditional on it: an archive that fails aborts the step rather than falling through.** Unchecked, this destroys the incumbent with no race and no hostile actor — `rename(2)` needs the write bit on the *directory* while overwriting a file inside it does not, so a read-only handoff dir silently turns "archive then write" into "write over it". Re-running the same session's own write is not a collision and overwrites in place.
 
-   The **archive name has to be free before it is used**, because it is not unique on its own: a stamp resolved to the second plus the incumbent's id repeats whenever the same incumbent is archived twice inside one second, and a wave boundary that ends one session and starts the next does exactly that. `mv` onto a name already taken overwrites it, so the unguarded form destroys the archive it made a moment earlier — the same loss the guard above prevents, arriving by the other door. Stepping to the first free `-<n>` keeps both, and the separator is a dash because `/next` reads a second dot as part of the scope key. This is a check, not a lock: two sessions racing on one seed can still both see the name free, which is the non-atomicity `mv` has always had here and is a different problem from the sequential one this closes.
+   Archiving preserves the incumbent byte for byte and frees the canonical name immediately, which is what keeps *"one line to paste"* working. Per-session-unique filenames would preserve the old seed too, and would destroy that affordance: the next session would have to be told which of N files to read, which is the thing the seed exists to avoid.
 
-   Required header — the `session:` field is what makes archive-on-collide decidable *and* what step 3 reads back to prove this session wrote the seed, so it is never decorative; `picks_up_at:` is the only line `/next` quotes:
+   Required header — `session:` is what makes archive-on-collide decidable *and* what step 3 reads back, so it is never decorative; `picks_up_at:` is the only line `/next` quotes:
 
    ```markdown
    ---
    type: handoff
    date: 2026-08-11T21:40Z          # full UTC timestamp
    scope: skill-templates           # the main worktree's directory basename, or fleet
-   session: a1b2c3d4                # this session's id — the one usage-benchmark-row.py prints
-   picks_up_at: "issue #205 — implement the layered continuity scheme"
+   session: a1b2c3d4                # this session's id
+   picks_up_at: "issue #205 — extract the seed logic into a tested script"
    sensitivity: public              # public | vault
    ---
-   # Handoff — <what this session actually landed>
-
-   - **Boundary reason:** <which global session-boundary rule fired>
-   - **Picks up at:** <the one thing the next session starts on>
    ```
 
-   Then, in order: `## STATE` (branch/HEAD, working tree, CI, tests, open PRs/issues) · a **"Verify before building on any of this — re-derive, don't trust"** bash block where every command carries its expected answer as a comment · `## TL;DR — what shipped` · the next task · `## Left undone, deliberately`.
-
-   The seed's own home is private, so `sensitivity: vault` needs no separate outlet; what still may not go in is a secret, in any file, ever.
+   The script generates all of it; `session-seed.py header <path>` reads it back. The seed's own home is private, so `sensitivity: vault` needs no separate outlet; what still may not go in is a secret, in any file, ever.
 
 2. **Benchmark row (artifact ①)** — append this session's row to `~/Obsidian/no-it-all/briefs/usage-benchmark.md` via `python3 ~/.claude/scripts/usage-benchmark-row.py`, replacing the placeholder with a one-line workload note. If the script resolves to a session ID that already has a row, **neither append nor overwrite** — the transcript counters are cumulative, so both actions corrupt the record; say so instead.
-3. **Prove the seed the next session will read is *this* session's** — re-derive the path from scratch, then check authorship, then location; none of it is about git history:
+3. **Prove the seed the next session will read is *this* session's.** Step 1 already ran this proof and its verdict was step 1's exit code; run it again after anything that could have moved underneath you, and to re-print the paste line:
 
    ```bash
-   # Re-derived, NOT carried over from step 1. Every line down to $SID is step 1's
-   # verbatim, repeated on purpose: a check handed step 1's variables can only
-   # confirm step 1's own arithmetic, and the path is the half most worth doubting.
-   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=
-   if [ -n "$common" ]; then SCOPE=$(basename "$(dirname "$common")"); else SCOPE=fleet; fi
-   HANDOFF_DIR=${CLAUDE_HANDOFF_DIR:-$HOME/Obsidian/no-it-all/handoffs}
-   SEED="$HANDOFF_DIR/NEXT-$SCOPE.md"
-   SID=$(python3 "$HOME/.claude/scripts/usage-benchmark-row.py" 2>/dev/null |
-         awk -F'|' '{ gsub(/[[:space:]]/,"",$3); if ($3 != "") { print $3; exit } }')
-
-   mine=$(awk 'NR>1 && /^---[[:space:]]*$/ {exit}
-               /^session:[[:space:]]*/ { sub(/^session:[[:space:]]*/,"");
-                                         sub(/[[:space:]]*#.*$/,"");
-                                         sub(/[[:space:]]+$/,""); print; exit }' "$SEED" 2>/dev/null)
-   mine=${mine#\"}; mine=${mine%\"}; mine=${mine#\'}; mine=${mine%\'}
-   if [ -n "$SID" ] && [ "$mine" = "$SID" ]; then
-     echo "seed: $SEED"
-   else
-     echo "REFUSE: $SEED carries session '${mine:-none}', not this session's '${SID:-unset}'"
-   fi
-   TREE=$(git rev-parse --show-toplevel 2>/dev/null)
-   case "$SEED" in "${TREE:-/nonexistent}"/*) echo "REFUSE: the seed is inside this worktree";; esac
+   python3 ~/.claude/scripts/session-seed.py verify     # + the same --topic the write used
    ```
 
-   `seed:` must print and `REFUSE:` must not. **Existence is not the property worth proving** — a file is at `$SEED` in every failure mode this checklist has, and the two that matter fail in different halves, so the check has to be re-derived *and* read back:
+   `seed:` must print and `REFUSE:` must not. The proof re-derives the scope, the handoff dir and the path from scratch in a fresh process — it is handed nothing the write computed — and then reads the seed's `session:` back. **Existence is not the property worth proving**: a file is at the canonical path in every failure mode this checklist has, and the two that matter fail in different halves.
 
-   - **Wrong file.** This session keyed `<scope>` on the *linked* worktree's basename instead of the main worktree's, wrote `NEXT-<wrong>.md`, and never touched the canonical file the next session will actually open. Its own seed is perfectly well-formed; it is simply not at the path anybody reads, while the previous session's stale seed still sits there. Re-deriving `$SEED` is the only thing that catches this — a check handed step 1's `$SEED` reads back the very file step 1 misfiled, finds its own id, and passes. **Reusing step 1's variables here would make the check structurally incapable of failing for the mistake it exists to catch.**
-   - **Right file, wrong author.** Step 1's archive was destroyed and overwritten, so the canonical path holds someone else's seed. Reading the `session:` field back is what distinguishes "I wrote the seed" from "a seed exists": it is the same field step 1 archives on, used a second time as the proof rather than only as the decision.
+   - **Wrong file.** The scope was keyed on something other than the main worktree — the *linked* worktree's basename is the near miss — so a perfectly well-formed seed sits at a path nobody opens while the previous session's stale seed still occupies the canonical name. Only re-deriving the scope catches this. **A check handed the write's own path reads back the very file the write misfiled, finds its own id, and passes — structurally incapable of failing for the mistake it exists to catch.**
+   - **Right file, wrong author.** The archive was destroyed and overwritten, so the canonical path holds someone else's seed. Reading `session:` back is what distinguishes "I wrote the seed" from "a seed exists": the same field the archive decides on, used a second time as the proof.
 
-   `[ -f "$SEED" ]` calls both a pass. An unset `$SID` is a REFUSE too — otherwise an empty id matches a seed with no `session:` line and the check passes on nothing; step 1 has already halted on that, so reaching it here means the id source went away mid-session. There is no commit to make, no branch to push, and no `cat-file` to run — the previous three rounds of this checklist all failed inside that machinery. Whether the vault repo itself is committed and pushed is ordinary vault hygiene, not a precondition: the seed already exists at a stable absolute path that nothing this session does can delete.
+   A bare `[ -f "$SEED" ]` calls both a pass, and an unresolvable session id is a REFUSE too — otherwise an empty id matches a seed with no `session:` line and the check passes on nothing. There is no commit to make, no branch to push, and no `cat-file` to run: the previous three rounds of this checklist all failed inside that machinery. Whether the vault repo itself is committed and pushed is ordinary vault hygiene, not a precondition — the seed already exists at a stable absolute path that nothing this session does can delete.
 4. **Executive brief** — for a session that shipped real work (several PRs/issues, an epic), run `/visual-brief` into the vault (`$CLAUDE_BRIEF_DIR`). Skip for small sessions — say so.
 5. **Capture learnings** — run `/learn` for genuinely novel lessons; "nothing novel" is a valid outcome, stated.
 6. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
 
    This step is **ungated on purpose**: `git worktree remove --force` deletes untracked files without prompting, and the seed is not in any worktree to be deleted. Anything else durable that got written into a worktree is committed and pushed before removal, or it is lost — so do not write durable things there.
-7. **Final `**Status:**` line** — the last message ends with the short status and **the one line to paste**: the seed's absolute path, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, expanded. There is exactly one legal form, it is the same string at every boundary of this scope, and cleanup cannot invalidate it — which is what makes a relaunch task safe to write in advance. If a PR is still open at the close, name its number alongside the path.
+7. **Final `**Status:**` block** — the last message ends with the mechanical status block and **the one line to paste**: the seed's absolute path, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, expanded — which is the `seed:` line step 1 printed. There is exactly one legal form, it is the same string at every boundary of this scope, and cleanup cannot invalidate it — which is what makes a relaunch task safe to write in advance. If a PR is still open at the close, name its number alongside the path.
 
 ### Follow-on protocol (when a task completes and work remains)
 
@@ -193,6 +143,18 @@ The canonical rules live in `~/.claude/CLAUDE.md` under **"Follow-on protocol"**
 | `/create-issue` | File scoped follow-on issues | `skill add create-issue` |
 
 Installing `session-lifecycle` should be followed by installing any missing components in the same pass — the bundle head without its components is a checklist that can't execute.
+
+**Two machine-level scripts** back the End steps, and they are bootstrapped once per machine from
+the registry rather than installed per repo — both End step 1 and `/next` call the same copy, which
+is the point:
+
+```bash
+cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py ~/.claude/scripts/
+```
+
+`session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
+`usage-benchmark-row.py` emits artifact ①'s row. Each ships with a sibling test suite in the
+registry, which is where their behaviour is pinned — this file states the doctrine, not the code.
 
 ## Customization Points
 

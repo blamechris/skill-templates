@@ -230,6 +230,21 @@ name, so *"one line to paste"* survives; a seed that was never consumed survives
 a name that says when it was parked. Per-session-unique filenames would also preserve it,
 and would destroy the affordance that makes the handoff usable — so they are not the answer.
 
+**One command does all of it**, and nothing else may write a seed:
+
+```bash
+python3 ~/.claude/scripts/session-seed.py write --picks-up-at "<the next thing>"
+```
+
+It resolves the scope from git, resolves this session's id from `--session` or
+`$CLAUDE_CODE_SESSION_ID` (and REFUSES rather than guessing at one), archives on collide,
+writes, and proves the result — printing `seed: <absolute path>`, or a `REFUSE:` line and a
+nonzero exit after which nothing was written and no seed was moved. It is bootstrapped with
+the other machine scripts (`cp assets/scripts/session-seed.py ~/.claude/scripts/`) and is
+covered by `assets/scripts/session-seed.test.sh` in the registry. The rule above is doctrine;
+the script is the only implementation of it, because five review rounds of the same logic
+transcribed into prose is what this replaced.
+
 Then hand Chris **one line to paste**: that absolute path. The seed file — not memory, not
 chat history — is the continuity mechanism.
 

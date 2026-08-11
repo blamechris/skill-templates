@@ -30,35 +30,36 @@ asking for that seed.
 [ -f "$ARGUMENTS" ] && echo "seed given: $ARGUMENTS"
 ```
 
-**2 — repo scope.** Resolve via **git, never a `$PWD` prefix match against `~/Projects`.**
-Worktrees routinely live outside `~/Projects` (a linked worktree under `/private/tmp/...` is the
-ordinary case on this machine), so a path-prefix test reports "fleet scope" while sitting inside
-a repo. `--git-common-dir` is the test because it points at the *shared* `.git` — the repo's
-identity — from the main checkout, from a nested subdirectory, from a detached HEAD, and from
-every linked worktree alike:
+**2 — repo scope.** Ask the script that owns the seed. It resolves via **git, never a `$PWD` prefix
+match against `~/Projects`** — worktrees routinely live outside `~/Projects` (a linked worktree
+under `/private/tmp/...` is the ordinary case on this machine), so a path-prefix test reports
+"fleet scope" while sitting inside a repo:
 
 ```bash
-common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=
-if [ -n "$common" ]; then
-  SCOPE=$(basename "$(dirname "$common")")   # identity: the MAIN WORKTREE's directory basename
-  TREE=$(git rev-parse --show-toplevel)      # where I am: THIS worktree's tree
-else
-  SCOPE=fleet                                # not in a repo at all — branch 3
-fi
-HANDOFF_DIR=${CLAUDE_HANDOFF_DIR:-$HOME/Obsidian/no-it-all/handoffs}
-SEED="$HANDOFF_DIR/NEXT-$SCOPE.md"
+SCOPE=$(python3 ~/.claude/scripts/session-seed.py scope) || exit 1   # `fleet` outside any repo
+SEED=$(python3 ~/.claude/scripts/session-seed.py path)  || exit 1
+TREE=$(git rev-parse --show-toplevel 2>/dev/null)                    # where I am, if anywhere
 ```
 
-Three properties of that key, each of which something simpler gets wrong:
+**The dispatcher does not re-implement the key; the writer and the reader must agree by
+construction.** Two hand-written copies of this derivation is how the fleet acquired a defect that
+only showed up on one side of it, and there is exactly one implementation now — the same one End
+step 1 writes through. Its properties, each of which something simpler gets wrong:
 
-- **`--path-format=absolute` is an addition to the test, not a substitute for it.** The bare form
-  returns a relative `.git` from a main checkout, which cannot be `dirname`'d into a repo root.
+- **`--git-common-dir`, with `--path-format=absolute`.** It points at the *shared* `.git` — the
+  repo's identity — from the main checkout, a nested subdirectory, a detached HEAD and every
+  linked worktree alike. The bare form returns a relative `.git` from a main checkout, which
+  cannot be `dirname`'d into a repo root, so the flag is an addition to the test rather than a
+  substitute for it.
 - **The directory basename, not the origin slug.** `chroxy` and `chroxy-daemon` share one origin
   URL and are separate projects with separate work; keying on the remote would merge their seeds
   and let each overwrite the other's.
-- **Outside any repo, `git rev-parse` exits 128** and the scope is `fleet` — the same word the
-  fleet seed is named for, so an orchestrator session and this dispatcher agree without a special
-  case. A session with a named topic uses `NEXT-fleet-<topic>.md`.
+- **Outside any repo the scope is `fleet`** — the same word the fleet seed is named for, so an
+  orchestrator session and this dispatcher agree without a special case. A session with a named
+  topic uses `NEXT-fleet-<topic>.md`, which `session-seed.py path --topic <name>` prints.
+- **A git failure that is not "not a git repository" is a REFUSE, not a `fleet` fallback**, and it
+  exits nonzero — hence the `|| exit 1`. Ranking the fleet from inside a repo the dispatcher
+  could not identify is a confident wrong answer.
 
 In repo scope, read `$SEED` and hand off to `/session-lifecycle start`. Exactly one canonical
 seed exists per scope, so there is nothing to rank and nothing to tie-break. If it is absent, say
@@ -76,9 +77,14 @@ the one word below.
 ```bash
 PRI=~/Projects/PRIORITIES.md
 if [ -f "$PRI" ]; then
-  age=$(( ( $(date +%s) - $(stat -f %m "$PRI") ) / 86400 ))   # GNU: stat -c %Y
+  # BSD and GNU `stat` disagree on BOTH flags, and they disagree SILENTLY in the
+  # worst direction: `stat -f` on GNU asks for FILESYSTEM stats, so it neither
+  # errors usefully nor returns an mtime — it prints an unrelated number that then
+  # formats as a plausible date. Probe once, and never mix the two spellings.
+  mtime=$(stat -c %Y "$PRI" 2>/dev/null || stat -f %m "$PRI")
+  age=$(( ( $(date +%s) - mtime ) / 86400 ))
   printf 'PRIORITIES.md — last edited %s (%s days ago)%s\n' \
-    "$(stat -f '%Sm' -t '%Y-%m-%d' "$PRI")" "$age" \
+    "$(date -u -d "@$mtime" +%Y-%m-%d 2>/dev/null || date -u -r "$mtime" +%Y-%m-%d)" "$age" \
     "$( [ "$age" -gt 14 ] && echo ' — stale; worth two minutes' )"
   cat "$PRI"
 fi
@@ -107,32 +113,16 @@ find them, no branch is consulted, and a repo that is not cloned on this machine
 if a session ever ended on it:
 
 ```bash
-seed_rows() {                          # one row per SCOPE: scope <TAB> timestamp <TAB> path
-  d=${CLAUDE_HANDOFF_DIR:-$HOME/Obsidian/no-it-all/handoffs}
-  [ -d "$d" ] || return 1
-  find "$d" -maxdepth 1 -type f -name 'NEXT-*.md' |
-  while IFS= read -r f; do
-    base=${f##*/}
-    # Archives are history, never ranked. The discriminator is the timestamped suffix
-    # NEXT-<scope>.<UTC>-<sid>.md — NOT "the name contains a dot": `blamechris.github.io`
-    # is a legal directory basename and therefore a legal scope key.
-    printf '%s' "$base" | grep -Eq '\.[0-9]{8}T[0-9]{6}Z-[^.]+\.md$' && continue
-    scope=${base#NEXT-}; scope=${scope%.md}
-    ts=$(awk 'NR>1 && /^---[[:space:]]*$/ {exit}
-              /^date:[[:space:]]*/ { sub(/^date:[[:space:]]*/,"");   # strip the key
-                                     sub(/[[:space:]]*#.*$/,"");     # trailing comment
-                                     sub(/[[:space:]]+$/,"");        # trailing whitespace
-                                     print; exit }' "$f")
-    ts=${ts#\"}; ts=${ts%\"}          # a quoted scalar is valid YAML — and an
-    ts=${ts#\'}; ts=${ts%\'}          # unstripped quote sorts before every digit
-    # `grep`, not `case`: bash 3.2 (the /bin/bash macOS ships) cannot parse a `case`
-    # nested inside `$( )`. Anything not shaped like a timestamp counts as MISSING,
-    # never as "early".
-    printf '%s' "$ts" | grep -q '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T' || ts=
-    printf '%s\t%s\t%s\n' "$scope" "$ts" "$f"
-  done
-}
+python3 ~/.claude/scripts/session-seed.py list        # scope <TAB> date <TAB> path, one row per scope
+python3 ~/.claude/scripts/session-seed.py list --archives   # only if a canonical seed is missing
 ```
+
+**Archives are history and are never ranked**, and the discriminator is not "the name contains a
+dot": `blamechris.github.io` is a legal directory basename and therefore a legal scope key. An
+archive is the timestamped suffix `NEXT-<scope>.<UTC>-<sid>.md`, and that rule lives in the script
+alongside the sanitiser that produces those names — one definition, so the writer cannot mint a
+name the reader misclassifies. It did once: a sanitiser that permitted `.` in the `<sid>` position
+produced archives this listing read back as canonical seeds, hanging a phantom scope off the fleet.
 
 **A seed with no parseable `date:` is UNDATED, not old.** Order it by nothing: list it in a
 separate *"undated seeds"* group with its scope and path, and say the ranking could not place it.

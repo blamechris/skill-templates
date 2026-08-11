@@ -448,9 +448,16 @@ Long autonomous runs are a sequence of bounded sessions, not one endless context
 - **Unattended with no re-launcher** — do **NOT** end the session (nothing would relaunch it): write the handoff seed, force/await a compaction at the boundary so the next segment starts lean, and continue. The cost goal — shed context at the boundary — holds in every mode.
 - **The boundary seed is written outside every worktree, and it archives rather than overwrites.** Both halves come from `/session-lifecycle` End step 1 and neither is optional:
 
-  **① The path.** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, where `<scope>` is the main worktree's directory basename from `git rev-parse --path-format=absolute --git-common-dir`. Never inside the segment's worktree: `git worktree remove --force` — the fleet's standard teardown — deletes untracked files silently, which is how three earlier versions of this rule lost a seed. Outside every workspace there is nothing to commit, nothing to push, and nothing to gate teardown on.
+  ```bash
+  python3 ~/.claude/scripts/session-seed.py write \
+    --picks-up-at "<the next queue item>" --boundary-reason "wave boundary"
+  ```
 
-  **② The header, and archive-on-collide.** Write the frontmatter End step 1 prescribes — `type`, `date` (full UTC timestamp), `scope`, `session`, `picks_up_at`, `sensitivity`. If the canonical file already exists carrying a **different** `session:`, rename it to `NEXT-<scope>.<UTC>-<sid>.md` before writing; a seed this segment did not write is never overwritten, and a segment re-writing its own seed overwrites in place.
+  **① The path.** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, where `<scope>` is the main worktree's directory basename. Never inside the segment's worktree: `git worktree remove --force` — the fleet's standard teardown — deletes untracked files silently, which is how three earlier versions of this rule lost a seed. Outside every workspace there is nothing to commit, nothing to push, and nothing to gate teardown on.
+
+  **② The header, and archive-on-collide.** The command writes the frontmatter End step 1 prescribes — `type`, `date` (full UTC timestamp), `scope`, `session`, `picks_up_at`, `sensitivity`. If the canonical file already exists carrying a **different** `session:`, it renames that one to `NEXT-<scope>.<UTC>-<sid>.md` before writing; a seed this segment did not write is never overwritten, a segment re-writing its own seed overwrites in place, and a failed archive is a REFUSE that writes nothing.
+
+  **Do not reimplement any of this inline.** The scope key, the session id, the archive and the proof live in one script with its own test suite; a segment that writes its own version is exactly the drift this consolidation removed.
 
 - **~150K main-thread context ceiling.** Past ~150K tokens of main-thread context, finish the current issue only, write the short handoff note (queue position, open blockers, awaiting-user items, last verified merge), and end the session (unattended with no re-launcher: force a compaction instead). Resume Strategy below makes the fresh session lossless — it re-derives progress from GitHub state, so the handoff plus the queue is all the seed a restart needs.
 - **Cost circuit breaker at wave boundaries (queue checkpoints).** At each boundary, check session cost ({{CUSTOMIZE: cost source — e.g. the statusline computes it; name the per-session budget, e.g. "$X eq."}}). Over budget → write the handoff and **stop and notify** instead of continuing. This breaker is the sole sanctioned exception to Critical Rule 4's "everything after is fully autonomous".
