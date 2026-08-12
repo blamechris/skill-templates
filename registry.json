@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "efd3a66",
+  "generatedFromCommit": "7d2cfa3",
   "skillCount": 41,
   "skills": [
     {
@@ -1319,7 +1319,7 @@
     },
     {
       "name": "prime-directive",
-      "hash": "809bf29",
+      "hash": "7d2cfa3",
       "lines": 129,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
@@ -1709,8 +1709,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "809bf29",
-      "lines": 167,
+      "hash": "7d2cfa3",
+      "lines": 170,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
