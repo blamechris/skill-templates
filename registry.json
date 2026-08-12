@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "7d2cfa3",
+  "generatedFromCommit": "1af9c66",
   "skillCount": 41,
   "skills": [
     {
@@ -76,7 +76,7 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "809bf29",
+      "hash": "1af9c66",
       "lines": 516,
       "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
       "guards": [
@@ -969,7 +969,7 @@
     },
     {
       "name": "look-approve",
-      "hash": "110a238",
+      "hash": "1af9c66",
       "lines": 474,
       "description": "Get a visual deliverable **approved** — by showing it, not describing it. Runs the real app from an isolated worktree of the approval target, captures **moving** evidence (an animated GIF tour plus one still per feature under review), emits a SHORT one-screen approval card as a self-contained HTML file, puts a single approve / approve-with-notes / reject question to the owner, and records the verdict on the tracking issue. The deliverable is a visual and a *\"we gotta do this\"* — never six pages of prose. Reach for it when a UI/art/feel change is sitting on `main` waiting for a human to say yes.",
       "guards": [
@@ -1319,7 +1319,7 @@
     },
     {
       "name": "prime-directive",
-      "hash": "7d2cfa3",
+      "hash": "1af9c66",
       "lines": 129,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
@@ -1709,7 +1709,7 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "7d2cfa3",
+      "hash": "1af9c66",
       "lines": 170,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
@@ -2067,7 +2067,7 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "809bf29",
+      "hash": "1af9c66",
       "lines": 455,
       "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
       "guards": [
