@@ -95,7 +95,11 @@ git -C "$REPO" worktree add --detach "$WT" "${TARGET_REF:-origin/main}"
   file "$WT/{{CUSTOMIZE: path to a representative binary asset, e.g. a texture}}"
   # want: "PNG image data …"   NOT: "ASCII text"  → then: git -C "$WT" lfs pull
   ```
-- Remove it when the pass is done: `git -C "$REPO" worktree remove --force "$WT"`.
+- Remove it when the pass is done: `git -C "$REPO" worktree remove --force "$WT"`. `--force`
+  deletes every untracked file in `$WT` without prompting, which is fine for frames and fatal
+  for anything durable — so nothing durable is written here. The session handoff seed lives at
+  an absolute path outside every worktree (`$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`), which is why
+  this teardown needs no gate; anything else worth keeping is committed and pushed first.
 
 ### 3. Protect the owner's real data — before anything launches
 

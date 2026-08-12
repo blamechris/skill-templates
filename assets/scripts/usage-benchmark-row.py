@@ -10,9 +10,20 @@ With no argument, targets the most recently modified session transcript under
 ~/.claude/projects/*/ (i.e., the session you are ending).
 
 Method (must match briefs/usage-benchmark.md): effective units =
-input*1 + cache_read*0.1 + cache_write*2 + output*5 over assistant turns.
-Transcript text is treated as opaque data; only usage numbers and timestamps
-are read.
+input*1 + cache_read*0.1 + cache_write*2 + output*5 over assistant turns,
+deduplicated by message.id (fallback: requestId) — transcripts write one JSONL
+line per content block, each repeating the same usage object, so without dedup
+multi-block turns are counted 2-3x (~2.2x measured). Transcript text is treated
+as opaque data; only usage numbers and timestamps are read.
+
+DEDUP IS NOT A REFINEMENT — it is what makes a row comparable to the rows above
+it. The benchmark file is a single table read across sessions, and nothing in a
+row records which version produced it, so one inflated row is not a bad row but a
+corrupted column. This copy shipped without the dedup for long enough that a
+machine bootstrapped from it (`cp assets/scripts/usage-benchmark-row.py
+~/.claude/scripts/`) wrote ~2.2x rows into a table it could not then repair —
+session-lifecycle's End step 2 is "neither append nor overwrite" once a row
+exists. skill-templates#207.
 """
 import json, glob, os, sys
 from datetime import datetime
@@ -36,6 +47,7 @@ def pick_transcript():
 
 path = pick_transcript()
 n = 0; eff = 0.0; out = 0; t0 = t1 = None
+seen = set()
 with open(path) as f:
     for line in f:
         try:
@@ -48,7 +60,18 @@ with open(path) as f:
             t1 = ts
         if rec.get("type") != "assistant":
             continue
-        u = (rec.get("message") or {}).get("usage") or {}
+        msg = rec.get("message") or {}
+        # One turn, one count. `message.id` is the API's id for the assistant turn
+        # and repeats on every content block of it; `requestId` is the harness's
+        # and is the fallback for lines that carry no message id. A line with
+        # NEITHER is counted (no key, no way to tell it from a distinct turn) —
+        # undercounting a turn is the failure the other direction.
+        key = msg.get("id") or rec.get("requestId")
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        u = msg.get("usage") or {}
         i, cr, cw, o = (u.get("input_tokens", 0), u.get("cache_read_input_tokens", 0),
                         u.get("cache_creation_input_tokens", 0), u.get("output_tokens", 0))
         if i + cr + cw + o == 0:

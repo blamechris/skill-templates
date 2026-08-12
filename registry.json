@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "5488e23",
+  "generatedFromCommit": "7d2cfa3",
   "skillCount": 41,
   "skills": [
     {
@@ -76,8 +76,8 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "af9c1e4",
-      "lines": 505,
+      "hash": "809bf29",
+      "lines": 516,
       "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
       "guards": [
         {
@@ -163,6 +163,14 @@
             "before (?:your |the )?first edit[^\\n]{0,120}before staging"
           ],
           "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
+        },
+        {
+          "label": "seed-written-by-the-script",
+          "anyOf": [
+            "session-seed\\.py write",
+            "[Dd]o not (hand-write the seed|reimplement any of this)"
+          ],
+          "note": "The seed's scope key, session id, archive-on-collide, write and proof are ONE implementation with its own test suite (assets/scripts/session-seed.test.sh). Five adversarial rounds went into prose-containing-bash that every wave template then restated in a near-copy, and the copies drifted; a customized copy that reintroduces an inline version is that regression returning. Alternate 1 is the invocation, alternate 2 the prohibition on replacing it — both state the same rule, and neither matches a heading or a path mention."
         }
       ]
     },
@@ -961,8 +969,8 @@
     },
     {
       "name": "look-approve",
-      "hash": "e053400",
-      "lines": 470,
+      "hash": "110a238",
+      "lines": 474,
       "description": "Get a visual deliverable **approved** — by showing it, not describing it. Runs the real app from an isolated worktree of the approval target, captures **moving** evidence (an animated GIF tour plus one still per feature under review), emits a SHORT one-screen approval card as a self-contained HTML file, puts a single approve / approve-with-notes / reject question to the owner, and records the verdict on the tracking issue. The deliverable is a visual and a *\"we gotta do this\"* — never six pages of prose. Reach for it when a UI/art/feel change is sitting on `main` waiting for a human to say yes.",
       "guards": [
         {
@@ -1311,8 +1319,8 @@
     },
     {
       "name": "prime-directive",
-      "hash": "af9c1e4",
-      "lines": 128,
+      "hash": "7d2cfa3",
+      "lines": 129,
       "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
       "guards": [
         {
@@ -1443,6 +1451,14 @@
             "before (?:your |the )?first edit[^\\n]{0,120}before staging"
           ],
           "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
+        },
+        {
+          "label": "seed-written-by-the-script",
+          "anyOf": [
+            "session-seed\\.py write",
+            "[Dd]o not (hand-write the seed|reimplement any of this)"
+          ],
+          "note": "The seed's scope key, session id, archive-on-collide, write and proof are ONE implementation with its own test suite (assets/scripts/session-seed.test.sh). Five adversarial rounds went into prose-containing-bash that every wave template then restated in a near-copy, and the copies drifted; a customized copy that reintroduces an inline version is that regression returning. Alternate 1 is the invocation, alternate 2 the prohibition on replacing it — both state the same rule, and neither matches a heading or a path mention."
         }
       ]
     },
@@ -1693,8 +1709,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "af9c1e4",
-      "lines": 76,
+      "hash": "7d2cfa3",
+      "lines": 170,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
@@ -1762,6 +1778,39 @@
             "before (?:your |the )?first edit[^\\n]{0,120}before staging"
           ],
           "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
+        },
+        {
+          "label": "archive-on-collide",
+          "anyOf": [
+            "[Aa]rchive on collide — never overwrite a seed this session did not write",
+            "[Tt]he archive is what earns the right to write",
+            "[Aa]rchiving preserves the incumbent byte for byte"
+          ],
+          "note": "#205 as amended: one canonical seed per scope means a write CAN land on someone else's seed, so the write is preceded by an archive rather than made non-destructive by uniquifying the filename (which would destroy the one-line-to-paste affordance). Alternates reword the rule sentence, the conditionality that makes it load-bearing, and its rationale; none matches the step heading, which survives a gutting. Rewritten when the mechanism moved into session-seed.py — the two earlier alternates named `mv`, which the doc no longer spells because it no longer carries the shell."
+        },
+        {
+          "label": "both-end-artifacts",
+          "anyOf": [
+            "a session that skips either artifact has not ended",
+            "the two ending artifacts and the one check that proves the seed"
+          ],
+          "note": "#204 defect 1: the end checklist used to omit both ending artifacts (the handoff seed and the benchmark row) entirely, so a customized copy could drop them without tripping anything. Binds the intro sentence that names them as mandatory, not the step headings — headings survive a gutting."
+        },
+        {
+          "label": "seed-outside-any-worktree",
+          "anyOf": [
+            "outside every worktree, at an absolute path",
+            "the seed is not in any worktree to be deleted"
+          ],
+          "note": "The floor rule `seed-written-outside-any-worktree`, bound where it is executable. Three rounds put the seed inside a git workspace and lost it to worktree teardown, branch reachability and a staged-not-committed file in turn; the fix is the location, so the location is what a customized copy must not be able to drop. Alternate 2 is on a different line (End step 6) so deleting one sentence cannot satisfy both."
+        },
+        {
+          "label": "seed-written-by-the-script",
+          "anyOf": [
+            "session-seed\\.py write",
+            "[Dd]o not (hand-write the seed|reimplement any of this)"
+          ],
+          "note": "The seed's scope key, session id, archive-on-collide, write and proof are ONE implementation with its own test suite (assets/scripts/session-seed.test.sh). Five adversarial rounds went into prose-containing-bash that every wave template then restated in a near-copy, and the copies drifted; a customized copy that reintroduces an inline version is that regression returning. Alternate 1 is the invocation, alternate 2 the prohibition on replacing it — both state the same rule, and neither matches a heading or a path mention."
         }
       ]
     },
@@ -2018,8 +2067,8 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "af9c1e4",
-      "lines": 444,
+      "hash": "809bf29",
+      "lines": 455,
       "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
       "guards": [
         {
@@ -2153,6 +2202,14 @@
             "before (?:your |the )?first edit[^\\n]{0,120}before staging"
           ],
           "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
+        },
+        {
+          "label": "seed-written-by-the-script",
+          "anyOf": [
+            "session-seed\\.py write",
+            "[Dd]o not (hand-write the seed|reimplement any of this)"
+          ],
+          "note": "The seed's scope key, session id, archive-on-collide, write and proof are ONE implementation with its own test suite (assets/scripts/session-seed.test.sh). Five adversarial rounds went into prose-containing-bash that every wave template then restated in a near-copy, and the copies drifted; a customized copy that reintroduces an inline version is that regression returning. Alternate 1 is the invocation, alternate 2 the prohibition on replacing it — both state the same rule, and neither matches a heading or a path mention."
         }
       ]
     },
@@ -2429,7 +2486,7 @@
     },
     {
       "name": "weekly-review",
-      "hash": "5488e23",
+      "hash": "f61c715",
       "lines": 271,
       "description": "The **Monday TPM pass over everything on this machine**: scan every repo for the trailing week's git activity, fan out one read-only scan agent per active repo, sweep the quiet tail, aggregate local session usage from the transcripts, and write a dated Markdown note plus a self-contained HTML brief into the vault. The chat message it ends with is **a short list of decisions waiting on the owner and one pointer to the note** — never a recap of the week, which is what the note is for. Reach for it at the top of the week, or any time \"what happened across all my projects, and what needs me?\" is the actual question.",
       "guards": [
