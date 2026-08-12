@@ -8,7 +8,9 @@ pr: 210
 **This file is a narrative artifact of PR #210 — a record of what the change was for. It is
 NOT a session seed and nothing is resumed from it.** The seed this repo's sessions actually
 read is `$CLAUDE_HANDOFF_DIR/NEXT-skill-templates.md`, an absolute path in the vault, outside
-every git workspace. Confusing the two is the mistake this PR exists to correct.
+every *session's* workspace. (The vault is itself a git repo — that is fine and beside the
+point: what the seed must be outside is the tree a session edits, branches and tears down.)
+Confusing the two is the mistake this PR exists to correct.
 
 ## What changed, and why the previous three rounds did not work
 

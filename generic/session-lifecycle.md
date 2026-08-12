@@ -69,7 +69,7 @@ Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others)
 
 Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the two ending artifacts and the one check that proves the seed the next session opens is the one this session wrote; a session that skips either artifact has not ended.**
 
-1. **Handoff seed (artifact ②)** — **the seed is written outside every worktree, at an absolute path:** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`. It holds what shipped, what remains, and *why* each remaining item is blocked or deferred. Not in the repo, not in this session's worktree, not on a branch — an absolute path outside every git workspace has **no worktree to be torn down with, no branch to be unreachable from, and no index to be confused with**, which is why nothing downstream has to be gated on it. Three earlier attempts to keep the seed inside a workspace failed on exactly those surfaces, the last of them on a "committed" proof that had only staged the file.
+1. **Handoff seed (artifact ②)** — **the seed is written outside every worktree, at an absolute path:** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`. It holds what shipped, what remains, and *why* each remaining item is blocked or deferred. Not in the repo, not in this session's worktree, not on a branch — an absolute path outside every *session's* workspace has **no worktree to be torn down with, no branch to be unreachable from, and no index to be confused with**, which is why nothing downstream has to be gated on it. Three earlier attempts to keep the seed inside a session's own workspace failed on exactly those surfaces, the last of them on a "committed" proof that had only staged the file. Read the property precisely: the default handoff dir is itself a git repo (the vault is versioned, and should be), and that takes nothing away — what the seed must be outside is the tree *this session* edits, branches and tears down, which is exactly what the write checks it against.
 
    **One command writes it.** It resolves the scope, resolves this session's id, archives whatever it collides with, writes the seed, and proves the result — all of it in `session-seed.py`, none of it transcribed here:
 
@@ -80,7 +80,7 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
      --body-file /tmp/handoff-body.md
    ```
 
-   It prints `seed: <absolute path>` — which is step 7's one line to paste — or a `REFUSE:` line with a nonzero exit, and **a REFUSE means nothing was written and no existing seed was moved.** Add `--topic <name>` for a fleet session with a named topic; never anywhere else.
+   It prints `seed: <absolute path>` — which is step 7's one line to paste — or a `REFUSE:` line with a nonzero exit. **A REFUSE never destroys an existing seed**: the archive is what earns the right to write, so a failed archive aborts before the write. It does *not* mean nothing happened, and reading it that way is the trap — the last thing the write does is run step 3's proof, so a REFUSE from *there* arrives after the seed is already on disk. Do not infer from the exit code; read the lines above it, which say what was done and in what order: `archived: <path>` iff an incumbent was moved, then `seed: <path>` iff the proof passed. Add `--topic <name>` for a fleet session with a named topic; never anywhere else.
 
    `--body-file` is the seed's body, written first to a scratch path (`-` reads stdin). Omit it and the script writes a skeleton to fill in: `## STATE` (branch/HEAD, working tree, CI, tests, open PRs and issues) · a **"Verify before building on any of this — re-derive, don't trust"** block where every command carries its expected answer as a comment · `## TL;DR — what shipped` · `## Today's task` · `## Left undone, deliberately`.
 
@@ -153,8 +153,11 @@ cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py ~/.claud
 ```
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
-`usage-benchmark-row.py` emits artifact ①'s row. Each ships with a sibling test suite in the
-registry, which is where their behaviour is pinned — this file states the doctrine, not the code.
+`usage-benchmark-row.py` emits artifact ①'s row. Each ships with a sibling `<name>.test.sh` in
+the registry, run by CI, and that is where their behaviour is pinned — this file states the
+doctrine, not the code. Bootstrap both or neither: a machine with a stale
+`usage-benchmark-row.py` writes step 2's row on a different scale from every row above it, and
+step 2 forbids repairing it.
 
 ## Customization Points
 

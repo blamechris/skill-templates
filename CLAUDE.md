@@ -27,7 +27,7 @@ skill-templates/
 
 `docs/handoffs/` holds narrative records of individual changes — what a PR was for, kept for
 the reader who arrives later. **It is not the continuity mechanism.** A session's seed is
-written outside every git workspace, at `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir
+written outside every session's workspace, at `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir
 `~/Obsidian/no-it-all/handoffs/`), and that absolute path — not anything in this repo — is
 what a fresh session is started from. See `/session-lifecycle`.
 
