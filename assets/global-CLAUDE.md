@@ -274,6 +274,22 @@ one tier below the session ceiling; the ceiling itself is reserved for
 orchestration and the hardest adjudication. Skills and worker briefs specify
 roles ("workhorse", "mechanical"), never a model above the session ceiling.
 
+<!--default:risk-tiered-review-->
+**Review intensity is risk-tiered** (decided 2026-08-14, spend audit; refuter
+panels buy precision, not recall — the catches live in the finder pass and the
+test gates). Depth scales with blast radius:
+- **LOW** (docs, pack/art data, guard additions, mechanical renames): inline
+  `/code-review` at high effort — no subagent fan-out.
+- **MEDIUM** (feature code with test coverage): 1 review agent; adversarially
+  verify **critical** findings only.
+- **HIGH** (doctrine, serialization/save-compat, CI/infra, security,
+  cross-cutting refactors): full dimension panel; refuters on critical +
+  suggestion findings only; ~20-agent cap per review workflow.
+Nitpick-severity findings never get refuter panels. Ultracode stays on for repo
+marathon sessions only; planning/chat/fleet sessions run without it (invoke
+per-task when wanted). Benchmark rows carry `· subagents: <eff>/<count>` per
+the usage-benchmark.md 2026-08-14 note.
+
 ## Follow-on protocol (all projects)
 
 <!--default:follow-on-protocol-->
