@@ -201,8 +201,12 @@ itself within ~10 requests. Rules:
   security-critical work, high fan-in refactors, visual-verify features). Outside a repo,
   `/next` ranks the fleet from those same seeds.
 - **Continue** only when the next task genuinely needs the context already loaded.
-- Keep main-thread context under **~150K tokens**: once past it, finish the current
-  item, write handoff state, end the session.
+- **One wave per session — there is no in-wave token ceiling to hold.** A single
+  wave's context legitimately crosses 150K mid-flight (measured 2026-08-19: the
+  median one-PR wave passes it by request ~40), so a numeric ceiling can only be
+  violated and trains sessions to ignore rules. The real levers: restart at the
+  wave boundary, and route heavy tool output — full-file reads, test logs, recon
+  dumps — through subagents instead of the main thread.
 - **Applies to orchestrator/chat sessions too**, not just repo marathons: a wave ends →
   write the handoff → end the session (recommend it explicitly when attended). For
   autonomous continuity, create a one-time scheduled task at the boundary that fires a
@@ -211,8 +215,9 @@ itself within ~10 requests. Rules:
   stable across waves, which is what makes a relaunch task safe to write in advance.
 - **Ending a session = two artifacts, every time:** ① the session's row appended to
   the usage benchmark (`~/Obsidian/no-it-all/briefs/usage-benchmark.md`) — generate it
-  with `python3 ~/.claude/scripts/usage-benchmark-row.py` and replace the placeholder
-  with a one-line workload note (duration + workload class make rows comparable); if it
+  with `python3 ~/.claude/scripts/usage-benchmark-row.py` and replace only the
+  `<workload note>` placeholder with a one-line workload note (duration + workload
+  class make rows comparable; the measured `· subagents:` suffix stays as emitted); if it
   resolves to a session ID that already has a row, neither append nor overwrite — the
   counters are cumulative and both corrupt the record; ② the next-session seed, below.
 
@@ -284,11 +289,16 @@ test gates). Depth scales with blast radius:
   verify **critical** findings only.
 - **HIGH** (doctrine, serialization/save-compat, CI/infra, security,
   cross-cutting refactors): full dimension panel; refuters on critical +
-  suggestion findings only; ~20-agent cap per review workflow.
+  suggestion findings only; **hard cap: ≤3 refuters per finding and ≤20 agents
+  per review workflow, the refute stage included.** Finding count never scales
+  the fan-out past the cap — when findings are many, queue refutation rounds
+  instead of widening (the "~20" tilde was read as panel-only and breached six
+  times, 27–70 agents, in its first week; hence no tilde).
 Nitpick-severity findings never get refuter panels. Ultracode stays on for repo
 marathon sessions only; planning/chat/fleet sessions run without it (invoke
-per-task when wanted). Benchmark rows carry `· subagents: <eff>/<count>` per
-the usage-benchmark.md 2026-08-14 note.
+per-task when wanted). Benchmark rows carry `· subagents: <eff>M/<count>`
+(weighted eff units, e.g. `4.5M/61`, `0.0M/0`), measured and emitted by
+`usage-benchmark-row.py` — keep the emitted value, never hand-type it.
 
 ## Follow-on protocol (all projects)
 

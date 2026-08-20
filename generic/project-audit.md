@@ -222,7 +222,7 @@ Roles per `/tiered-delegation`: **workhorse** = one tier below the session ceili
 - **Audit agents run at the workhorse tier by default.** Codebase exploration and per-lens reporting are workhorse work; do not spawn panel agents at the ceiling. The orchestrator's master assessment (step 7) is where the expensive judgment lives.
 - **Discovery pre-pass at the mechanical tier.** The step-2 profile scan's mechanical parts (file inventories, signal detection, dependency counts) run at the mechanical tier at low effort; the orchestrator interprets the results.
 - **Sample-verify instead of up-tiering.** Before filing issues from agent recommendations (step 8), re-check a ~10% sample of the load-bearing findings with a stronger tier rather than re-running agents up-tier.
-- **Fan-out budget: ~12 workhorse/ceiling subagents per run.** The budget counts workhorse- and ceiling-tier agents — a full 12-persona panel fills it exactly, and stays legal because the mechanical discovery pre-pass and the ~10% sample-verify checks do not count against it. Exceeding 12 (up to a hard 20) requires an explicit one-line justification in the master assessment.
+- **Fan-out budget: ~12 workhorse/ceiling subagents per run.** The budget counts workhorse- and ceiling-tier agents — a full 12-persona panel fills it exactly, and stays legal because the mechanical discovery pre-pass and the ~10% sample-verify checks do not count against it. Exceeding 12 requires an explicit one-line justification in the master assessment; **20 is a hard ceiling that includes every refute/verify agent, and no justification lifts it** (≤3 refuters per finding — queue rounds rather than widen).
 
 ### 6. Write Individual Reports
 

@@ -53,6 +53,9 @@ suite never notices).
 
 1. Diff the fix commits alone (`git diff <pre-fix-sha>..HEAD`).
 2. Spawn a verifier scoped to that delta's behavior changes, prompted to REFUTE the fixes.
+   **Refute-stage cap: at most 3 refuters per finding, and the whole review — dimensions,
+   refuters, verifiers — stays within the hard 20-agent workflow cap.** When findings are
+   many, queue refutation rounds; never let finding count widen the fan-out past the cap.
 3. Tell the verifier explicitly that **"nothing found" is a valid result** — it must not
    manufacture findings to justify the pass.
 4. A real finding loops back through Phase 2 (fix → reply → resolve → re-verify the new

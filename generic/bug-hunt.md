@@ -147,7 +147,7 @@ Roles per `/tiered-delegation`: **workhorse** = one tier below the session ceili
 - **Hunters run at the workhorse tier by default.** Bug-hunting breadth is workhorse work; do not spawn hunters at the ceiling. The orchestrator's dedup/triage (step 5) and the user-facing report are where the expensive judgment lives.
 - **Mechanical passes at the mechanical tier.** The step-5 dedup key matching, severity-floor filtering, and any pre-filter over candidate files run at the mechanical tier at low effort.
 - **Sample-verify instead of up-tiering.** If hunter findings look noisy, re-check a ~10% sample with a stronger tier before filing anything; a finding that fails its sample check sends the whole batch back for verification, not for a full re-run up-tier.
-- **Fan-out budget: ~12 workhorse/ceiling subagents per run.** The budget counts workhorse- and ceiling-tier agents (the hunters); mechanical-tier passes and the ~10% sample-verify checks do not count against it. Exceeding 12 (up to a hard 20) requires an explicit one-line justification in the report. The 6-hunter maximum sits well inside this budget.
+- **Fan-out budget: ~12 workhorse/ceiling subagents per run.** The budget counts workhorse- and ceiling-tier agents (the hunters); mechanical-tier passes and the ~10% sample-verify checks do not count against it. Exceeding 12 requires an explicit one-line justification in the report; **20 is a hard ceiling that includes every refute/verify agent, and no justification lifts it** (≤3 refuters per finding — queue rounds rather than widen). The 6-hunter maximum sits well inside this budget.
 
 ### 5. Dedup and Triage
 

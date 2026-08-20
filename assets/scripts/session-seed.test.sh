@@ -311,7 +311,10 @@ with open(sys.argv[1], 'w', encoding='utf-8') as f:
                                                   "cache_creation_input_tokens": 10, "output_tokens": 50}},
                             "pad": "x" * 200}) + "\n")
 PY
-row=$(HOME="$BH" "$PY" "$BH/.claude/scripts/usage-benchmark-row.py" 2>/dev/null |
+# Resolved the way a real End step does — via $CLAUDE_CODE_SESSION_ID. (The row
+# script's old no-id fallback is gone: with neither an argument nor the env var
+# it now REFUSES, per its own suite.)
+row=$(HOME="$BH" CLAUDE_CODE_SESSION_ID="$UUID" "$PY" "$BH/.claude/scripts/usage-benchmark-row.py" 2>/dev/null |
       awk -F'|' 'NR==1 { gsub(/[[:space:]]/,"",$3); print $3 }')
 seedid=$("$PY" "$SUT" header "$TMP/c1/handoffs/NEXT-demo.md" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["session"])')
 [ -n "$row" ] && [ "$row" = "$seedid" ] \
