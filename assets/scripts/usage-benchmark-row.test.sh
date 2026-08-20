@@ -186,13 +186,17 @@ cp "$A" "$HOMEDIR/.claude/projects/-demo/$UUID.jsonl"
 gen "$HOMEDIR/.claude/projects/-demo/0f0f0f0f-1111-2222-3333-444455556666.jsonl" 5 1 msgid
 touch "$HOMEDIR/.claude/projects/-demo/$UUID.jsonl"      # make ours the newest
 
-out=$(HOME="$HOMEDIR" "$PY" "$SUT" 2>/dev/null); rc=$?
+# CLAUDE_CODE_SESSION_ID is explicitly unset for the fallback cases: this suite
+# is normally run FROM a Claude session, where the variable is set and points at
+# a transcript outside $HOMEDIR — so leaving it inherited would make these cases
+# assert the environment rather than the script.
+out=$(HOME="$HOMEDIR" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && [ "$(field "$out" 3)" = 5fc4a59c ] \
-  && ok "no argument: the most recently modified transcript under ~/.claude/projects" \
-  || bad "no argument: the most recently modified transcript under ~/.claude/projects" \
+  && ok "no argument and no session id: the most recently modified transcript" \
+  || bad "no argument and no session id: the most recently modified transcript" \
          "rc=$rc $(flat "$out")"
 
-out=$(HOME="$HOMEDIR" "$PY" "$SUT" 0f0f0f0f 2>/dev/null); rc=$?
+out=$(HOME="$HOMEDIR" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" 0f0f0f0f 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && [ "$(field "$out" 3)" = 0f0f0f0f ] \
   && ok "a session-id prefix selects that session's transcript, not the newest" \
   || bad "a session-id prefix selects that session's transcript, not the newest" \
@@ -201,17 +205,92 @@ out=$(HOME="$HOMEDIR" "$PY" "$SUT" 0f0f0f0f 2>/dev/null); rc=$?
 # An id that matches nothing must NOT silently fall back to the newest transcript:
 # a row attributed to the wrong session is the same corrupted column by another
 # route, and the caller cannot see it happen.
-out=$(HOME="$HOMEDIR" "$PY" "$SUT" nosuchid 2>&1); rc=$?
+out=$(HOME="$HOMEDIR" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" nosuchid 2>&1); rc=$?
 [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -q '^| ' \
   && ok "an id matching no transcript exits nonzero instead of falling back to the newest" \
   || bad "an id matching no transcript exits nonzero instead of falling back to the newest" \
          "rc=$rc $(flat "$out")"
 
 EMPTY="$TMP/emptyhome"; mkdir -p "$EMPTY/.claude/projects/-demo"
-out=$(HOME="$EMPTY" "$PY" "$SUT" 2>&1); rc=$?
+out=$(HOME="$EMPTY" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" 2>&1); rc=$?
 [ "$rc" -ne 0 ] \
   && ok "no transcripts at all exits nonzero" \
   || bad "no transcripts at all exits nonzero" "rc=$rc $(flat "$out")"
+
+# ====================== D — the row belongs to the session that ASKED for it
+echo; echo "D. session resolution: concurrency"
+
+# The defect: with no argument the script took the newest mtime across EVERY
+# project and called it "the session you are ending". That is only true when one
+# session runs at a time. Measured 2026-08-20 on a machine that routinely runs
+# several: an Aeolus session ending at 01:21Z resolved a concurrently-active
+# chroxy session and wrote a row carrying Aeolus's workload note with chroxy's
+# id and chroxy's five counters. Wrong in the id AND every number, and by End
+# step 2 ("neither append nor overwrite") the caller could not repair it.
+#
+# $HOMEDIR already holds two transcripts with $UUID (5fc4a59c) as the NEWEST,
+# so "honours the session id" and "takes the newest" give different answers here
+# — which is what makes these cases able to fail.
+
+out=$(HOME="$HOMEDIR" CLAUDE_CODE_SESSION_ID=0f0f0f0f-1111-2222-3333-444455556666 \
+      "$PY" "$SUT" 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(field "$out" 3)" = 0f0f0f0f ] \
+  && ok "CLAUDE_CODE_SESSION_ID wins over the newest transcript" \
+  || bad "CLAUDE_CODE_SESSION_ID wins over the newest transcript" \
+         "rc=$rc $(flat "$out")"
+
+# The mutant, in this suite's own idiom: the same fixture through a copy that
+# ignores the variable must produce a DIFFERENT row. Without this the case above
+# is also satisfied by a script that happens to pick 0f0f0f0f for another reason
+# — and "the fixture cannot distinguish the two implementations" is exactly how
+# the dedup defect in section A survived.
+sed -e 's/^    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()$/    sid = ""/' \
+    "$SUT" > "$TMP/env-blind.py"
+if grep -q '^    sid = ""$' "$TMP/env-blind.py"; then
+  mrow=$(HOME="$HOMEDIR" CLAUDE_CODE_SESSION_ID=0f0f0f0f-1111-2222-3333-444455556666 \
+         "$PY" "$TMP/env-blind.py" 2>/dev/null)
+  [ "$(field "$mrow" 3)" = 5fc4a59c ] \
+    && ok "the fixture DISTINGUISHES the two implementations (env-blind: 5fc4a59c)" \
+    || bad "the fixture DISTINGUISHES the two implementations (env-blind: 5fc4a59c)" \
+           "mutant row='$(flat "$mrow")' — a fixture both versions agree on proves nothing"
+else
+  bad "the fixture DISTINGUISHES the two implementations (env-blind: 5fc4a59c)" \
+      "could not build the mutant: the env lookup is not where this expects it"
+fi
+
+# Set-but-unresolvable must NOT fall through to the newest transcript. That
+# fall-through is the defect wearing a seatbelt: it still emits a plausible row
+# for the wrong session, and the caller cannot see it happen.
+out=$(HOME="$HOMEDIR" CLAUDE_CODE_SESSION_ID=deadbeef-0000-0000-0000-000000000000 \
+      "$PY" "$SUT" 2>&1); rc=$?
+[ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -q '^| ' \
+  && ok "a set-but-unresolvable session id exits nonzero instead of guessing" \
+  || bad "a set-but-unresolvable session id exits nonzero instead of guessing" \
+         "rc=$rc $(flat "$out")"
+
+# An explicit argument still outranks the variable — the repair path for a row
+# that has to be regenerated for some OTHER session.
+out=$(HOME="$HOMEDIR" CLAUDE_CODE_SESSION_ID=0f0f0f0f-1111-2222-3333-444455556666 \
+      "$PY" "$SUT" 5fc4a59c 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(field "$out" 3)" = 5fc4a59c ] \
+  && ok "an explicit argument outranks CLAUDE_CODE_SESSION_ID" \
+  || bad "an explicit argument outranks CLAUDE_CODE_SESSION_ID" \
+         "rc=$rc $(flat "$out")"
+
+# Which transcript was chosen, and how, has to reach the caller — a silent right
+# answer and a silent wrong answer look identical, and this script's failure mode
+# is unrepairable once appended.
+err=$(HOME="$HOMEDIR" CLAUDE_CODE_SESSION_ID=0f0f0f0f-1111-2222-3333-444455556666 \
+      "$PY" "$SUT" 2>&1 >/dev/null)
+printf '%s' "$err" | grep -q 'resolved 0f0f0f0f via .CLAUDE_CODE_SESSION_ID' \
+  && ok "stderr names the resolved session AND how it was resolved" \
+  || bad "stderr names the resolved session AND how it was resolved" "$(flat "$err")"
+
+# ...and the provenance line must not contaminate the row itself, which End
+# step 2 appends verbatim.
+printf '%s' "$err" | grep -q '^| ' \
+  && bad "the provenance line goes to stderr, not into the row" "$(flat "$err")" \
+  || ok "the provenance line goes to stderr, not into the row"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
