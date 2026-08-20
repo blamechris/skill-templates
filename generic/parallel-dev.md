@@ -140,7 +140,7 @@ Roles per `/tiered-delegation`: **workhorse** = one tier below the session ceili
 - **Implementers run at the workhorse tier by default.** Well-scoped, low/medium-complexity issues are workhorse work. Spawn a **ceiling-tier implementer only for a non-trivial issue** — genuine design latitude, cross-cutting change surface, or a prior workhorse failure on the same issue — and note which issues got the ceiling tier in the progress table.
 - **Triage/classification at the mechanical tier.** The queue triage pass (complexity read, skip-criteria checks, label classification) runs at the mechanical tier at low effort.
 - **Sample-verify instead of up-tiering.** Re-check a ~10% sample of the mechanical triage's classifications with a stronger tier rather than running the whole triage on an expensive one; a failed sample sends the batch back for verification, not up-tier.
-- **Fan-out budget: ~12 workhorse/ceiling subagents per run** (implementers + reviewers across all batches). Mechanical-tier triage/pre-filter agents and the ~10% sample-verify checks do not count against it. Exceeding 12 (up to a hard 20) requires an explicit one-line justification recorded in the session summary.
+- **Fan-out budget: ~12 workhorse/ceiling subagents per run** (implementers + reviewers across all batches). Mechanical-tier triage/pre-filter agents and the ~10% sample-verify checks do not count against it. Exceeding 12 requires an explicit one-line justification recorded in the session summary; **20 is a hard ceiling that includes every refute/verify agent, and no justification lifts it** (≤3 refuters per finding — queue rounds rather than widen).
 
 Each agent independently:
 1. Installs dependencies in its worktree

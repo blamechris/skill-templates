@@ -151,9 +151,9 @@ row "$A"
 [ "$(field "$out" 4)" = 2.0 ] \
   && ok "the duration column spans first to last timestamp, in hours" \
   || bad "the duration column spans first to last timestamp, in hours" "$(flat "$out")"
-[ "$(field "$out" 9)" = "<workload note>" ] \
-  && ok "the note column is a placeholder the caller replaces" \
-  || bad "the note column is a placeholder the caller replaces" "$(flat "$out")"
+[ "$(field "$out" 9)" = "<workload note> · subagents: 0.0M/0" ] \
+  && ok "the note column is a placeholder plus a measured subagents suffix (one format, 0.0M/0 when none)" \
+  || bad "the note column is a placeholder plus a measured subagents suffix (one format, 0.0M/0 when none)" "$(flat "$out")"
 
 # End step 2 appends stdout to the benchmark file, so the "where to put this"
 # reminder must NOT be on stdout or it lands in the table.
@@ -186,14 +186,19 @@ cp "$A" "$HOMEDIR/.claude/projects/-demo/$UUID.jsonl"
 gen "$HOMEDIR/.claude/projects/-demo/0f0f0f0f-1111-2222-3333-444455556666.jsonl" 5 1 msgid
 touch "$HOMEDIR/.claude/projects/-demo/$UUID.jsonl"      # make ours the newest
 
-# CLAUDE_CODE_SESSION_ID is explicitly unset for the fallback cases: this suite
-# is normally run FROM a Claude session, where the variable is set and points at
+# CLAUDE_CODE_SESSION_ID is explicitly unset for these cases: this suite is
+# normally run FROM a Claude session, where the variable is set and points at
 # a transcript outside $HOMEDIR — so leaving it inherited would make these cases
 # assert the environment rather than the script.
-out=$(HOME="$HOMEDIR" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" 2>/dev/null); rc=$?
-[ "$rc" -eq 0 ] && [ "$(field "$out" 3)" = 5fc4a59c ] \
-  && ok "no argument and no session id: the most recently modified transcript" \
-  || bad "no argument and no session id: the most recently modified transcript" \
+#
+# No argument and no session id is a REFUSE, not a guess: the newest-mtime
+# fallback that lived here resolved the WRONG session three times in the week
+# of 2026-08-17, against a table that cannot be repaired once appended.
+out=$(HOME="$HOMEDIR" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" 2>&1); rc=$?
+[ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -q '^| ' \
+  && printf '%s' "$out" | grep -q '^REFUSE: ' \
+  && ok "no argument and no session id REFUSES (prefix on stderr, no row emitted)" \
+  || bad "no argument and no session id REFUSES (prefix on stderr, no row emitted)" \
          "rc=$rc $(flat "$out")"
 
 out=$(HOME="$HOMEDIR" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" 0f0f0f0f 2>/dev/null); rc=$?
@@ -201,6 +206,17 @@ out=$(HOME="$HOMEDIR" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" 0f0f0f0f 2>/dev
   && ok "a session-id prefix selects that session's transcript, not the newest" \
   || bad "a session-id prefix selects that session's transcript, not the newest" \
          "rc=$rc $(flat "$out")"
+
+# An empty argument would wildcard the id glob into "every transcript, newest
+# wins" — the removed fallback through a side door. Same for glob metacharacters.
+out=$(HOME="$HOMEDIR" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "" 2>&1); rc=$?
+[ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -q '^| ' \
+  && ok "an empty argument REFUSES instead of matching every transcript" \
+  || bad "an empty argument REFUSES instead of matching every transcript" "rc=$rc $(flat "$out")"
+out=$(HOME="$HOMEDIR" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" '*' 2>&1); rc=$?
+[ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -q '^| ' \
+  && ok "a glob-metachar argument REFUSES instead of wildcarding the id glob" \
+  || bad "a glob-metachar argument REFUSES instead of wildcarding the id glob" "rc=$rc $(flat "$out")"
 
 # An id that matches nothing must NOT silently fall back to the newest transcript:
 # a row attributed to the wrong session is the same corrupted column by another
@@ -248,13 +264,17 @@ sed -e 's/^    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()$/    s
     "$SUT" > "$TMP/env-blind.py"
 if grep -q '^    sid = ""$' "$TMP/env-blind.py"; then
   mrow=$(HOME="$HOMEDIR" CLAUDE_CODE_SESSION_ID=0f0f0f0f-1111-2222-3333-444455556666 \
-         "$PY" "$TMP/env-blind.py" 2>/dev/null)
-  [ "$(field "$mrow" 3)" = 5fc4a59c ] \
-    && ok "the fixture DISTINGUISHES the two implementations (env-blind: 5fc4a59c)" \
-    || bad "the fixture DISTINGUISHES the two implementations (env-blind: 5fc4a59c)" \
-           "mutant row='$(flat "$mrow")' — a fixture both versions agree on proves nothing"
+         "$PY" "$TMP/env-blind.py" 2>/dev/null); mrc=$?
+  # An env-blind script used to fall back to the newest transcript and emit a
+  # WRONG row (5fc4a59c). The fallback is gone, so the mutant must now REFUSE —
+  # a different observable from the real script's 0f0f0f0f row, and the stronger
+  # property: blindness can no longer corrupt the table, only stop.
+  [ "$mrc" -ne 0 ] && [ -z "$mrow" ] \
+    && ok "the fixture DISTINGUISHES the two implementations (env-blind: REFUSES, no row)" \
+    || bad "the fixture DISTINGUISHES the two implementations (env-blind: REFUSES, no row)" \
+           "mrc=$mrc mutant row='$(flat "$mrow")' — a fixture both versions agree on proves nothing"
 else
-  bad "the fixture DISTINGUISHES the two implementations (env-blind: 5fc4a59c)" \
+  bad "the fixture DISTINGUISHES the two implementations (env-blind: REFUSES, no row)" \
       "could not build the mutant: the env lookup is not where this expects it"
 fi
 
@@ -291,6 +311,41 @@ printf '%s' "$err" | grep -q 'resolved 0f0f0f0f via .CLAUDE_CODE_SESSION_ID' \
 printf '%s' "$err" | grep -q '^| ' \
   && bad "the provenance line goes to stderr, not into the row" "$(flat "$err")" \
   || ok "the provenance line goes to stderr, not into the row"
+
+# ==================== E — the subagents suffix is measured, not hand-typed
+echo; echo "E. subagents suffix"
+
+# A session directory sits NEXT to its transcript: <dir>/<uuid>.jsonl plus
+# <dir>/<uuid>/subagents/**/*.jsonl (workflow agents one level deeper). The
+# suffix must count files and sum eff with the SAME dedup as the main loop.
+SUBH="$TMP/subhome"; SDIR="$SUBH/.claude/projects/-demo"
+mkdir -p "$SDIR/$UUID/subagents/workflows/wf_x"
+cp "$A" "$SDIR/$UUID.jsonl"
+# agent 1: 100 turns x 3 content-block lines — dedup must yield 3.1M, not 9.3M.
+gen "$SDIR/$UUID/subagents/agent-1.jsonl" 100 3 msgid
+# agent 2 (nested under workflows/): distinct keys so it does not collide with
+# agent 1's msg_0..99 — real message ids are globally unique; gen's are not.
+"$PY" - "$SDIR/$UUID/subagents/workflows/wf_x/agent-2.jsonl" <<'PY'
+import json, sys
+usage = {"input_tokens": 1000, "cache_read_input_tokens": 100000,
+         "cache_creation_input_tokens": 5000, "output_tokens": 2000}
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    for i in range(100):
+        rec = {"type": "assistant", "timestamp": "2026-08-11T03:00:00.000Z",
+               "message": {"id": "wf_msg_%d" % i, "usage": dict(usage)}}
+        f.write(json.dumps(rec) + "\n")
+PY
+out=$(HOME="$SUBH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$SDIR/$UUID.jsonl" 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "<workload note> · subagents: 6.2M/2" ] \
+  && ok "subagent transcripts are found (incl. nested workflows/), deduped, and emitted as 6.2M/2" \
+  || bad "subagent transcripts are found (incl. nested workflows/), deduped, and emitted as 6.2M/2" \
+         "rc=$rc $(flat "$out")"
+
+# The main columns must NOT absorb the subagent numbers — the eff column stays
+# main-only for comparability with every prior row.
+[ "$(field "$out" 5)" = 100 ] && [ "$(field "$out" 6)" = 3.1 ] \
+  && ok "main-thread columns are unchanged by subagent measurement (100 turns / 3.1M)" \
+  || bad "main-thread columns are unchanged by subagent measurement (100 turns / 3.1M)" "$(flat "$out")"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
