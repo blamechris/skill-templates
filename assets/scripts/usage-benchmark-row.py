@@ -6,8 +6,23 @@
 Usage:
   python3 ~/.claude/scripts/usage-benchmark-row.py [session-id-or-jsonl-path]
 
-With no argument, targets the most recently modified session transcript under
-~/.claude/projects/*/ (i.e., the session you are ending).
+With no argument, targets $CLAUDE_CODE_SESSION_ID's transcript — the session
+actually running this — and falls back to the most recently modified transcript
+under ~/.claude/projects/*/ only when that variable is unset.
+
+THE FALLBACK IS NOT "the session you are ending". It used to be the only path,
+and it is wrong whenever two sessions overlap, which is the normal case on this
+machine: it globs EVERY project and takes the newest mtime, so a session ending
+at the moment another one writes a tool result gets the OTHER session's
+transcript. Measured 2026-08-20: an Aeolus session resolved a concurrent chroxy
+session's id and wrote a row carrying Aeolus's workload note with chroxy's id
+and chroxy's counters — wrong in the id AND in every number, and unrepairable
+by the caller, because End step 2 is "neither append nor overwrite" once a row
+exists. Same shape as skill-templates#207: a heuristic that is correct exactly
+once and silently wrong after, in a table nothing else can audit.
+
+Which transcript was chosen, and how, is printed to stderr so a wrong pick is
+visible instead of silent.
 
 Method (must match briefs/usage-benchmark.md): effective units =
 input*1 + cache_read*0.1 + cache_write*2 + output*5 over assistant turns,
@@ -34,18 +49,27 @@ def pick_transcript():
     if len(sys.argv) > 1:
         a = sys.argv[1]
         if a.endswith(".jsonl") and os.path.exists(a):
-            return a
+            return a, "argv path"
         hits = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{a}*.jsonl"))
         if hits:
-            return max(hits, key=os.path.getmtime)
+            return max(hits, key=os.path.getmtime), f"argv {a!r}"
         sys.exit(f"no transcript matching {a!r}")
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    if sid:
+        hits = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid}*.jsonl"))
+        if hits:
+            return max(hits, key=os.path.getmtime), f"$CLAUDE_CODE_SESSION_ID={sid[:8]}"
+        # Set but unresolvable is NOT a licence to guess: falling through to the
+        # mtime heuristic here is exactly how a row gets another session's id.
+        sys.exit(f"CLAUDE_CODE_SESSION_ID={sid!r} is set but no transcript matches it. "
+                 "Pass a session id or a .jsonl path explicitly.")
     files = [f for f in glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
              if os.path.getsize(f) > 50_000]
     if not files:
         sys.exit("no transcripts found")
-    return max(files, key=os.path.getmtime)
+    return max(files, key=os.path.getmtime), "newest-mtime fallback (CLAUDE_CODE_SESSION_ID unset)"
 
-path = pick_transcript()
+path, how = pick_transcript()
 n = 0; eff = 0.0; out = 0; t0 = t1 = None
 seen = set()
 with open(path) as f:
@@ -88,4 +112,7 @@ dur = (datetime.fromisoformat(t1.replace("Z", "+00:00"))
 sid = os.path.basename(path)[:8]
 date = t0[5:10]
 print(f"| {date} | {sid} | {dur:.1f} | {n} | {eff/1e6:.1f} | {out/1e3:.0f} | {eff/n/1e3:.1f} | <workload note> |")
+print(f"\nresolved {sid} via {how}", file=sys.stderr)
+print(f"  transcript: {path}", file=sys.stderr)
+print(f"  If that is not the session you are ending, STOP — pass the id explicitly.", file=sys.stderr)
 print(f"\n(append to ~/Obsidian/no-it-all/briefs/usage-benchmark.md and replace the note)", file=sys.stderr)
