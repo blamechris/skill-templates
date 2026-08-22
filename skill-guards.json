@@ -64,6 +64,26 @@
         "run at the workhorse tier",
         "Delegation tiers"
       ]
+    },
+    {
+      "label": "hard-agent-ceiling",
+      "anyOf": [
+        "20 is a hard ceiling",
+        "hard 20-agent",
+        "≤ ?20 agents",
+        "20-agent (workflow )?cap"
+      ],
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+    },
+    {
+      "label": "refuters-per-finding-cap",
+      "anyOf": [
+        "≤ ?3 refuters per finding",
+        "at most 3 refuters per finding",
+        "no more than 3 refuters per finding",
+        "maximum of 3 refuters per finding"
+      ],
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
     }
   ],
   "autonomous-dev-flow": [
@@ -282,6 +302,26 @@
         "run at the workhorse tier",
         "Delegation tiers"
       ]
+    },
+    {
+      "label": "hard-agent-ceiling",
+      "anyOf": [
+        "20 is a hard ceiling",
+        "hard 20-agent",
+        "≤ ?20 agents",
+        "20-agent (workflow )?cap"
+      ],
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+    },
+    {
+      "label": "refuters-per-finding-cap",
+      "anyOf": [
+        "≤ ?3 refuters per finding",
+        "at most 3 refuters per finding",
+        "no more than 3 refuters per finding",
+        "maximum of 3 refuters per finding"
+      ],
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
     }
   ],
   "catchup": [
@@ -820,6 +860,26 @@
         "\\*\\*[Nn][Oo] attribution",
         "[Ff]ollow[^.\\n]{0,30}[Aa]ttribution [Pp]olicy"
       ]
+    },
+    {
+      "label": "hard-agent-ceiling",
+      "anyOf": [
+        "20 is a hard ceiling",
+        "hard 20-agent",
+        "≤ ?20 agents",
+        "20-agent (workflow )?cap"
+      ],
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+    },
+    {
+      "label": "refuters-per-finding-cap",
+      "anyOf": [
+        "≤ ?3 refuters per finding",
+        "at most 3 refuters per finding",
+        "no more than 3 refuters per finding",
+        "maximum of 3 refuters per finding"
+      ],
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
     }
   ],
   "learn": [
@@ -1165,6 +1225,26 @@
       ]
     },
     {
+      "label": "hard-agent-ceiling",
+      "anyOf": [
+        "20 is a hard ceiling",
+        "hard 20-agent",
+        "≤ ?20 agents",
+        "20-agent (workflow )?cap"
+      ],
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+    },
+    {
+      "label": "refuters-per-finding-cap",
+      "anyOf": [
+        "≤ ?3 refuters per finding",
+        "at most 3 refuters per finding",
+        "no more than 3 refuters per finding",
+        "maximum of 3 refuters per finding"
+      ],
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
+    },
+    {
       "label": "explicit-path-staging",
       "anyOf": [
         "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
@@ -1398,6 +1478,26 @@
         "run at the workhorse tier",
         "Delegation tiers"
       ]
+    },
+    {
+      "label": "hard-agent-ceiling",
+      "anyOf": [
+        "20 is a hard ceiling",
+        "hard 20-agent",
+        "≤ ?20 agents",
+        "20-agent (workflow )?cap"
+      ],
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+    },
+    {
+      "label": "refuters-per-finding-cap",
+      "anyOf": [
+        "≤ ?3 refuters per finding",
+        "at most 3 refuters per finding",
+        "no more than 3 refuters per finding",
+        "maximum of 3 refuters per finding"
+      ],
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
     }
   ],
   "recon": [
@@ -1869,6 +1969,26 @@
         "run at the workhorse tier",
         "Delegation tiers"
       ]
+    },
+    {
+      "label": "hard-agent-ceiling",
+      "anyOf": [
+        "20 is a hard ceiling",
+        "hard 20-agent",
+        "≤ ?20 agents",
+        "20-agent (workflow )?cap"
+      ],
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+    },
+    {
+      "label": "refuters-per-finding-cap",
+      "anyOf": [
+        "≤ ?3 refuters per finding",
+        "at most 3 refuters per finding",
+        "no more than 3 refuters per finding",
+        "maximum of 3 refuters per finding"
+      ],
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
     }
   ],
   "tackle-issues": [
