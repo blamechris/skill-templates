@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "66d8dda",
+  "generatedFromCommit": "2b9833f",
   "skillCount": 41,
   "skills": [
     {
@@ -23,10 +23,12 @@
             "[Cc]reate a tracked (?:GitHub )?issue",
             "[Ff]ile a tracked (?:GitHub )?issue",
             "[Oo]pen a tracked (?:GitHub )?issue",
+            "MUST (?:get|have|be given) an? (?:tracked )?(?:GitHub )?issue",
             "[Nn]ever leave deferred items as (?:just )?review comments",
+            "[Cc]reate (?:a )?(?:tracked )?(?:GitHub )?issue\\*{0,2} for everything else",
             "worth mentioning, it['’]s worth tracking"
           ],
-          "note": "Vacuity fix found by scripts/guard-audit.py: was [\"issue create\"], which matched ONLY the `gh issue create` invocation inside this step's own bash fence — delete the rule sentence, leave the fence intact, and the guard stayed green. In a customized copy that pattern is looser still: it matches any unrelated `gh issue create` anywhere in the file. Now binds the sentence that states the rule — a valid-but-out-of-scope finding becomes a tracked GitHub issue, never just a review comment. The command is the ENACTMENT, not the rule: a copy that keeps a `gh issue create` snippet after deleting the instruction has lost the rule, so it is deliberately not an alternate. Distinct from `mandatory-issues`, which binds that the rule is mandatory rather than what it requires."
+          "note": "Vacuity fix found by scripts/guard-audit.py: was [\"issue create\"], which matched ONLY the `gh issue create` invocation inside this step's own bash fence — delete the rule sentence, leave the fence intact, and the guard stayed green. In a customized copy that pattern is looser still: it matches any unrelated `gh issue create` anywhere in the file. Now binds the sentence that states the rule — a valid-but-out-of-scope finding becomes a tracked GitHub issue, never just a review comment. The command is the ENACTMENT, not the rule: a copy that keeps a `gh issue create` snippet after deleting the instruction has lost the rule, so it is deliberately not an alternate. Distinct from `mandatory-issues`, which binds that the rule is mandatory rather than what it requires. The first cut of this bind was too NARROW: it turned two installed copies red that state the rule perfectly well (exodus-loop \"MUST get a tracked GitHub issue\" under a \"NOTHING IS LOST.\" lead; repo-relay \"Create GitHub issue for everything else (MANDATORY - nothing gets lost)\"). The added alternates are those two wordings of the same sentence. A bare `nothing gets lost` slogan was tried first and REJECTED: it matched \"Nothing gets lost when the build cache is warm\", so it could have held the guard green off prose that says nothing about deferred findings — the same vacuity this guard was rebound to fix. Every alternate is a clause about what happens to a deferred finding."
         },
         {
           "label": "issue-reconciliation",
