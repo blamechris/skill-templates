@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "65e6c19",
+  "generatedFromCommit": "66d8dda",
   "skillCount": 41,
   "skills": [
     {
@@ -24,7 +24,7 @@
             "[Ff]ile a tracked (?:GitHub )?issue",
             "[Oo]pen a tracked (?:GitHub )?issue",
             "[Nn]ever leave deferred items as (?:just )?review comments",
-            "worth mentioning, it.s worth tracking"
+            "worth mentioning, it['’]s worth tracking"
           ],
           "note": "Vacuity fix found by scripts/guard-audit.py: was [\"issue create\"], which matched ONLY the `gh issue create` invocation inside this step's own bash fence — delete the rule sentence, leave the fence intact, and the guard stayed green. In a customized copy that pattern is looser still: it matches any unrelated `gh issue create` anywhere in the file. Now binds the sentence that states the rule — a valid-but-out-of-scope finding becomes a tracked GitHub issue, never just a review comment. The command is the ENACTMENT, not the rule: a copy that keeps a `gh issue create` snippet after deleting the instruction has lost the rule, so it is deliberately not an alternate. Distinct from `mandatory-issues`, which binds that the rule is mandatory rather than what it requires."
         },
@@ -1153,8 +1153,11 @@
           "label": "escalate-only-on-second-failure",
           "anyOf": [
             "fails a second time",
-            "[Ss]econd failure"
-          ]
+            "[Ii]f it fails again, (?:THEN|then)",
+            "[Oo]n(?:ly on)? the second failure[^\\n]{0,40}(?:THEN |then )?check",
+            "[Ss]econd failure[^\\n]{0,40}(?:THEN|then) check"
+          ],
+          "note": "A tenth vacuity of the same class as the nine scripts/guard-audit.py reported, and one the audit CANNOT report: the dropped `[Ss]econd failure` alternate matched the \"Graceful fallback — second failure triggers real investigation\" bullet under `## Why This Works`, which is the skill's own DOCUMENTATION of the rule and classifies as prose. Deleting the rule itself (step 4 of the snippet) left the guard green off that bullet. Every alternate now requires the escalation the rule actually orders — check `gh pr checks` — which the Why-This-Works bullet does not name."
         }
       ]
     },
