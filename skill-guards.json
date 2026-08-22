@@ -68,15 +68,16 @@
     {
       "label": "hard-agent-ceiling",
       "anyOf": [
-        "20 is a hard ceiling",
-        "hard 20-agent",
-        "≤ ?20 agents",
-        "20-agent (workflow )?cap",
-        "hard ceiling[^\\n]{0,60}\\b20\\b",
-        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
-        "(?:no more than|at most|a maximum of) 20 agents"
+        "20 is a hard ceiling that includes every refute/verify agent",
+        "refuters, verifiers[^\\n]{0,40}hard 20-agent",
+        "\\b20\\b[^\\n]{0,80}hard (?:ceiling|cap)[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "hard (?:ceiling|cap)[^\\n]{0,60}\\b20\\b[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "(?:refuters?|verifiers?)[^\\n]{0,60}(?:stays? within|inside)[^\\n]{0,60}\\b20\\b",
+        "(?:refuters?|verifiers?)[^\\n]{0,30}(?:includ|counted)\\w*[^\\n]{0,120}\\b20\\b",
+        "(?:includ\\w*|counting)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)[^\\n]{0,140}\\b20\\b",
+        "\\b20\\b[^\\n]{0,80}(?:refuters?|verifiers?)[^\\n]{0,40}includ"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. EVERY alternate binds the SCOPE CLAUSE — that the ceiling includes the refute/verify agents — not merely the number 20 near the word 'ceiling'. That is deliberate and is the whole point: the historical breach was not someone deleting the cap, it was someone reading it as panel-only, and an alternate like `20 is a hard ceiling` stays GREEN on '20 is a hard ceiling on the workhorse panel; refute/verify agents are counted separately'. Requiring an INCLUSION word (includes/counting/stays within) adjacent to the refuter noun is what separates the rule from that mutant, which also mentions refuters — in order to exclude them. Kept SEPARATE from refuters-per-finding-cap so stripping either half fails. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so alternate 2 binds its second line. Verified: all six templates match, six rule-gutting mutants (panel-only x2, inversion, scope-dropped, soft-target, 20->40) all go red, no line outside the six templates matches, and deleting only the rule line fails every alternate."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -311,15 +312,16 @@
     {
       "label": "hard-agent-ceiling",
       "anyOf": [
-        "20 is a hard ceiling",
-        "hard 20-agent",
-        "≤ ?20 agents",
-        "20-agent (workflow )?cap",
-        "hard ceiling[^\\n]{0,60}\\b20\\b",
-        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
-        "(?:no more than|at most|a maximum of) 20 agents"
+        "20 is a hard ceiling that includes every refute/verify agent",
+        "refuters, verifiers[^\\n]{0,40}hard 20-agent",
+        "\\b20\\b[^\\n]{0,80}hard (?:ceiling|cap)[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "hard (?:ceiling|cap)[^\\n]{0,60}\\b20\\b[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "(?:refuters?|verifiers?)[^\\n]{0,60}(?:stays? within|inside)[^\\n]{0,60}\\b20\\b",
+        "(?:refuters?|verifiers?)[^\\n]{0,30}(?:includ|counted)\\w*[^\\n]{0,120}\\b20\\b",
+        "(?:includ\\w*|counting)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)[^\\n]{0,140}\\b20\\b",
+        "\\b20\\b[^\\n]{0,80}(?:refuters?|verifiers?)[^\\n]{0,40}includ"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. EVERY alternate binds the SCOPE CLAUSE — that the ceiling includes the refute/verify agents — not merely the number 20 near the word 'ceiling'. That is deliberate and is the whole point: the historical breach was not someone deleting the cap, it was someone reading it as panel-only, and an alternate like `20 is a hard ceiling` stays GREEN on '20 is a hard ceiling on the workhorse panel; refute/verify agents are counted separately'. Requiring an INCLUSION word (includes/counting/stays within) adjacent to the refuter noun is what separates the rule from that mutant, which also mentions refuters — in order to exclude them. Kept SEPARATE from refuters-per-finding-cap so stripping either half fails. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so alternate 2 binds its second line. Verified: all six templates match, six rule-gutting mutants (panel-only x2, inversion, scope-dropped, soft-target, 20->40) all go red, no line outside the six templates matches, and deleting only the rule line fails every alternate."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -874,15 +876,16 @@
     {
       "label": "hard-agent-ceiling",
       "anyOf": [
-        "20 is a hard ceiling",
-        "hard 20-agent",
-        "≤ ?20 agents",
-        "20-agent (workflow )?cap",
-        "hard ceiling[^\\n]{0,60}\\b20\\b",
-        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
-        "(?:no more than|at most|a maximum of) 20 agents"
+        "20 is a hard ceiling that includes every refute/verify agent",
+        "refuters, verifiers[^\\n]{0,40}hard 20-agent",
+        "\\b20\\b[^\\n]{0,80}hard (?:ceiling|cap)[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "hard (?:ceiling|cap)[^\\n]{0,60}\\b20\\b[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "(?:refuters?|verifiers?)[^\\n]{0,60}(?:stays? within|inside)[^\\n]{0,60}\\b20\\b",
+        "(?:refuters?|verifiers?)[^\\n]{0,30}(?:includ|counted)\\w*[^\\n]{0,120}\\b20\\b",
+        "(?:includ\\w*|counting)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)[^\\n]{0,140}\\b20\\b",
+        "\\b20\\b[^\\n]{0,80}(?:refuters?|verifiers?)[^\\n]{0,40}includ"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. EVERY alternate binds the SCOPE CLAUSE — that the ceiling includes the refute/verify agents — not merely the number 20 near the word 'ceiling'. That is deliberate and is the whole point: the historical breach was not someone deleting the cap, it was someone reading it as panel-only, and an alternate like `20 is a hard ceiling` stays GREEN on '20 is a hard ceiling on the workhorse panel; refute/verify agents are counted separately'. Requiring an INCLUSION word (includes/counting/stays within) adjacent to the refuter noun is what separates the rule from that mutant, which also mentions refuters — in order to exclude them. Kept SEPARATE from refuters-per-finding-cap so stripping either half fails. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so alternate 2 binds its second line. Verified: all six templates match, six rule-gutting mutants (panel-only x2, inversion, scope-dropped, soft-target, 20->40) all go red, no line outside the six templates matches, and deleting only the rule line fails every alternate."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -1242,15 +1245,16 @@
     {
       "label": "hard-agent-ceiling",
       "anyOf": [
-        "20 is a hard ceiling",
-        "hard 20-agent",
-        "≤ ?20 agents",
-        "20-agent (workflow )?cap",
-        "hard ceiling[^\\n]{0,60}\\b20\\b",
-        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
-        "(?:no more than|at most|a maximum of) 20 agents"
+        "20 is a hard ceiling that includes every refute/verify agent",
+        "refuters, verifiers[^\\n]{0,40}hard 20-agent",
+        "\\b20\\b[^\\n]{0,80}hard (?:ceiling|cap)[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "hard (?:ceiling|cap)[^\\n]{0,60}\\b20\\b[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "(?:refuters?|verifiers?)[^\\n]{0,60}(?:stays? within|inside)[^\\n]{0,60}\\b20\\b",
+        "(?:refuters?|verifiers?)[^\\n]{0,30}(?:includ|counted)\\w*[^\\n]{0,120}\\b20\\b",
+        "(?:includ\\w*|counting)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)[^\\n]{0,140}\\b20\\b",
+        "\\b20\\b[^\\n]{0,80}(?:refuters?|verifiers?)[^\\n]{0,40}includ"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. EVERY alternate binds the SCOPE CLAUSE — that the ceiling includes the refute/verify agents — not merely the number 20 near the word 'ceiling'. That is deliberate and is the whole point: the historical breach was not someone deleting the cap, it was someone reading it as panel-only, and an alternate like `20 is a hard ceiling` stays GREEN on '20 is a hard ceiling on the workhorse panel; refute/verify agents are counted separately'. Requiring an INCLUSION word (includes/counting/stays within) adjacent to the refuter noun is what separates the rule from that mutant, which also mentions refuters — in order to exclude them. Kept SEPARATE from refuters-per-finding-cap so stripping either half fails. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so alternate 2 binds its second line. Verified: all six templates match, six rule-gutting mutants (panel-only x2, inversion, scope-dropped, soft-target, 20->40) all go red, no line outside the six templates matches, and deleting only the rule line fails every alternate."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -1502,15 +1506,16 @@
     {
       "label": "hard-agent-ceiling",
       "anyOf": [
-        "20 is a hard ceiling",
-        "hard 20-agent",
-        "≤ ?20 agents",
-        "20-agent (workflow )?cap",
-        "hard ceiling[^\\n]{0,60}\\b20\\b",
-        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
-        "(?:no more than|at most|a maximum of) 20 agents"
+        "20 is a hard ceiling that includes every refute/verify agent",
+        "refuters, verifiers[^\\n]{0,40}hard 20-agent",
+        "\\b20\\b[^\\n]{0,80}hard (?:ceiling|cap)[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "hard (?:ceiling|cap)[^\\n]{0,60}\\b20\\b[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "(?:refuters?|verifiers?)[^\\n]{0,60}(?:stays? within|inside)[^\\n]{0,60}\\b20\\b",
+        "(?:refuters?|verifiers?)[^\\n]{0,30}(?:includ|counted)\\w*[^\\n]{0,120}\\b20\\b",
+        "(?:includ\\w*|counting)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)[^\\n]{0,140}\\b20\\b",
+        "\\b20\\b[^\\n]{0,80}(?:refuters?|verifiers?)[^\\n]{0,40}includ"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. EVERY alternate binds the SCOPE CLAUSE — that the ceiling includes the refute/verify agents — not merely the number 20 near the word 'ceiling'. That is deliberate and is the whole point: the historical breach was not someone deleting the cap, it was someone reading it as panel-only, and an alternate like `20 is a hard ceiling` stays GREEN on '20 is a hard ceiling on the workhorse panel; refute/verify agents are counted separately'. Requiring an INCLUSION word (includes/counting/stays within) adjacent to the refuter noun is what separates the rule from that mutant, which also mentions refuters — in order to exclude them. Kept SEPARATE from refuters-per-finding-cap so stripping either half fails. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so alternate 2 binds its second line. Verified: all six templates match, six rule-gutting mutants (panel-only x2, inversion, scope-dropped, soft-target, 20->40) all go red, no line outside the six templates matches, and deleting only the rule line fails every alternate."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -1998,15 +2003,16 @@
     {
       "label": "hard-agent-ceiling",
       "anyOf": [
-        "20 is a hard ceiling",
-        "hard 20-agent",
-        "≤ ?20 agents",
-        "20-agent (workflow )?cap",
-        "hard ceiling[^\\n]{0,60}\\b20\\b",
-        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
-        "(?:no more than|at most|a maximum of) 20 agents"
+        "20 is a hard ceiling that includes every refute/verify agent",
+        "refuters, verifiers[^\\n]{0,40}hard 20-agent",
+        "\\b20\\b[^\\n]{0,80}hard (?:ceiling|cap)[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "hard (?:ceiling|cap)[^\\n]{0,60}\\b20\\b[^\\n]{0,80}(?:includ\\w*|count\\w*)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)",
+        "(?:refuters?|verifiers?)[^\\n]{0,60}(?:stays? within|inside)[^\\n]{0,60}\\b20\\b",
+        "(?:refuters?|verifiers?)[^\\n]{0,30}(?:includ|counted)\\w*[^\\n]{0,120}\\b20\\b",
+        "(?:includ\\w*|counting)[^\\n]{0,40}(?:every |all )?(?:refute|refuter|verif)[^\\n]{0,140}\\b20\\b",
+        "\\b20\\b[^\\n]{0,80}(?:refuters?|verifiers?)[^\\n]{0,40}includ"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. EVERY alternate binds the SCOPE CLAUSE — that the ceiling includes the refute/verify agents — not merely the number 20 near the word 'ceiling'. That is deliberate and is the whole point: the historical breach was not someone deleting the cap, it was someone reading it as panel-only, and an alternate like `20 is a hard ceiling` stays GREEN on '20 is a hard ceiling on the workhorse panel; refute/verify agents are counted separately'. Requiring an INCLUSION word (includes/counting/stays within) adjacent to the refuter noun is what separates the rule from that mutant, which also mentions refuters — in order to exclude them. Kept SEPARATE from refuters-per-finding-cap so stripping either half fails. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so alternate 2 binds its second line. Verified: all six templates match, six rule-gutting mutants (panel-only x2, inversion, scope-dropped, soft-target, 20->40) all go red, no line outside the six templates matches, and deleting only the rule line fails every alternate."
     },
     {
       "label": "refuters-per-finding-cap",
