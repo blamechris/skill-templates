@@ -1,7 +1,7 @@
 # skill-templates skill profile
 
 ## Project Context
-- Tech: Markdown skill templates (`generic/*.md`); Bash with embedded `python3` heredocs (`scripts/`, `assets/scripts/`); one ESM Node script, `assets/compile-skill-targets.mjs`; GitHub Actions. No package manager and no dependencies — every Node import is a `node:` builtin.
+- Tech: Markdown skill templates (`generic/*.md`); Bash with embedded `python3` heredocs (`scripts/`, `assets/scripts/`); two ESM Node scripts, `assets/compile-skill-targets.mjs` (CI-gated) and `assets/smoke-intake.mjs`; GitHub Actions. No package manager and no dependencies — every Node import is a `node:` builtin.
 - Build system: no compile step. `./scripts/build-index.sh` regenerates `registry.json` from `generic/*.md`, and that generated index *is* the build product; CI fails the PR if it is stale.
 - Repo: blamechris/skill-templates (public)
 - Main branch: main
@@ -12,10 +12,10 @@
   - **Every change lands through a PR.** No direct pushes to `main`, no `gh pr merge --auto` / `--admin`, no protection override — a one-line template tweak and a regenerated index are not exempt (`49ccfc5`, reverted in #132, re-landed as #133).
   - **`registry.json` is generated, never hand-edited.** Run `./scripts/build-index.sh` and commit the result; `generatedFromCommit` and the per-skill `hash` are git-derived and cannot be right before the squash — `reindex-after-merge.yml` repairs them.
   - **The push-deploy stays dead.** Do not recreate `deploy.sh`, `deploy.conf`, `sync.sh`, `customizations/`, `values/`, or a push trigger.
-  - **The session seed lives outside every worktree** at `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`. `docs/handoffs/` is a narrative artifact of a PR and is NOT the continuity mechanism; `handoffs/NEXT.md` is retired.
+  - **The session seed lives outside every worktree** at `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`. `docs/handoffs/` is a narrative artifact of a PR and is NOT the continuity mechanism. Seeds are per-scope and archive-on-collide; the single global seed file is retired.
   - **Exactly one scope derivation.** `--git-common-dir` is executable only in `assets/scripts/session-seed.py`; prose outside a code fence may explain it. A second copy fails CI.
   - **The floor is exactly five rules** (`no-agent-attribution`, `explicit-path-staging`, `worktree-by-default`, `no-secrets-in-committed-files`, `seed-written-outside-any-worktree`), agreeing in `assets/global-CLAUDE.md` and `assets/scripts/fleet-check.py`.
-  - **Every shipped script has an executable sibling `*.test.sh`** — an untested script asset is a tracked defect (#209).
+  - **A new shipped script arrives with an executable sibling suite** (`*.test.sh` / `*.test.mjs`) — an untested script asset is a tracked defect (#209), which is *open*: `scripts/build-index.sh`, `scripts/guard-audit.py` and `assets/smoke-intake.mjs` have none today. Treat that as the known backlog, not as a regression to report.
   - **This repo's own installed skills lint clean.** `.claude/commands/*.md` is covered by CI, and every name in `.claude/skills.lock` must have a file on disk (#156).
   - **No secrets.** The repo is public; keys, tokens, cookies, private URLs, and third-party personal data never land here.
 
@@ -32,7 +32,7 @@
 
 ## Conventions
 - Branch prefix / naming: `<type>/<slug>`, or `<type>/<issue>-<slug>` when it closes an issue — `feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `revert/`. The post-merge reindex bot uses `chore/reindex-registry`.
-- Commit style + scopes: conventional commits, `type(scope): subject`. Scopes in use: `registry`, `skills`, `scripts`, `guards`, `generic`, `templates`, `compiler`, `skill-lint`, `session-lifecycle`, `assets`, `global`, `conventions`.
+- Commit style + scopes: conventional commits, `type(scope): subject`. **A change to one skill is scoped by that skill's own name** — `feat(weekly-review)`, `fix(visual-brief)`, `feat(look-approve)`, `fix(batch-merge)` — which is the most common form in the log. Otherwise the scope names the area: `registry`, `skills`, `skill`, `scripts`, `guards`, `generic`, `templates`, `compiler`, `skill-lint`, `session-lifecycle`, `assets`, `global`, `conventions`, `ci`.
 - Source file patterns: `generic/*.md` (templates — prose plus fenced examples, no frontmatter); `assets/**` (files distributed verbatim to consumer repos); `scripts/*.sh` and `scripts/*.py` plus their `*.test.sh` siblings; `.github/workflows/*.yml`; `registry.json` (generated) and `skill-guards.json` (hand-maintained); `.claude/commands/*.md` (this repo's own version-stamped installs).
 - Shell style: `set -euo pipefail` in `scripts/`, with one deliberate exception — `scripts/skill-lint.test.sh` uses `set -uo pipefail` because its harness captures a non-zero `rc` from every "dirty" case and `-e` would abort the suite on the first one. Bash targets macOS bash 3.2 (`.claude/rules/bash-compat.md`): no `declare -A`, use parallel indexed arrays.
 - GitHub Actions (`.claude/rules/gh-actions.md`): `gh` has no auth session on a self-hosted runner — export `GH_TOKEN` before any `gh pr` / `gh issue` call; `if:` compares step outputs as strings, so write `!= '0'`, not `> 0`.
@@ -63,13 +63,15 @@ The gate is self-imposed and nothing enforces it: `main` carries `required_statu
 
 Recorded in the profile, not just in the installed skill: `.claude/commands/` is regenerated on every `skill update`, this file is not.
 
+Note that this particular block is **documentation, not a machine-checked pin**: `scripts/skill-lint.sh` scopes check 5 to `POSTURE_SKILLS = (autonomous-dev-flow, tackle-issues)`, so it never reads a `prime-directive` section. The enforced pins are the two sections at the end of this file.
+
 ## agent-review Customizations
 
 - Reviewer persona: a registry maintainer who reads skill templates as *programs an agent will execute*, not as documentation — the failure mode is a template that renders plausibly and then behaves wrongly at install time.
 - Code quality criteria: no residual `{{CUSTOMIZE}}` markers; no attribution footer; a well-formed version stamp alone on the last non-blank line; guard anchors intact.
 - Architecture criteria: one implementation per rule — this repo's recurring defect is a *second* copy of a derivation or a doctrine paragraph, and the copy in the most-read file is the one that wins the drift (#210). A new gate must be able to fail; a needle a scan looks for must not also appear in the prose that explains the ban.
 - Test criteria: every shipped script under `scripts/` and `assets/scripts/` has an executable sibling `*.test.sh`, and a new assertion must be shown to fail against a deliberately broken mutant — not merely pass against the good file.
-- Labels: `bug`, `enhancement`, `documentation`, `from-review`. That is the whole set — do not invent a `type:`/`triaged:` scheme.
+- Labels: `bug`, `enhancement`, `documentation`, and `from-review` for anything a review turned up — those four are the ones actually used. Six GitHub defaults also exist and are unused (`duplicate`, `good first issue`, `help wanted`, `invalid`, `question`, `wontfix`). Ten labels total; do not invent a `type:`/`triaged:` scheme.
 
 ## bug-hunt Customizations
 
