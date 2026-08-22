@@ -71,9 +71,12 @@
         "20 is a hard ceiling",
         "hard 20-agent",
         "≤ ?20 agents",
-        "20-agent (workflow )?cap"
+        "20-agent (workflow )?cap",
+        "hard ceiling[^\\n]{0,60}\\b20\\b",
+        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
+        "(?:no more than|at most|a maximum of) 20 agents"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -81,9 +84,11 @@
         "≤ ?3 refuters per finding",
         "at most 3 refuters per finding",
         "no more than 3 refuters per finding",
-        "maximum of 3 refuters per finding"
+        "maximum of 3 refuters per finding",
+        "(?:≤ ?|at most |no more than |a maximum of )(?:3|three) refuters",
+        "(?:3|three) refuters per finding at most"
       ],
-      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule. The looser alternates require a limiting phrase before the number for the same reason: \"more than 3 refuters is fine\" must leave the guard red, not green."
     }
   ],
   "autonomous-dev-flow": [
@@ -309,9 +314,12 @@
         "20 is a hard ceiling",
         "hard 20-agent",
         "≤ ?20 agents",
-        "20-agent (workflow )?cap"
+        "20-agent (workflow )?cap",
+        "hard ceiling[^\\n]{0,60}\\b20\\b",
+        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
+        "(?:no more than|at most|a maximum of) 20 agents"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -319,9 +327,11 @@
         "≤ ?3 refuters per finding",
         "at most 3 refuters per finding",
         "no more than 3 refuters per finding",
-        "maximum of 3 refuters per finding"
+        "maximum of 3 refuters per finding",
+        "(?:≤ ?|at most |no more than |a maximum of )(?:3|three) refuters",
+        "(?:3|three) refuters per finding at most"
       ],
-      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule. The looser alternates require a limiting phrase before the number for the same reason: \"more than 3 refuters is fine\" must leave the guard red, not green."
     }
   ],
   "catchup": [
@@ -867,9 +877,12 @@
         "20 is a hard ceiling",
         "hard 20-agent",
         "≤ ?20 agents",
-        "20-agent (workflow )?cap"
+        "20-agent (workflow )?cap",
+        "hard ceiling[^\\n]{0,60}\\b20\\b",
+        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
+        "(?:no more than|at most|a maximum of) 20 agents"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -877,9 +890,11 @@
         "≤ ?3 refuters per finding",
         "at most 3 refuters per finding",
         "no more than 3 refuters per finding",
-        "maximum of 3 refuters per finding"
+        "maximum of 3 refuters per finding",
+        "(?:≤ ?|at most |no more than |a maximum of )(?:3|three) refuters",
+        "(?:3|three) refuters per finding at most"
       ],
-      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule. The looser alternates require a limiting phrase before the number for the same reason: \"more than 3 refuters is fine\" must leave the guard red, not green."
     }
   ],
   "learn": [
@@ -1230,9 +1245,12 @@
         "20 is a hard ceiling",
         "hard 20-agent",
         "≤ ?20 agents",
-        "20-agent (workflow )?cap"
+        "20-agent (workflow )?cap",
+        "hard ceiling[^\\n]{0,60}\\b20\\b",
+        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
+        "(?:no more than|at most|a maximum of) 20 agents"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -1240,9 +1258,11 @@
         "≤ ?3 refuters per finding",
         "at most 3 refuters per finding",
         "no more than 3 refuters per finding",
-        "maximum of 3 refuters per finding"
+        "maximum of 3 refuters per finding",
+        "(?:≤ ?|at most |no more than |a maximum of )(?:3|three) refuters",
+        "(?:3|three) refuters per finding at most"
       ],
-      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule. The looser alternates require a limiting phrase before the number for the same reason: \"more than 3 refuters is fine\" must leave the guard red, not green."
     },
     {
       "label": "explicit-path-staging",
@@ -1485,9 +1505,12 @@
         "20 is a hard ceiling",
         "hard 20-agent",
         "≤ ?20 agents",
-        "20-agent (workflow )?cap"
+        "20-agent (workflow )?cap",
+        "hard ceiling[^\\n]{0,60}\\b20\\b",
+        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
+        "(?:no more than|at most|a maximum of) 20 agents"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -1495,9 +1518,11 @@
         "≤ ?3 refuters per finding",
         "at most 3 refuters per finding",
         "no more than 3 refuters per finding",
-        "maximum of 3 refuters per finding"
+        "maximum of 3 refuters per finding",
+        "(?:≤ ?|at most |no more than |a maximum of )(?:3|three) refuters",
+        "(?:3|three) refuters per finding at most"
       ],
-      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule. The looser alternates require a limiting phrase before the number for the same reason: \"more than 3 refuters is fine\" must leave the guard red, not green."
     }
   ],
   "recon": [
@@ -1976,9 +2001,12 @@
         "20 is a hard ceiling",
         "hard 20-agent",
         "≤ ?20 agents",
-        "20-agent (workflow )?cap"
+        "20-agent (workflow )?cap",
+        "hard ceiling[^\\n]{0,60}\\b20\\b",
+        "\\b20\\b[^\\n]{0,40}hard (ceiling|cap)",
+        "(?:no more than|at most|a maximum of) 20 agents"
       ],
-      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line."
+      "note": "The ~20-agent review cap breached six times in its first week (27-70 agents) while every registry gate stayed green, because nothing bound it. Kept SEPARATE from refuters-per-finding-cap on purpose: one guard spanning both halves stays green while a customization strips either half. Every alternate restates the same sentence — the total is hard-capped at 20, refute stage included. Single-line by necessity: guards are re.search with no flags, and full-review.md wraps this sentence across a newline, so the alternates bind its second line. Meaning-based alternates follow the cost-circuit-breaker style #220 asked for: a customizing agent that rewords the sentence (\"the hard ceiling is 20 agents\") must still satisfy it, while an inversion (\"no hard ceiling\") must not."
     },
     {
       "label": "refuters-per-finding-cap",
@@ -1986,9 +2014,11 @@
         "≤ ?3 refuters per finding",
         "at most 3 refuters per finding",
         "no more than 3 refuters per finding",
-        "maximum of 3 refuters per finding"
+        "maximum of 3 refuters per finding",
+        "(?:≤ ?|at most |no more than |a maximum of )(?:3|three) refuters",
+        "(?:3|three) refuters per finding at most"
       ],
-      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule."
+      "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule. The looser alternates require a limiting phrase before the number for the same reason: \"more than 3 refuters is fine\" must leave the guard red, not green."
     }
   ],
   "tackle-issues": [
