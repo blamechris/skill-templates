@@ -1,5 +1,5 @@
 {
-  "_comment": "Per-skill content guards — load-bearing markers that must survive customization. Each guard passes if ANY of its regexes matches the installed skill (Python re.search over the whole file, no flags — so `.` does not cross newlines and ^/$ are string anchors). Ported from sync.sh so the check outlives it; build-index.sh folds these into registry.json, and /skill uses them in `add` self-validation and `outdated`. WRITING A GUARD: bind the sentence that states the rule, not a word that happens to appear near it. Every alternate in an `anyOf` must be a rewording of the SAME sentence — never a neighbouring heading, table row, or output template, because those are exactly what survives when a customizing agent rewrites the rule. Validate by deleting ONLY the rule line and leaving the decoration intact: if the guard still matches, it is vacuous. An optional `note` field records why a non-obvious pattern is shaped the way it is; skill-lint and /skill read only `label` and `anyOf`.",
+  "_comment": "Per-skill content guards — load-bearing markers that must survive customization. Each guard passes if ANY of its regexes matches the installed skill (Python re.search over the whole file, no flags — so `.` does not cross newlines and ^/$ are string anchors). Ported from sync.sh so the check outlives it; build-index.sh folds these into registry.json, and /skill uses them in `add` self-validation and `outdated`. WRITING A GUARD: bind the sentence that states the rule, not a word that happens to appear near it. Every alternate in an `anyOf` must be a rewording of the SAME sentence — never a neighbouring heading, table row, or output template, because those are exactly what survives when a customizing agent rewrites the rule. The code that ENACTS a rule is not an alternate either — a `gh issue create` invocation, a jq filter, a `git pull` — because an `anyOf` is an OR, so one surviving code alternate reinstates the vacuity the prose alternates were added to fix; bind the sentence and drop the command. Validate by deleting ONLY the rule line and leaving the decoration intact: if the guard still matches, it is vacuous. Note that `guard-audit.py` cannot see the case where a skill DOCUMENTS its own rule in prose elsewhere (a \"Why This Works\" bullet restating a rule that lives in a snippet) — that one only shows up under the deletion test. An optional `note` field records why a non-obvious pattern is shaped the way it is; skill-lint and /skill read only `label` and `anyOf`.",
   "agent-review": [
     {
       "label": "mandatory-issues",
@@ -16,7 +16,7 @@
         "[Ff]ile a tracked (?:GitHub )?issue",
         "[Oo]pen a tracked (?:GitHub )?issue",
         "[Nn]ever leave deferred items as (?:just )?review comments",
-        "worth mentioning, it.s worth tracking"
+        "worth mentioning, it['\u2019]s worth tracking"
       ],
       "note": "Vacuity fix found by scripts/guard-audit.py: was [\"issue create\"], which matched ONLY the `gh issue create` invocation inside this step's own bash fence — delete the rule sentence, leave the fence intact, and the guard stayed green. In a customized copy that pattern is looser still: it matches any unrelated `gh issue create` anywhere in the file. Now binds the sentence that states the rule — a valid-but-out-of-scope finding becomes a tracked GitHub issue, never just a review comment. The command is the ENACTMENT, not the rule: a copy that keeps a `gh issue create` snippet after deleting the instruction has lost the rule, so it is deliberately not an alternate. Distinct from `mandatory-issues`, which binds that the rule is mandatory rather than what it requires."
     },
@@ -1067,8 +1067,11 @@
       "label": "escalate-only-on-second-failure",
       "anyOf": [
         "fails a second time",
-        "[Ss]econd failure"
-      ]
+        "[Ii]f it fails again, (?:THEN|then)",
+        "[Oo]n(?:ly on)? the second failure[^\\n]{0,40}(?:THEN |then )?check",
+        "[Ss]econd failure[^\\n]{0,40}(?:THEN|then) check"
+      ],
+      "note": "A tenth vacuity of the same class as the nine scripts/guard-audit.py reported, and one the audit CANNOT report: the dropped `[Ss]econd failure` alternate matched the \"Graceful fallback — second failure triggers real investigation\" bullet under `## Why This Works`, which is the skill's own DOCUMENTATION of the rule and classifies as prose. Deleting the rule itself (step 4 of the snippet) left the guard green off that bullet. Every alternate now requires the escalation the rule actually orders — check `gh pr checks` — which the Why-This-Works bullet does not name."
     }
   ],
   "parallel-dev": [
