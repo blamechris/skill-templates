@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "a0b98e6",
+  "generatedFromCommit": "66d8dda",
   "skillCount": 41,
   "skills": [
     {
@@ -20,8 +20,13 @@
         {
           "label": "issue-creation-code",
           "anyOf": [
-            "issue create"
-          ]
+            "[Cc]reate a tracked (?:GitHub )?issue",
+            "[Ff]ile a tracked (?:GitHub )?issue",
+            "[Oo]pen a tracked (?:GitHub )?issue",
+            "[Nn]ever leave deferred items as (?:just )?review comments",
+            "worth mentioning, it['’]s worth tracking"
+          ],
+          "note": "Vacuity fix found by scripts/guard-audit.py: was [\"issue create\"], which matched ONLY the `gh issue create` invocation inside this step's own bash fence — delete the rule sentence, leave the fence intact, and the guard stayed green. In a customized copy that pattern is looser still: it matches any unrelated `gh issue create` anywhere in the file. Now binds the sentence that states the rule — a valid-but-out-of-scope finding becomes a tracked GitHub issue, never just a review comment. The command is the ENACTMENT, not the rule: a copy that keeps a `gh issue create` snippet after deleting the instruction has lost the rule, so it is deliberately not an alternate. Distinct from `mandatory-issues`, which binds that the rule is mandatory rather than what it requires."
         },
         {
           "label": "issue-reconciliation",
@@ -412,8 +417,13 @@
         {
           "label": "idempotency",
           "anyOf": [
-            "in_reply_to_id"
-          ]
+            "filter out comments that already have replies",
+            "already-replied comments are skipped",
+            "[Ss]afe to re-run without duplicating",
+            "[Ss]kip(?:ping)? comments that already have (?:a )?repl",
+            "[Oo]nly process comments in `PENDING_COMMENTS`"
+          ],
+          "note": "Vacuity fix found by scripts/guard-audit.py: was [\"in_reply_to_id\"], which matched the jq filters in the step-2 fence AND two unrelated lines in the step-6 verification fence (the root/replied counters). The entire idempotency step could therefore be deleted with the guard held green by a later step that does something else. Now binds the sentence that states the rule — comments that already carry a reply from this workflow are filtered out, so a re-run does not duplicate work — in each of the three places the template states it (step 2's instruction, the `PENDING_COMMENTS` restatement, Critical Rule 10). The jq filter is the ENACTMENT, not the rule, and is deliberately not an alternate."
         },
         {
           "label": "mandatory-issues",
@@ -734,11 +744,12 @@
       "guards": [
         {
           "label": "refresh-existing-clone",
-          "note": "Binds the refresh of an ALREADY-CLONED docs repo, not the clone-if-absent branch — a missing clone fails loudly, a never-refreshed one serves stale docs silently. Deliberately excludes the neighbouring `Pulling latest docs...` echo, which survives deletion of the git command. The `nothing to clone or pull` alternate is the same instruction as restated by a repo whose docs live in-tree (no-it-all), where there is no clone to refresh.",
+          "note": "Binds the refresh of an ALREADY-CLONED docs repo, not the clone-if-absent branch — a missing clone fails loudly, a never-refreshed one serves stale docs silently. Vacuity fix found by scripts/guard-audit.py: the alternates used to be the `git -C … pull --rebase` command itself, which failed in both directions — deleting the rule sentence and leaving the bash fence intact kept the guard green, while a consumer that refreshes with `fetch` + `reset --hard` (honouring the rule exactly) went red. Now binds the sentence that states it; the pull command is the ENACTMENT, not the rule. Still deliberately excludes the neighbouring `Pulling latest docs...` echo, which survives deletion of the rule. The `nothing to clone or pull` alternate is the same instruction as restated by a repo whose docs live in-tree (no-it-all), where there is no clone to refresh.",
           "anyOf": [
-            "pull --rebase",
-            "git -C .{0,60} pull",
-            "git pull",
+            "[Ss]ync first, always",
+            "stale until it is (?:refreshed|synced|pulled)",
+            "[Aa]lways (?:sync|refresh) (?:the )?(?:docs |clone )?before (?:reading|citing|using)",
+            "[Rr]efresh (?:the |an )?existing clone before",
             "[Nn]othing to clone or pull"
           ]
         },
@@ -1142,8 +1153,11 @@
           "label": "escalate-only-on-second-failure",
           "anyOf": [
             "fails a second time",
-            "[Ss]econd failure"
-          ]
+            "[Ii]f it fails again, (?:THEN|then)",
+            "[Oo]n(?:ly on)? the second failure[^\\n]{0,40}(?:THEN |then )?check",
+            "[Ss]econd failure[^\\n]{0,40}(?:THEN|then) check"
+          ],
+          "note": "A tenth vacuity of the same class as the nine scripts/guard-audit.py reported, and one the audit CANNOT report: the dropped `[Ss]econd failure` alternate matched the \"Graceful fallback — second failure triggers real investigation\" bullet under `## Why This Works`, which is the skill's own DOCUMENTATION of the rule and classifies as prose. Deleting the rule itself (step 4 of the snippet) left the guard green off that bullet. Every alternate now requires the escalation the rule actually orders — check `gh pr checks` — which the Why-This-Works bullet does not name."
         }
       ]
     },
@@ -2030,10 +2044,13 @@
         {
           "label": "core-panel",
           "anyOf": [
-            "Core Panel \\(always included\\)[\\s\\S]{0,400}\\| Agent \\| Nickname",
-            "\\| Agent \\| Nickname \\| Lens \\| Personality \\|"
+            "[Aa]lways include the first (?:4|four)",
+            "[Aa]lways include the core panel",
+            "[Tt]he core panel is always included",
+            "[Tt]he first (?:4|four)[^\\n]{0,30}are always included",
+            "[Cc]ore panel agents are mandatory"
           ],
-          "note": "Vacuity fix found by scripts/guard-audit.py: Was ['Core Panel'] — matched only the `#### Core Panel (always included)` heading, so the panel TABLE could be deleted with the guard green. Now requires the table itself. Confirmed by mutation — before the fix, deleting every non-heading line the alternates matched removed ZERO lines, because they matched no rule text at all."
+          "note": "Vacuity fix found by scripts/guard-audit.py, second pass. The first pass moved this guard off the `#### Core Panel (always included)` heading and onto the roster TABLE — but the table is CONTENT a consumer legitimately rewrites (its own personas, its own columns), not the rule. Binding `| Agent | Nickname | Lens | Personality |` therefore forced an exact column set on every installed copy AND still left the rule sentence deletable with the guard green. The rule is the sentence: the first four agents are always in the panel. Every alternate is a rewording of that one sentence, and none of them matches the heading — deleting only the sentence now turns the guard red."
         },
         {
           "label": "master-assessment",
