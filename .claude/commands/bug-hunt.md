@@ -145,7 +145,7 @@ Roles per `/tiered-delegation`: **workhorse** = one tier below the session ceili
 - **Hunters run at the workhorse tier by default.** Bug-hunting breadth is workhorse work; do not spawn hunters at the ceiling. The orchestrator's dedup/triage (step 5) and the user-facing report are where the expensive judgment lives.
 - **Mechanical passes at the mechanical tier.** The step-5 dedup key matching, severity-floor filtering, and any pre-filter over candidate files run at the mechanical tier at low effort.
 - **Sample-verify instead of up-tiering.** If hunter findings look noisy, re-check a ~10% sample with a stronger tier before filing anything; a finding that fails its sample check sends the whole batch back for verification, not for a full re-run up-tier.
-- **Fan-out budget: ~12 workhorse/ceiling subagents per run.** The budget counts workhorse- and ceiling-tier agents (the hunters); mechanical-tier passes and the ~10% sample-verify checks do not count against it. Exceeding 12 (up to a hard 20) requires an explicit one-line justification in the report. The 6-hunter maximum sits well inside this budget.
+- **Fan-out budget: ~12 workhorse/ceiling subagents per run.** The budget counts workhorse- and ceiling-tier agents (the hunters); mechanical-tier passes and the ~10% sample-verify checks do not count against it. Exceeding 12 requires an explicit one-line justification in the report; **20 is a hard ceiling that includes every refute/verify agent, and no justification lifts it** (≤3 refuters per finding — queue rounds rather than widen). The 6-hunter maximum sits well inside this budget.
 
 ### 5. Dedup and Triage
 
@@ -248,8 +248,17 @@ This repo's label set is the GitHub default plus `from-review` — there is **no
 
 ### 8. Commit Candidate List (only if files were written)
 
+**Stage explicit paths.** `git status --short` first, then `git add` the report files you just
+wrote, **by name**. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or
+`git commit -a`. A trailing-slash directory add is a bulk add: the working copy is shared with
+concurrent sessions, so `${OUTPUT_DIR}/` may also hold a stale report from another run or a file
+that is not yours. `-u` is not the safe one: it restages every *tracked* file whose worktree copy
+differs, including files a clean/smudge filter rewrote without you touching them — that is how
+`git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as an edit.
+
 ```bash
-git add "${OUTPUT_DIR}/"
+git status --short "${OUTPUT_DIR}"
+git add "${OUTPUT_DIR}/<report-file-1>.md" "${OUTPUT_DIR}/<report-file-2>.md"   # name each file you wrote
 git commit -m "docs: bug-hunt of <target> (<N> candidates, <M> filed)"
 ```
 
@@ -319,4 +328,4 @@ Output a final summary:
 | "Review this PR before merge" | `/agentic-audit` |
 
 A typical pipeline: `/recon src/payments` → `/bug-hunt src/payments` → `/tackle-issues` on the newly-filed issues.
-<!-- skill-templates: bug-hunt a09dcc2 2026-08-01 -->
+<!-- skill-templates: bug-hunt a0b98e6 2026-08-21 -->

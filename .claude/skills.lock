@@ -9,8 +9,8 @@
       ]
     },
     "bug-hunt": {
-      "hash": "a09dcc2",
-      "installed": "2026-08-01",
+      "hash": "a0b98e6",
+      "installed": "2026-08-21",
       "targets": [
         "claude"
       ]
@@ -23,15 +23,15 @@
       ]
     },
     "prime-directive": {
-      "hash": "d318c59",
-      "installed": "2026-07-26",
+      "hash": "a0b98e6",
+      "installed": "2026-08-21",
       "targets": [
         "claude"
       ]
     },
     "recon": {
-      "hash": "7f5fa28",
-      "installed": "2026-05-19",
+      "hash": "af9c1e4",
+      "installed": "2026-08-21",
       "targets": [
         "claude"
       ]
