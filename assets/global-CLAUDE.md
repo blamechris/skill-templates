@@ -167,8 +167,10 @@ have a worktree — they are advisory, and advisory is how three separate incide
 in one week, the third of them *while fixing the second*.
 
 <!--default:harness-reaps-agent-worktrees-->
-**`<repo>/.claude/worktrees/` is harness-managed space, and the harness reaps it on its own
-schedule.** A periodic Claude Code cleanup pass deletes stale `agent-<hex>` worktrees *and their
+**`~/Projects/<repo>/.claude/worktrees/` is harness-managed space, and the harness reaps it on
+its own schedule.** That directory is the harness's own agent-worktree store inside the shared
+checkout — not the `<scratch>/<repo>-<slug>` worktree the rule above tells you to create. A
+periodic Claude Code cleanup pass deletes stale `agent-<hex>` worktrees there *and their
 branches*, then stamps `~/.claude/.last-cleanup`. "Keep this worktree until issue X closes" is
 therefore not a retention any session can grant: the rule above guards against *your* teardown,
 this one against a teardown nobody in the session initiated and no care inside it prevents.
