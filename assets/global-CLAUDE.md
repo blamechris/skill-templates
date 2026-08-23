@@ -166,6 +166,25 @@ is not worth keeping. The two rules above are the fallback for when you genuinel
 have a worktree — they are advisory, and advisory is how three separate incidents happened
 in one week, the third of them *while fixing the second*.
 
+<!--default:harness-reaps-agent-worktrees-->
+**`~/Projects/<repo>/.claude/worktrees/` is harness-managed space, and the harness reaps it on
+its own schedule.** That directory is the harness's own agent-worktree store inside the shared
+checkout — not the `<scratch>/<repo>-<slug>` worktree the rule above tells you to create. A
+periodic Claude Code cleanup pass deletes stale `agent-<hex>` worktrees there *and their
+branches*, then stamps `~/.claude/.last-cleanup`. "Keep this worktree until issue X closes" is
+therefore not a retention any session can grant: the rule above guards against *your* teardown,
+this one against a teardown nobody in the session initiated and no care inside it prevents.
+Confirmed 2026-08-22 — rah6's `worktree-agent-a0b15ce809474e61d`, retained on purpose by rah6#232
+as the only copy of three stranded test blocks, was deleted **107 seconds before** the merge that
+closed #232. Everything else was eliminated first (no crontab, launchd job, scheduled task, git
+hook, Claude hook, peer session, or `git gc`), and a direct experiment established that
+`git worktree remove` does not prune a sibling and that git marks a vanished worktree `prunable`
+in `git worktree list` — which rah6's listing minutes earlier did not show. The operative rule:
+**when an issue's acceptance depends on a retained worktree, capture the evidence at filing
+time** — push the branch, `git tag` the commit in the main checkout, or paste the diff into the
+issue body. A filesystem path in an issue is a pointer to something already scheduled for
+deletion.
+
 <!--floor:no-secrets-in-committed-files-->
 **Never commit a secret, and never write one into a file that is on its way to a commit.**
 No tokens, API keys, passwords, cookies, private URLs, or personal data of third parties —
