@@ -307,9 +307,11 @@ serialization/save-compat, CI/infra, security, cross-cutting refactors — **and
 the hardest adjudication.** Judge the tier from the blast radius the session is
 aiming at, not from how the work feels; when it is genuinely unclear, it is not
 HIGH. Never for subagents — no Fable finder, refuter, judge, or sweep, whatever
-the panel's tier. And **never above $500 in a meter week**; at the ceiling, Fable
-is off for the remainder of the week and Opus orchestrates. **Ask the script for
-the running total, never a guess or a fresh scan:**
+the panel's tier. And **never above $500 in a meter week** — the subscription
+meter's own week, which resets **Wednesday 15:59 America/Los_Angeles**, not a
+calendar week and not a rolling seven days; at the ceiling, Fable is off for the
+remainder of that week and Opus orchestrates. **Ask the script for the running
+total, never a guess or a fresh scan** (it buckets by the same boundary)**:**
 
 ```bash
 python3 ~/.claude/scripts/usage-trend.py --week --oneline   # fable $N so far this meter week
