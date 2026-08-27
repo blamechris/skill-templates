@@ -302,19 +302,36 @@ roles ("workhorse", "mechanical"), never a model above the session ceiling.
 **Fable is scoped, and the scope is binding** (decided 2026-08-26, replacing the
 self-expiring hard throttle of 2026-08-22). Fable costs exactly **2x Opus**
 ($10/$50 per M vs $5/$25), so it is permitted in exactly one place: **main-thread
-orchestration of HIGH-tier work and the hardest adjudication.** Never for
-subagents — no Fable finder, refuter, judge, or sweep, whatever the panel's tier.
-And **never above $500 in a meter week**; at the ceiling, Fable is off for the
-remainder of the week and Opus orchestrates.
+orchestration of work that is HIGH-tier by the risk tiers below** — doctrine,
+serialization/save-compat, CI/infra, security, cross-cutting refactors — **and
+the hardest adjudication.** Judge the tier from the blast radius the session is
+aiming at, not from how the work feels; when it is genuinely unclear, it is not
+HIGH. Never for subagents — no Fable finder, refuter, judge, or sweep, whatever
+the panel's tier. And **never above $500 in a meter week**; at the ceiling, Fable
+is off for the remainder of the week and Opus orchestrates. **Ask the script for
+the running total, never a guess or a fresh scan:**
 
-This is the ladder's top rung made binding with a number, not a new rule. Two
-throttled weeks (fable $448 / $470) shipped 44+ PRs and drove main-thread unit
-price DOWN to $0.180/req opus-equivalent, so a blanket throttle has no measured
-outcome cost — but it also permanently defers the question the ladder exists to
-answer, which is whether the ceiling earns its 2x on the work reserved for it.
-The two unthrottled weeks ran $963 and $833, both against a weekly cap that has
-never once been calibrated against a real meter reading. A scope plus a number
-tests the rung and caps the downside; "use judgment" was what produced $963.
+```bash
+python3 ~/.claude/scripts/usage-trend.py --week --oneline   # fable $N so far this meter week
+```
+
+This is the ladder's top rung made binding with a number, not a new rule. The
+honest evidence, because a rule argued from a flattering summary is a rule
+nobody can re-evaluate later: **one** week has actually run under a throttle
+(closing 2026-08-26, fable $470, 44 PRs across 6 repos). The $448 week before it
+closed 2026-08-19, three days before the throttle was ruled — it was unthrottled
+and simply light. Unthrottled weeks have run $348 / $640 / $833 / $963, so $963
+is the worst case, not the norm. And the throttle cannot be credited with the
+low unit price: the cheapest main-thread week on record is $0.172/req
+opus-equivalent, closing 2026-08-12, **unthrottled at fable $833** — against
+$0.180 for the throttled week. What the one throttled week does show is that
+removing Fable cost no measurable throughput.
+
+So a blanket ban is not obviously paying for itself, and it permanently defers
+the question the ladder exists to answer: whether the top rung earns its 2x on
+the work reserved for it. A scope plus a number tests the rung on one week's
+worth of the hardest work and caps the downside at half the worst observed
+week; "use judgment" is what produced $963.
 
 <!--default:risk-tiered-review-->
 **Review intensity is risk-tiered** (decided 2026-08-14, spend audit; refuter
