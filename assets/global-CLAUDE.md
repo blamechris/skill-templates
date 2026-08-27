@@ -298,6 +298,24 @@ one tier below the session ceiling; the ceiling itself is reserved for
 orchestration and the hardest adjudication. Skills and worker briefs specify
 roles ("workhorse", "mechanical"), never a model above the session ceiling.
 
+<!--default:fable-scoped-->
+**Fable is scoped, and the scope is binding** (decided 2026-08-26, replacing the
+self-expiring hard throttle of 2026-08-22). Fable costs exactly **2x Opus**
+($10/$50 per M vs $5/$25), so it is permitted in exactly one place: **main-thread
+orchestration of HIGH-tier work and the hardest adjudication.** Never for
+subagents — no Fable finder, refuter, judge, or sweep, whatever the panel's tier.
+And **never above $500 in a meter week**; at the ceiling, Fable is off for the
+remainder of the week and Opus orchestrates.
+
+This is the ladder's top rung made binding with a number, not a new rule. Two
+throttled weeks (fable $448 / $470) shipped 44+ PRs and drove main-thread unit
+price DOWN to $0.180/req opus-equivalent, so a blanket throttle has no measured
+outcome cost — but it also permanently defers the question the ladder exists to
+answer, which is whether the ceiling earns its 2x on the work reserved for it.
+The two unthrottled weeks ran $963 and $833, both against a weekly cap that has
+never once been calibrated against a real meter reading. A scope plus a number
+tests the rung and caps the downside; "use judgment" was what produced $963.
+
 <!--default:risk-tiered-review-->
 **Review intensity is risk-tiered** (decided 2026-08-14, spend audit; refuter
 panels buy precision, not recall — the catches live in the finder pass and the
