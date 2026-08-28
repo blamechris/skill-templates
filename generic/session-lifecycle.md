@@ -67,7 +67,7 @@ Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others)
 
 ### The interactive flow — two wait points
 
-An **interactive** session (an operator is watching) stops and waits on the user at exactly **two** points. Every other transition is the agent's to make.
+An **interactive** session (an operator is watching) stops and waits for the user at exactly **two** points. Every other transition is the agent's to make.
 
 1. **Scope, at the start.** Seed pasted → agent states the next task and its scope → operator approves or redirects. One wait, at the top.
 2. **Merge, at the end.** After the review pipeline the repo requires passes clean, ask **once**: "gates green — merge?". This is the one mid-flow wait with catch value; the repo's own `CLAUDE.md` defines that gate — what must be reviewed, which checks must be green, how threads are resolved — so follow it from there rather than restating the criteria here.
