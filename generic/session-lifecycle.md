@@ -65,6 +65,27 @@ Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others)
 - **Stage explicit paths.** `git status --short`, then `git add` the files you changed, **by name**. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a` — a foreign file in a shared tree is the normal case, so a bulk add commits someone else's work into your PR. `-u` is not the safe one: it restages every *tracked* file whose worktree copy differs, including files a clean/smudge filter rewrote without you touching them — that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as an edit.
 - **Prefer a per-session worktree.** Where the harness gives this session its own `git worktree`, use it; where it does not, the two rules above are the whole of the protection and apply verbatim.
 
+### The interactive flow — two wait points
+
+An **interactive** session (an operator is watching) stops and waits for the user at exactly **two** points. Every other transition is the agent's to make.
+
+1. **Scope, at the start.** Seed pasted → agent states the next task and its scope → operator approves or redirects. One wait, at the top.
+2. **Merge, at the end.** After the review pipeline the repo requires passes clean, ask **once**: "gates green — merge?". This is the one mid-flow wait with catch value; the repo's own `CLAUDE.md` defines that gate — what must be reviewed, which checks must be green, how threads are resolved — so follow it from there rather than restating the criteria here.
+
+**Between those two, do not ask — act.** Specifically, never ask:
+
+- *"want a PR?"* — PR-first is already the workflow; open it.
+- *"merge or review?"* — review is mandatory; run it, never offer to skip it.
+- *"shall I fix the findings?"* — fix them, re-run the gates, and return to wait point 2.
+
+Each of those asks permission for something policy already requires, so it buys a stall with no catch value — the safety lives in the review gate, not in the questions. A **genuine** decision the agent cannot resolve — a design fork, a real scope question — is not one of these: it goes in the `DECISION` slot of the `**Status:**` block and the agent continues other work while it waits, rather than blocking on it.
+
+**Unattended sessions have zero mid-flow waits** *where the repo grants an unattended-merge authority*. Wait point 2 is then replaced by that authority's gates — the same review-and-checks bar, self-verified instead of operator-confirmed — exactly as the repo's own `CLAUDE.md` defines it. Follow it from there; never assume an authority a repo did not grant.
+
+**Clearing the session** follows the global "Session boundaries" rule; the operational test that a boundary is genuinely *clean* is three clauses, **all** of which must hold: (a) every session PR is **merged and verified on `origin/main`** — not merely "merged"; (b) nothing is in flight and every follow-on is filed; (c) the next task is a different work class or needs almost none of the loaded context. Continue past a boundary only for a **dependent chain** — the next PR needs this session's context. Never stack **independent, same-class** waves past a boundary: that is the one pattern the flow audit measured as pure overhead, where a session overstayed and carried ~15% idle wall-clock. Second compaction or work-class switch → clear regardless.
+
+> Codified from a 9-session flow audit (skill-templates#237): the zero-wait configuration ran 19 PRs with 0 rollbacks and 9/9 clean endings, while the only measured overhead came from overstaying a boundary, not from asking questions. The cost of a Path-B wait is still unmeasured — when a mid-flow wait *does* happen, timestamp the ask and the reply in the status flow so the counterfactual can close.
+
 ### Session end — the checklist
 
 Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the two ending artifacts and the one check that proves the seed the next session opens is the one this session wrote; a session that skips either artifact has not ended.**
