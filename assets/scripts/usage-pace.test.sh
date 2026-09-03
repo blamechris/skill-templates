@@ -341,5 +341,137 @@ printf '%s' "$got" | grep -q 'MATCH' \
   || bad "a shrunk transcript leaves no stale spend in the cached total" "$(flat "$got")"
 
 
+# ------------------------------- 11. COVERAGE FOR FIXES THE SUITE DID NOT PIN
+# A refute pass showed the suite caught only 3 of the 7 fixes when each was reverted
+# in ISOLATION. The four below had no coverage at all, so a future refactor could
+# reintroduce any of them with CI fully green. Each case here fails if its fix is
+# reverted alone.
+
+# (h) The two HIST.mkdir calls must be pinned SEPARATELY. Removing either one alone
+#     left 31/31 green, because whichever survives creates the directory first and
+#     masks the other. --oneline writes the cache and never the state file, so it
+#     isolates _save_cache's copy.
+CACHEHOME=$TMP/cachehome
+mkdir -p "$CACHEHOME/.claude/projects"
+HOME="$CACHEHOME" "$PY" "$SUT" --oneline >/dev/null 2>&1
+[ -f "$CACHEHOME/.claude/usage-history/pace-cache.json" ] \
+  && ok "_save_cache creates HIST on a fresh machine (isolates it from _write_state)" \
+  || bad "_save_cache creates HIST on a fresh machine" "no pace-cache.json under $CACHEHOME"
+
+# (i) ahead -> ok -> ahead must speak the second time. Reverting s.pop("acked") left
+#     31/31 green because no scenario ever returned to ok between two alerts.
+#     --margin -1 forces "ahead"; a huge margin forces "ok".
+ACKHOME=$TMP/ackhome
+mkdir -p "$ACKHOME/.claude/projects"
+ackrun() { printf '{"session_id":"s1","transcript_path":"%s"}' "$TMP/fable.jsonl" \
+  | HOME="$ACKHOME" "$PY" "$SUT" --hook --every 1 --margin "$1" 2>&1; }
+a1=$(ackrun -1); a2=$(ackrun 999); a3=$(ackrun -1)
+spoke() { printf '%s' "$1" | grep -q 'usage-pace' && echo yes || echo no; }
+[ "$(spoke "$a1")" = yes ] && [ "$(spoke "$a2")" = no ] && [ "$(spoke "$a3")" = yes ] \
+  && ok "ahead -> ok -> ahead speaks again (the acknowledgment is cleared on ok)" \
+  || bad "ahead -> ok -> ahead speaks again" "spoke: $(spoke "$a1")/$(spoke "$a2")/$(spoke "$a3")"
+
+# (j) A record still being appended must be counted EXACTLY once — not zero times
+#     (offset advanced past it) and not twice (re-read after being counted).
+got=$("$PY" - "$SUT" "$TMP" <<'TORNPY' 2>&1
+import importlib.util, json, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"torn"; root.mkdir(exist_ok=True)
+up.ROOT=root; up.CACHE=tmp/"tc.json"; up.STATE=tmp/"ts.json"; up.HIST=tmp
+from datetime import datetime
+WK=up.week_close(datetime.fromisoformat("2026-09-04T00:00:00+00:00"))
+def rec(i):
+    return json.dumps({"type":"assistant","timestamp":"2026-09-04T00:00:00Z",
+        "message":{"id":"m%d"%i,"model":"claude-opus-5","usage":{"output_tokens":1000}}},
+        separators=(",",":"))
+f=root/"t.jsonl"
+full=rec(1)+"\n"+rec(2)+"\n"
+f.write_text(full[:len(full)-12])            # last record TORN mid-line
+a=up.scan(WK).get("all",0.0)
+f.write_text(full)                            # the rest lands
+b=up.scan(WK).get("all",0.0)
+c=up.scan(WK, force=True).get("all",0.0)      # ground truth: exactly 2 records
+print("%.4f %.4f %.4f"%(a,b,c), "ONCE" if abs(b-c)<1e-9 else "WRONG")
+TORNPY
+)
+printf '%s' "$got" | grep -q 'ONCE' \
+  && ok "a torn trailing record is counted exactly once, once completed" \
+  || bad "a torn trailing record is counted exactly once, once completed" "$(flat "$got")"
+
+# (k) The DST week is 7 days AND an hour. Subtracting two datetimes that share one
+#     tzinfo diffs their naive fields and silently loses that hour; no assertion
+#     anywhere in this file covered it.
+got=$(pymod "
+o,c = up.week_bounds('2026-11-04')     # contains the Nov 1 2026 fall-back
+n,d = up.week_bounds('2026-09-09')     # an ordinary week
+u = lambda x: x.astimezone(up.timezone.utc)
+print(int((u(c)-u(o)).total_seconds()), int((u(d)-u(n)).total_seconds()))" 2>&1)
+[ "$got" = "608400 604800" ] \
+  && ok "week span is DST-correct (608400s across the fall-back, 604800s otherwise)" \
+  || bad "week span is DST-correct" "got=$(flat "$got")"
+
+
+# (l) _write_state's mkdir must be pinned independently of _save_cache's. In the
+#     speaking path _save_cache runs first and creates HIST, masking a revert here.
+#     With --every huge the hook is never due: it writes state and never scans.
+STHOME=$TMP/sthome
+mkdir -p "$STHOME/.claude/projects"
+printf '{"session_id":"s1","transcript_path":"%s"}' "$TMP/fable.jsonl" \
+  | HOME="$STHOME" "$PY" "$SUT" --hook --every 999999 >/dev/null 2>&1
+[ -f "$STHOME/.claude/usage-history/pace-state.json" ] \
+  && ok "_write_state creates HIST when not due (isolates it from _save_cache)" \
+  || bad "_write_state creates HIST when not due" "no pace-state.json under $STHOME"
+[ ! -f "$STHOME/.claude/usage-history/pace-cache.json" ] \
+  && ok "the not-due path writes state without scanning (the isolation holds)" \
+  || bad "the not-due path writes state without scanning" "pace-cache.json exists — path not isolated"
+
+# (m) A cache that IS a dict but whose `files` is the wrong type must be rejected.
+#     A top-level list is caught by the exception tuple; this shape is not, and
+#     reaches files.get() inside scan().
+got=$("$PY" - "$SUT" "$TMP" <<'BADFILES' 2>&1
+import importlib.util, json, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"bf"; root.mkdir(exist_ok=True)
+up.ROOT=root; up.CACHE=tmp/"bf.json"; up.STATE=tmp/"bs.json"; up.HIST=tmp
+from datetime import datetime
+WK=up.week_close(datetime.fromisoformat("2026-09-04T00:00:00+00:00"))
+up.CACHE.write_text(json.dumps({"week":WK,"files":[1,2,3],"totals":"nope","seen":{}}))
+try:
+    up.scan(WK); print("OK")
+except Exception as e:
+    print("CRASH", type(e).__name__, e)
+BADFILES
+)
+[ "$got" = "OK" ] \
+  && ok "a cache dict with a malformed files/totals is rejected, not trusted" \
+  || bad "a cache dict with a malformed files/totals is rejected, not trusted" "$(flat "$got")"
+
+# (n) pace() itself must report DST-correct elapsed and days_left. The earlier DST
+#     case asserted on week_bounds and computed the UTC diff itself, so reverting
+#     pace()'s own arithmetic left it green.
+#     `now` is placed BEFORE the transition (still PDT) while the week closes after
+#     it (PST), so the naive and UTC answers differ for both fields. The expected
+#     values are derived here from UTC arithmetic, independently of the SUT.
+got=$(pymod "
+from datetime import datetime, timedelta, timezone
+up.scan = lambda *a, **k: {}
+up.read_readings = lambda: []
+now = datetime(2026,10,30,12,0,tzinfo=up.PT)      # PDT; the week closes in PST
+p = up.pace(now=now)
+o, c = up.week_bounds('2026-11-04')
+u = lambda d: d.astimezone(timezone.utc)
+want_e = (u(now)-u(o)).total_seconds() / (u(c)-u(o)).total_seconds()
+want_d = (u(c)-u(now)).total_seconds() / 86400
+naive_e = (now.replace(tzinfo=None)-o.replace(tzinfo=None)).total_seconds() / 604800.0
+ok_e = abs(p['elapsed']-want_e) < 1e-9
+ok_d = abs(p['days_left']-want_d) < 1e-9
+print('OK' if ok_e and ok_d else 'BAD', 'discriminating' if abs(want_e-naive_e) > 1e-4 else 'DEGENERATE')" 2>&1)
+[ "$got" = "OK discriminating" ] \
+  && ok "pace() elapsed and days_left are DST-correct across the fall-back" \
+  || bad "pace() elapsed and days_left are DST-correct across the fall-back" "got=$(flat "$got")"
+
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

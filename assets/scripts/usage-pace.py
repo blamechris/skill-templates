@@ -400,7 +400,7 @@ def pace(now=None, force=False):
     consumed = fable / cap if cap else 0.0
     return {
         "week": wk, "now": now.astimezone(PT).isoformat(timespec="minutes"),
-        "elapsed": elapsed, "days_left": (close - now.astimezone(PT)).total_seconds() / 86400,
+        "elapsed": elapsed, "days_left": (_u(close) - _u(now)).total_seconds() / 86400,
         "fable": fable, "all": tot.get("all", 0.0),
         "main": tot.get("main", 0.0), "sub": tot.get("sub", 0.0),
         "sub_fable": tot.get("sub_fable", 0.0),
