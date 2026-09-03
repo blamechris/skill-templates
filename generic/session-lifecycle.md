@@ -165,20 +165,36 @@ The canonical rules live in `~/.claude/CLAUDE.md` under **"Follow-on protocol"**
 
 Installing `session-lifecycle` should be followed by installing any missing components in the same pass — the bundle head without its components is a checklist that can't execute.
 
-**Two machine-level scripts** back the End steps, and they are bootstrapped once per machine from
-the registry rather than installed per repo — both End step 1 and `/next` call the same copy, which
-is the point:
+**Three machine-level scripts** back the End steps, and they are bootstrapped once per machine
+from the registry rather than installed per repo — both End step 1 and `/next` call the same copy,
+which is the point:
 
 ```bash
-cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py ~/.claude/scripts/
+cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
+   assets/scripts/usage-pace.py ~/.claude/scripts/
 ```
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
-`usage-benchmark-row.py` emits artifact ①'s row. Each ships with a sibling `<name>.test.sh` in
+`usage-benchmark-row.py` emits artifact ①'s row; `usage-pace.py` answers "how much of the meter
+week is spent" and records meter readings. Each ships with a sibling `<name>.test.sh` in
 the registry, run by CI, and that is where their behaviour is pinned — this file states the
-doctrine, not the code. Bootstrap both or neither: a machine with a stale
+doctrine, not the code. Bootstrap all or none: a machine with a stale
 `usage-benchmark-row.py` writes step 2's row on a different scale from every row above it, and
-step 2 forbids repairing it.
+step 2 forbids repairing it; a machine without `usage-pace.py` silently has no pace check at all,
+which is the failure the check exists to prevent.
+
+**`meter` is an optional shell alias, not a shipped command.** The global rules refer to it
+because it is short, but it is one line over `usage-pace.py` and nothing in the registry defines
+it — a machine that bootstrapped only the scripts above has the script and not the alias. The
+canonical, always-available form is the script; add the alias per machine if wanted:
+
+```bash
+meter() { python3 "$HOME/.claude/scripts/usage-pace.py" --record "$@"; }
+```
+
+Run with no arguments it prompts for the two `/usage` percentages, so neither form needs
+placeholder substitution — which is the point: a documented command carrying `<angle brackets>`
+is read by the shell as a redirection and cannot be run as written.
 
 ## Customization Points
 

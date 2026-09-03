@@ -378,11 +378,18 @@ discriminating ratios span 1.41x (`$/ieq`) and 1.23x (`raw/ieq`), both far above
 noise in an eyeballed percentage — so two well-placed readings settle it. **Record a reading any day of the week** — the deadline is gone:
 
 ```bash
-meter                            # prompts for the two /usage percentages
-meter 87 46 "heavy chroxy week"  # or pass them directly
+python3 ~/.claude/scripts/usage-pace.py --record  # prompts for the two /usage percentages
 python3 ~/.claude/scripts/usage-pace.py --units   # which unit does the meter count?
 python3 ~/.claude/scripts/usage-pace.py --caps    # implied caps from every reading
 ```
+
+`meter` is an **optional per-machine alias** for the first of those, not a shipped
+command — nothing in the registry defines it, so the script form above is the one that
+works on a machine that bootstrapped from `assets/scripts/`. `session-lifecycle` carries
+the one-line definition for machines that want the shorthand. Either form prompts when
+given no values, so neither needs a placeholder substituted into it: a documented command
+carrying `<angle brackets>` is read by the shell as a redirection and cannot be run as
+written.
 
 **Fable is a per-turn choice, not a session mode.** This is the defect the pace
 check is shaped around, and it is worth stating separately because the previous

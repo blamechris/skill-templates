@@ -22,6 +22,9 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUT="$HERE/usage-pace.py"
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
+# This is the only suite that IMPORTS the SUT rather than running it as a subprocess,
+# so it is the only one that would drop __pycache__/ into the tracked source tree.
+export PYTHONDONTWRITEBYTECODE=1
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/usage-pace-test.XXXXXX")
 cleanup() { chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
@@ -102,8 +105,8 @@ esac
 # ------------------------------------------------------------ 4. reading round-trip
 R=$TMP/readings.md
 mk() {   # pct_all pct_fable $all $fable tok_all tok_fable ieq_all ieq_fable
-  cat > "$R" <<HDR
-| week-close | read at | all% | fable% | all\$ | fable\$ | all_tok | fable_tok | all_ieq | fable_ieq | note |
+  cat > "$R" <<'HDR'
+| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok | all_ieq | fable_ieq | note |
 |---|---|---|---|---|---|---|---|---|---|---|
 HDR
   while [ $# -ge 8 ]; do
@@ -234,6 +237,109 @@ COST" ] && ok "pricing and cost_usd agree with usage-trend.py on this machine" \
 else
   skipt "pricing agrees with usage-trend.py" "usage-trend.py not present (not in this registry)"
 fi
+
+# ------------------------------------- 10. REGRESSIONS (mutation-proven gaps)
+# Each case below exists because a mutation that broke real behaviour left the suite
+# fully green. They are the difference between a suite and a safety net.
+
+# (a) --caps must format a REAL cap, not only the n/a branch. The previous fixture was
+#     entirely sub-MIN_PCT, so the single line that formats a cap never ran -- and the
+#     invalid format string named in this file's own header reintroduces with 20/20 green.
+mk 38 24 1180.00 340.00 1400000000 400000000 180000000 40000000
+got=$("$PY" - "$SUT" "$R" <<'CAPPY' 2>&1
+import importlib.util, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+up.READINGS=pathlib.Path(sys.argv[2]); sys.argv=["x","--caps"]; sys.exit(up.main() or 0)
+CAPPY
+); rc=$?
+[ "$rc" -eq 0 ] && printf '%s' "$got" | grep -q '3,105' \
+  && ok "--caps formats a real cap (1180/0.38), not just the n/a branch" \
+  || bad "--caps formats a real cap (1180/0.38), not just the n/a branch" "rc=$rc $(flat "$got")"
+
+# (b) The hook's speaking path had NO test at all: `due = False` (never fire, ever) left
+#     the suite green. Drive it end to end against a fresh HOME.
+HOOKHOME=$TMP/hookhome
+mkdir -p "$HOOKHOME/.claude/projects"
+cat > "$TMP/fable.jsonl" <<'FABLEJ'
+{"type":"assistant","timestamp":"2099-01-01T00:00:00Z","message":{"id":"m1","model":"claude-fable-5","usage":{"output_tokens":1}}}
+FABLEJ
+hookrun() { printf '{"session_id":"s1","transcript_path":"%s"}' "$TMP/fable.jsonl" \
+  | HOME="$HOOKHOME" "$PY" "$SUT" --hook --every 1 --margin -1 2>&1; }
+out=$(hookrun); rc=$?
+printf '%s' "$out" | grep -q 'usage-pace' \
+  && ok "hook actually SPEAKS when due and off pace (margin -1 forces a verdict)" \
+  || bad "hook actually SPEAKS when due and off pace" "rc=$rc out=$(flat "$out")"
+
+# (c) ...and the state it wrote must persist, which requires creating ~/.claude/usage-history.
+#     That dir is absent on a fresh machine and the write swallowed the OSError, so the
+#     turn counter never persisted and the check was permanently silent.
+[ -f "$HOOKHOME/.claude/usage-history/pace-state.json" ] \
+  && ok "hook creates its own state dir on a fresh machine" \
+  || bad "hook creates its own state dir on a fresh machine" "no pace-state.json written"
+
+# (d) Malformed-but-valid JSON state must not crash the hook. This path runs BEFORE the
+#     --every gate, so the uncaught AttributeError hit every prompt and no write path
+#     was reached to heal it.
+for shape in '[1,2,3]' 'null' '"a string"' '42'; do
+  printf '%s' "$shape" > "$HOOKHOME/.claude/usage-history/pace-state.json"
+  out=$(hookrun); rc=$?
+  [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'Traceback' \
+    && ok "hook survives a state file of shape $shape" \
+    || bad "hook survives a state file of shape $shape" "rc=$rc $(flat "$out")"
+done
+printf '%s' '[1,2,3]' > "$HOOKHOME/.claude/usage-history/pace-cache.json"
+out=$(hookrun); rc=$?
+[ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'Traceback' \
+  && ok "hook survives a malformed pace-cache.json" \
+  || bad "hook survives a malformed pace-cache.json" "rc=$rc $(flat "$out")"
+
+# (e) week_close on the EXACT boundary second: neither old fixture (15:58 / 16:00) could
+#     tell `cand <= loc` from `cand < loc`.
+got=$(pymod "
+from datetime import datetime
+from zoneinfo import ZoneInfo
+PT=ZoneInfo('America/Los_Angeles')
+print(up.week_close(datetime(2026,9,2,15,59,0,tzinfo=PT)))" 2>&1)
+[ "$got" = "2026-09-09" ] \
+  && ok "week_close at exactly 15:59:00 PT Wed belongs to the NEXT week" \
+  || bad "week_close at exactly 15:59:00 PT Wed belongs to the NEXT week" "got=$(flat "$got")"
+
+# (f) mythos is priced at the Fable rate, so it must tier as fable -- otherwise a
+#     Fable-priced model is invisible to a Fable pace check.
+got=$(pymod "print(up.tier('claude-mythos-1'), up.rates('claude-mythos-1')[0])" 2>&1)
+[ "$got" = "fable 10.0" ] \
+  && ok "mythos tiers as fable, matching the Fable rate it is priced at" \
+  || bad "mythos tiers as fable, matching the Fable rate it is priced at" "got=$(flat "$got")"
+
+# (g) The incremental cache must never keep a contribution from bytes that are gone.
+#     Re-reading a shrunk file from zero ADDED to the stale total and inflated the week
+#     permanently -- and record() scans without force, so that number could be written
+#     into meter-readings.md and treated as ground truth.
+got=$("$PY" - "$SUT" "$TMP" <<'SHRINKPY' 2>&1
+import importlib.util, json, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"proj"; root.mkdir(exist_ok=True)
+up.ROOT=root; up.CACHE=tmp/"c.json"; up.STATE=tmp/"s.json"; up.HIST=tmp
+from datetime import datetime
+WK=up.week_close(datetime.fromisoformat("2026-09-04T00:00:00+00:00"))
+def rec(i):
+    return json.dumps({"type":"assistant","timestamp":"2026-09-04T00:00:00Z",
+        "message":{"id":"m%d"%i,"model":"claude-opus-5","usage":{"output_tokens":1000}}},
+        separators=(",",":"))
+f=root/"t.jsonl"
+f.write_text(rec(1)+"\n"+rec(2)+"\n"); a=up.scan(WK)["all"]
+f.write_text(rec(1)+"\n"+rec(2)+"\n"+rec(3)+"\n"); b=up.scan(WK)["all"]
+f.write_text(rec(9)+"\n"); c=up.scan(WK)["all"]
+d=up.scan(WK, force=True)["all"]
+print("%.4f %.4f %.4f %.4f"%(a,b,c,d), "MATCH" if abs(c-d)<1e-9 else "STALE")
+SHRINKPY
+)
+printf '%s' "$got" | grep -q 'MATCH' \
+  && ok "a shrunk transcript leaves no stale spend in the cached total" \
+  || bad "a shrunk transcript leaves no stale spend in the cached total" "$(flat "$got")"
+
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

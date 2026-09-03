@@ -22,7 +22,7 @@ Entry points:
   --at-now      the (spend, timestamp) half of a meter reading, for the `meter` function
 """
 import argparse, hashlib, json, os, sys, time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -57,7 +57,18 @@ def rates(model):
     return (5.0, 25.0)
 
 
+# `mythos` is priced at the Fable rate in PRICING, so it must TIER as fable too.
+# usage-trend.py has the same table and the same plain substring match, so it also
+# buckets mythos as "other" -- a Fable-priced model invisible to a Fable pace check
+# is the guard-never-fires failure this script exists to prevent. Fixed here; the
+# sibling needs the same fix (follow-on -- it is not in this registry).
+TIER_ALIASES = {"mythos": "fable"}
+
+
 def tier(model):
+    for alias, t in TIER_ALIASES.items():
+        if alias in model:
+            return t
     for t in TIERS:
         if t in model:
             return t
@@ -101,10 +112,15 @@ def _load_cache(week):
     """Cache is per-week; a new week discards the old one rather than migrating it."""
     try:
         c = json.loads(CACHE.read_text())
-        if c.get("week") == week:
-            c["seen"] = set(c.get("seen", []))
+        # A non-dict is VALID json (`[1,2,3]`, `null`, `"x"`): json.loads succeeds and
+        # the .get() below raised AttributeError, which was NOT caught -- so a
+        # malformed cache crashed the hook with no self-repair. ValueError covers
+        # JSONDecodeError and UnicodeDecodeError (invalid UTF-8) alike.
+        if isinstance(c, dict) and c.get("week") == week and isinstance(c.get("files"), dict):
+            c["seen"] = set(c.get("seen") or [])
+            c["totals"] = c["totals"] if isinstance(c.get("totals"), dict) else {}
             return c
-    except (OSError, json.JSONDecodeError, TypeError):
+    except (OSError, ValueError, TypeError, AttributeError):
         pass
     return {"week": week, "files": {}, "totals": {}, "seen": set()}
 
@@ -114,6 +130,11 @@ def _save_cache(c):
     out["seen"] = sorted(c["seen"])
     tmp = CACHE.with_suffix(".tmp")
     try:
+        # Create the parent: it does not exist on a freshly bootstrapped machine, and
+        # the except-OSError below swallowed the failure -- so the turn counter never
+        # persisted, `--every` never came due, and the pace check was permanently
+        # silent exactly where a new machine needed it most.
+        HIST.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(out))
         tmp.replace(CACHE)
     except OSError:
@@ -145,6 +166,38 @@ def token_measures(u):
     return raw, ieq
 
 
+def _cache_stale(files):
+    """True when the cached totals describe bytes that no longer exist.
+
+    The totals are ONE accumulator across every file; there is no per-file ledger, so
+    a file that shrank cannot have its old contribution subtracted -- re-reading it
+    from zero (which the previous code did) ADDED its new content on top of the stale
+    total and inflated the week permanently. `record()` scans without force, so that
+    inflated number could be written into meter-readings.md, which the implied-cap and
+    pace arithmetic then treat as ground truth.
+
+    Rather than carry a per-file ledger, detect the anomaly and discard the whole
+    cache: a full rescan is ~5s and these events are rare (transcript pruning, a
+    resumed session rewriting a file, a deletion). Correct and cheap beats clever.
+
+    Three anomalies, all meaning "not a pure append since the last scan":
+      - the file is gone      -- its contribution is still in the totals
+      - the file shrank       -- rewritten or pruned
+      - same size, new mtime  -- replaced in place; a byte-offset check cannot see it
+    """
+    for key, rec in (files or {}).items():
+        off, mt = rec if isinstance(rec, (list, tuple)) and len(rec) == 2 else (rec, None)
+        try:
+            st = os.stat(key)
+        except OSError:
+            return True
+        if not isinstance(off, (int, float)) or st.st_size < off:
+            return True
+        if mt is not None and st.st_size == off and st.st_mtime != mt:
+            return True
+    return False
+
+
 def scan(week, force=False):
     """Totals for `week`, reading only bytes appended since the last call.
 
@@ -153,7 +206,10 @@ def scan(week, force=False):
     Dedup by (message id, requestId) is kept because one request can land in more than one
     transcript (resumes, sidechains); without it a resumed session double-counts.
     """
-    c = {"week": week, "files": {}, "totals": {}, "seen": set()} if force else _load_cache(week)
+    fresh = {"week": week, "files": {}, "totals": {}, "seen": set()}
+    c = fresh if force else _load_cache(week)
+    if not force and _cache_stale(c["files"]):
+        c = {"week": week, "files": {}, "totals": {}, "seen": set()}
     tot = {k: float(v) for k, v in c.get("totals", {}).items()}
     seen, files = c["seen"], c["files"]
     for path in ROOT.rglob("*.jsonl"):
@@ -162,66 +218,81 @@ def scan(week, force=False):
             continue
         key = str(path)
         try:
-            size = path.stat().st_size
+            stt = path.stat()
         except OSError:
             continue
-        off = files.get(key, 0)
-        if size < off:          # truncated or replaced
+        size, mtime = stt.st_size, stt.st_mtime
+        rec = files.get(key, 0)
+        off = rec[0] if isinstance(rec, (list, tuple)) and len(rec) == 2 else rec
+        if not isinstance(off, (int, float)) or size < off:
             off = 0
         if size == off:
+            files[key] = [off, mtime]
             continue
         is_sub = "subagents" in parts
+        # Read bytes, not text lines, and stop at the last newline. A transcript being
+        # appended to right now can present a PARTIAL final line; the text iterator
+        # yields it, json.loads rejects it, and fh.tell() then recorded an offset PAST
+        # those bytes -- so when the rest of that record landed it was never re-read
+        # and the request was silently dropped from the week.
         try:
-            fh = open(path, "r", errors="replace")
+            with open(path, "rb") as fh:
+                fh.seek(off)
+                data = fh.read()
         except OSError:
             continue
-        with fh:
+        cut = data.rfind(b"\n")
+        if cut < 0:                     # nothing complete yet; hold the offset
+            files[key] = [off, mtime]
+            continue
+        consumed = cut + 1
+        for raw in data[:consumed].split(b"\n"):
+            if not raw:
+                continue
+            line = raw.decode("utf-8", "replace")
+            if '"type":"assistant"' not in line:
+                continue
             try:
-                fh.seek(off)
-            except OSError:
-                fh.seek(0)
-            for line in fh:
-                if '"type":"assistant"' not in line:
-                    continue
-                try:
-                    e = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if e.get("type") != "assistant":
-                    continue
-                m = e.get("message") or {}
-                u, model = m.get("usage"), m.get("model") or ""
-                if not u or not model or model == "<synthetic>":
-                    continue
-                ts = e.get("timestamp")
-                if not ts:
-                    continue
-                try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except ValueError:
-                    continue
-                if week_close(dt) != week:
-                    continue
-                k = hashlib.md5(f"{m.get('id')}|{e.get('requestId')}".encode()).hexdigest()[:12]
-                if k in seen:
-                    continue
-                seen.add(k)
-                cost, t = cost_usd(u, model), tier(model)
-                raw, ieq = token_measures(u)
-                tot["all"] = tot.get("all", 0.0) + cost
-                tot[t] = tot.get(t, 0.0) + cost
-                tot["sub" if is_sub else "main"] = tot.get("sub" if is_sub else "main", 0.0) + cost
-                # Parallel accumulators in the two non-dollar candidate units, so a
-                # meter reading can identify WHICH unit the meter counts (see
-                # `--units`). Cheap to carry; impossible to reconstruct once
-                # transcripts are pruned.
-                tot["all_raw"] = tot.get("all_raw", 0.0) + raw
-                tot["all_ieq"] = tot.get("all_ieq", 0.0) + ieq
-                tot[f"{t}_raw"] = tot.get(f"{t}_raw", 0.0) + raw
-                tot[f"{t}_ieq"] = tot.get(f"{t}_ieq", 0.0) + ieq
-                if is_sub:
-                    tot[f"sub_{t}"] = tot.get(f"sub_{t}", 0.0) + cost
-            files[key] = fh.tell()
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if e.get("type") != "assistant":
+                continue
+            m = e.get("message") or {}
+            u, model = m.get("usage"), m.get("model") or ""
+            if not u or not model or model == "<synthetic>":
+                continue
+            ts = e.get("timestamp")
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if week_close(dt) != week:
+                continue
+            k = hashlib.md5(f"{m.get('id')}|{e.get('requestId')}".encode()).hexdigest()[:12]
+            if k in seen:
+                continue
+            seen.add(k)
+            cost, t = cost_usd(u, model), tier(model)
+            raw, ieq = token_measures(u)
+            tot["all"] = tot.get("all", 0.0) + cost
+            tot[t] = tot.get(t, 0.0) + cost
+            tot["sub" if is_sub else "main"] = tot.get("sub" if is_sub else "main", 0.0) + cost
+            # Parallel accumulators in the two non-dollar candidate units, so a
+            # meter reading can identify WHICH unit the meter counts (see
+            # `--units`). Cheap to carry; impossible to reconstruct once
+            # transcripts are pruned.
+            tot["all_raw"] = tot.get("all_raw", 0.0) + raw
+            tot["all_ieq"] = tot.get("all_ieq", 0.0) + ieq
+            tot[f"{t}_raw"] = tot.get(f"{t}_raw", 0.0) + raw
+            tot[f"{t}_ieq"] = tot.get(f"{t}_ieq", 0.0) + ieq
+            if is_sub:
+                tot[f"sub_{t}"] = tot.get(f"sub_{t}", 0.0) + cost
+        # Outside the line loop: the offset must advance even when this chunk held no
+        # parseable assistant records, or those bytes are re-read on every scan forever.
+        files[key] = [off + consumed, mtime]
     c["totals"] = tot
     _save_cache(c)
     return tot
@@ -315,8 +386,13 @@ def pace(now=None, force=False):
     now = now or datetime.now().astimezone()
     wk = week_close(now)
     open_, close = week_bounds(wk)
-    span = (close - open_).total_seconds()
-    elapsed = max(0.0, min(1.0, (now.astimezone(PT) - open_).total_seconds() / span))
+    # Convert to UTC before subtracting. `open_` and `close` share one tzinfo object,
+    # and arithmetic on two aware datetimes with the SAME tzinfo diffs their naive
+    # fields -- so the week containing a DST transition measures 604800s instead of
+    # its true 608400s, skewing every elapsed fraction in it.
+    _u = lambda d: d.astimezone(timezone.utc)
+    span = (_u(close) - _u(open_)).total_seconds()
+    elapsed = max(0.0, min(1.0, (_u(now) - _u(open_)).total_seconds() / span))
     tot = scan(wk, force=force)
     rows = [r for r in read_readings() if r["week"] == wk]
     fable = tot.get("fable", 0.0)
@@ -397,9 +473,13 @@ def hook(args):
 
     try:
         st = json.loads(STATE.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         st = {}
-    s = st.get(sid) or {"turns": 0, "last": 0.0, "acked_at": 0.0}
+    if not isinstance(st, dict):        # valid JSON, wrong shape -- see _load_cache.
+        st = {}                         # This path runs BEFORE the --every gate, so
+    s = st.get(sid)                     # the crash it replaces hit EVERY prompt.
+    if not isinstance(s, dict):
+        s = {"turns": 0, "last_fire_turn": 0}
     s["turns"] = s.get("turns", 0) + 1
 
     due = s["turns"] - s.get("last_fire_turn", 0) >= args.every
@@ -411,6 +491,10 @@ def hook(args):
     p = pace()
     v = verdict(p, args.margin)
     if v == "ok":
+        # Clear the acknowledgment: without this, ahead -> ok -> ahead stays silent,
+        # because `acked` still holds the verdict from before the session came back
+        # on pace and the `acked == v` check below suppresses the new alert.
+        s.pop("acked", None)
         s["last_fire_turn"] = s["turns"]
         st[sid] = s
         _write_state(st)
@@ -448,6 +532,11 @@ drop to Opus for this work. Then do what they say. Do not re-raise this unprompt
 
 def _write_state(st):
     try:
+        # Create the parent: it does not exist on a freshly bootstrapped machine, and
+        # the except-OSError below swallowed the failure -- so the turn counter never
+        # persisted, `--every` never came due, and the pace check was permanently
+        # silent exactly where a new machine needed it most.
+        HIST.mkdir(parents=True, exist_ok=True)
         tmp = STATE.with_suffix(".tmp")
         tmp.write_text(json.dumps(st))
         tmp.replace(STATE)

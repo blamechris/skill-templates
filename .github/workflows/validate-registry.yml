@@ -440,6 +440,21 @@ jobs:
         # lines, which is the shape every earlier eyeball check used.
         run: ./assets/scripts/usage-benchmark-row.test.sh
 
+      - name: usage-pace regression tests
+        # Added with the script itself, because #207 is precisely what happens
+        # otherwise: usage-benchmark-row.py shipped here missing the machine copy's
+        # dedup, and "nothing could fail for it, because nothing ran this script".
+        # A suite that exists but is not wired into a step is worse than no suite —
+        # it looks covered. There is no `*.test.sh` glob in this workflow, so every
+        # new asset script needs its own step, by name.
+        #
+        # What this pins: the hook stays silent and exit-0 on hostile stdin (it runs
+        # on EVERY prompt submit); last_model does not reacquire the compact-separator
+        # fast path that would make it silently blind to a writer spacing change;
+        # --units reports a tie as a tie instead of naming a unit that merely tied;
+        # and the reading parser still tolerates the pre-token schema.
+        run: ./assets/scripts/usage-pace.test.sh
+
       - name: fleet-check regression tests
         # Proves the class split can still fail for its named regressions: a floor
         # difference exits 1, a default difference exits 0 naming the direction, and
