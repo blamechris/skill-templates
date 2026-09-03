@@ -298,42 +298,119 @@ one tier below the session ceiling; the ceiling itself is reserved for
 orchestration and the hardest adjudication. Skills and worker briefs specify
 roles ("workhorse", "mechanical"), never a model above the session ceiling.
 
-<!--default:fable-scoped-->
-**Fable is scoped, and the scope is binding** (decided 2026-08-26, replacing the
-self-expiring hard throttle of 2026-08-22). Fable costs exactly **2x Opus**
-($10/$50 per M vs $5/$25), so it is permitted in exactly one place: **main-thread
-orchestration of work that is HIGH-tier by the risk tiers below** — doctrine,
-serialization/save-compat, CI/infra, security, cross-cutting refactors — **and
-the hardest adjudication.** Judge the tier from the blast radius the session is
-aiming at, not from how the work feels; when it is genuinely unclear, it is not
-HIGH. Never for subagents — no Fable finder, refuter, judge, or sweep, whatever
-the panel's tier. And **never above $500 in a meter week** — the subscription
-meter's own week, which resets **Wednesday 15:59 America/Los_Angeles**, not a
-calendar week and not a rolling seven days; at the ceiling, Fable is off for the
-remainder of that week and Opus orchestrates. **Ask the script for the running
-total, never a guess or a fresh scan** (it buckets by the same boundary)**:**
+**Naming the tier in doctrine has not moved a dollar, so the tier goes in the
+brief that spawns the agent** (decided 2026-09-02). Four consecutive weeks of
+subagent spend closed at effectively **$0 haiku** while this paragraph said
+mechanical work belongs there, and the week closing 2026-09-02 ran **97.0% opus /
+2.3% sonnet / 0.7% fable / 0.03% haiku** — with sonnet *regressing* from 15% the
+week before. Subagents are now **45% of all-in spend**, the largest share on
+record, so this is the biggest untouched dial by a wide margin: a third of that
+moved down one rung is worth more than the entire Fable overage that prompted a
+rule change. The concrete action is not another sentence here — it is putting the
+role in the **worker briefs and review skills that actually call the Agent tool**
+(triage, classification, verification sweeps, refuter panels), where the model is
+chosen. A principle stated at the top of every session and applied at none is
+evidence about placement, not about the principle.
+
+<!--default:fable-paced-->
+**Fable is scoped, and the scope is paced — not capped** (decided 2026-09-02,
+replacing the `$500`/week ceiling of 2026-08-26, which replaced the self-expiring
+hard throttle of 2026-08-22). Fable costs exactly **2x Opus** ($10/$50 per M vs
+$5/$25), so it is permitted in exactly one place: **main-thread orchestration of
+work that is HIGH-tier by the risk tiers below** — doctrine, serialization/save-compat,
+CI/infra, security, cross-cutting refactors — **and the hardest adjudication.**
+Judge the tier from the blast radius the session is aiming at, not from how the
+work feels; when it is genuinely unclear, it is not HIGH. **Never for subagents**
+— no Fable finder, refuter, judge, or sweep, whatever the panel's tier. That half
+is categorical and needs no arithmetic to obey; it still leaked $8.73 across four
+agents in the week closing 2026-09-02, so it is restated here rather than assumed.
+
+**There is no weekly dollar ceiling, and reinstating one is the thing to argue
+against.** The subscription is a flat fee whose meter resets Wednesday 15:59
+America/Los_Angeles and **does not roll over** — quota unspent is quota destroyed.
+The objective is to saturate the week, not to minimize it. The `$500` ceiling was
+derived as "half the worst observed week," a risk number rather than a quota
+number, and the ledger had already falsified it: the week closing **2026-08-05 ran
+fable $963 through the meter with no clamp**, so the true cap is *provably above
+$963* and `$500` was capping at **52% of demonstrated-safe headroom**. Two more
+weeks ran $833 and $878 unclamped. A ceiling below proven headroom is waste
+wearing the costume of discipline.
+
+**What replaces it is a pace check, and its job is to make you look — never to
+stop you.** The failure it exists to prevent is exhausting the meter on Tuesday
+and being blocked until the next Wednesday; that is a pacing failure, not a
+spending one. So: while a session is on Fable, compare consumption against the
+fraction of the meter week elapsed, and when consumption outruns elapsed time,
+**surface the number and require an explicit acknowledgment to continue.**
+Acknowledging is always available and is not a failure — a heavy week that paces
+to 100% is the system working. **Ask the script, never a guess or a fresh scan**
+(it buckets by the same boundary)**:**
 
 ```bash
-python3 ~/.claude/scripts/usage-trend.py --week --oneline   # fable $N so far this meter week
+python3 ~/.claude/scripts/usage-pace.py --oneline    # fable $N, % of cap, % of week elapsed
 ```
 
-This is the ladder's top rung made binding with a number, not a new rule. The
-honest evidence, because a rule argued from a flattering summary is a rule
-nobody can re-evaluate later: **one** week has actually run under a throttle
-(closing 2026-08-26, fable $470, 44 PRs across 6 repos). The $448 week before it
-closed 2026-08-19, three days before the throttle was ruled — it was unthrottled
-and simply light. Unthrottled weeks have run $348 / $640 / $833 / $963, so $963
-is the worst case, not the norm. And the throttle cannot be credited with the
-low unit price: the cheapest main-thread week on record is $0.172/req
-opus-equivalent, closing 2026-08-12, **unthrottled at fable $833** — against
-$0.180 for the throttled week. What the one throttled week does show is that
-removing Fable cost no measurable throughput.
+It answers the pacing question in one line and costs ~0.1s warm (an incremental
+byte-offset cache; ~5s only on the first call of a new meter week), so there is no
+budget excuse for not looking. `usage-trend.py --week --oneline` still works and is
+the same arithmetic, but rescans every transcript on every call — prefer the former.
 
-So a blanket ban is not obviously paying for itself, and it permanently defers
-the question the ladder exists to answer: whether the top rung earns its 2x on
-the work reserved for it. A scope plus a number tests the rung on one week's
-worth of the hardest work and caps the downside at half the worst observed
-week; "use judgment" is what produced $963.
+**A `UserPromptSubmit` hook runs this automatically** (`~/.claude/settings.json`):
+while a session is on Fable, every 40 turns, it compares consumption to elapsed time
+and prints a `<usage-pace>` block only when consumption is more than 15 points ahead
+— or past 90% of cap. It speaks once per verdict, escalates if the situation worsens,
+and is silent for every non-Fable session. It cannot refuse anything.
+
+Until a real meter reading exists, it paces against computed spend and the
+proven-safe floor (`> $963`) rather than the retired 2026-08-06 estimate, and says so
+in its own output. **A second thing is unverified and worth stating plainly: nobody
+has established what the meter counts.** Every cap figure in this system is quoted in
+dollars because that is what the first calibration assumed, not because it was tested.
+Three units fit the evidence — list-price dollars, raw tokens (cache reads are ~97% of
+all tokens, so this differs by roughly 10x), and input-equivalent tokens (the same
+cache/output weighting as dollars but blind to Fable's 2x model premium). Each reading
+therefore records all three, because a reading stored in one unit cannot be converted
+into another after transcripts are pruned. `--units` compares implied-cap stability
+across readings and names the unit whose cap holds steady; it reports a tie as a tie
+rather than guessing, since dollars and input-equivalent tokens are degenerate until
+readings sample genuinely different Fable shares. Across the eight weeks on record the
+discriminating ratios span 1.41x (`$/ieq`) and 1.23x (`raw/ieq`), both far above the
+noise in an eyeballed percentage — so two well-placed readings settle it. **Record a reading any day of the week** — the deadline is gone:
+
+```bash
+meter                            # prompts for the two /usage percentages
+meter 87 46 "heavy chroxy week"  # or pass them directly
+python3 ~/.claude/scripts/usage-pace.py --units   # which unit does the meter count?
+python3 ~/.claude/scripts/usage-pace.py --caps    # implied caps from every reading
+```
+
+**Fable is a per-turn choice, not a session mode.** This is the defect the pace
+check is shaped around, and it is worth stating separately because the previous
+rule missed it entirely. In the week closing 2026-09-02 two sessions ran **100%
+Fable for 600 and 542 consecutive requests** at ~580K context per request, $441
+and $368, and **neither ever ran the command above** — not once across 1,142
+requests. The rule was not overridden or argued with; it was never read. A tier
+selected at turn one and never revisited is how $500 became $878 without anyone
+deciding to spend it. Whatever surfaces the pace must make *continuing* on Fable
+an act, not an inheritance.
+
+The honest evidence, because a rule argued from a flattering summary is a rule
+nobody can re-evaluate later: **one** week ran under the hard throttle (closing
+2026-08-26, fable $470, 44 PRs across 6 repos) and **one** under the `$500`
+ceiling (closing 2026-09-02, fable $878 — the ceiling was crossed mid-session on
+08-29 and nothing noticed). Unthrottled weeks have run $348 / $640 / $833 / $963.
+The throttle cannot be credited with the low unit price either: the cheapest
+main-thread week on record is $0.172/req opus-equivalent, closing 2026-08-12,
+**unthrottled at fable $833** — against $0.180 for the throttled week. What the
+throttled week does show is that removing Fable cost no measurable throughput,
+which is an argument about *value*, not about *cost*, and is still open.
+
+Two ceilings have now been tried and neither was ever consulted by the sessions
+that crossed it. The lesson generalizes past Fable: **in this ledger every
+honor-system limit has failed and every mechanically-bound one has held** — the
+agent fan-out cap was breached 8 times on the honor system and 0 times in 17
+workflows after `skill-guards.json` bound it. A limit nobody queries is not a
+limit, and a third written number would be the third of the same kind.
 
 <!--default:risk-tiered-review-->
 **Review intensity is risk-tiered** (decided 2026-08-14, spend audit; refuter
