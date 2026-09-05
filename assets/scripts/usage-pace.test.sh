@@ -473,5 +473,79 @@ print('OK' if ok_e and ok_d else 'BAD', 'discriminating' if abs(want_e-naive_e) 
   || bad "pace() elapsed and days_left are DST-correct across the fall-back" "got=$(flat "$got")"
 
 
+# ------------------------------------------- 12. DIFFERENTIAL CAP CALIBRATION
+# Anthropic reset the quota out of band on 2026-09-04, moving the meter's zero to an
+# unknown instant. The absolute method divides week-to-date spend by the percentage and
+# so counts spend the meter no longer counts. A difference between two readings cancels
+# the origin and is immune to it. These cases pin that.
+
+# (a) The headline property: the SAME pair of readings yields the SAME cap no matter
+#     where the zero sits, because the origin cancels. Two rows 40 points apart,
+#     $1200 apart -> cap $3000, and shifting both spends by a constant (which is what
+#     a moved zero does) must not change the answer.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 1800.00 1800.00 3000000000 3000000000 300000000 300000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,_=up.differential_caps(up.read_readings()); print('%.0f'%d['all'][0])" "$R" 2>&1)
+[ "$got" = "3000" ] \
+  && ok "differential cap = delta-spend / delta-pct (1200/0.40 = 3000)" \
+  || bad "differential cap = delta-spend / delta-pct" "got=$(flat "$got")"
+
+mk 20 20 5600.00 5600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 6800.00 6800.00 3000000000 3000000000 300000000 300000000
+shifted=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,_=up.differential_caps(up.read_readings()); print('%.0f'%d['all'][0])" "$R" 2>&1)
+[ "$shifted" = "3000" ] \
+  && ok "the same cap survives a shifted origin (a reset moves the zero, not the slope)" \
+  || bad "the same cap survives a shifted origin" "got=$(flat "$shifted")"
+
+# (b) A percentage that went DOWN means the meter reset BETWEEN the two readings, so the
+#     pair straddles two different zeros. Differencing it would produce a negative or
+#     meaningless cap; it must be dropped with a note naming the reset.
+mk 70 70 2100.00 2100.00 3000000000 3000000000 300000000 300000000 \
+   5  5  2400.00 2400.00 3400000000 3400000000 340000000 340000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), 'RESET' if any('reset' in x for x in n) else 'NONOTE')" "$R" 2>&1)
+[ "$got" = "0 RESET" ] \
+  && ok "a pair straddling a mid-week reset is dropped and the reset is named" \
+  || bad "a pair straddling a mid-week reset is dropped and the reset is named" "got=$(flat "$got")"
+
+# (c) A small delta is dropped: both percentages are eyeballed integers, so at 5 points a
+#     +/-1 point rounding is a 20% error in the cap.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   25 25 750.00 750.00 1200000000 1200000000 120000000 120000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), 'FLOOR' if any('floor' in x for x in n) else 'NONOTE')" "$R" 2>&1)
+[ "$got" = "0 FLOOR" ] \
+  && ok "a sub-10-point delta is dropped as rounding-dominated" \
+  || bad "a sub-10-point delta is dropped as rounding-dominated" "got=$(flat "$got")"
+
+# (d) Readings in DIFFERENT meter weeks are never differenced: week-to-date spend resets
+#     at the boundary, so the subtraction would be against two different origins.
+cat > "$R" <<'HDR'
+| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok | all_ieq | fable_ieq | note |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-09 | 2026-09-04T10:00-07:00 | 20% | 20% | 600.00 | 600.00 | 1 | 1 | 1 | 1 | a |
+| 2026-09-16 | 2026-09-11T10:00-07:00 | 60% | 60% | 1800.00 | 1800.00 | 1 | 1 | 1 | 1 | b |
+HDR
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,_=up.differential_caps(up.read_readings()); print(len(d['all']))" "$R" 2>&1)
+[ "$got" = "0" ] \
+  && ok "readings in different meter weeks are never differenced" \
+  || bad "readings in different meter weeks are never differenced" "got=$(flat "$got")"
+
+# (e) resolve_cap must PREFER the differential over the absolute. With both available and
+#     deliberately disagreeing, the differential wins and the basis string says so.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 1800.00 1800.00 3000000000 3000000000 300000000 300000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', up.read_readings()); print('%.0f'%c, 'DIFF' if 'differential' in b else b)" "$R" 2>&1)
+[ "$got" = "3000 DIFF" ] \
+  && ok "resolve_cap prefers the differential (3000) over the absolute (3000/3000)" \
+  || bad "resolve_cap prefers the differential" "got=$(flat "$got")"
+
+# (f) With only one reading there is nothing to difference, and the absolute fallback must
+#     announce its own assumption rather than presenting itself as calibrated truth.
+mk 38 24 1180.00 340.00 1400000000 400000000 180000000 40000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', up.read_readings()); print('ABS' if 'ABSOLUTE' in b else b)" "$R" 2>&1)
+[ "$got" = "ABS" ] \
+  && ok "a lone reading falls back to ABSOLUTE and labels the assumption" \
+  || bad "a lone reading falls back to ABSOLUTE and labels the assumption" "got=$(flat "$got")"
+
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

@@ -361,6 +361,60 @@ def implied_caps(rows, unit="$"):
     return out
 
 
+MIN_DELTA_PCT = 10.0     # below this, integer rounding on both readings dominates
+
+
+def differential_caps(rows, unit="$"):
+    """cap = delta-measure / (delta-pct/100), between two readings in one meter week.
+
+    THIS IS THE ONLY METHOD THAT SURVIVES AN OUT-OF-BAND QUOTA RESET, and it is the
+    reason readings are worth taking in pairs rather than singly.
+
+    The absolute method (`implied_caps`) divides week-to-date spend by the meter
+    percentage, which silently assumes the meter's zero sits exactly at the week open.
+    Anthropic reset the quota mid-week on 2026-09-04, moving the zero to an unknown
+    instant; every absolute cap computed after that counts pre-reset spend the meter
+    itself no longer counts, and so runs high by whatever accumulated before it.
+
+    A difference does not care. Both measures are taken from the same origin, so the
+    origin cancels: `spend_B - spend_A` is the spend between the two readings whatever
+    the meter's zero was, and `pct_B - pct_A` is the share of cap that bought it. The
+    method is likewise blind to a mid-week boost multiplier, as long as it did not
+    change between the two readings.
+
+    Two guards. A percentage that went DOWN means the meter reset between the readings
+    (or the week rolled), so the pair spans two different zeros and is dropped rather
+    than differenced into a negative cap. A delta below MIN_DELTA_PCT is dropped
+    because both percentages are read by eye as integers: at a 5-point delta a +/-1
+    point rounding is a 20% error in the cap, while at 40 points it is 2.5%.
+    """
+    ak, fk = next((a, f) for u, a, f, _ in UNITS if u == unit)
+    out, notes = {"all": [], "fable": []}, []
+    weeks = {}
+    for r in rows:
+        weeks.setdefault(r["week"], []).append(r)
+    for wk in sorted(weeks):
+        rs = sorted(weeks[wk], key=lambda r: r.get("at") or "")
+        for a, b in zip(rs, rs[1:]):
+            for meter, pk, mk in (("all", "all_pct", ak), ("fable", "fable_pct", fk)):
+                pa, pb, ma, mb = a.get(pk), b.get(pk), a.get(mk), b.get(mk)
+                if None in (pa, pb, ma, mb):
+                    continue
+                dp, dm = pb - pa, mb - ma
+                if dp < 0 or dm < 0:
+                    notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} went DOWN "
+                                 f"({pa:g}% -> {pb:g}%) -- the meter reset between these "
+                                 f"readings; the pair spans two zeros and is dropped")
+                    continue
+                if dp < MIN_DELTA_PCT:
+                    notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} moved only "
+                                 f"{dp:g} points -- below the {MIN_DELTA_PCT:g}-point floor "
+                                 f"where integer rounding dominates; dropped")
+                    continue
+                out[meter].append(100.0 * dm / dp)
+    return out, notes
+
+
 def spread(vals):
     """max/min. The unit the meter actually counts is the one whose implied cap is
     STABLE across readings with different model mixes; the others swing."""
@@ -371,12 +425,23 @@ def spread(vals):
 
 
 def resolve_cap(kind, rows):
-    """Best available cap, and how much to trust it."""
+    """Best available cap, and how much to trust it.
+
+    Differential first: it is immune to where the meter's zero sits, and after the
+    2026-09-04 quota reset the absolute method's assumption (zero == week open) is
+    known to be wrong. Absolute is the fallback, and says so.
+    """
+    dcaps, _ = differential_caps(rows)
+    if dcaps[kind]:
+        v = sorted(dcaps[kind])
+        med = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+        return med, f"differential of {len(v)} reading pair(s) -- zero-point independent", True
     caps = implied_caps(rows)[kind]
     if caps:
         caps = sorted(caps)
         med = caps[len(caps) // 2] if len(caps) % 2 else (caps[len(caps) // 2 - 1] + caps[len(caps) // 2]) / 2
-        return med, f"median of {len(caps)} meter reading(s)", True
+        return med, (f"median of {len(caps)} single reading(s) -- ABSOLUTE, assumes the "
+                     f"meter zeroed at the week open; wrong after an out-of-band reset"), True
     return FLOOR[kind], "observed-unclamped floor (no meter reading yet -- true cap is HIGHER)", False
 
 
@@ -786,6 +851,22 @@ def main():
                   f"{cap_cell(r['all_pct'], r['all_at']):>11}"
                   f"{r['fable_pct']:6.0f}%{r['fable_at']:9,.0f}"
                   f"{cap_cell(r['fable_pct'], r['fable_at']):>11}")
+        dcaps, dnotes = differential_caps(rows)
+        print()
+        print("DIFFERENTIAL (preferred — cancels the meter's zero point, so it survives")
+        print("an out-of-band quota reset, a mid-week boost, and a moved week boundary):")
+        if any(dcaps.values()):
+            for k in ("all", "fable"):
+                if dcaps[k]:
+                    print(f"  {k:6s} " + "  ".join(f"${v:,.0f}" for v in sorted(dcaps[k])))
+                else:
+                    print(f"  {k:6s} no usable pair")
+        else:
+            print("  none — this needs TWO readings in one meter week, at least "
+                  f"{MIN_DELTA_PCT:g} percentage points apart.")
+        for n in dnotes:
+            print(f"  note: {n}")
+        print()
         for k in ("all", "fable"):
             cap, basis, cal = resolve_cap(k, rows)
             print(f"  {k:6s} cap ${cap:,.0f}  ({basis})")
