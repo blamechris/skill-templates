@@ -473,5 +473,328 @@ print('OK' if ok_e and ok_d else 'BAD', 'discriminating' if abs(want_e-naive_e) 
   || bad "pace() elapsed and days_left are DST-correct across the fall-back" "got=$(flat "$got")"
 
 
+# ------------------------------------------- 12. DIFFERENTIAL CAP CALIBRATION
+# Anthropic reset the quota out of band on 2026-09-04, moving the meter's zero to an
+# unknown instant. The absolute method divides week-to-date spend by the percentage and
+# so counts spend the meter no longer counts. A difference between two readings cancels
+# the origin and is immune to it. These cases pin that.
+
+# (a) The headline property: the SAME pair of readings yields the SAME cap no matter
+#     where the zero sits, because the origin cancels. Two rows 40 points apart,
+#     $1200 apart -> cap $3000, and shifting both spends by a constant (which is what
+#     a moved zero does) must not change the answer.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 1800.00 1800.00 3000000000 3000000000 300000000 300000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,_=up.differential_caps(up.read_readings()); print('%.0f'%d['all'][0])" "$R" 2>&1)
+[ "$got" = "3000" ] \
+  && ok "differential cap = delta-spend / delta-pct (1200/0.40 = 3000)" \
+  || bad "differential cap = delta-spend / delta-pct" "got=$(flat "$got")"
+
+mk 20 20 5600.00 5600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 6800.00 6800.00 3000000000 3000000000 300000000 300000000
+shifted=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,_=up.differential_caps(up.read_readings()); print('%.0f'%d['all'][0])" "$R" 2>&1)
+[ "$shifted" = "3000" ] \
+  && ok "the same cap survives a shifted origin (a reset moves the zero, not the slope)" \
+  || bad "the same cap survives a shifted origin" "got=$(flat "$shifted")"
+
+# (b) A percentage that went DOWN means the meter reset BETWEEN the two readings, so the
+#     pair straddles two different zeros. Differencing it would produce a negative or
+#     meaningless cap; it must be dropped with a note naming the reset.
+mk 70 70 2100.00 2100.00 3000000000 3000000000 300000000 300000000 \
+   5  5  2400.00 2400.00 3400000000 3400000000 340000000 340000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), 'RESET' if any('reset' in x for x in n) else 'NONOTE')" "$R" 2>&1)
+[ "$got" = "0 RESET" ] \
+  && ok "a pair straddling a mid-week reset is dropped and the reset is named" \
+  || bad "a pair straddling a mid-week reset is dropped and the reset is named" "got=$(flat "$got")"
+
+# (c) A small delta is dropped: both percentages are eyeballed integers, so at 5 points a
+#     +/-1 point rounding is a 20% error in the cap.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   25 25 750.00 750.00 1200000000 1200000000 120000000 120000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), 'FLOOR' if any('floor' in x for x in n) else 'NONOTE')" "$R" 2>&1)
+[ "$got" = "0 FLOOR" ] \
+  && ok "a sub-10-point delta is dropped as rounding-dominated" \
+  || bad "a sub-10-point delta is dropped as rounding-dominated" "got=$(flat "$got")"
+
+# (d) Readings in DIFFERENT meter weeks are never differenced: week-to-date spend resets
+#     at the boundary, so the subtraction would be against two different origins.
+cat > "$R" <<'HDR'
+| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok | all_ieq | fable_ieq | note |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-09 | 2026-09-04T10:00-07:00 | 20% | 20% | 600.00 | 600.00 | 1 | 1 | 1 | 1 | a |
+| 2026-09-16 | 2026-09-11T10:00-07:00 | 60% | 60% | 1800.00 | 1800.00 | 1 | 1 | 1 | 1 | b |
+HDR
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,_=up.differential_caps(up.read_readings()); print(len(d['all']))" "$R" 2>&1)
+[ "$got" = "0" ] \
+  && ok "readings in different meter weeks are never differenced" \
+  || bad "readings in different meter weeks are never differenced" "got=$(flat "$got")"
+
+# (e) resolve_cap must PREFER the differential over the absolute. With both available and
+#     deliberately disagreeing, the differential wins and the basis string says so.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 1800.00 1800.00 3000000000 3000000000 300000000 300000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); up.CALIB=pathlib.Path(sys.argv[3]+'.nope'); c,b,_=up.resolve_cap('all', up.read_readings()); print('%.0f'%c, 'DIFF' if 'differential' in b else b)" "$R" 2>&1)
+[ "$got" = "3000 DIFF" ] \
+  && ok "resolve_cap prefers the differential (3000) over the absolute (3000/3000)" \
+  || bad "resolve_cap prefers the differential" "got=$(flat "$got")"
+
+# (f) With only one reading there is nothing to difference, and the absolute fallback must
+#     announce its own assumption rather than presenting itself as calibrated truth.
+mk 38 24 1180.00 340.00 1400000000 400000000 180000000 40000000
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); up.CALIB=pathlib.Path(sys.argv[3]+'.nope'); c,b,_=up.resolve_cap('all', up.read_readings()); print('ABS' if 'ABSOLUTE' in b else b)" "$R" 2>&1)
+[ "$got" = "ABS" ] \
+  && ok "a lone reading falls back to ABSOLUTE and labels the assumption" \
+  || bad "a lone reading falls back to ABSOLUTE and labels the assumption" "got=$(flat "$got")"
+
+
+# (g) The sampled calibration outranks both. It is a regression over the desktop app's
+#     own 15-minute meter samples, so it beats a hand-recorded pair on both sample size
+#     and freshness. Pinned with a stub file so the test never reads machine state.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 1800.00 1800.00 3000000000 3000000000 300000000 300000000
+printf '{"all": 4321.0, "periods": 5, "r2": 0.99}' > "$TMP/calib.json"
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); up.CALIB=pathlib.Path(sys.argv[4]); c,b,_=up.resolve_cap('all', up.read_readings()); print('%.0f'%c, 'SAMPLED' if 'regression' in b else b)" "$R" "$TMP/calib.json" 2>&1)
+[ "$got" = "4321 SAMPLED" ] \
+  && ok "the sampled calibration outranks the differential and the absolute" \
+  || bad "the sampled calibration outranks the differential and the absolute" "got=$(flat "$got")"
+
+# (h) A malformed or zero calibration must be ignored, not trusted -- it feeds the cap
+#     the pace check divides by.
+for bad_c in '{"all": 0}' '{"all": "x"}' '[1,2,3]' 'not json' '{}'; do
+  printf '%s' "$bad_c" > "$TMP/calib.json"
+  got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); up.CALIB=pathlib.Path(sys.argv[4]); c,b,_=up.resolve_cap('all', up.read_readings()); print('SAMPLED' if 'regression' in b else 'FELLBACK')" "$R" "$TMP/calib.json" 2>&1)
+  [ "$got" = "FELLBACK" ] \
+    && ok "a bad calibration file is ignored: $bad_c" \
+    || bad "a bad calibration file is ignored: $bad_c" "got=$(flat "$got")"
+done
+
+# --------------------------------- 13. THE SAMPLED-CALIBRATION MATH ITSELF
+# A reviewer found this math had NO direct coverage: only its downstream consumption
+# via a pre-built cache file was tested, so a regression in _fit, _segments or
+# sampled_caps would have shipped with the suite fully green.
+
+# (a) _fit recovers a known slope and R2 exactly, and guards degenerate input.
+got=$(pymod "
+b,r = up._fit([0,1,2,3],[10,20,30,40])          # slope 10, perfect fit
+b2,r2 = up._fit([5,5,5],[1,2,3])                # zero variance in x
+b3,r3 = up._fit([],[])                          # empty
+print('%.6f %.6f %s %s' % (b, r, b2 is None, b3 is None))" 2>&1)
+[ "$got" = "10.000000 1.000000 True True" ] \
+  && ok "_fit recovers a known slope/R2 and returns None on degenerate input" \
+  || bad "_fit recovers a known slope/R2 and returns None on degenerate input" "got=$(flat "$got")"
+
+# (b) The property the whole method rests on: adding a constant to every y (which is
+#     exactly what a moved zero point does) must not move the slope.
+got=$(pymod "
+xs=[0,10,20,30,40]; ys=[100,300,500,700,900]
+a,_ = up._fit(xs, ys)
+b,_ = up._fit(xs, [y+99999 for y in ys])
+print('SAME' if abs(a-b) < 1e-9 else 'MOVED %f %f' % (a,b))" 2>&1)
+[ "$got" = "SAME" ] \
+  && ok "the fitted slope is invariant to a shifted origin (the reset-proof property)" \
+  || bad "the fitted slope is invariant to a shifted origin" "got=$(flat "$got")"
+
+# (c) _segments splits on a big drop, on ANY fall to zero, and not on noise.
+got=$(pymod "
+seg = lambda v: [[y for _,y in s] for s in up._segments([(float(i),float(x)) for i,x in enumerate(v)])]
+print(seg([10,50,90,0,20]), seg([1,2,0,3]), seg([10,9,11,40]))" 2>&1)
+exp="[[10.0, 50.0, 90.0], [0.0, 20.0]] [[1.0, 2.0], [0.0, 3.0]] [[10.0, 9.0, 11.0, 40.0]]"
+[ "$got" = "$exp" ] \
+  && ok "_segments splits on a reset and on a fall to zero, but not on 1-point noise" \
+  || bad "_segments splits on a reset and on a fall to zero, but not on 1-point noise" "got=$(flat "$got")"
+
+# (d) plan_samples tolerates every malformed shape the desktop app could present.
+PS=$TMP/plan.json
+psrun() { printf '%s' "$1" > "$PS"; pymod "up.PLAN_SAMPLES=pathlib.Path(sys.argv[3]); print(len(up.plan_samples()))" "$PS" 2>&1; }
+allok=yes
+for shape in '{}' '[]' 'not json' '{"samples": {}}' '{"samples": [1,2,3]}' \
+             '{"samples": [{"t": 1, "u": {"sd": "x"}}]}' '{"samples": [{"u": {"sd": 5}}]}' \
+             '{"samples": [{"t": 1}]}' '{"samples": [{"t": 1, "u": null}]}'; do
+  [ "$(psrun "$shape")" = "0" ] || { allok="no ($shape -> $(psrun "$shape"))"; break; }
+done
+[ "$allok" = yes ] \
+  && ok "plan_samples returns nothing for every malformed shape, never raises" \
+  || bad "plan_samples returns nothing for every malformed shape" "$allok"
+
+got=$(psrun '{"samples": [{"t": 300, "u": {"sd": 9, "fh": 1}}, {"t": 100, "u": {"sd": 3}}]}')
+[ "$got" = "2" ] && ok "plan_samples keeps well-formed entries" \
+  || bad "plan_samples keeps well-formed entries" "got=$(flat "$got")"
+
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[3])
+print([int(t) for t,_ in up.plan_samples()])" "$PS" 2>&1)
+[ "$got" = "[100, 300]" ] \
+  && ok "plan_samples sorts by the numeric epoch (not by insertion order)" \
+  || bad "plan_samples sorts by the numeric epoch" "got=$(flat "$got")"
+
+# (e) sampled_caps end to end against a synthetic meter + synthetic transcripts: a known
+#     cap must come back out. Two periods at $20/point -> cap $2000.
+got=$("$PY" - "$SUT" "$TMP" <<'CAPPY' 2>&1
+import importlib.util, json, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"sc"; 
+import shutil; shutil.rmtree(root, ignore_errors=True); root.mkdir()
+up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/"sc_c.json"
+# one $2.00 request every 60s from t0; meter climbs 1 point per 10 requests => $20/point
+t0=1788000000000
+recs=[]
+for i in range(400):
+    recs.append(json.dumps({"type":"assistant","timestamp":
+        up.datetime.fromtimestamp((t0+i*60000)/1000, up.timezone.utc).isoformat().replace("+00:00","Z"),
+        "message":{"id":"m%d"%i,"model":"claude-opus-5",
+                   "usage":{"output_tokens":80000}}}, separators=(",",":")))
+(root/"t.jsonl").write_text("\n".join(recs)+"\n")
+per_req = up.cost_usd({"output_tokens":80000}, "claude-opus-5")
+samples=[{"t": t0+i*10*60000, "u": {"sd": i}} for i in range(40)]
+up.PLAN_SAMPLES=tmp/"plan.json"; up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":samples}))
+out=up.sampled_caps()
+exp = per_req*10*100      # $/point x 100
+print("%d %.2f %.2f" % (len(out), out[0][1], exp), "MATCH" if abs(out[0][1]-exp) < exp*0.02 else "OFF")
+CAPPY
+)
+printf '%s' "$got" | grep -q 'MATCH' \
+  && ok "sampled_caps recovers a known cap from a synthetic meter + transcripts" \
+  || bad "sampled_caps recovers a known cap from a synthetic meter + transcripts" "$(flat "$got")"
+
+# (f) Readings must sort chronologically, not lexicographically: ISO offsets change at a
+#     DST transition, so the raw string order flips the pair and fakes a reset.
+got=$(pymod "
+A={'at':'2026-11-01T01:45-07:00'}   # PDT, 08:45 UTC, EARLIER
+B={'at':'2026-11-01T01:30-08:00'}   # PST, 09:30 UTC, LATER
+print([r['at'][-6:] for r in sorted([B,A], key=up._reading_instant)],
+      up._reading_instant({'at':'garbage'}) > up._reading_instant(A))" 2>&1)
+[ "$got" = "['-07:00', '-08:00'] True" ] \
+  && ok "readings sort by instant, not ISO text (DST offsets flip the string order)" \
+  || bad "readings sort by instant, not ISO text" "got=$(flat "$got")"
+
+# (g) The cap the pace check divides by must be finite and must not be a bool.
+#     json.loads accepts Infinity/NaN, and bool is an int subclass.
+allok=yes
+for shape in '{"all": Infinity}' '{"all": -Infinity}' '{"all": NaN}' '{"all": true}'; do
+  printf '%s' "$shape" > "$TMP/calib.json"
+  r=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); print('ACCEPTED' if up.cached_calibration() else 'rejected')" "$TMP/calib.json" 2>&1)
+  [ "$r" = "rejected" ] || { allok="no ($shape -> $r)"; break; }
+done
+[ "$allok" = yes ] \
+  && ok "Infinity/NaN/true are rejected as a cached cap" \
+  || bad "Infinity/NaN/true are rejected as a cached cap" "$allok"
+
+
+# (h) ...and differential_caps must actually USE that key. Reverting the call site to a
+#     string sort left the direct _reading_instant test green, so this drives the real
+#     path: two readings in one week whose ISO text order is the REVERSE of their true
+#     order, straddling the 2026-11-01 PT fall-back. Sorted as text the meter appears to
+#     fall 60% -> 20% and the pair is dropped as a reset that never happened.
+cat > "$R" <<'HDR'
+| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok | all_ieq | fable_ieq | note |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-04 | 2026-11-01T01:45-07:00 | 20% | 20% | 600.00 | 600.00 | 1 | 1 | 1 | 1 | earlier (PDT, 08:45 UTC) |
+| 2026-11-04 | 2026-11-01T01:30-08:00 | 60% | 60% | 1800.00 | 1800.00 | 1 | 1 | 1 | 1 | later (PST, 09:30 UTC) |
+HDR
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), ('%.0f'%d['all'][0]) if d['all'] else 'none', 'RESETNOTE' if any('reset' in x for x in n) else 'clean')" "$R" 2>&1)
+[ "$got" = "1 3000 clean" ] \
+  && ok "differential_caps orders a DST-straddling pair correctly (no phantom reset)" \
+  || bad "differential_caps orders a DST-straddling pair correctly (no phantom reset)" "got=$(flat "$got")"
+
+
+# --------------------------- 14. THE SPREAD REPORTING (shipped without coverage)
+# The refute pass found the CAUTION path, the "range $lo-$hi" note and the persistence
+# of lo/hi had no test at all — so a lo/hi inversion, or dropping the range entirely,
+# would ship green. That is the same "ships alongside its own fix, untested" gap this
+# suite was extended to close twice already.
+
+# (a) The range reaches the basis string, in the right order.
+printf '{"all": 2363.0, "periods": 6, "r2": 0.994, "lo": 1978.0, "hi": 2870.0, "at": "2026-09-04T22:00"}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', []); print('%.0f'%c, 'RANGE' if 'range \$1,978-\$2,870' in b else 'MISSING:'+b)" "$TMP/calib.json" 2>&1)
+[ "$got" = "2363 RANGE" ] \
+  && ok "the cached basis carries the range low-to-high, not inverted" \
+  || bad "the cached basis carries the range low-to-high, not inverted" "got=$(flat "$got")"
+
+# (b) An inverted range must be visible, not silently printed backwards.
+printf '{"all": 2363.0, "periods": 6, "r2": 0.994, "lo": 2870.0, "hi": 1978.0}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', []); print('INVERTED' if 'range \$2,870-\$1,978' in b else 'ok')" "$TMP/calib.json" 2>&1)
+[ "$got" = "INVERTED" ] \
+  && ok "an inverted lo/hi renders verbatim (so a swap is visible, not masked)" \
+  || bad "an inverted lo/hi renders verbatim" "got=$(flat "$got")"
+
+# (c) The measurement date is surfaced, so a stale calibration is not silently trusted.
+printf '{"all": 2363.0, "periods": 6, "r2": 0.994, "at": "2026-09-04T22:00"}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); _,b,_=up.resolve_cap('all', []); print('DATED' if 'measured 2026-09-04' in b else 'MISSING')" "$TMP/calib.json" 2>&1)
+[ "$got" = "DATED" ] \
+  && ok "the basis says when the calibration was measured" \
+  || bad "the basis says when the calibration was measured" "got=$(flat "$got")"
+
+# (d) A cache written before the range existed must still resolve, not crash or print
+#     a half-formed range.
+printf '{"all": 2363.0, "periods": 6, "r2": 0.994}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', []); print('%.0f'%c, 'NORANGE' if 'range' not in b else 'LEAKED')" "$TMP/calib.json" 2>&1)
+[ "$got" = "2363 NORANGE" ] \
+  && ok "a pre-range cache file still resolves, with no half-formed range" \
+  || bad "a pre-range cache file still resolves" "got=$(flat "$got")"
+
+printf '{"all": 2363.0, "lo": 1978.0}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', []); print('%.0f'%c, 'NORANGE' if 'range' not in b else 'LEAKED')" "$TMP/calib.json" 2>&1)
+[ "$got" = "2363 NORANGE" ] \
+  && ok "lo without hi does not render a broken range" \
+  || bad "lo without hi does not render a broken range" "got=$(flat "$got")"
+
+# (e) NaN must not reach the fit. json.loads accepts it, and `b <= 0` cannot reject a
+#     NaN slope because every NaN comparison is False.
+got=$(pymod "
+import json
+p=pathlib.Path(sys.argv[3]); p.write_text(json.dumps({'samples':[{'t':1,'u':{'sd':1}}]}).replace('\"sd\": 1','\"sd\": NaN'))
+up.PLAN_SAMPLES=p; print(len(up.plan_samples()))" "$TMP/plan_nan.json" 2>&1)
+[ "$got" = "0" ] \
+  && ok "a NaN meter percentage is dropped before it can reach the regression" \
+  || bad "a NaN meter percentage is dropped before it can reach the regression" "got=$(flat "$got")"
+
+
+# (f) --calibrate END TO END: it must actually persist lo/hi and print the CAUTION.
+#     Every case above writes the cache by hand, so they test the READ side only —
+#     removing `"lo": lo, "hi": hi` from the write left the suite green. This drives the
+#     real command against a synthetic meter whose periods deliberately disagree.
+got=$("$PY" - "$SUT" "$TMP" <<'E2E' 2>&1
+import importlib.util, json, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"e2e"
+shutil.rmtree(root, ignore_errors=True); root.mkdir()
+up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/"e2e_c.json"; up.CALIB=tmp/"e2e_calib.json"
+up.READINGS=tmp/"e2e_r.md"
+t0=1788600000000
+# Two periods with deliberately different $/point, so lo != hi and the CAUTION fires.
+recs=[]; samples=[]; n=0
+for period,(per_step,pts) in enumerate([(1,40),(2,40)]):
+    base=t0+period*100*10*60000
+    for i in range(pts):
+        for _ in range(per_step):
+            recs.append(json.dumps({"type":"assistant","timestamp":
+                up.datetime.fromtimestamp((base+i*10*60000+n)/1000, up.timezone.utc)
+                  .isoformat().replace("+00:00","Z"),
+                "message":{"id":"m%d"%n,"model":"claude-opus-5",
+                           "usage":{"output_tokens":80000}}}, separators=(",",":")))
+            n+=1
+        samples.append({"t": base+i*10*60000, "u": {"sd": i}})
+(root/"t.jsonl").write_text("\n".join(recs)+"\n")
+up.PLAN_SAMPLES=tmp/"e2e_plan.json"
+up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":samples}))
+import io, contextlib
+out=io.StringIO()
+sys.argv=["x","--calibrate"]
+with contextlib.redirect_stdout(out): rc=up.main()
+c=json.loads(up.CALIB.read_text())
+has=all(k in c for k in ("all","lo","hi","periods","r2","at"))
+ordered = c.get("lo",0) <= c.get("all",0) <= c.get("hi",0)
+caution = "CAUTION" in out.getvalue()
+print(f"rc={rc} keys={has} ordered={ordered} caution={caution} ratio={c['hi']/c['lo']:.2f}")
+E2E
+)
+case "$got" in
+  "rc=0 keys=True ordered=True caution=True"*) ok "--calibrate persists lo/hi in order and prints the CAUTION when they disagree" ;;
+  *) bad "--calibrate persists lo/hi in order and prints the CAUTION when they disagree" "$(flat "$got")" ;;
+esac
+
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

@@ -176,7 +176,10 @@ cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
 `usage-benchmark-row.py` emits artifact ①'s row; `usage-pace.py` answers "how much of the meter
-week is spent" and records meter readings. Each ships with a sibling `<name>.test.sh` in
+week is spent", records meter readings, and — on macOS with the Claude desktop app — measures
+the cap outright with `--calibrate`, by regressing spend against the meter samples the app
+already writes every ~15 minutes. On a machine without that app the flag explains itself and
+exits non-zero; every other path is unaffected and the cap falls back to a recorded reading. Each ships with a sibling `<name>.test.sh` in
 the registry, run by CI, and that is where their behaviour is pinned — this file states the
 doctrine, not the code. Bootstrap all or none: a machine with a stale
 `usage-benchmark-row.py` writes step 2's row on a different scale from every row above it, and

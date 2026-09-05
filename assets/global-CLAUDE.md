@@ -378,6 +378,7 @@ discriminating ratios span 1.41x (`$/ieq`) and 1.23x (`raw/ieq`), both far above
 noise in an eyeballed percentage — so two well-placed readings settle it. **Record a reading any day of the week** — the deadline is gone:
 
 ```bash
+python3 ~/.claude/scripts/usage-pace.py --calibrate  # measure the cap; no reading needed
 python3 ~/.claude/scripts/usage-pace.py --record  # prompts for the two /usage percentages
 python3 ~/.claude/scripts/usage-pace.py --units   # which unit does the meter count?
 python3 ~/.claude/scripts/usage-pace.py --caps    # implied caps from every reading
@@ -390,6 +391,37 @@ the one-line definition for machines that want the shorthand. Either form prompt
 given no values, so neither needs a placeholder substituted into it: a documented command
 carrying `<angle brackets>` is read by the shell as a redirection and cannot be run as
 written.
+
+**The all-models cap is measured, not read off a screen** (2026-09-04). The Claude
+desktop app samples the plan meters every ~15 minutes and persists them to
+`~/Library/Application Support/Claude/plan-usage-history.json` -- `sd` is the seven-day
+all-models meter, `fh` the five-hour session meter. `--calibrate` segments that series at
+every reset and regresses cumulative spend on the meter percentage within each period;
+the slope times 100 is the cap, and fitting a line rather than dividing means the
+intercept absorbs the zero point, so an out-of-band reset before the period does not
+disturb it. Six periods currently fit at mean R2 0.994.
+
+**The measured all-models cap is ~$2,363, and the honest form of that number is a range:
+as measured on 2026-09-04 the six periods spanned roughly $2,000-$2,900** (the exact
+endpoints drift as data accumulates -- run `--calibrate` for the current figures).** That 1.45x spread is not explained by the +50%
+boost (the two post-2026-09-01 periods sit at the LOW end), nor by fit quality (R2 is
+0.98+ throughout), nor by model mix. Treat it as a central estimate with roughly +/-20%
+around it. Dollars is nonetheless the best-fitting of the three candidate units -- its
+spread is 1.45x against 1.76x for raw tokens and 1.67x for input-equivalent -- which is
+the first evidence for the dollar assumption that does not rest on the assumption.
+
+**This also settles what the ledger could not.** The meter read 100% from 2026-08-30
+14:35 to 08-31 19:51 and was reset out of band on 09-01: the week closing 2026-09-02 did
+not merely run hot, it hit the wall and sat locked out for roughly 29 hours. The weekly
+meter has reached >=98% in four of the last five weeks. **The account is not
+under-spending its quota; it is hitting the ceiling and being blocked mid-week**, which
+is why the answer is pacing rather than a larger number.
+
+Two limits, stated rather than hidden. The samples carry **no Fable meter**, so the Fable
+cap still rests on its observed-unclamped floor (`> $963`) and a hand-recorded reading is
+still the only way to improve it. And the file is macOS desktop-app state: on a headless
+or non-desktop machine `--calibrate` explains itself and exits non-zero, every other path
+keeps working, and the cap falls back to a hand-recorded reading or the floor.
 
 **Fable is a per-turn choice, not a session mode.** This is the defect the pace
 check is shaped around, and it is worth stating separately because the previous

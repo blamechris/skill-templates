@@ -21,7 +21,7 @@ Entry points:
                 pace, and only every --every turns. Silent and cheap otherwise.
   --at-now      the (spend, timestamp) half of a meter reading, for the `meter` function
 """
-import argparse, hashlib, json, os, sys, time
+import argparse, hashlib, json, math, os, sys, time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -361,6 +361,245 @@ def implied_caps(rows, unit="$"):
     return out
 
 
+# The Claude desktop app samples the plan meters every ~15 minutes and persists them
+# here. `sd` is the seven-day (weekly) ALL-MODELS meter -- the same number /usage shows --
+# and `fh` is the five-hour session meter. Validated 2026-09-04 against a hand-recorded
+# reading: the screen read session 31% / all-models 8% at 21:52 PT on 2026-09-02, and the
+# sample one minute later reads {"fh": 32, "sd": 8}.
+#
+# This is why meter readings never needed a human. It is macOS-desktop-app state, so it is
+# absent on a headless or non-desktop machine -- every consumer of it degrades to the
+# hand-recorded readings rather than failing.
+#
+# NOTE: there is no Fable field. Only the all-models meter can be calibrated from here;
+# the Fable cap still needs a hand-recorded reading.
+PLAN_SAMPLES = HOME / "Library" / "Application Support" / "Claude" / "plan-usage-history.json"
+CALIB = HIST / "pace-calibration.json"
+RESET_DROP = 2           # a sd fall of more than this is a reset, not noise
+MIN_SEG_SPAN = 15        # a period must cover this many points to be worth fitting
+
+
+def plan_samples():
+    """Sorted (epoch_ms, weekly_pct) from the desktop app, or [] when unavailable."""
+    try:
+        d = json.loads(PLAN_SAMPLES.read_text())
+    except (OSError, ValueError):
+        return []
+    if not isinstance(d, dict) or not isinstance(d.get("samples"), list):
+        return []
+    out = []
+    for x in d["samples"]:
+        if not isinstance(x, dict):
+            continue
+        u = x.get("u")
+        t, sd = x.get("t"), (u.get("sd") if isinstance(u, dict) else None)
+        # Same validation as cached_calibration, and for the same reason: json.loads
+        # accepts Infinity/NaN, and bool subclasses int. A NaN `sd` reaches _fit and
+        # produces a NaN slope, which the `b <= 0` guard does NOT reject -- every NaN
+        # comparison is False. Today the R2 filter happens to catch it downstream;
+        # relying on that is relying on an accident.
+        if (isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t)
+                and isinstance(sd, (int, float)) and not isinstance(sd, bool)
+                and math.isfinite(sd)):
+            out.append((float(t), float(sd)))
+    return sorted(out)
+
+
+def _segments(samples):
+    """Split the series at every reset -- weekly boundary or out-of-band alike."""
+    segs, start = [], 0
+    for i in range(1, len(samples)):
+        prev, cur = samples[i - 1][1], samples[i][1]
+        # A fall of more than RESET_DROP is a reset; so is ANY fall to zero from a
+        # positive value. Without the second clause a reset late in a quiet week --
+        # 2% -> 0% -- is a drop of only 2 and fails the threshold, splicing two
+        # different zero points into one regression.
+        if cur < prev - RESET_DROP or (cur == 0 and prev > 0):
+            segs.append(samples[start:i])
+            start = i
+    segs.append(samples[start:])
+    return segs
+
+
+def _fit(xs, ys):
+    n = len(xs)
+    if n == 0:                  # the only caller guards this, but the helper must not
+        return None, None       # depend on that -- a future caller would divide by zero
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx == 0:
+        return None, None
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    b = sxy / sxx
+    a = my - b * mx
+    ssr = sum((y - (a + b * x)) ** 2 for x, y in zip(xs, ys))
+    sst = sum((y - my) ** 2 for y in ys)
+    return b, (1 - ssr / sst if sst else None)
+
+
+def sampled_caps(unit="$"):
+    """Implied all-models cap per meter period, by regressing spend on the meter %.
+
+    The slope is dollars per percentage point, so slope x 100 is the cap. Fitting a LINE
+    rather than dividing means the intercept absorbs the zero point -- which is the same
+    property that makes a two-reading difference immune to a reset, generalised over
+    every sample in the period. Returns [(label, cap, r2, n), ...], newest last.
+    """
+    samples = plan_samples()
+    if not samples:
+        return []
+    ev, seen = [], set()
+    idx = {"$": 0, "raw": 1, "ieq": 2}[unit]
+    for path in ROOT.rglob("*.jsonl"):
+        if "memory" in path.parts or "tool-results" in path.parts:
+            continue
+        try:
+            fh = open(path, "rb")
+        except OSError:
+            continue
+        with fh:
+            for raw_line in fh:
+                if b'"type":"assistant"' not in raw_line:
+                    continue
+                try:
+                    e = json.loads(raw_line.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if e.get("type") != "assistant":
+                    continue
+                m = e.get("message") or {}
+                u, model = m.get("usage"), m.get("model") or ""
+                if not u or not model or model == "<synthetic>":
+                    continue
+                k = (m.get("id"), e.get("requestId"))
+                if k in seen:
+                    continue
+                seen.add(k)
+                ts = e.get("timestamp")
+                if not ts:
+                    continue
+                try:
+                    d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                rawt, ieq = token_measures(u)
+                ev.append((d.timestamp() * 1000, (cost_usd(u, model), rawt, ieq)[idx]))
+    if not ev:
+        return []
+    ev.sort()
+    times = [e[0] for e in ev]
+    cum = [0.0]
+    for _, v in ev:
+        cum.append(cum[-1] + v)
+    import bisect
+    out = []
+    for seg in _segments(samples):
+        if len(seg) < 8:
+            continue
+        xs = [p for _, p in seg]
+        if max(xs) - min(xs) < MIN_SEG_SPAN:
+            continue
+        ys = [cum[bisect.bisect_right(times, t)] for t, _ in seg]
+        b, r2 = _fit(xs, ys)
+        if b is None or not math.isfinite(b) or b <= 0:
+            continue
+        lo = datetime.fromtimestamp(seg[0][0] / 1000, PT)
+        hi = datetime.fromtimestamp(seg[-1][0] / 1000, PT)
+        out.append((f"{lo:%m-%d %H:%M}->{hi:%m-%d %H:%M}", b * 100, r2, len(seg)))
+    return out
+
+
+def _median(v):
+    v = sorted(v)
+    return v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+
+
+def cached_calibration():
+    """The last computed sampled cap, or None. Keeps the hook off a full rescan."""
+    try:
+        d = json.loads(CALIB.read_text())
+        v = d.get("all") if isinstance(d, dict) else None
+        # json.loads accepts the non-standard literals Infinity/-Infinity/NaN, and bool
+        # is an int subclass -- so `isinstance(v, (int, float)) and v > 0` alone admits
+        # `Infinity` and `true` as caps. This value is divided by.
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
+            return d
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+MIN_DELTA_PCT = 10.0     # below this, integer rounding on both readings dominates
+
+
+def _reading_instant(r):
+    """Sort key for a reading: an absolute instant, never the raw ISO string.
+
+    A recorded `at` carries a UTC OFFSET (`...T01:30-08:00`), and offsets change at a
+    DST transition, so lexicographic order is not chronological order. Either side of
+    the 2026-11-01 PT fall-back, `01:30-08:00` (09:30 UTC) sorts BEFORE `01:45-07:00`
+    (08:45 UTC) as text while being 45 minutes LATER in fact. Differencing
+    that pair reads the meter as having gone down and reports a reset that never
+    happened. Unparseable timestamps sort last rather than throwing.
+    """
+    at = r.get("at") or ""
+    try:
+        return (0, datetime.fromisoformat(at).timestamp())
+    except (TypeError, ValueError):
+        return (1, 0.0)
+
+
+def differential_caps(rows, unit="$"):
+    """cap = delta-measure / (delta-pct/100), between two readings in one meter week.
+
+    THIS IS THE ONLY METHOD THAT SURVIVES AN OUT-OF-BAND QUOTA RESET, and it is the
+    reason readings are worth taking in pairs rather than singly.
+
+    The absolute method (`implied_caps`) divides week-to-date spend by the meter
+    percentage, which silently assumes the meter's zero sits exactly at the week open.
+    Anthropic reset the quota mid-week on 2026-09-04, moving the zero to an unknown
+    instant; every absolute cap computed after that counts pre-reset spend the meter
+    itself no longer counts, and so runs high by whatever accumulated before it.
+
+    A difference does not care. Both measures are taken from the same origin, so the
+    origin cancels: `spend_B - spend_A` is the spend between the two readings whatever
+    the meter's zero was, and `pct_B - pct_A` is the share of cap that bought it. The
+    method is likewise blind to a mid-week boost multiplier, as long as it did not
+    change between the two readings.
+
+    Two guards. A percentage that went DOWN means the meter reset between the readings
+    (or the week rolled), so the pair spans two different zeros and is dropped rather
+    than differenced into a negative cap. A delta below MIN_DELTA_PCT is dropped
+    because both percentages are read by eye as integers: at a 5-point delta a +/-1
+    point rounding is a 20% error in the cap, while at 40 points it is 2.5%.
+    """
+    ak, fk = next((a, f) for u, a, f, _ in UNITS if u == unit)
+    out, notes = {"all": [], "fable": []}, []
+    weeks = {}
+    for r in rows:
+        weeks.setdefault(r["week"], []).append(r)
+    for wk in sorted(weeks):
+        rs = sorted(weeks[wk], key=_reading_instant)
+        for a, b in zip(rs, rs[1:]):
+            for meter, pk, mk in (("all", "all_pct", ak), ("fable", "fable_pct", fk)):
+                pa, pb, ma, mb = a.get(pk), b.get(pk), a.get(mk), b.get(mk)
+                if None in (pa, pb, ma, mb):
+                    continue
+                dp, dm = pb - pa, mb - ma
+                if dp < 0 or dm < 0:
+                    notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} went DOWN "
+                                 f"({pa:g}% -> {pb:g}%) -- the meter reset between these "
+                                 f"readings; the pair spans two zeros and is dropped")
+                    continue
+                if dp < MIN_DELTA_PCT:
+                    notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} moved only "
+                                 f"{dp:g} points -- below the {MIN_DELTA_PCT:g}-point floor "
+                                 f"where integer rounding dominates; dropped")
+                    continue
+                out[meter].append(100.0 * dm / dp)
+    return out, notes
+
+
 def spread(vals):
     """max/min. The unit the meter actually counts is the one whose implied cap is
     STABLE across readings with different model mixes; the others swing."""
@@ -371,12 +610,37 @@ def spread(vals):
 
 
 def resolve_cap(kind, rows):
-    """Best available cap, and how much to trust it."""
+    """Best available cap, and how much to trust it.
+
+    Differential first: it is immune to where the meter's zero sits, and after the
+    2026-09-04 quota reset the absolute method's assumption (zero == week open) is
+    known to be wrong. Absolute is the fallback, and says so.
+    """
+    if kind == "all":
+        c = cached_calibration()
+        if c:
+            lo, hi = c.get("lo"), c.get("hi")
+            # The spread is part of the answer, not a footnote. Six periods of real data
+            # imply caps from $1,979 to $2,870 -- a 1.45x span that the boost, the model
+            # mix and the fit quality all fail to explain. Reporting only the median
+            # presents +/-20% uncertainty as a precise number.
+            rng = (f", range ${lo:,.0f}-${hi:,.0f}"
+                   if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else "")
+            age = f", measured {c['at'][:16]}" if isinstance(c.get("at"), str) else ""
+            return (c["all"], f"regression over {c.get('periods', '?')} meter period(s) "
+                              f"from the app's own 15-minute samples (R2 {c.get('r2', 0):.3f}"
+                              f"{rng}{age}) -- zero-point independent", True)
+    dcaps, _ = differential_caps(rows)
+    if dcaps[kind]:
+        v = sorted(dcaps[kind])
+        med = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+        return med, f"differential of {len(v)} reading pair(s) -- zero-point independent", True
     caps = implied_caps(rows)[kind]
     if caps:
         caps = sorted(caps)
         med = caps[len(caps) // 2] if len(caps) % 2 else (caps[len(caps) // 2 - 1] + caps[len(caps) // 2]) / 2
-        return med, f"median of {len(caps)} meter reading(s)", True
+        return med, (f"median of {len(caps)} single reading(s) -- ABSOLUTE, assumes the "
+                     f"meter zeroed at the week open; wrong after an out-of-band reset"), True
     return FLOOR[kind], "observed-unclamped floor (no meter reading yet -- true cap is HIGHER)", False
 
 
@@ -686,6 +950,8 @@ def main():
     g.add_argument("--hook", action="store_true", help="UserPromptSubmit hook mode")
     g.add_argument("--at-now", action="store_true", help="spend+timestamp for a meter reading")
     g.add_argument("--caps", action="store_true", help="implied caps from every meter reading")
+    g.add_argument("--calibrate", action="store_true",
+                   help="derive the all-models cap from the desktop app's meter samples")
     g.add_argument("--units", action="store_true",
                    help="which unit does the meter count? (needs >=2 readings)")
     g.add_argument("--record", nargs="*", metavar="VAL",
@@ -699,6 +965,38 @@ def main():
 
     if a.hook:
         return hook(a)
+
+    if a.calibrate:
+        rowsc = sampled_caps()
+        if not rowsc:
+            print("no plan-usage samples available "
+                  f"({PLAN_SAMPLES}) — this is macOS desktop-app state; fall back to "
+                  "hand-recorded readings (--record).")
+            return 1
+        print(f"{'meter period (PT)':32}{'n':>5}{'implied cap':>13}{'R2':>8}")
+        for label, cap, r2, n in rowsc:
+            print(f"{label:32}{n:5d}{cap:>13,.0f}{(r2 if r2 is not None else 0):>8.3f}")
+        good = [(c, r) for _, c, r, _ in rowsc if r is not None and r >= 0.95]
+        if good:
+            v = sorted(c for c, _ in good)
+            med = v[len(v)//2] if len(v) % 2 else (v[len(v)//2-1]+v[len(v)//2])/2
+            r2m = sum(r for _, r in good)/len(good)
+            CALIB.parent.mkdir(parents=True, exist_ok=True)
+            lo, hi = min(v), max(v)
+            CALIB.write_text(json.dumps({"all": med, "periods": len(good), "r2": r2m,
+                                         "lo": lo, "hi": hi,
+                                         "at": datetime.now().astimezone().isoformat(timespec="minutes")}))
+            print(f"\nall-models cap ${med:,.0f} (median of {len(good)} well-fit period(s), "
+                  f"mean R2 {r2m:.3f})  — cached for the pace check")
+            if lo and hi / lo > 1.15:
+                print(f"  CAUTION: the six periods span ${lo:,.0f}-${hi:,.0f} ({hi/lo:.2f}x). That "
+                      f"spread is NOT explained by the\n  +50% boost (the two post-2026-09-01 "
+                      f"periods are at the LOW end, not 1.5x high), nor by fit\n  quality (R2 is "
+                      f"0.98+ throughout), nor by model mix. Treat ${med:,.0f} as a central "
+                      f"estimate\n  with roughly +/-20% around it, not a measured constant.")
+            print("NOTE: these samples carry no Fable meter, so the Fable cap still needs "
+                  "a hand-recorded reading.")
+        return 0
 
     if a.units:
         return units_report(read_readings())
@@ -786,6 +1084,25 @@ def main():
                   f"{cap_cell(r['all_pct'], r['all_at']):>11}"
                   f"{r['fable_pct']:6.0f}%{r['fable_at']:9,.0f}"
                   f"{cap_cell(r['fable_pct'], r['fable_at']):>11}")
+        dcaps, dnotes = differential_caps(rows)
+        print()
+        print("DIFFERENTIAL — cancels the meter's zero point, so an out-of-band reset")
+        print("BEFORE the pair does not affect it. Conditions, stated because the guards")
+        print("below enforce them: a reset or a week roll BETWEEN the two readings is")
+        print("detected and the pair DROPPED, not survived; and the result is only valid")
+        print("if the cap multiplier (e.g. a temporary boost) held steady across them:")
+        if any(dcaps.values()):
+            for k in ("all", "fable"):
+                if dcaps[k]:
+                    print(f"  {k:6s} " + "  ".join(f"${v:,.0f}" for v in sorted(dcaps[k])))
+                else:
+                    print(f"  {k:6s} no usable pair")
+        else:
+            print("  none — this needs TWO readings in one meter week, at least "
+                  f"{MIN_DELTA_PCT:g} percentage points apart.")
+        for n in dnotes:
+            print(f"  note: {n}")
+        print()
         for k in ("all", "fable"):
             cap, basis, cal = resolve_cap(k, rows)
             print(f"  {k:6s} cap ${cap:,.0f}  ({basis})")
