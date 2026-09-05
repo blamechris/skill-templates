@@ -361,6 +361,151 @@ def implied_caps(rows, unit="$"):
     return out
 
 
+# The Claude desktop app samples the plan meters every ~15 minutes and persists them
+# here. `sd` is the seven-day (weekly) ALL-MODELS meter -- the same number /usage shows --
+# and `fh` is the five-hour session meter. Validated 2026-09-04 against a hand-recorded
+# reading: the screen read session 31% / all-models 8% at 21:52 PT on 2026-09-02, and the
+# sample one minute later reads {"fh": 32, "sd": 8}.
+#
+# This is why meter readings never needed a human. It is macOS-desktop-app state, so it is
+# absent on a headless or non-desktop machine -- every consumer of it degrades to the
+# hand-recorded readings rather than failing.
+#
+# NOTE: there is no Fable field. Only the all-models meter can be calibrated from here;
+# the Fable cap still needs a hand-recorded reading.
+PLAN_SAMPLES = HOME / "Library" / "Application Support" / "Claude" / "plan-usage-history.json"
+CALIB = HIST / "pace-calibration.json"
+RESET_DROP = 2           # a sd fall of more than this is a reset, not noise
+MIN_SEG_SPAN = 15        # a period must cover this many points to be worth fitting
+
+
+def plan_samples():
+    """Sorted (epoch_ms, weekly_pct) from the desktop app, or [] when unavailable."""
+    try:
+        d = json.loads(PLAN_SAMPLES.read_text())
+    except (OSError, ValueError):
+        return []
+    if not isinstance(d, dict) or not isinstance(d.get("samples"), list):
+        return []
+    out = []
+    for x in d["samples"]:
+        if not isinstance(x, dict):
+            continue
+        u = x.get("u")
+        t, sd = x.get("t"), (u.get("sd") if isinstance(u, dict) else None)
+        if isinstance(t, (int, float)) and isinstance(sd, (int, float)):
+            out.append((float(t), float(sd)))
+    return sorted(out)
+
+
+def _segments(samples):
+    """Split the series at every reset -- weekly boundary or out-of-band alike."""
+    segs, start = [], 0
+    for i in range(1, len(samples)):
+        if samples[i][1] < samples[i - 1][1] - RESET_DROP:
+            segs.append(samples[start:i])
+            start = i
+    segs.append(samples[start:])
+    return segs
+
+
+def _fit(xs, ys):
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx == 0:
+        return None, None
+    b = sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    b = sxy / sxx
+    a = my - b * mx
+    ssr = sum((y - (a + b * x)) ** 2 for x, y in zip(xs, ys))
+    sst = sum((y - my) ** 2 for y in ys)
+    return b, (1 - ssr / sst if sst else None)
+
+
+def sampled_caps(unit="$"):
+    """Implied all-models cap per meter period, by regressing spend on the meter %.
+
+    The slope is dollars per percentage point, so slope x 100 is the cap. Fitting a LINE
+    rather than dividing means the intercept absorbs the zero point -- which is the same
+    property that makes a two-reading difference immune to a reset, generalised over
+    every sample in the period. Returns [(label, cap, r2, n), ...], newest last.
+    """
+    samples = plan_samples()
+    if not samples:
+        return []
+    ev, seen = [], set()
+    idx = {"$": 0, "raw": 1, "ieq": 2}[unit]
+    for path in ROOT.rglob("*.jsonl"):
+        if "memory" in path.parts or "tool-results" in path.parts:
+            continue
+        try:
+            fh = open(path, "rb")
+        except OSError:
+            continue
+        with fh:
+            for raw_line in fh:
+                if b'"type":"assistant"' not in raw_line:
+                    continue
+                try:
+                    e = json.loads(raw_line.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if e.get("type") != "assistant":
+                    continue
+                m = e.get("message") or {}
+                u, model = m.get("usage"), m.get("model") or ""
+                if not u or not model or model == "<synthetic>":
+                    continue
+                k = (m.get("id"), e.get("requestId"))
+                if k in seen:
+                    continue
+                seen.add(k)
+                ts = e.get("timestamp")
+                if not ts:
+                    continue
+                try:
+                    d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                rawt, ieq = token_measures(u)
+                ev.append((d.timestamp() * 1000, (cost_usd(u, model), rawt, ieq)[idx]))
+    if not ev:
+        return []
+    ev.sort()
+    times = [e[0] for e in ev]
+    cum = [0.0]
+    for _, v in ev:
+        cum.append(cum[-1] + v)
+    import bisect
+    out = []
+    for seg in _segments(samples):
+        if len(seg) < 8:
+            continue
+        xs = [p for _, p in seg]
+        if max(xs) - min(xs) < MIN_SEG_SPAN:
+            continue
+        ys = [cum[bisect.bisect_right(times, t)] for t, _ in seg]
+        b, r2 = _fit(xs, ys)
+        if b is None or b <= 0:
+            continue
+        lo = datetime.fromtimestamp(seg[0][0] / 1000, PT)
+        hi = datetime.fromtimestamp(seg[-1][0] / 1000, PT)
+        out.append((f"{lo:%m-%d %H:%M}->{hi:%m-%d %H:%M}", b * 100, r2, len(seg)))
+    return out
+
+
+def cached_calibration():
+    """The last computed sampled cap, or None. Keeps the hook off a full rescan."""
+    try:
+        d = json.loads(CALIB.read_text())
+        if isinstance(d, dict) and isinstance(d.get("all"), (int, float)) and d["all"] > 0:
+            return d
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 MIN_DELTA_PCT = 10.0     # below this, integer rounding on both readings dominates
 
 
@@ -431,6 +576,12 @@ def resolve_cap(kind, rows):
     2026-09-04 quota reset the absolute method's assumption (zero == week open) is
     known to be wrong. Absolute is the fallback, and says so.
     """
+    if kind == "all":
+        c = cached_calibration()
+        if c:
+            return (c["all"], f"regression over {c.get('periods', '?')} meter period(s) "
+                              f"from the desktop app's own 15-minute samples "
+                              f"(R2 {c.get('r2', 0):.3f}) -- zero-point independent", True)
     dcaps, _ = differential_caps(rows)
     if dcaps[kind]:
         v = sorted(dcaps[kind])
@@ -751,6 +902,8 @@ def main():
     g.add_argument("--hook", action="store_true", help="UserPromptSubmit hook mode")
     g.add_argument("--at-now", action="store_true", help="spend+timestamp for a meter reading")
     g.add_argument("--caps", action="store_true", help="implied caps from every meter reading")
+    g.add_argument("--calibrate", action="store_true",
+                   help="derive the all-models cap from the desktop app's meter samples")
     g.add_argument("--units", action="store_true",
                    help="which unit does the meter count? (needs >=2 readings)")
     g.add_argument("--record", nargs="*", metavar="VAL",
@@ -764,6 +917,30 @@ def main():
 
     if a.hook:
         return hook(a)
+
+    if a.calibrate:
+        rowsc = sampled_caps()
+        if not rowsc:
+            print("no plan-usage samples available "
+                  f"({PLAN_SAMPLES}) — this is macOS desktop-app state; fall back to "
+                  "hand-recorded readings (--record).")
+            return 1
+        print(f"{'meter period (PT)':32}{'n':>5}{'implied cap':>13}{'R2':>8}")
+        for label, cap, r2, n in rowsc:
+            print(f"{label:32}{n:5d}{cap:>13,.0f}{(r2 if r2 is not None else 0):>8.3f}")
+        good = [(c, r) for _, c, r, _ in rowsc if r is not None and r >= 0.95]
+        if good:
+            v = sorted(c for c, _ in good)
+            med = v[len(v)//2] if len(v) % 2 else (v[len(v)//2-1]+v[len(v)//2])/2
+            r2m = sum(r for _, r in good)/len(good)
+            CALIB.parent.mkdir(parents=True, exist_ok=True)
+            CALIB.write_text(json.dumps({"all": med, "periods": len(good), "r2": r2m,
+                                         "at": datetime.now().astimezone().isoformat(timespec="minutes")}))
+            print(f"\nall-models cap ${med:,.0f} (median of {len(good)} well-fit period(s), "
+                  f"mean R2 {r2m:.3f}) — cached for the pace check")
+            print("NOTE: these samples carry no Fable meter, so the Fable cap still needs "
+                  "a hand-recorded reading.")
+        return 0
 
     if a.units:
         return units_report(read_readings())

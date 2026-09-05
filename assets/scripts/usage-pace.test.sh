@@ -533,7 +533,7 @@ got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,_=up.differential_caps(up.
 #     deliberately disagreeing, the differential wins and the basis string says so.
 mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
    60 60 1800.00 1800.00 3000000000 3000000000 300000000 300000000
-got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', up.read_readings()); print('%.0f'%c, 'DIFF' if 'differential' in b else b)" "$R" 2>&1)
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); up.CALIB=pathlib.Path(sys.argv[3]+'.nope'); c,b,_=up.resolve_cap('all', up.read_readings()); print('%.0f'%c, 'DIFF' if 'differential' in b else b)" "$R" 2>&1)
 [ "$got" = "3000 DIFF" ] \
   && ok "resolve_cap prefers the differential (3000) over the absolute (3000/3000)" \
   || bad "resolve_cap prefers the differential" "got=$(flat "$got")"
@@ -541,11 +541,32 @@ got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', 
 # (f) With only one reading there is nothing to difference, and the absolute fallback must
 #     announce its own assumption rather than presenting itself as calibrated truth.
 mk 38 24 1180.00 340.00 1400000000 400000000 180000000 40000000
-got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', up.read_readings()); print('ABS' if 'ABSOLUTE' in b else b)" "$R" 2>&1)
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); up.CALIB=pathlib.Path(sys.argv[3]+'.nope'); c,b,_=up.resolve_cap('all', up.read_readings()); print('ABS' if 'ABSOLUTE' in b else b)" "$R" 2>&1)
 [ "$got" = "ABS" ] \
   && ok "a lone reading falls back to ABSOLUTE and labels the assumption" \
   || bad "a lone reading falls back to ABSOLUTE and labels the assumption" "got=$(flat "$got")"
 
+
+# (g) The sampled calibration outranks both. It is a regression over the desktop app's
+#     own 15-minute meter samples, so it beats a hand-recorded pair on both sample size
+#     and freshness. Pinned with a stub file so the test never reads machine state.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 1800.00 1800.00 3000000000 3000000000 300000000 300000000
+printf '{"all": 4321.0, "periods": 5, "r2": 0.99}' > "$TMP/calib.json"
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); up.CALIB=pathlib.Path(sys.argv[4]); c,b,_=up.resolve_cap('all', up.read_readings()); print('%.0f'%c, 'SAMPLED' if 'regression' in b else b)" "$R" "$TMP/calib.json" 2>&1)
+[ "$got" = "4321 SAMPLED" ] \
+  && ok "the sampled calibration outranks the differential and the absolute" \
+  || bad "the sampled calibration outranks the differential and the absolute" "got=$(flat "$got")"
+
+# (h) A malformed or zero calibration must be ignored, not trusted -- it feeds the cap
+#     the pace check divides by.
+for bad_c in '{"all": 0}' '{"all": "x"}' '[1,2,3]' 'not json' '{}'; do
+  printf '%s' "$bad_c" > "$TMP/calib.json"
+  got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); up.CALIB=pathlib.Path(sys.argv[4]); c,b,_=up.resolve_cap('all', up.read_readings()); print('SAMPLED' if 'regression' in b else 'FELLBACK')" "$R" "$TMP/calib.json" 2>&1)
+  [ "$got" = "FELLBACK" ] \
+    && ok "a bad calibration file is ignored: $bad_c" \
+    || bad "a bad calibration file is ignored: $bad_c" "got=$(flat "$got")"
+done
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
