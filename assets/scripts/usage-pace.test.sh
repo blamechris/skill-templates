@@ -928,7 +928,7 @@ up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
 tmp=pathlib.Path(sys.argv[2])
 
 def mk(pre_reset_reqs, post_reqs, fable_pre=0, fable_post=0, n_samples=24, tag="ow",
-       pre_step=60_000, post_step=60_000):
+       pre_step=60_000, post_step=60_000, curve=1.0):
     """A week that runs `pre_reset_reqs` requests, has the meter zeroed out of band,
     then runs `post_reqs` more. Returns (week, expected_all_offset, expected_fable_off)."""
     root=tmp/tag; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
@@ -967,7 +967,7 @@ def mk(pre_reset_reqs, post_reqs, fable_pre=0, fable_post=0, n_samples=24, tag="
     s=[{"t":int(open_ms+60_000),"u":{"sd":0}},{"t":int(reset_ms-pre_step),"u":{"sd":40}}]
     for i in range(n_samples):
         s.append({"t":int(reset_ms+(i+1)*post_span/n_samples),
-                  "u":{"sd": int(round((i+1)*(60/n_samples)))}})
+                  "u":{"sd": int(round(60*(((i+1)/n_samples)**curve)))}})
     up.PLAN_SAMPLES=tmp/(tag+"_p.json")
     up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":s}))
     return week, exp_all, exp_fbl
@@ -983,7 +983,13 @@ week="2026-09-09"
 root=tmp/"n"; import shutil; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
 up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/"n_c.json"; up.CALIB=tmp/"n_k.json"
 open_ms=up.week_bounds(week)[0].timestamp()*1000
-s=[{"t":int(open_ms+i*600_000),"u":{"sd":i}} for i in range(30)]
+recs=[json.dumps({"type":"assistant","timestamp":
+    up.datetime.fromtimestamp((open_ms+60_000+i*60_000)/1000, up.timezone.utc)
+      .isoformat().replace("+00:00","Z"),
+    "message":{"id":"n%d"%i,"model":"claude-opus-5",
+               "usage":{"output_tokens":80000}}}, separators=(",",":")) for i in range(300)]
+(root/"t.jsonl").write_text("\n".join(recs)+"\n")
+s=[{"t":int(open_ms+60_000+i*600_000),"u":{"sd":i*2}} for i in range(30)]
 up.PLAN_SAMPLES=tmp/"n_p.json"; up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":s}))
 a,f,z,note,exact=up.meter_offset(week)
 print("%.4f %.4f %s %r %s" % (a,f,z,note,exact))')
@@ -1102,6 +1108,76 @@ print("all=%s fable=%s lower=%s consumed=%s" % (
 [ "$got" = "all=True fable=True lower=True consumed=True" ] \
   && ok "pace() reports what the METER counts, not the week total" \
   || bad "pace() subtracts the offset from both meters" "got=$(flat "$got")"
+
+# (h) a machine with no usage history at all. Extracting the transcript walk out of
+#     sampled_caps carried its single-list `return []` along, where the new caller
+#     unpacks three -- so an empty ROOT raised ValueError instead of returning empty.
+#     Reachable on a fresh bootstrap, and no other test has an empty ROOT.
+got=$(pymod '
+import tempfile
+up.ROOT=pathlib.Path(tempfile.mkdtemp())
+t,c,f=up._cum_events("$")
+print("arity=3 times=%d cum=%s caps=%s" % (len(t), c, up.sampled_caps()))')
+[ "$got" = "arity=3 times=0 cum=[0.0] caps=[]" ] \
+  && ok "an empty transcript tree returns a 3-tuple (fresh machine does not crash)" \
+  || bad "empty ROOT returns the documented shape" "got=$(flat "$got")"
+
+# (i) the fit can FAIL rather than merely be imprecise. This period starts at a reset,
+#     so the forgotten spend is spend that happened earlier this week and the intercept
+#     cannot be meaningfully negative. Clamping it to zero applied NO correction while
+#     reporting `exact` -- silently reproducing the defect this file exists to fix,
+#     under a plausible R2 and no warning.
+got=$(offworld '
+week,exp_all,exp_fbl=mk(pre_reset_reqs=20, post_reqs=300, curve=0.5, tag="cv")
+a,f,z,note,exact=up.meter_offset(week)
+zero=up.week_bounds(week)[0]+up.timedelta(hours=30)
+p=up.pace(now=zero)
+print("off=%.1f exact=%s zero=%s warned=%s | %s" % (
+  a, exact, z, "WARNING" in up.fmt(p,0.15), note[:52]))')
+printf '%s' "$got" | grep -q '^off=0.0 exact=False zero=None warned=True | meter reset out of band' \
+  && ok "a failed fit is disclosed and WARNS, instead of silently correcting nothing" \
+  || bad "a failed fit discloses rather than clamping to zero" "$(flat "$got")"
+
+# (j) the cap calibration and the anchor share one file, so either writer must merge.
+#     --calibrate used to overwrite it wholesale, discarding the anchor.
+got=$(pymod '
+import tempfile
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+up._merge_calib({"anchor": {"week":"2026-09-09","seg":1,"all":5.0,"fable":1.0}})
+up._merge_calib({"all": 2415.0, "periods": 7, "r2": 0.99})   # what --calibrate writes
+d=up.json.loads(up.CALIB.read_text())
+print("anchor_kept=%s cap=%s" % ("anchor" in d, d.get("all")))')
+[ "$got" = "anchor_kept=True cap=2415.0" ] \
+  && ok "the cap calibration and the anchor share a file without clobbering each other" \
+  || bad "--calibrate merges rather than overwriting the anchor" "got=$(flat "$got")"
+
+# (k) a zero offset makes the crossing land on the week-open index, so `j - 1` names the
+#     last event of the PREVIOUS week. A zero instant outside this week is not a zero
+#     instant. Driven through a stubbed _cum_events because the series has to contain a
+#     pre-week event, which no synthetic world above builds.
+got=$(pymod '
+import tempfile
+week="2026-09-09"
+O=up.week_bounds(week)[0].timestamp()*1000
+# one event LAST week (cum 100 at the week open), then 40 events this week whose spend
+# is exactly proportional to the meter -> the fitted intercept is 0, which is the case
+# that exposes the index.
+times=[O-1000.0]+[O+1000.0+i*60_000 for i in range(40)]
+cum=[0.0,100.0]+[100.0+i*10.0 for i in range(40)]
+up._cum_events=lambda unit="$": (times, cum, list(cum))
+# a real out-of-band reset INSIDE the week, or the early return fires first and the
+# index under test is never reached (this test did exactly that before).
+smp=[{"t":int(O+200),"u":{"sd":30}},{"t":int(O+400),"u":{"sd":40}}]+[
+     {"t":int(O+1000+i*60_000),"u":{"sd":i}} for i in range(40)]
+up.PLAN_SAMPLES=pathlib.Path(tempfile.mkdtemp())/"p.json"
+up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":smp}))
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+a,f,z,note,exact=up.meter_offset(week, force=True)
+print("off=%.1f reached=%s zero_before_week=%s" % (
+      a, note!="" or not exact, (z is not None and z < O)))')
+[ "$got" = "off=0.0 reached=True zero_before_week=False" ] \
+  && ok "a zero instant is never reported from before the week opened" \
+  || bad "the zero instant stays inside the week" "got=$(flat "$got")"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

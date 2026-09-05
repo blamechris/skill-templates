@@ -510,8 +510,6 @@ def _cum_events(unit="$"):
                 v = (cost_usd(u, model), rawt, ieq)[idx]
                 ev.append((d.timestamp() * 1000, v, v if tier(model) == "fable" else 0.0))
     if not ev:
-        return []
-    if not ev:
         return [], [0.0], [0.0]
     ev.sort()
     times = [e[0] for e in ev]
@@ -626,8 +624,17 @@ def meter_offset(week, force=False):
         return 0.0, 0.0, None, f"meter reset out of band {when} PT; period does not " \
                                f"fit, so this is the WEEK total and reads high", False
     off = sum(ys) / len(ys) - b * (sum(xs) / len(xs))
-    # A negative intercept means the meter was already above zero at the week open,
-    # which cannot happen for a period that STARTS at a reset -- it is fit noise.
+    # This period STARTS at a reset, so whatever the meter forgot is spend that
+    # happened earlier THIS week: the intercept cannot be meaningfully negative. When
+    # it is, the fit has failed, and clamping it to zero would apply no correction at
+    # all while reporting `exact` -- silently reproducing the very defect this
+    # function exists to fix, with a plausible R2 next to it and no warning. Disclose
+    # instead, exactly as the `b <= 0` and too-few-samples paths do. A NEAR-zero
+    # intercept is a different thing (a reset with little before it) and is kept.
+    if off < -max(1.0, 0.01 * ys[-1]):
+        return 0.0, 0.0, None, f"meter reset out of band {when} PT; the fit puts " \
+                               f"${-off:,.0f} of spend BEFORE the week began, so it " \
+                               f"has failed -- this is the WEEK total and reads high", False
     off = min(max(off, 0.0), ys[-1])
     # The instant week-anchored spend crossed the offset IS the meter's zero -- a
     # far tighter localisation than the samples give (they only bracket the reset,
@@ -635,6 +642,11 @@ def meter_offset(week, force=False):
     j = bisect.bisect_left(cum, base + off)
     offf = min(max(cumf[min(j, len(cumf) - 1)] - basef, 0.0), cumf[-1] - basef)
     zero_ms = times[min(max(j - 1, 0), len(times) - 1)] if times else None
+    # With a zero offset the crossing lands on the week-open index itself, so `j - 1`
+    # is the last event of the PREVIOUS week. A zero instant outside this week is not
+    # a zero instant; pace() would reject it anyway, but it must not be returned.
+    if zero_ms is not None and zero_ms < open_ms:
+        zero_ms = None
     note = f"anchored to the out-of-band reset of {when} PT (${off:,.0f} all / " \
            f"${offf:,.0f} fable before the meter's zero, R2 {r2:.3f})" if r2 is not None \
            else f"anchored to the out-of-band reset of {when} PT"
@@ -662,21 +674,31 @@ def _cached_anchor(week, seg_start):
     return None
 
 
-def _save_anchor(week, seg_start, off, offf, zero_ms, note):
+def _merge_calib(update):
+    """Read-modify-write the shared calibration file.
+
+    The cap calibration and the meter anchor live in the same JSON. A bare
+    `write_text` from either one drops the other -- `--calibrate` used to, which cost
+    a full rescan on the next pace check for no reason at all.
+    """
     try:
         d = json.loads(CALIB.read_text()) if CALIB.exists() else {}
-        if not isinstance(d, dict):
-            d = {}
     except (OSError, ValueError):
         d = {}
-    d["anchor"] = {"week": week, "seg": seg_start, "all": off, "fable": offf,
-                   "zero": zero_ms, "note": note,
-                   "at": datetime.now(PT).isoformat(timespec="minutes")}
+    if not isinstance(d, dict):
+        d = {}
+    d.update(update)
     try:
         CALIB.parent.mkdir(parents=True, exist_ok=True)
         CALIB.write_text(json.dumps(d))
     except OSError:
         pass
+
+
+def _save_anchor(week, seg_start, off, offf, zero_ms, note):
+    _merge_calib({"anchor": {"week": week, "seg": seg_start, "all": off, "fable": offf,
+                             "zero": zero_ms, "note": note,
+                             "at": datetime.now(PT).isoformat(timespec="minutes")}})
 
 
 def _median(v):
@@ -1229,9 +1251,9 @@ def main():
             r2m = sum(r for _, r in good)/len(good)
             CALIB.parent.mkdir(parents=True, exist_ok=True)
             lo, hi = min(v), max(v)
-            CALIB.write_text(json.dumps({"all": med, "periods": len(good), "r2": r2m,
-                                         "lo": lo, "hi": hi,
-                                         "at": datetime.now().astimezone().isoformat(timespec="minutes")}))
+            _merge_calib({"all": med, "periods": len(good), "r2": r2m,
+                          "lo": lo, "hi": hi,
+                          "at": datetime.now().astimezone().isoformat(timespec="minutes")})
             print(f"\nall-models cap ${med:,.0f} (median of {len(good)} well-fit period(s), "
                   f"mean R2 {r2m:.3f})  — cached for the pace check")
             if lo and hi / lo > 1.15:
