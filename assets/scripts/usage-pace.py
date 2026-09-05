@@ -405,16 +405,27 @@ def plan_samples():
     return sorted(out)
 
 
+def _is_reset(prev, cur):
+    """The single definition of "the meter reset between these two samples".
+
+    Both _segments and reset_between need this, and they had it twice with different
+    rules: _segments gained the fall-to-zero clause after review, reset_between was
+    written afterwards without it, so a 2% -> 0% reset split a regression period but
+    did NOT disqualify a reading pair spanning it. Two predicates for one concept is
+    the drift this repo has CI about; there is now one.
+
+    A fall of more than RESET_DROP is a reset; so is any fall to zero from a positive
+    value, which a threshold alone misses late in a quiet week.
+    """
+    return cur < prev - RESET_DROP or (cur == 0 and prev > 0)
+
+
 def _segments(samples):
     """Split the series at every reset -- weekly boundary or out-of-band alike."""
     segs, start = [], 0
     for i in range(1, len(samples)):
-        prev, cur = samples[i - 1][1], samples[i][1]
-        # A fall of more than RESET_DROP is a reset; so is ANY fall to zero from a
-        # positive value. Without the second clause a reset late in a quiet week --
-        # 2% -> 0% -- is a drop of only 2 and fails the threshold, splicing two
-        # different zero points into one regression.
-        if cur < prev - RESET_DROP or (cur == 0 and prev > 0):
+        # Splicing two different zero points into one regression is the failure here.
+        if _is_reset(samples[i - 1][1], samples[i][1]):
             segs.append(samples[start:i])
             start = i
     segs.append(samples[start:])
@@ -549,6 +560,39 @@ def _reading_instant(r):
         return (1, 0.0)
 
 
+def reset_between(t0, t1, samples=None):
+    """Did the weekly meter reset between two instants (epoch seconds)?
+
+    The `dp < 0` guard in differential_caps only catches a reset when the LATER reading
+    reads lower. It cannot see one the meter has already climbed back past -- and that
+    is not hypothetical. The two real readings on file, 2026-09-02 21:52 (8%) and
+    2026-09-04 23:44 (13%), straddle the out-of-band reset of 2026-09-04 12:51-14:51
+    (34% -> 2%), and their delta is POSITIVE (+5). Differencing them yields $20,598
+    against a measured $2,363 -- out by 8.7x. Only the 10-point floor dropped that pair,
+    which is luck, not a guard.
+
+    The app's own 15-minute samples settle it directly. Where they are unavailable
+    (non-macOS, no desktop app) this returns False and the pair is judged by the weaker
+    guards alone -- the caller says so rather than implying a check that did not happen.
+    """
+    s = plan_samples() if samples is None else samples
+    lo, hi = (t0, t1) if t0 <= t1 else (t1, t0)
+    prev = None
+    for t, pct in s:
+        t_s = t / 1000.0
+        if prev is not None and _is_reset(prev[1], pct):
+            # The drop happened somewhere in the OPEN interval (prev_t, t) -- at
+            # 15-minute resolution its exact instant is unknown. It disqualifies the
+            # pair whenever that interval overlaps the reading window at all. Testing
+            # only whether the post-drop SAMPLE lands inside [lo, hi] misses a reset
+            # that occurred inside the window but whose first post-reset sample
+            # arrived after it, which at a 15-minute cadence is an ordinary case.
+            if prev[0] <= hi and t_s >= lo:
+                return True
+        prev = (t_s, pct)
+    return False
+
+
 def differential_caps(rows, unit="$"):
     """cap = delta-measure / (delta-pct/100), between two readings in one meter week.
 
@@ -575,6 +619,11 @@ def differential_caps(rows, unit="$"):
     """
     ak, fk = next((a, f) for u, a, f, _ in UNITS if u == unit)
     out, notes = {"all": [], "fable": []}, []
+    samples = plan_samples()          # loaded once; [] when the app's history is absent
+    if not samples and len(rows) > 1:
+        notes.append("no meter samples on this machine, so a pair that STRADDLES a reset "
+                     "cannot be detected -- only a pair whose percentage went down. Treat "
+                     "any cap below with that caveat.")
     weeks = {}
     for r in rows:
         weeks.setdefault(r["week"], []).append(r)
@@ -586,6 +635,14 @@ def differential_caps(rows, unit="$"):
                 if None in (pa, pb, ma, mb):
                     continue
                 dp, dm = pb - pa, mb - ma
+                ta, tb = _reading_instant(a)[1], _reading_instant(b)[1]
+                if ta and tb and reset_between(ta, tb, samples):
+                    notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} STRADDLES a meter "
+                                 f"reset (seen in the app's own samples). The delta is "
+                                 f"positive, so the percentage guard cannot catch this; "
+                                 f"differencing across two zero points is what produced "
+                                 f"$20,598 against a measured $2,363. Dropped")
+                    continue
                 if dp < 0 or dm < 0:
                     notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} went DOWN "
                                  f"({pa:g}% -> {pb:g}%) -- the meter reset between these "
