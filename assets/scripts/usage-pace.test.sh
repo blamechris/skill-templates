@@ -854,5 +854,30 @@ print(len(d['all']), 'DISCLOSED' if any('cannot be detected' in x for x in n) el
   || bad "with no samples the pair still computes but the missing check is disclosed" "got=$(flat "$got")"
 
 
+# (e) A reset whose first post-reset SAMPLE lands after the reading window. At a
+#     15-minute cadence the drop's exact instant is unknown, so the interval
+#     (prev_sample, next_sample) is what must overlap the window — checking whether the
+#     post-drop sample itself falls inside it misses this ordinary case.
+mkplan '[{"t":1000000,"u":{"sd":30}},{"t":2000000,"u":{"sd":34}},{"t":4000000,"u":{"sd":2}},{"t":5000000,"u":{"sd":9}}]'
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[3])
+print(up.reset_between(2500, 3000), up.reset_between(1000, 1500), up.reset_between(4200, 4800))" "$PLANF" 2>&1)
+[ "$got" = "True False False" ] \
+  && ok "a reset inside the window with no sample in it is still detected (interval overlap)" \
+  || bad "a reset inside the window with no sample in it is still detected" "got=$(flat "$got")"
+
+# (f) One definition of "reset", not two. _segments gained the fall-to-zero clause after
+#     review; reset_between was written later without it, so 2%->0% split a regression
+#     period but did not disqualify a pair spanning it.
+mkplan '[{"t":1000000,"u":{"sd":2}},{"t":2000000,"u":{"sd":0}}]'
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[3])
+print(up.reset_between(500, 2500), len(up._segments(up.plan_samples())),
+      up._is_reset(2,0), up._is_reset(34,2), up._is_reset(30,29), up._is_reset(0,0))" "$PLANF" 2>&1)
+[ "$got" = "True 2 True True False False" ] \
+  && ok "reset_between and _segments share one predicate (2%->0% is a reset to both)" \
+  || bad "reset_between and _segments share one predicate" "got=$(flat "$got")"
+
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

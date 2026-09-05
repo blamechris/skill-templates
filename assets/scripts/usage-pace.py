@@ -405,16 +405,27 @@ def plan_samples():
     return sorted(out)
 
 
+def _is_reset(prev, cur):
+    """The single definition of "the meter reset between these two samples".
+
+    Both _segments and reset_between need this, and they had it twice with different
+    rules: _segments gained the fall-to-zero clause after review, reset_between was
+    written afterwards without it, so a 2% -> 0% reset split a regression period but
+    did NOT disqualify a reading pair spanning it. Two predicates for one concept is
+    the drift this repo has CI about; there is now one.
+
+    A fall of more than RESET_DROP is a reset; so is any fall to zero from a positive
+    value, which a threshold alone misses late in a quiet week.
+    """
+    return cur < prev - RESET_DROP or (cur == 0 and prev > 0)
+
+
 def _segments(samples):
     """Split the series at every reset -- weekly boundary or out-of-band alike."""
     segs, start = [], 0
     for i in range(1, len(samples)):
-        prev, cur = samples[i - 1][1], samples[i][1]
-        # A fall of more than RESET_DROP is a reset; so is ANY fall to zero from a
-        # positive value. Without the second clause a reset late in a quiet week --
-        # 2% -> 0% -- is a drop of only 2 and fails the threshold, splicing two
-        # different zero points into one regression.
-        if cur < prev - RESET_DROP or (cur == 0 and prev > 0):
+        # Splicing two different zero points into one regression is the failure here.
+        if _is_reset(samples[i - 1][1], samples[i][1]):
             segs.append(samples[start:i])
             start = i
     segs.append(samples[start:])
@@ -569,9 +580,16 @@ def reset_between(t0, t1, samples=None):
     prev = None
     for t, pct in s:
         t_s = t / 1000.0
-        if prev is not None and lo <= t_s <= hi and pct < prev - RESET_DROP:
-            return True
-        prev = pct
+        if prev is not None and _is_reset(prev[1], pct):
+            # The drop happened somewhere in the OPEN interval (prev_t, t) -- at
+            # 15-minute resolution its exact instant is unknown. It disqualifies the
+            # pair whenever that interval overlaps the reading window at all. Testing
+            # only whether the post-drop SAMPLE lands inside [lo, hi] misses a reset
+            # that occurred inside the window but whose first post-reset sample
+            # arrived after it, which at a 15-minute cadence is an ordinary case.
+            if prev[0] <= hi and t_s >= lo:
+                return True
+        prev = (t_s, pct)
     return False
 
 
