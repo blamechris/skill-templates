@@ -698,5 +698,103 @@ got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.
   || bad "differential_caps orders a DST-straddling pair correctly (no phantom reset)" "got=$(flat "$got")"
 
 
+# --------------------------- 14. THE SPREAD REPORTING (shipped without coverage)
+# The refute pass found the CAUTION path, the "range $lo-$hi" note and the persistence
+# of lo/hi had no test at all — so a lo/hi inversion, or dropping the range entirely,
+# would ship green. That is the same "ships alongside its own fix, untested" gap this
+# suite was extended to close twice already.
+
+# (a) The range reaches the basis string, in the right order.
+printf '{"all": 2363.0, "periods": 6, "r2": 0.994, "lo": 1978.0, "hi": 2870.0, "at": "2026-09-04T22:00"}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', []); print('%.0f'%c, 'RANGE' if 'range \$1,978-\$2,870' in b else 'MISSING:'+b)" "$TMP/calib.json" 2>&1)
+[ "$got" = "2363 RANGE" ] \
+  && ok "the cached basis carries the range low-to-high, not inverted" \
+  || bad "the cached basis carries the range low-to-high, not inverted" "got=$(flat "$got")"
+
+# (b) An inverted range must be visible, not silently printed backwards.
+printf '{"all": 2363.0, "periods": 6, "r2": 0.994, "lo": 2870.0, "hi": 1978.0}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', []); print('INVERTED' if 'range \$2,870-\$1,978' in b else 'ok')" "$TMP/calib.json" 2>&1)
+[ "$got" = "INVERTED" ] \
+  && ok "an inverted lo/hi renders verbatim (so a swap is visible, not masked)" \
+  || bad "an inverted lo/hi renders verbatim" "got=$(flat "$got")"
+
+# (c) The measurement date is surfaced, so a stale calibration is not silently trusted.
+printf '{"all": 2363.0, "periods": 6, "r2": 0.994, "at": "2026-09-04T22:00"}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); _,b,_=up.resolve_cap('all', []); print('DATED' if 'measured 2026-09-04' in b else 'MISSING')" "$TMP/calib.json" 2>&1)
+[ "$got" = "DATED" ] \
+  && ok "the basis says when the calibration was measured" \
+  || bad "the basis says when the calibration was measured" "got=$(flat "$got")"
+
+# (d) A cache written before the range existed must still resolve, not crash or print
+#     a half-formed range.
+printf '{"all": 2363.0, "periods": 6, "r2": 0.994}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', []); print('%.0f'%c, 'NORANGE' if 'range' not in b else 'LEAKED')" "$TMP/calib.json" 2>&1)
+[ "$got" = "2363 NORANGE" ] \
+  && ok "a pre-range cache file still resolves, with no half-formed range" \
+  || bad "a pre-range cache file still resolves" "got=$(flat "$got")"
+
+printf '{"all": 2363.0, "lo": 1978.0}' > "$TMP/calib.json"
+got=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); c,b,_=up.resolve_cap('all', []); print('%.0f'%c, 'NORANGE' if 'range' not in b else 'LEAKED')" "$TMP/calib.json" 2>&1)
+[ "$got" = "2363 NORANGE" ] \
+  && ok "lo without hi does not render a broken range" \
+  || bad "lo without hi does not render a broken range" "got=$(flat "$got")"
+
+# (e) NaN must not reach the fit. json.loads accepts it, and `b <= 0` cannot reject a
+#     NaN slope because every NaN comparison is False.
+got=$(pymod "
+import json
+p=pathlib.Path(sys.argv[3]); p.write_text(json.dumps({'samples':[{'t':1,'u':{'sd':1}}]}).replace('\"sd\": 1','\"sd\": NaN'))
+up.PLAN_SAMPLES=p; print(len(up.plan_samples()))" "$TMP/plan_nan.json" 2>&1)
+[ "$got" = "0" ] \
+  && ok "a NaN meter percentage is dropped before it can reach the regression" \
+  || bad "a NaN meter percentage is dropped before it can reach the regression" "got=$(flat "$got")"
+
+
+# (f) --calibrate END TO END: it must actually persist lo/hi and print the CAUTION.
+#     Every case above writes the cache by hand, so they test the READ side only —
+#     removing `"lo": lo, "hi": hi` from the write left the suite green. This drives the
+#     real command against a synthetic meter whose periods deliberately disagree.
+got=$("$PY" - "$SUT" "$TMP" <<'E2E' 2>&1
+import importlib.util, json, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"e2e"
+shutil.rmtree(root, ignore_errors=True); root.mkdir()
+up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/"e2e_c.json"; up.CALIB=tmp/"e2e_calib.json"
+up.READINGS=tmp/"e2e_r.md"
+t0=1788600000000
+# Two periods with deliberately different $/point, so lo != hi and the CAUTION fires.
+recs=[]; samples=[]; n=0
+for period,(per_step,pts) in enumerate([(1,40),(2,40)]):
+    base=t0+period*100*10*60000
+    for i in range(pts):
+        for _ in range(per_step):
+            recs.append(json.dumps({"type":"assistant","timestamp":
+                up.datetime.fromtimestamp((base+i*10*60000+n)/1000, up.timezone.utc)
+                  .isoformat().replace("+00:00","Z"),
+                "message":{"id":"m%d"%n,"model":"claude-opus-5",
+                           "usage":{"output_tokens":80000}}}, separators=(",",":")))
+            n+=1
+        samples.append({"t": base+i*10*60000, "u": {"sd": i}})
+(root/"t.jsonl").write_text("\n".join(recs)+"\n")
+up.PLAN_SAMPLES=tmp/"e2e_plan.json"
+up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":samples}))
+import io, contextlib
+out=io.StringIO()
+sys.argv=["x","--calibrate"]
+with contextlib.redirect_stdout(out): rc=up.main()
+c=json.loads(up.CALIB.read_text())
+has=all(k in c for k in ("all","lo","hi","periods","r2","at"))
+ordered = c.get("lo",0) <= c.get("all",0) <= c.get("hi",0)
+caution = "CAUTION" in out.getvalue()
+print(f"rc={rc} keys={has} ordered={ordered} caution={caution} ratio={c['hi']/c['lo']:.2f}")
+E2E
+)
+case "$got" in
+  "rc=0 keys=True ordered=True caution=True"*) ok "--calibrate persists lo/hi in order and prints the CAUTION when they disagree" ;;
+  *) bad "--calibrate persists lo/hi in order and prints the CAUTION when they disagree" "$(flat "$got")" ;;
+esac
+
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

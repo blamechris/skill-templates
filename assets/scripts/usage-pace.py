@@ -393,7 +393,14 @@ def plan_samples():
             continue
         u = x.get("u")
         t, sd = x.get("t"), (u.get("sd") if isinstance(u, dict) else None)
-        if isinstance(t, (int, float)) and isinstance(sd, (int, float)):
+        # Same validation as cached_calibration, and for the same reason: json.loads
+        # accepts Infinity/NaN, and bool subclasses int. A NaN `sd` reaches _fit and
+        # produces a NaN slope, which the `b <= 0` guard does NOT reject -- every NaN
+        # comparison is False. Today the R2 filter happens to catch it downstream;
+        # relying on that is relying on an accident.
+        if (isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t)
+                and isinstance(sd, (int, float)) and not isinstance(sd, bool)
+                and math.isfinite(sd)):
             out.append((float(t), float(sd)))
     return sorted(out)
 
@@ -494,7 +501,7 @@ def sampled_caps(unit="$"):
             continue
         ys = [cum[bisect.bisect_right(times, t)] for t, _ in seg]
         b, r2 = _fit(xs, ys)
-        if b is None or b <= 0:
+        if b is None or not math.isfinite(b) or b <= 0:
             continue
         lo = datetime.fromtimestamp(seg[0][0] / 1000, PT)
         hi = datetime.fromtimestamp(seg[-1][0] / 1000, PT)
@@ -531,7 +538,7 @@ def _reading_instant(r):
     A recorded `at` carries a UTC OFFSET (`...T01:30-08:00`), and offsets change at a
     DST transition, so lexicographic order is not chronological order. Either side of
     the 2026-11-01 PT fall-back, `01:30-08:00` (09:30 UTC) sorts BEFORE `01:45-07:00`
-    (08:45 UTC) as text while being an hour and a quarter LATER in fact. Differencing
+    (08:45 UTC) as text while being 45 minutes LATER in fact. Differencing
     that pair reads the meter as having gone down and reports a reset that never
     happened. Unparseable timestamps sort last rather than throwing.
     """
@@ -976,7 +983,6 @@ def main():
             r2m = sum(r for _, r in good)/len(good)
             CALIB.parent.mkdir(parents=True, exist_ok=True)
             lo, hi = min(v), max(v)
-            CALIB.parent.mkdir(parents=True, exist_ok=True)
             CALIB.write_text(json.dumps({"all": med, "periods": len(good), "r2": r2m,
                                          "lo": lo, "hi": hi,
                                          "at": datetime.now().astimezone().isoformat(timespec="minutes")}))

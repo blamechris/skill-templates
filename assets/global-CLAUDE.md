@@ -402,7 +402,8 @@ intercept absorbs the zero point, so an out-of-band reset before the period does
 disturb it. Six periods currently fit at mean R2 0.994.
 
 **The measured all-models cap is ~$2,363, and the honest form of that number is a range:
-the six periods span $1,979-$2,870.** That 1.45x spread is not explained by the +50%
+as measured on 2026-09-04 the six periods spanned roughly $2,000-$2,900** (the exact
+endpoints drift as data accumulates -- run `--calibrate` for the current figures).** That 1.45x spread is not explained by the +50%
 boost (the two post-2026-09-01 periods sit at the LOW end), nor by fit quality (R2 is
 0.98+ throughout), nor by model mix. Treat it as a central estimate with roughly +/-20%
 around it. Dollars is nonetheless the best-fitting of the three candidate units -- its
