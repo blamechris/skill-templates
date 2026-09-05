@@ -502,7 +502,7 @@ shifted=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,_=up.differential_caps
 #     meaningless cap; it must be dropped with a note naming the reset.
 mk 70 70 2100.00 2100.00 3000000000 3000000000 300000000 300000000 \
    5  5  2400.00 2400.00 3400000000 3400000000 340000000 340000000
-got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), 'RESET' if any('reset' in x for x in n) else 'NONOTE')" "$R" 2>&1)
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), 'RESET' if any('went DOWN' in x for x in n) else 'NONOTE')" "$R" 2>&1)
 [ "$got" = "0 RESET" ] \
   && ok "a pair straddling a mid-week reset is dropped and the reset is named" \
   || bad "a pair straddling a mid-week reset is dropped and the reset is named" "got=$(flat "$got")"
@@ -686,13 +686,16 @@ done
 #     path: two readings in one week whose ISO text order is the REVERSE of their true
 #     order, straddling the 2026-11-01 PT fall-back. Sorted as text the meter appears to
 #     fall 60% -> 20% and the pair is dropped as a reset that never happened.
+#     The assertion matches the specific "went DOWN" note, NOT the substring "reset":
+#     an unrelated advisory note also contains that word, and matching it made this case
+#     pass locally and fail in CI, where no meter samples exist to suppress the advisory.
 cat > "$R" <<'HDR'
 | week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok | all_ieq | fable_ieq | note |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2026-11-04 | 2026-11-01T01:45-07:00 | 20% | 20% | 600.00 | 600.00 | 1 | 1 | 1 | 1 | earlier (PDT, 08:45 UTC) |
 | 2026-11-04 | 2026-11-01T01:30-08:00 | 60% | 60% | 1800.00 | 1800.00 | 1 | 1 | 1 | 1 | later (PST, 09:30 UTC) |
 HDR
-got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), ('%.0f'%d['all'][0]) if d['all'] else 'none', 'RESETNOTE' if any('reset' in x for x in n) else 'clean')" "$R" 2>&1)
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), ('%.0f'%d['all'][0]) if d['all'] else 'none', 'RESETNOTE' if any('went DOWN' in x for x in n) else 'clean')" "$R" 2>&1)
 [ "$got" = "1 3000 clean" ] \
   && ok "differential_caps orders a DST-straddling pair correctly (no phantom reset)" \
   || bad "differential_caps orders a DST-straddling pair correctly (no phantom reset)" "got=$(flat "$got")"
