@@ -911,5 +911,273 @@ print('%.0f'%up.resolve_cap('all', up.read_readings())[0])" "$R" 2>&1)
   || bad "a measured reading pair still outranks the fallback" "got=$(flat "$got")"
 
 
+
+# ---------------------------------------------- 12. the meter's zero vs the week open
+# The pace numerator was week-anchored while the cap describes a METER PERIOD. Those
+# agree only while the meter zeroed at the week open, and Anthropic moved the zero out
+# of band on 2026-09-04 -- after which the live check read 90% of the all-models cap
+# against a meter showing 57%. resolve_cap already routed around this defect (it prefers
+# the differential BECAUSE absolute assumes zero == week open); the numerator did not.
+#
+# Every case below builds a world with a KNOWN offset and asserts it comes back.
+offworld() {   # $1 = python body, run with `up`, `mk(reset_at_pct)` in scope
+  "$PY" - "$SUT" "$TMP" "$1" <<'OFFPY' 2>&1
+import importlib.util, json, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2])
+
+def mk(pre_reset_reqs, post_reqs, fable_pre=0, fable_post=0, n_samples=24, tag="ow",
+       pre_step=60_000, post_step=60_000, curve=1.0):
+    """A week that runs `pre_reset_reqs` requests, has the meter zeroed out of band,
+    then runs `post_reqs` more. Returns (week, expected_all_offset, expected_fable_off)."""
+    root=tmp/tag; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+    up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/(tag+"_c.json"); up.CALIB=tmp/(tag+"_k.json")
+    week="2026-09-09"
+    open_ms=up.week_bounds(week)[0].timestamp()*1000
+    t0=open_ms+3_600_000                      # first request an hour into the week
+    recs=[]; n=0; clock=[t0]
+    def add(count, fable_n, step):
+        """Fable requests are INTERLEAVED, not appended. Bunching them at the end of a
+        stretch makes spend piecewise-linear against a meter that climbs with time, and
+        a straight-line fit through a kink returns a biased intercept -- $298 against a
+        true $320 when this helper appended them. That bias is real (a period whose
+        model mix shifts is genuinely harder to anchor) but it is a property of the
+        WORLD, so a test that wants to measure the estimator must not build it in."""
+        nonlocal n
+        fset={round(j*count/fable_n) for j in range(fable_n)} if fable_n else set()
+        for i in range(count):
+            recs.append(json.dumps({"type":"assistant","timestamp":
+                up.datetime.fromtimestamp(clock[0]/1000, up.timezone.utc)
+                  .isoformat().replace("+00:00","Z"),
+                "message":{"id":"m%d"%n,
+                           "model":"claude-fable-5-1" if i in fset else "claude-opus-5",
+                           "usage":{"output_tokens":80000}}}, separators=(",",":")))
+            n+=1; clock[0]+=step
+    add(pre_reset_reqs, fable_pre, pre_step)
+    reset_ms=clock[0]                         # the meter zeroes HERE
+    add(post_reqs, fable_post, post_step)
+    post_span=clock[0]-reset_ms
+    (root/"t.jsonl").write_text("\n".join(recs)+"\n")
+    opus=up.cost_usd({"output_tokens":80000},"claude-opus-5")
+    fbl =up.cost_usd({"output_tokens":80000},"claude-fable-5-1")
+    exp_all=(pre_reset_reqs-fable_pre)*opus + fable_pre*fbl
+    exp_fbl=fable_pre*fbl
+    # meter: climbs over the pre-reset stretch, drops to 0 at the reset, climbs again
+    s=[{"t":int(open_ms+60_000),"u":{"sd":0}},{"t":int(reset_ms-pre_step),"u":{"sd":40}}]
+    for i in range(n_samples):
+        s.append({"t":int(reset_ms+(i+1)*post_span/n_samples),
+                  "u":{"sd": int(round(60*(((i+1)/n_samples)**curve)))}})
+    up.PLAN_SAMPLES=tmp/(tag+"_p.json")
+    up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":s}))
+    return week, exp_all, exp_fbl
+exec(sys.argv[3])
+OFFPY
+}
+
+# (a) the normal week -- no out-of-band reset, so the meter has forgotten nothing and
+#     this path must stay EXACTLY as it was. A fix that perturbs the common case is a
+#     regression however well it handles the rare one.
+got=$(offworld '
+week="2026-09-09"
+root=tmp/"n"; import shutil; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/"n_c.json"; up.CALIB=tmp/"n_k.json"
+open_ms=up.week_bounds(week)[0].timestamp()*1000
+recs=[json.dumps({"type":"assistant","timestamp":
+    up.datetime.fromtimestamp((open_ms+60_000+i*60_000)/1000, up.timezone.utc)
+      .isoformat().replace("+00:00","Z"),
+    "message":{"id":"n%d"%i,"model":"claude-opus-5",
+               "usage":{"output_tokens":80000}}}, separators=(",",":")) for i in range(300)]
+(root/"t.jsonl").write_text("\n".join(recs)+"\n")
+s=[{"t":int(open_ms+60_000+i*600_000),"u":{"sd":i*2}} for i in range(30)]
+up.PLAN_SAMPLES=tmp/"n_p.json"; up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":s}))
+a,f,z,note,exact=up.meter_offset(week)
+print("%.4f %.4f %s %r %s" % (a,f,z,note,exact))')
+[ "$got" = "0.0000 0.0000 None '' True" ] \
+  && ok "no out-of-band reset: offset 0, no rebase, no note (the common case is untouched)" \
+  || bad "no out-of-band reset leaves the common case alone" "got=$(flat "$got")"
+
+# (b) a known offset must come back out, in BOTH meters. The samples carry no Fable
+#     field, so the Fable offset can only come from inverting the all-models fit --
+#     which is the half most likely to be silently wrong.
+got=$(offworld '
+week,exp_all,exp_fbl=mk(pre_reset_reqs=120, post_reqs=300, fable_pre=40, fable_post=60)
+a,f,z,note,exact=up.meter_offset(week)
+ok_all = abs(a-exp_all) <= max(2.0, exp_all*0.02)
+ok_fbl = abs(f-exp_fbl) <= max(2.0, exp_fbl*0.04)
+print("all %.2f want %.2f %s | fable %.2f want %.2f %s | exact=%s"
+      % (a,exp_all,"OK" if ok_all else "OFF", f,exp_fbl,"OK" if ok_fbl else "OFF", exact))
+print("VERDICT-OK" if ok_all and ok_fbl and exact else "VERDICT-BAD")')
+printf '%s' "$got" | grep -qx 'VERDICT-OK' \
+  && ok "a known out-of-band offset is recovered in both meters (fable via the inverted fit)" \
+  || bad "a known out-of-band offset is recovered in both meters" "$(flat "$got")"
+
+# (c) the reset is real but the period is too short to fit. Reporting 0 would state a
+#     number known to be too high; a guess dressed as a measurement is what this file
+#     keeps having to retract. It must say so and mark itself inexact.
+got=$(offworld '
+week,exp_all,exp_fbl=mk(pre_reset_reqs=120, post_reqs=12, n_samples=3, tag="sh")
+a,f,z,note,exact=up.meter_offset(week)
+print("%.2f %s %s | %s" % (a, z, exact, note))')
+printf '%s' "$got" | grep -q '^0.00 None False | meter reset out of band .* reads high' \
+  && ok "a reset too short to fit is DISCLOSED, not silently reported as anchored" \
+  || bad "a short post-reset period discloses that the total reads high" "$(flat "$got")"
+
+# (d) the offset is a constant once the reset is past, so it is cached per PERIOD --
+#     but a NEW reset must invalidate it. A cache keyed only by week would serve the
+#     stale offset for the rest of the week.
+got=$(offworld '
+week,exp_all,_=mk(pre_reset_reqs=120, post_reqs=300, tag="c1")
+first=up.meter_offset(week)[0]
+cached=up.meter_offset(week)[0]                      # served from the cache
+seg_before=json.loads(up.CALIB.read_text())["anchor"]["seg"]
+# A SECOND reset, WITH spend after it. A reset followed by nothing cannot be fitted
+# at all -- the code refuses it by the (c) path -- so the case that exercises the
+# cache key is the one where the new period has something to measure.
+f=up.ROOT/"t.jsonl"; lines=f.read_text().strip().split("\n")
+t_last=up.datetime.fromisoformat(
+    json.loads(lines[-1])["timestamp"].replace("Z","+00:00")).timestamp()*1000
+lines += [json.dumps({"type":"assistant","timestamp":
+    up.datetime.fromtimestamp((t_last+(i+1)*60_000)/1000, up.timezone.utc)
+      .isoformat().replace("+00:00","Z"),
+    "message":{"id":"z%d"%i,"model":"claude-opus-5",
+               "usage":{"output_tokens":80000}}}, separators=(",",":")) for i in range(300)]
+f.write_text("\n".join(lines)+"\n")
+s=json.loads(up.PLAN_SAMPLES.read_text())
+s["samples"] += [{"t":int(t_last+30_000),"u":{"sd":0}}] + [
+    {"t":int(t_last+(i+1)*60_000*12),"u":{"sd":(i+1)*3}} for i in range(20)]
+up.PLAN_SAMPLES.write_text(json.dumps(s))
+after=up.meter_offset(week)[0]
+seg_after=json.loads(up.CALIB.read_text())["anchor"]["seg"]
+print("stable=%s invalidated=%s grew=%s" % (abs(first-cached)<1e-9,
+      seg_after!=seg_before, after>first+1.0))')
+[ "$got" = "stable=True invalidated=True grew=True" ] \
+  && ok "the anchor caches per period and a NEW reset invalidates it" \
+  || bad "the anchor cache is keyed to the period, not the week" "got=$(flat "$got")"
+
+# (e) elapsed must be measured over the window the METER is pacing over. An out-of-band
+#     reset moves the ZERO and not the close -- the 2026-09-01 top-up was followed by
+#     the regular Wednesday reset anyway -- so the budget is a full cap over a SHORTER
+#     window. Leaving a 7-day denominator under a re-anchored numerator calls a
+#     genuinely hot week "on pace".
+got=$(offworld '
+week,exp_all,_=mk(pre_reset_reqs=120, post_reqs=300, tag="el", pre_step=1_800_000)
+a,f,z,note,exact=up.meter_offset(week)
+open_,close=up.week_bounds(week)
+zero=up.datetime.fromtimestamp(z/1000, up.PT)
+now=zero+up.timedelta(hours=6)
+p=up.pace(now=now)
+wk_frac=(now-open_).total_seconds()/(close-open_).total_seconds()
+mt_frac=(now-zero).total_seconds()/(close-zero).total_seconds()
+print("rebased=%s not_week=%s" % (abs(p["elapsed"]-mt_frac)<0.01, abs(p["elapsed"]-wk_frac)>0.02))')
+[ "$got" = "rebased=True not_week=True" ] \
+  && ok "elapsed is measured from the meter's zero, not the week open" \
+  || bad "elapsed is re-based to the meter's zero" "got=$(flat "$got")"
+
+# (f) the all-models meter is the one that actually locks the account out -- it has hit
+#     >=98% in four of the last five weeks and sat at 100% for ~29 hours in the week
+#     closing 2026-09-02 -- and pacing only Fable watched the wrong one.
+q=$(pymod 'print(up.verdict({"consumed":0.02,"all_consumed":0.95,
+                             "ahead_by":-0.4,"all_ahead_by":0.5}, 0.15))')
+[ "$q" = "near-cap" ] \
+  && ok "a quiet-Fable week at 95% all-models is near-cap (it used to read on pace)" \
+  || bad "all-models alone can raise near-cap" "got=$(flat "$q")"
+q=$(pymod 'print(up.verdict({"consumed":0.02,"all_consumed":0.40,
+                             "ahead_by":-0.4,"all_ahead_by":0.22}, 0.15))')
+[ "$q" = "ahead" ] \
+  && ok "all-models alone can raise AHEAD OF PACE" \
+  || bad "all-models alone can raise ahead" "got=$(flat "$q")"
+q=$(pymod 'print(up.verdict({"consumed":0.10,"all_consumed":0.10,
+                             "ahead_by":-0.3,"all_ahead_by":-0.3}, 0.15))')
+[ "$q" = "ok" ] && ok "both meters quiet still reads ok (no new false alarm)" \
+  || bad "both meters quiet reads ok" "got=$(flat "$q")"
+
+# (g) and pace() must actually SUBTRACT the offset. meter_offset can be perfect while
+#     the caller ignores it -- which is precisely the shape of the original defect,
+#     where resolve_cap handled the moved zero and the numerator did not.
+got=$(offworld '
+week,exp_all,exp_fbl=mk(pre_reset_reqs=120, post_reqs=300, fable_pre=40, fable_post=60)
+a,f,z,note,exact=up.meter_offset(week)
+zero=up.datetime.fromtimestamp(z/1000, up.PT)
+p=up.pace(now=zero+up.timedelta(hours=2))
+print("all=%s fable=%s lower=%s consumed=%s" % (
+  abs(p["week_all"]-p["all"]-a)<0.01,
+  abs(p["week_fable"]-p["fable"]-f)<0.01,
+  p["all"]<p["week_all"]-1.0 and p["fable"]<p["week_fable"]-1.0,
+  abs(p["consumed"]-p["fable"]/p["cap"])<1e-9))')
+[ "$got" = "all=True fable=True lower=True consumed=True" ] \
+  && ok "pace() reports what the METER counts, not the week total" \
+  || bad "pace() subtracts the offset from both meters" "got=$(flat "$got")"
+
+# (h) a machine with no usage history at all. Extracting the transcript walk out of
+#     sampled_caps carried its single-list `return []` along, where the new caller
+#     unpacks three -- so an empty ROOT raised ValueError instead of returning empty.
+#     Reachable on a fresh bootstrap, and no other test has an empty ROOT.
+got=$(pymod '
+import tempfile
+up.ROOT=pathlib.Path(tempfile.mkdtemp())
+t,c,f=up._cum_events("$")
+print("arity=3 times=%d cum=%s caps=%s" % (len(t), c, up.sampled_caps()))')
+[ "$got" = "arity=3 times=0 cum=[0.0] caps=[]" ] \
+  && ok "an empty transcript tree returns a 3-tuple (fresh machine does not crash)" \
+  || bad "empty ROOT returns the documented shape" "got=$(flat "$got")"
+
+# (i) the fit can FAIL rather than merely be imprecise. This period starts at a reset,
+#     so the forgotten spend is spend that happened earlier this week and the intercept
+#     cannot be meaningfully negative. Clamping it to zero applied NO correction while
+#     reporting `exact` -- silently reproducing the defect this file exists to fix,
+#     under a plausible R2 and no warning.
+got=$(offworld '
+week,exp_all,exp_fbl=mk(pre_reset_reqs=20, post_reqs=300, curve=0.5, tag="cv")
+a,f,z,note,exact=up.meter_offset(week)
+zero=up.week_bounds(week)[0]+up.timedelta(hours=30)
+p=up.pace(now=zero)
+print("off=%.1f exact=%s zero=%s warned=%s | %s" % (
+  a, exact, z, "WARNING" in up.fmt(p,0.15), note[:52]))')
+printf '%s' "$got" | grep -q '^off=0.0 exact=False zero=None warned=True | meter reset out of band' \
+  && ok "a failed fit is disclosed and WARNS, instead of silently correcting nothing" \
+  || bad "a failed fit discloses rather than clamping to zero" "$(flat "$got")"
+
+# (j) the cap calibration and the anchor share one file, so either writer must merge.
+#     --calibrate used to overwrite it wholesale, discarding the anchor.
+got=$(pymod '
+import tempfile
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+up._merge_calib({"anchor": {"week":"2026-09-09","seg":1,"all":5.0,"fable":1.0}})
+up._merge_calib({"all": 2415.0, "periods": 7, "r2": 0.99})   # what --calibrate writes
+d=up.json.loads(up.CALIB.read_text())
+print("anchor_kept=%s cap=%s" % ("anchor" in d, d.get("all")))')
+[ "$got" = "anchor_kept=True cap=2415.0" ] \
+  && ok "the cap calibration and the anchor share a file without clobbering each other" \
+  || bad "--calibrate merges rather than overwriting the anchor" "got=$(flat "$got")"
+
+# (k) a zero offset makes the crossing land on the week-open index, so `j - 1` names the
+#     last event of the PREVIOUS week. A zero instant outside this week is not a zero
+#     instant. Driven through a stubbed _cum_events because the series has to contain a
+#     pre-week event, which no synthetic world above builds.
+got=$(pymod '
+import tempfile
+week="2026-09-09"
+O=up.week_bounds(week)[0].timestamp()*1000
+# one event LAST week (cum 100 at the week open), then 40 events this week whose spend
+# is exactly proportional to the meter -> the fitted intercept is 0, which is the case
+# that exposes the index.
+times=[O-1000.0]+[O+1000.0+i*60_000 for i in range(40)]
+cum=[0.0,100.0]+[100.0+i*10.0 for i in range(40)]
+up._cum_events=lambda unit="$": (times, cum, list(cum))
+# a real out-of-band reset INSIDE the week, or the early return fires first and the
+# index under test is never reached (this test did exactly that before).
+smp=[{"t":int(O+200),"u":{"sd":30}},{"t":int(O+400),"u":{"sd":40}}]+[
+     {"t":int(O+1000+i*60_000),"u":{"sd":i}} for i in range(40)]
+up.PLAN_SAMPLES=pathlib.Path(tempfile.mkdtemp())/"p.json"
+up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":smp}))
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+a,f,z,note,exact=up.meter_offset(week, force=True)
+print("off=%.1f reached=%s zero_before_week=%s" % (
+      a, note!="" or not exact, (z is not None and z < O)))')
+[ "$got" = "off=0.0 reached=True zero_before_week=False" ] \
+  && ok "a zero instant is never reported from before the week opened" \
+  || bad "the zero instant stays inside the week" "got=$(flat "$got")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
