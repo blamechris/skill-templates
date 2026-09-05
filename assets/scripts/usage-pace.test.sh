@@ -879,5 +879,37 @@ print(up.reset_between(500, 2500), len(up._segments(up.plan_samples())),
   || bad "reset_between and _segments share one predicate" "got=$(flat "$got")"
 
 
+# ------------------------------- 16. THE FALLBACK IS A MEASUREMENT, NOT AN INFERENCE
+# Until 2026-09-05 these were "observed-unclamped floors" — the highest week seen to run
+# without a visible clamp, asserted as a LOWER bound on the cap. Both were falsified by
+# measurement: all-models said >$2,920 against a measured $2,363, and Fable said >$963
+# against a measured $920, i.e. BELOW the week that supposedly proved it.
+got=$(pymod "print('%.0f %.0f' % (up.FALLBACK['fable'], up.FALLBACK['all']))" 2>&1)
+[ "$got" = "920 2363" ] \
+  && ok "the fallbacks are the measured caps, not the falsified floors" \
+  || bad "the fallbacks are the measured caps, not the falsified floors" "got=$(flat "$got")"
+
+# and the basis must not repeat the claim the measurement disproved
+got=$(pymod "
+up.READINGS=pathlib.Path(sys.argv[3]+'.absent'); up.CALIB=pathlib.Path(sys.argv[3]+'.absent2')
+c,b,cal = up.resolve_cap('fable', [])
+print('%.0f'%c, cal, 'CLAIMS_HIGHER' if 'HIGHER' in b else 'honest')" "$R" 2>&1)
+[ "$got" = "920 False honest" ] \
+  && ok "the fallback basis no longer claims the true cap is higher than it" \
+  || bad "the fallback basis no longer claims the true cap is higher than it" "got=$(flat "$got")"
+
+# a real reading must still win over the fallback. This case builds its OWN fixture:
+# relying on whatever $R held from an earlier section made it read 2000 instead of 3000.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 1800.00 1800.00 3000000000 3000000000 300000000 300000000
+got=$(pymod "
+up.CALIB=pathlib.Path(sys.argv[3]+'.absent2'); up.READINGS=pathlib.Path(sys.argv[3])
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[3]+'.nosamples')
+print('%.0f'%up.resolve_cap('all', up.read_readings())[0])" "$R" 2>&1)
+[ "$got" = "3000" ] \
+  && ok "a measured reading pair still outranks the fallback" \
+  || bad "a measured reading pair still outranks the fallback" "got=$(flat "$got")"
+
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

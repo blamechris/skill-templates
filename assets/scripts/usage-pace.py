@@ -4,9 +4,18 @@
 The instrument here is deliberately NOT a ceiling. Decided 2026-09-02, replacing the
 $500/week cap: the subscription meter resets Wed 15:59 PT and does NOT roll over, so
 unspent quota is destroyed, not saved -- a dollar cap below the real ceiling throws away
-paid capacity. The week closing 2026-08-05 ran fable $963 through the meter with no
-clamp, which is why $963 is the floor used below and why $500 was capping at ~52% of
-demonstrated-safe headroom.
+paid capacity, and $500 was well below it.
+
+The fallbacks below are MEASUREMENTS, and they were not always. Until 2026-09-05 they
+were "observed-unclamped floors": the highest week seen to run without an obvious clamp,
+asserted as a lower bound on the cap. That inference is false, and both instances of it
+were falsified by measurement within a day of each other. The all-models floor said the
+cap was above $2,920; regression over the desktop app's own meter samples puts it at
+~$2,363, and the meter is on record sitting at 100% for ~29 hours during the very week
+that "ran unclamped". The Fable floor said above $963; a reading pair measured $920 --
+BELOW the week that supposedly proved it. A clamp is not conspicuous from inside a
+transcript, which is exactly why "no clamp was observed" cannot support "the cap is
+higher than this".
 
 What actually failed in the week closing 2026-09-02 was not the total. Two sessions ran
 100% Fable for 600 and 542 consecutive requests and never once ran the running-total
@@ -37,7 +46,12 @@ WEEK_WD, WEEK_H, WEEK_MIN = 2, 15, 59          # Wednesday 15:59 PT
 
 # Observed-unclamped floors. NOT estimates -- each is a week that actually passed
 # through the meter without a clamp, so the true cap is at least this.
-FLOOR = {"fable": 963.0, "all": 2920.0}
+# Fallbacks when this machine has no calibration of its own. These are MEASURED, not
+# inferred: all-models by regression over 6 meter periods (mean R2 0.994, 2026-09-04),
+# Fable by a reading pair 17 points apart (2026-09-05). Both replaced a larger number
+# that came from "this week ran without a clamp, so the cap is above it" -- an inference
+# both measurements falsified. A machine with its own readings never uses these.
+FALLBACK = {"fable": 920.0, "all": 2363.0}
 
 PRICING = [
     ("fable-5", (10.0, 50.0)), ("mythos", (10.0, 50.0)),
@@ -698,7 +712,8 @@ def resolve_cap(kind, rows):
         med = caps[len(caps) // 2] if len(caps) % 2 else (caps[len(caps) // 2 - 1] + caps[len(caps) // 2]) / 2
         return med, (f"median of {len(caps)} single reading(s) -- ABSOLUTE, assumes the "
                      f"meter zeroed at the week open; wrong after an out-of-band reset"), True
-    return FLOOR[kind], "observed-unclamped floor (no meter reading yet -- true cap is HIGHER)", False
+    return (FALLBACK[kind], "measured elsewhere, not calibrated on this machine "
+            "(record a reading pair to replace it)", False)
 
 
 # ---------------------------------------------------------------- pace
@@ -1124,8 +1139,8 @@ def main():
     if a.caps:
         rows = read_readings()
         if not rows:
-            print("no meter readings recorded — every cap in use is an observed-unclamped floor:")
-            for k, v in FLOOR.items():
+            print("no meter readings recorded — every cap in use was measured elsewhere:")
+            for k, v in FALLBACK.items():
                 print(f"  {k:6s} > ${v:,.0f}")
             return 0
         caps = implied_caps(rows)

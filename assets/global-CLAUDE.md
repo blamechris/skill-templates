@@ -330,11 +330,18 @@ against.** The subscription is a flat fee whose meter resets Wednesday 15:59
 America/Los_Angeles and **does not roll over** — quota unspent is quota destroyed.
 The objective is to saturate the week, not to minimize it. The `$500` ceiling was
 derived as "half the worst observed week," a risk number rather than a quota
-number, and the ledger had already falsified it: the week closing **2026-08-05 ran
-fable $963 through the meter with no clamp**, so the true cap is *provably above
-$963* and `$500` was capping at **52% of demonstrated-safe headroom**. Two more
-weeks ran $833 and $878 unclamped. A ceiling below proven headroom is waste
-wearing the costume of discipline.
+number, and it sat well below the real ceiling. **The argument originally made here
+was wrong in its evidence, and is corrected rather than deleted** (2026-09-05): it
+read the week closing 2026-08-05 as having run fable $963 "with no clamp" and
+concluded the cap was *provably above* $963. A measured reading pair puts the Fable
+cap at **$920** — *below* the week that supposedly proved the floor, which therefore
+hit the ceiling rather than demonstrating headroom above it.
+
+The conclusion survives its broken premise: `$500` was still capping at roughly **54%
+of the real cap**, so a ceiling there was still waste. But the reasoning is retired.
+**"No clamp was observed" cannot support "the cap is higher than this"** — a clamp is
+not conspicuous from inside a transcript, and the identical inference was falsified
+twice within a day, once for each meter.
 
 **What replaces it is a pace check, and its job is to make you look — never to
 stop you.** The failure it exists to prevent is exhausting the meter on Tuesday
@@ -362,8 +369,7 @@ and prints a `<usage-pace>` block only when consumption is more than 15 points a
 and is silent for every non-Fable session. It cannot refuse anything.
 
 Until a real meter reading exists, it paces against computed spend and the
-proven-safe floor (`> $963`) rather than the retired 2026-08-06 estimate, and says so
-in its own output. **A second thing is unverified and worth stating plainly: nobody
+measured fallback rather than an inferred floor, and says so in its own output. **A second thing is unverified and worth stating plainly: nobody
 has established what the meter counts.** Every cap figure in this system is quoted in
 dollars because that is what the first calibration assumed, not because it was tested.
 Three units fit the evidence — list-price dollars, raw tokens (cache reads are ~97% of
@@ -417,9 +423,12 @@ meter has reached >=98% in four of the last five weeks. **The account is not
 under-spending its quota; it is hitting the ceiling and being blocked mid-week**, which
 is why the answer is pacing rather than a larger number.
 
-Two limits, stated rather than hidden. The samples carry **no Fable meter**, so the Fable
-cap still rests on its observed-unclamped floor (`> $963`) and a hand-recorded reading is
-still the only way to improve it. And the file is macOS desktop-app state: on a headless
+One limit, stated rather than hidden. The samples carry **no Fable meter**, so a
+hand-recorded reading pair is the only way to calibrate Fable — and on 2026-09-05 one
+did: **the Fable cap is $920** (17-point delta, +/-6%), from a pair the straddle guard
+verified did not span the 09-04 reset. Two independent methods agree on all-models —
+$2,363 by regression, $2,591 by that same reading pair — which is the strongest
+evidence either number has. And the file is macOS desktop-app state: on a headless
 or non-desktop machine `--calibrate` explains itself and exits non-zero, every other path
 keeps working, and the cap falls back to a hand-recorded reading or the floor.
 
@@ -437,7 +446,9 @@ The honest evidence, because a rule argued from a flattering summary is a rule
 nobody can re-evaluate later: **one** week ran under the hard throttle (closing
 2026-08-26, fable $470, 44 PRs across 6 repos) and **one** under the `$500`
 ceiling (closing 2026-09-02, fable $878 — the ceiling was crossed mid-session on
-08-29 and nothing noticed). Unthrottled weeks have run $348 / $640 / $833 / $963.
+08-29 and nothing noticed). Unthrottled weeks have run $348 / $640 / $833 / $963 — and
+against a measured cap of $920 the last two of those were at 91% and 105%, so "unthrottled"
+described the rule in force, never headroom that was demonstrated.
 The throttle cannot be credited with the low unit price either: the cheapest
 main-thread week on record is $0.172/req opus-equivalent, closing 2026-08-12,
 **unthrottled at fable $833** — against $0.180 for the throttled week. What the
