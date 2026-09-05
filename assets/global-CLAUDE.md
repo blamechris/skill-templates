@@ -430,7 +430,8 @@ verified did not span the 09-04 reset. Two independent methods agree on all-mode
 $2,363 by regression, $2,591 by that same reading pair — which is the strongest
 evidence either number has. And the file is macOS desktop-app state: on a headless
 or non-desktop machine `--calibrate` explains itself and exits non-zero, every other path
-keeps working, and the cap falls back to a hand-recorded reading or the floor.
+keeps working, and the cap falls back to a hand-recorded reading or to the measured
+fallback the script carries.
 
 **Fable is a per-turn choice, not a session mode.** This is the defect the pace
 check is shaped around, and it is worth stating separately because the previous

@@ -44,8 +44,6 @@ READINGS = HOME / "Obsidian" / "no-it-all" / "briefs" / "meter-readings.md"
 PT = ZoneInfo("America/Los_Angeles")
 WEEK_WD, WEEK_H, WEEK_MIN = 2, 15, 59          # Wednesday 15:59 PT
 
-# Observed-unclamped floors. NOT estimates -- each is a week that actually passed
-# through the meter without a clamp, so the true cap is at least this.
 # Fallbacks when this machine has no calibration of its own. These are MEASURED, not
 # inferred: all-models by regression over 6 meter periods (mean R2 0.994, 2026-09-04),
 # Fable by a reading pair 17 points apart (2026-09-05). Both replaced a larger number
@@ -1141,7 +1139,7 @@ def main():
         if not rows:
             print("no meter readings recorded — every cap in use was measured elsewhere:")
             for k, v in FALLBACK.items():
-                print(f"  {k:6s} > ${v:,.0f}")
+                print(f"  {k:6s} ${v:,.0f}")
             return 0
         caps = implied_caps(rows)
         def cap_cell(pct, at_):
