@@ -30,7 +30,7 @@ Entry points:
                 pace, and only every --every turns. Silent and cheap otherwise.
   --at-now      the (spend, timestamp) half of a meter reading, for the `meter` function
 """
-import argparse, hashlib, json, math, os, sys, time
+import argparse, bisect, hashlib, json, math, os, sys, time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -460,19 +460,20 @@ def _fit(xs, ys):
     return b, (1 - ssr / sst if sst else None)
 
 
-def sampled_caps(unit="$"):
-    """Implied all-models cap per meter period, by regressing spend on the meter %.
+def _cum_events(unit="$"):
+    """Cumulative spend over every transcript: (times_ms, cum, cum_fable).
 
-    The slope is dollars per percentage point, so slope x 100 is the cap. Fitting a LINE
-    rather than dividing means the intercept absorbs the zero point -- which is the same
-    property that makes a two-reading difference immune to a reset, generalised over
-    every sample in the period. Returns [(label, cap, r2, n), ...], newest last.
+    `cum[k]` is the total after the first k events, so `cum[bisect_right(times, t)]` is
+    the total as of instant `t` -- and `cum[0] == 0` covers "before anything happened".
+
+    One full walk, shared. The cap regression and the meter anchor need the same series
+    and this walk is the expensive thing in this file; building it twice per invocation
+    is what the anchor cache exists to avoid. The Fable column rides along because the
+    desktop app's samples carry NO Fable meter, so the Fable side of an out-of-band
+    reset can only be recovered by summing Fable spend up to the zero instant.
     """
-    samples = plan_samples()
-    if not samples:
-        return []
-    ev, seen = [], set()
     idx = {"$": 0, "raw": 1, "ieq": 2}[unit]
+    ev, seen = [], set()
     for path in ROOT.rglob("*.jsonl"):
         if "memory" in path.parts or "tool-results" in path.parts:
             continue
@@ -506,15 +507,35 @@ def sampled_caps(unit="$"):
                 except ValueError:
                     continue
                 rawt, ieq = token_measures(u)
-                ev.append((d.timestamp() * 1000, (cost_usd(u, model), rawt, ieq)[idx]))
+                v = (cost_usd(u, model), rawt, ieq)[idx]
+                ev.append((d.timestamp() * 1000, v, v if tier(model) == "fable" else 0.0))
     if not ev:
         return []
+    if not ev:
+        return [], [0.0], [0.0]
     ev.sort()
     times = [e[0] for e in ev]
-    cum = [0.0]
-    for _, v in ev:
+    cum, cumf = [0.0], [0.0]
+    for _, v, vf in ev:
         cum.append(cum[-1] + v)
-    import bisect
+        cumf.append(cumf[-1] + vf)
+    return times, cum, cumf
+
+
+def sampled_caps(unit="$"):
+    """Implied all-models cap per meter period, by regressing spend on the meter %.
+
+    The slope is dollars per percentage point, so slope x 100 is the cap. Fitting a LINE
+    rather than dividing means the intercept absorbs the zero point -- which is the same
+    property that makes a two-reading difference immune to a reset, generalised over
+    every sample in the period. Returns [(label, cap, r2, n), ...], newest last.
+    """
+    samples = plan_samples()
+    if not samples:
+        return []
+    times, cum, _ = _cum_events(unit)
+    if not times:
+        return []
     out = []
     for seg in _segments(samples):
         if len(seg) < 8:
@@ -530,6 +551,132 @@ def sampled_caps(unit="$"):
         hi = datetime.fromtimestamp(seg[-1][0] / 1000, PT)
         out.append((f"{lo:%m-%d %H:%M}->{hi:%m-%d %H:%M}", b * 100, r2, len(seg)))
     return out
+
+
+ANCHOR_MIN_SAMPLES = 6   # below this the intercept is noise, not a measurement
+ANCHOR_MIN_SPAN = 10     # percentage points the period must cover, as for MIN_DELTA_PCT
+
+
+def meter_offset(week, force=False):
+    """Week-anchored spend the meter has ALREADY forgotten, in dollars.
+
+    The pace numerator was week-anchored and the cap describes a METER PERIOD. Those are
+    the same window only while the meter zeroed at the week open. Anthropic reset the
+    quota out of band on 2026-09-04, and from that instant every week-anchored total
+    overstated what the meter counts by exactly the spend preceding the new zero -- so
+    the live check read 90% of the all-models cap against a meter showing 57%, and 29%
+    of the Fable cap against a meter showing 21%.
+
+    That defect is the one `resolve_cap` already routes around: it prefers the
+    differential precisely BECAUSE the absolute method assumes zero == week open. The
+    fix went into the cap and not into the numerator that is divided by it.
+
+    The offset is the INTERCEPT of week-anchored spend regressed on the meter
+    percentage over the current period -- spend at 0% -- which is the same fit
+    `sampled_caps` takes the slope from, and zero-point independent for the same
+    reason. Fitting all of the period's samples beats anchoring to the reset boundary:
+    the samples only bracket it (2026-09-04 has a two-hour gap, 34% -> 2%), so a
+    boundary anchor would have to guess where in that gap the spend fell.
+
+    The desktop samples carry no Fable meter, so the Fable offset cannot be regressed.
+    It is recovered instead by inverting the all-models fit -- find the instant
+    week-anchored spend crossed the offset, that is the zero -- and summing Fable spend
+    up to it.
+
+    An out-of-band reset moves the ZERO, not the week close: the top-up of 2026-09-01
+    was followed by the regular Wednesday reset of 2026-09-02 anyway. So the period the
+    meter is pacing over is [zero, week close], which is SHORTER than the week -- and
+    `zero_ms` is returned so the elapsed fraction is measured over that same window
+    rather than against a 7-day denominator the meter is no longer using.
+
+    Returns (offset_all, offset_fable, zero_ms, note, exact).
+    """
+    open_ms = week_bounds(week)[0].timestamp() * 1000
+    samples = [x for x in plan_samples() if x[0] >= open_ms]
+    if not samples:
+        return 0.0, 0.0, None, "", True
+    seg = _segments(samples)[-1]
+    # The common case, and the one that must stay untouched: no out-of-band reset this
+    # week, so the meter's zero IS the week open and it has forgotten nothing.
+    if seg[0][0] <= samples[0][0]:
+        return 0.0, 0.0, None, "", True
+
+    cached = _cached_anchor(week, seg[0][0]) if not force else None
+    if cached:
+        return (cached["all"], cached["fable"], cached["zero"],
+                cached["note"], cached["exact"])
+
+    when = datetime.fromtimestamp(seg[0][0] / 1000, PT).strftime("%m-%d %H:%M")
+    xs = [pct for _, pct in seg]
+    if len(seg) < ANCHOR_MIN_SAMPLES or max(xs) - min(xs) < ANCHOR_MIN_SPAN:
+        # Known reset, un-fittable period. Saying so beats both alternatives: a silent 0
+        # reports a number known to be too high, and a guess dressed as a measurement is
+        # what this file keeps having to retract.
+        return 0.0, 0.0, None, f"meter reset out of band {when} PT; too few samples " \
+                               f"to anchor, so this is the WEEK total and reads high", False
+
+    times, cum, cumf = _cum_events("$")
+    if not times:
+        return 0.0, 0.0, None, "", True
+    base = cum[bisect.bisect_right(times, open_ms)]
+    basef = cumf[bisect.bisect_right(times, open_ms)]
+    ys = [cum[bisect.bisect_right(times, t)] - base for t, _ in seg]
+    b, r2 = _fit(xs, ys)
+    if b is None or not math.isfinite(b) or b <= 0:
+        return 0.0, 0.0, None, f"meter reset out of band {when} PT; period does not " \
+                               f"fit, so this is the WEEK total and reads high", False
+    off = sum(ys) / len(ys) - b * (sum(xs) / len(xs))
+    # A negative intercept means the meter was already above zero at the week open,
+    # which cannot happen for a period that STARTS at a reset -- it is fit noise.
+    off = min(max(off, 0.0), ys[-1])
+    # The instant week-anchored spend crossed the offset IS the meter's zero -- a
+    # far tighter localisation than the samples give (they only bracket the reset,
+    # two hours wide on 2026-09-04).
+    j = bisect.bisect_left(cum, base + off)
+    offf = min(max(cumf[min(j, len(cumf) - 1)] - basef, 0.0), cumf[-1] - basef)
+    zero_ms = times[min(max(j - 1, 0), len(times) - 1)] if times else None
+    note = f"anchored to the out-of-band reset of {when} PT (${off:,.0f} all / " \
+           f"${offf:,.0f} fable before the meter's zero, R2 {r2:.3f})" if r2 is not None \
+           else f"anchored to the out-of-band reset of {when} PT"
+    _save_anchor(week, seg[0][0], off, offf, zero_ms, note)
+    return off, offf, zero_ms, note, True
+
+
+def _cached_anchor(week, seg_start):
+    """The offset is a CONSTANT once the reset is past -- it does not drift as spend
+    accrues -- so it is computed once per period, not once per invocation. Only a new
+    reset or a new week invalidates it, which is what the key checks."""
+    try:
+        d = json.loads(CALIB.read_text())
+        a = d.get("anchor") if isinstance(d, dict) else None
+        if (isinstance(a, dict) and a.get("week") == week and a.get("seg") == seg_start
+                and all(isinstance(a.get(k), (int, float)) and not isinstance(a.get(k), bool)
+                        and math.isfinite(a[k]) for k in ("all", "fable"))):
+            z = a.get("zero")
+            return {"all": a["all"], "fable": a["fable"],
+                    "zero": z if isinstance(z, (int, float)) and not isinstance(z, bool)
+                            and math.isfinite(z) else None,
+                    "note": a.get("note") or "", "exact": True}
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _save_anchor(week, seg_start, off, offf, zero_ms, note):
+    try:
+        d = json.loads(CALIB.read_text()) if CALIB.exists() else {}
+        if not isinstance(d, dict):
+            d = {}
+    except (OSError, ValueError):
+        d = {}
+    d["anchor"] = {"week": week, "seg": seg_start, "all": off, "fable": offf,
+                   "zero": zero_ms, "note": note,
+                   "at": datetime.now(PT).isoformat(timespec="minutes")}
+    try:
+        CALIB.parent.mkdir(parents=True, exist_ok=True)
+        CALIB.write_text(json.dumps(d))
+    except OSError:
+        pass
 
 
 def _median(v):
@@ -729,26 +876,53 @@ def pace(now=None, force=False):
     elapsed = max(0.0, min(1.0, (_u(now) - _u(open_)).total_seconds() / span))
     tot = scan(wk, force=force)
     rows = [r for r in read_readings() if r["week"] == wk]
-    fable = tot.get("fable", 0.0)
+    # Every figure below describes THE METER, so it is measured from the meter's zero.
+    # That is the week open until an out-of-band reset moves it; `week_*` keeps the
+    # raw week totals, which is what a recorded reading stores.
+    off_all, off_fbl, zero_ms, anchor, anchor_exact = meter_offset(wk, force=force)
+    # Pace over the window the METER is pacing over. Leaving a 7-day denominator under a
+    # re-anchored numerator would compare a 5-day budget against a 7-day clock and call
+    # a genuinely hot week "on pace".
+    if zero_ms:
+        zero_dt = datetime.fromtimestamp(zero_ms / 1000, PT)
+        if open_ < zero_dt < close:
+            span = (_u(close) - _u(zero_dt)).total_seconds()
+            elapsed = max(0.0, min(1.0, (_u(now) - _u(zero_dt)).total_seconds() / span))
+    week_fable, week_all = tot.get("fable", 0.0), tot.get("all", 0.0)
+    fable, all_ = max(0.0, week_fable - off_fbl), max(0.0, week_all - off_all)
     cap, basis, calibrated = resolve_cap("fable", rows)
     consumed = fable / cap if cap else 0.0
+    # The all-models meter is the one that actually hit 100% and locked the account out
+    # for ~29 hours in the week closing 2026-09-02, and nothing paced it. It does now.
+    all_cap, all_basis, all_calibrated = resolve_cap("all", rows)
+    all_consumed = all_ / all_cap if all_cap else 0.0
     return {
         "week": wk, "now": now.astimezone(PT).isoformat(timespec="minutes"),
         "elapsed": elapsed, "days_left": (_u(close) - _u(now)).total_seconds() / 86400,
-        "fable": fable, "all": tot.get("all", 0.0),
+        "fable": fable, "all": all_,
+        "week_fable": week_fable, "week_all": week_all,
+        "offset_fable": off_fbl, "offset_all": off_all,
+        "anchor": anchor, "anchor_exact": anchor_exact,
         "main": tot.get("main", 0.0), "sub": tot.get("sub", 0.0),
         "sub_fable": tot.get("sub_fable", 0.0),
         "cap": cap, "cap_basis": basis, "calibrated": calibrated,
+        "all_cap": all_cap, "all_cap_basis": all_basis, "all_calibrated": all_calibrated,
         "consumed": consumed, "ahead_by": consumed - elapsed,
+        "all_consumed": all_consumed, "all_ahead_by": all_consumed - elapsed,
         "projected": fable / elapsed if elapsed > 0.02 else 0.0,
     }
 
 
 def verdict(p, margin):
-    """Ahead of pace, or nearly out of week. Neither is a refusal."""
-    if p["consumed"] >= 0.90:
+    """Ahead of pace, or nearly out of week. Neither is a refusal.
+
+    Both meters count. Pacing only Fable watched the meter that never locked the
+    account out while ignoring the one that did -- all-models has reached >=98% in four
+    of the last five weeks. Whichever is further along decides.
+    """
+    if max(p["consumed"], p["all_consumed"]) >= 0.90:
         return "near-cap"
-    if p["ahead_by"] > margin:
+    if max(p["ahead_by"], p["all_ahead_by"]) > margin:
         return "ahead"
     return "ok"
 
@@ -756,9 +930,11 @@ def verdict(p, margin):
 def fmt(p, margin):
     v = verdict(p, margin)
     mark = {"ok": "on pace", "ahead": "AHEAD OF PACE", "near-cap": "NEAR CAP"}[v]
+    warn = "" if p["anchor_exact"] else f" | WARNING: {p['anchor']}"
     return (f"fable ${p['fable']:,.0f} = {100*p['consumed']:.0f}% of cap ${p['cap']:,.0f} "
-            f"({p['cap_basis']}) | week {100*p['elapsed']:.0f}% elapsed, "
-            f"{p['days_left']:.1f}d left | {mark} | all-models ${p['all']:,.0f}")
+            f"({p['cap_basis']}) | all-models ${p['all']:,.0f} = "
+            f"{100*p['all_consumed']:.0f}% of cap ${p['all_cap']:,.0f} | week "
+            f"{100*p['elapsed']:.0f}% elapsed, {p['days_left']:.1f}d left | {mark}{warn}")
 
 
 # ---------------------------------------------------------------- hook
