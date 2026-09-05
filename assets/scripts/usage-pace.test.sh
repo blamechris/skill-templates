@@ -796,5 +796,60 @@ case "$got" in
 esac
 
 
+# ------------------------- 15. A PAIR THAT STRADDLES A RESET THE METER CLIMBED PAST
+# The dp<0 guard only sees a reset when the LATER reading reads lower. The two real
+# readings on file straddle the 2026-09-04 out-of-band reset and their delta is
+# POSITIVE (+5), so that guard is blind to it; differencing them gives $20,598 against
+# a measured $2,363. Only the 10-point floor dropped the pair, which was luck.
+
+PLANF=$TMP/straddle-plan.json
+mkplan() {   # $1 = json samples array
+  printf '{"version":2,"samples":%s}' "$1" > "$PLANF"
+}
+# a reset at t=2000s: 34% -> 2%, then climbing back past the first reading
+mkplan '[{"t":1000000,"u":{"sd":30}},{"t":2000000,"u":{"sd":34}},{"t":3000000,"u":{"sd":2}},{"t":4000000,"u":{"sd":20}}]'
+
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[3])
+print(up.reset_between(1500, 3500), up.reset_between(3100, 4000), up.reset_between(500, 900))" "$PLANF" 2>&1)
+[ "$got" = "True False False" ] \
+  && ok "reset_between sees a reset inside the window and not outside it" \
+  || bad "reset_between sees a reset inside the window and not outside it" "got=$(flat "$got")"
+
+# the real shape: a pair whose delta is POSITIVE but which straddles a reset
+cat > "$R" <<'HDR'
+| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok | all_ieq | fable_ieq | note |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-09 | 1970-01-01T00:25:00+00:00 | 10% | 10% | 200.00 | 200.00 | 1 | 1 | 1 | 1 | before |
+| 2026-09-09 | 1970-01-01T01:06:40+00:00 | 60% | 60% | 1200.00 | 1200.00 | 1 | 1 | 1 | 1 | after |
+HDR
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[4]); up.READINGS=pathlib.Path(sys.argv[3])
+d,n=up.differential_caps(up.read_readings())
+print(len(d['all']), 'STRADDLE' if any('STRADDLES' in x for x in n) else 'MISSED')" "$R" "$PLANF" 2>&1)
+[ "$got" = "0 STRADDLE" ] \
+  && ok "a +50-point pair straddling a reset is dropped (the percentage guard is blind to it)" \
+  || bad "a +50-point pair straddling a reset is dropped" "got=$(flat "$got")"
+
+# and a clean pair over the SAME window with no reset must still compute
+mkplan '[{"t":1000000,"u":{"sd":10}},{"t":2000000,"u":{"sd":30}},{"t":3000000,"u":{"sd":50}},{"t":4000000,"u":{"sd":60}}]'
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[4]); up.READINGS=pathlib.Path(sys.argv[3])
+d,_=up.differential_caps(up.read_readings())
+print(len(d['all']), ('%.0f'%d['all'][0]) if d['all'] else '-')" "$R" "$PLANF" 2>&1)
+[ "$got" = "1 2000" ] \
+  && ok "an equivalent pair with no reset in the window still computes (1000/0.50)" \
+  || bad "an equivalent pair with no reset in the window still computes" "got=$(flat "$got")"
+
+# without the app's samples the check cannot run, and that must be SAID, not implied
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[3]+'.absent'); up.READINGS=pathlib.Path(sys.argv[3])
+d,n=up.differential_caps(up.read_readings())
+print(len(d['all']), 'DISCLOSED' if any('cannot be detected' in x for x in n) else 'SILENT')" "$R" 2>&1)
+[ "$got" = "1 DISCLOSED" ] \
+  && ok "with no samples the pair still computes but the missing check is disclosed" \
+  || bad "with no samples the pair still computes but the missing check is disclosed" "got=$(flat "$got")"
+
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
