@@ -568,5 +568,135 @@ for bad_c in '{"all": 0}' '{"all": "x"}' '[1,2,3]' 'not json' '{}'; do
     || bad "a bad calibration file is ignored: $bad_c" "got=$(flat "$got")"
 done
 
+# --------------------------------- 13. THE SAMPLED-CALIBRATION MATH ITSELF
+# A reviewer found this math had NO direct coverage: only its downstream consumption
+# via a pre-built cache file was tested, so a regression in _fit, _segments or
+# sampled_caps would have shipped with the suite fully green.
+
+# (a) _fit recovers a known slope and R2 exactly, and guards degenerate input.
+got=$(pymod "
+b,r = up._fit([0,1,2,3],[10,20,30,40])          # slope 10, perfect fit
+b2,r2 = up._fit([5,5,5],[1,2,3])                # zero variance in x
+b3,r3 = up._fit([],[])                          # empty
+print('%.6f %.6f %s %s' % (b, r, b2 is None, b3 is None))" 2>&1)
+[ "$got" = "10.000000 1.000000 True True" ] \
+  && ok "_fit recovers a known slope/R2 and returns None on degenerate input" \
+  || bad "_fit recovers a known slope/R2 and returns None on degenerate input" "got=$(flat "$got")"
+
+# (b) The property the whole method rests on: adding a constant to every y (which is
+#     exactly what a moved zero point does) must not move the slope.
+got=$(pymod "
+xs=[0,10,20,30,40]; ys=[100,300,500,700,900]
+a,_ = up._fit(xs, ys)
+b,_ = up._fit(xs, [y+99999 for y in ys])
+print('SAME' if abs(a-b) < 1e-9 else 'MOVED %f %f' % (a,b))" 2>&1)
+[ "$got" = "SAME" ] \
+  && ok "the fitted slope is invariant to a shifted origin (the reset-proof property)" \
+  || bad "the fitted slope is invariant to a shifted origin" "got=$(flat "$got")"
+
+# (c) _segments splits on a big drop, on ANY fall to zero, and not on noise.
+got=$(pymod "
+seg = lambda v: [[y for _,y in s] for s in up._segments([(float(i),float(x)) for i,x in enumerate(v)])]
+print(seg([10,50,90,0,20]), seg([1,2,0,3]), seg([10,9,11,40]))" 2>&1)
+exp="[[10.0, 50.0, 90.0], [0.0, 20.0]] [[1.0, 2.0], [0.0, 3.0]] [[10.0, 9.0, 11.0, 40.0]]"
+[ "$got" = "$exp" ] \
+  && ok "_segments splits on a reset and on a fall to zero, but not on 1-point noise" \
+  || bad "_segments splits on a reset and on a fall to zero, but not on 1-point noise" "got=$(flat "$got")"
+
+# (d) plan_samples tolerates every malformed shape the desktop app could present.
+PS=$TMP/plan.json
+psrun() { printf '%s' "$1" > "$PS"; pymod "up.PLAN_SAMPLES=pathlib.Path(sys.argv[3]); print(len(up.plan_samples()))" "$PS" 2>&1; }
+allok=yes
+for shape in '{}' '[]' 'not json' '{"samples": {}}' '{"samples": [1,2,3]}' \
+             '{"samples": [{"t": 1, "u": {"sd": "x"}}]}' '{"samples": [{"u": {"sd": 5}}]}' \
+             '{"samples": [{"t": 1}]}' '{"samples": [{"t": 1, "u": null}]}'; do
+  [ "$(psrun "$shape")" = "0" ] || { allok="no ($shape -> $(psrun "$shape"))"; break; }
+done
+[ "$allok" = yes ] \
+  && ok "plan_samples returns nothing for every malformed shape, never raises" \
+  || bad "plan_samples returns nothing for every malformed shape" "$allok"
+
+got=$(psrun '{"samples": [{"t": 300, "u": {"sd": 9, "fh": 1}}, {"t": 100, "u": {"sd": 3}}]}')
+[ "$got" = "2" ] && ok "plan_samples keeps well-formed entries" \
+  || bad "plan_samples keeps well-formed entries" "got=$(flat "$got")"
+
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[3])
+print([int(t) for t,_ in up.plan_samples()])" "$PS" 2>&1)
+[ "$got" = "[100, 300]" ] \
+  && ok "plan_samples sorts by the numeric epoch (not by insertion order)" \
+  || bad "plan_samples sorts by the numeric epoch" "got=$(flat "$got")"
+
+# (e) sampled_caps end to end against a synthetic meter + synthetic transcripts: a known
+#     cap must come back out. Two periods at $20/point -> cap $2000.
+got=$("$PY" - "$SUT" "$TMP" <<'CAPPY' 2>&1
+import importlib.util, json, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"sc"; 
+import shutil; shutil.rmtree(root, ignore_errors=True); root.mkdir()
+up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/"sc_c.json"
+# one $2.00 request every 60s from t0; meter climbs 1 point per 10 requests => $20/point
+t0=1788000000000
+recs=[]
+for i in range(400):
+    recs.append(json.dumps({"type":"assistant","timestamp":
+        up.datetime.fromtimestamp((t0+i*60000)/1000, up.timezone.utc).isoformat().replace("+00:00","Z"),
+        "message":{"id":"m%d"%i,"model":"claude-opus-5",
+                   "usage":{"output_tokens":80000}}}, separators=(",",":")))
+(root/"t.jsonl").write_text("\n".join(recs)+"\n")
+per_req = up.cost_usd({"output_tokens":80000}, "claude-opus-5")
+samples=[{"t": t0+i*10*60000, "u": {"sd": i}} for i in range(40)]
+up.PLAN_SAMPLES=tmp/"plan.json"; up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":samples}))
+out=up.sampled_caps()
+exp = per_req*10*100      # $/point x 100
+print("%d %.2f %.2f" % (len(out), out[0][1], exp), "MATCH" if abs(out[0][1]-exp) < exp*0.02 else "OFF")
+CAPPY
+)
+printf '%s' "$got" | grep -q 'MATCH' \
+  && ok "sampled_caps recovers a known cap from a synthetic meter + transcripts" \
+  || bad "sampled_caps recovers a known cap from a synthetic meter + transcripts" "$(flat "$got")"
+
+# (f) Readings must sort chronologically, not lexicographically: ISO offsets change at a
+#     DST transition, so the raw string order flips the pair and fakes a reset.
+got=$(pymod "
+A={'at':'2026-11-01T01:45-07:00'}   # PDT, 08:45 UTC, EARLIER
+B={'at':'2026-11-01T01:30-08:00'}   # PST, 09:30 UTC, LATER
+print([r['at'][-6:] for r in sorted([B,A], key=up._reading_instant)],
+      up._reading_instant({'at':'garbage'}) > up._reading_instant(A))" 2>&1)
+[ "$got" = "['-07:00', '-08:00'] True" ] \
+  && ok "readings sort by instant, not ISO text (DST offsets flip the string order)" \
+  || bad "readings sort by instant, not ISO text" "got=$(flat "$got")"
+
+# (g) The cap the pace check divides by must be finite and must not be a bool.
+#     json.loads accepts Infinity/NaN, and bool is an int subclass.
+allok=yes
+for shape in '{"all": Infinity}' '{"all": -Infinity}' '{"all": NaN}' '{"all": true}'; do
+  printf '%s' "$shape" > "$TMP/calib.json"
+  r=$(pymod "up.CALIB=pathlib.Path(sys.argv[3]); print('ACCEPTED' if up.cached_calibration() else 'rejected')" "$TMP/calib.json" 2>&1)
+  [ "$r" = "rejected" ] || { allok="no ($shape -> $r)"; break; }
+done
+[ "$allok" = yes ] \
+  && ok "Infinity/NaN/true are rejected as a cached cap" \
+  || bad "Infinity/NaN/true are rejected as a cached cap" "$allok"
+
+
+# (h) ...and differential_caps must actually USE that key. Reverting the call site to a
+#     string sort left the direct _reading_instant test green, so this drives the real
+#     path: two readings in one week whose ISO text order is the REVERSE of their true
+#     order, straddling the 2026-11-01 PT fall-back. Sorted as text the meter appears to
+#     fall 60% -> 20% and the pair is dropped as a reset that never happened.
+cat > "$R" <<'HDR'
+| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok | all_ieq | fable_ieq | note |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-04 | 2026-11-01T01:45-07:00 | 20% | 20% | 600.00 | 600.00 | 1 | 1 | 1 | 1 | earlier (PDT, 08:45 UTC) |
+| 2026-11-04 | 2026-11-01T01:30-08:00 | 60% | 60% | 1800.00 | 1800.00 | 1 | 1 | 1 | 1 | later (PST, 09:30 UTC) |
+HDR
+got=$(pymod "up.READINGS=pathlib.Path(sys.argv[3]); d,n=up.differential_caps(up.read_readings()); print(len(d['all']), ('%.0f'%d['all'][0]) if d['all'] else 'none', 'RESETNOTE' if any('reset' in x for x in n) else 'clean')" "$R" 2>&1)
+[ "$got" = "1 3000 clean" ] \
+  && ok "differential_caps orders a DST-straddling pair correctly (no phantom reset)" \
+  || bad "differential_caps orders a DST-straddling pair correctly (no phantom reset)" "got=$(flat "$got")"
+
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

@@ -21,7 +21,7 @@ Entry points:
                 pace, and only every --every turns. Silent and cheap otherwise.
   --at-now      the (spend, timestamp) half of a meter reading, for the `meter` function
 """
-import argparse, hashlib, json, os, sys, time
+import argparse, hashlib, json, math, os, sys, time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -402,7 +402,12 @@ def _segments(samples):
     """Split the series at every reset -- weekly boundary or out-of-band alike."""
     segs, start = [], 0
     for i in range(1, len(samples)):
-        if samples[i][1] < samples[i - 1][1] - RESET_DROP:
+        prev, cur = samples[i - 1][1], samples[i][1]
+        # A fall of more than RESET_DROP is a reset; so is ANY fall to zero from a
+        # positive value. Without the second clause a reset late in a quiet week --
+        # 2% -> 0% -- is a drop of only 2 and fails the threshold, splicing two
+        # different zero points into one regression.
+        if cur < prev - RESET_DROP or (cur == 0 and prev > 0):
             segs.append(samples[start:i])
             start = i
     segs.append(samples[start:])
@@ -411,11 +416,13 @@ def _segments(samples):
 
 def _fit(xs, ys):
     n = len(xs)
+    if n == 0:                  # the only caller guards this, but the helper must not
+        return None, None       # depend on that -- a future caller would divide by zero
     mx, my = sum(xs) / n, sum(ys) / n
     sxx = sum((x - mx) ** 2 for x in xs)
     if sxx == 0:
         return None, None
-    b = sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
     b = sxy / sxx
     a = my - b * mx
     ssr = sum((y - (a + b * x)) ** 2 for x, y in zip(xs, ys))
@@ -495,11 +502,20 @@ def sampled_caps(unit="$"):
     return out
 
 
+def _median(v):
+    v = sorted(v)
+    return v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+
+
 def cached_calibration():
     """The last computed sampled cap, or None. Keeps the hook off a full rescan."""
     try:
         d = json.loads(CALIB.read_text())
-        if isinstance(d, dict) and isinstance(d.get("all"), (int, float)) and d["all"] > 0:
+        v = d.get("all") if isinstance(d, dict) else None
+        # json.loads accepts the non-standard literals Infinity/-Infinity/NaN, and bool
+        # is an int subclass -- so `isinstance(v, (int, float)) and v > 0` alone admits
+        # `Infinity` and `true` as caps. This value is divided by.
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
             return d
     except (OSError, ValueError):
         pass
@@ -507,6 +523,23 @@ def cached_calibration():
 
 
 MIN_DELTA_PCT = 10.0     # below this, integer rounding on both readings dominates
+
+
+def _reading_instant(r):
+    """Sort key for a reading: an absolute instant, never the raw ISO string.
+
+    A recorded `at` carries a UTC OFFSET (`...T01:30-08:00`), and offsets change at a
+    DST transition, so lexicographic order is not chronological order. Either side of
+    the 2026-11-01 PT fall-back, `01:30-08:00` (09:30 UTC) sorts BEFORE `01:45-07:00`
+    (08:45 UTC) as text while being an hour and a quarter LATER in fact. Differencing
+    that pair reads the meter as having gone down and reports a reset that never
+    happened. Unparseable timestamps sort last rather than throwing.
+    """
+    at = r.get("at") or ""
+    try:
+        return (0, datetime.fromisoformat(at).timestamp())
+    except (TypeError, ValueError):
+        return (1, 0.0)
 
 
 def differential_caps(rows, unit="$"):
@@ -539,7 +572,7 @@ def differential_caps(rows, unit="$"):
     for r in rows:
         weeks.setdefault(r["week"], []).append(r)
     for wk in sorted(weeks):
-        rs = sorted(weeks[wk], key=lambda r: r.get("at") or "")
+        rs = sorted(weeks[wk], key=_reading_instant)
         for a, b in zip(rs, rs[1:]):
             for meter, pk, mk in (("all", "all_pct", ak), ("fable", "fable_pct", fk)):
                 pa, pb, ma, mb = a.get(pk), b.get(pk), a.get(mk), b.get(mk)
@@ -579,9 +612,17 @@ def resolve_cap(kind, rows):
     if kind == "all":
         c = cached_calibration()
         if c:
+            lo, hi = c.get("lo"), c.get("hi")
+            # The spread is part of the answer, not a footnote. Six periods of real data
+            # imply caps from $1,979 to $2,870 -- a 1.45x span that the boost, the model
+            # mix and the fit quality all fail to explain. Reporting only the median
+            # presents +/-20% uncertainty as a precise number.
+            rng = (f", range ${lo:,.0f}-${hi:,.0f}"
+                   if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else "")
+            age = f", measured {c['at'][:16]}" if isinstance(c.get("at"), str) else ""
             return (c["all"], f"regression over {c.get('periods', '?')} meter period(s) "
-                              f"from the desktop app's own 15-minute samples "
-                              f"(R2 {c.get('r2', 0):.3f}) -- zero-point independent", True)
+                              f"from the app's own 15-minute samples (R2 {c.get('r2', 0):.3f}"
+                              f"{rng}{age}) -- zero-point independent", True)
     dcaps, _ = differential_caps(rows)
     if dcaps[kind]:
         v = sorted(dcaps[kind])
@@ -934,10 +975,19 @@ def main():
             med = v[len(v)//2] if len(v) % 2 else (v[len(v)//2-1]+v[len(v)//2])/2
             r2m = sum(r for _, r in good)/len(good)
             CALIB.parent.mkdir(parents=True, exist_ok=True)
+            lo, hi = min(v), max(v)
+            CALIB.parent.mkdir(parents=True, exist_ok=True)
             CALIB.write_text(json.dumps({"all": med, "periods": len(good), "r2": r2m,
+                                         "lo": lo, "hi": hi,
                                          "at": datetime.now().astimezone().isoformat(timespec="minutes")}))
             print(f"\nall-models cap ${med:,.0f} (median of {len(good)} well-fit period(s), "
-                  f"mean R2 {r2m:.3f}) — cached for the pace check")
+                  f"mean R2 {r2m:.3f})  — cached for the pace check")
+            if lo and hi / lo > 1.15:
+                print(f"  CAUTION: the six periods span ${lo:,.0f}-${hi:,.0f} ({hi/lo:.2f}x). That "
+                      f"spread is NOT explained by the\n  +50% boost (the two post-2026-09-01 "
+                      f"periods are at the LOW end, not 1.5x high), nor by fit\n  quality (R2 is "
+                      f"0.98+ throughout), nor by model mix. Treat ${med:,.0f} as a central "
+                      f"estimate\n  with roughly +/-20% around it, not a measured constant.")
             print("NOTE: these samples carry no Fable meter, so the Fable cap still needs "
                   "a hand-recorded reading.")
         return 0
@@ -1030,8 +1080,11 @@ def main():
                   f"{cap_cell(r['fable_pct'], r['fable_at']):>11}")
         dcaps, dnotes = differential_caps(rows)
         print()
-        print("DIFFERENTIAL (preferred — cancels the meter's zero point, so it survives")
-        print("an out-of-band quota reset, a mid-week boost, and a moved week boundary):")
+        print("DIFFERENTIAL — cancels the meter's zero point, so an out-of-band reset")
+        print("BEFORE the pair does not affect it. Conditions, stated because the guards")
+        print("below enforce them: a reset or a week roll BETWEEN the two readings is")
+        print("detected and the pair DROPPED, not survived; and the result is only valid")
+        print("if the cap multiplier (e.g. a temporary boost) held steady across them:")
         if any(dcaps.values()):
             for k in ("all", "fable"):
                 if dcaps[k]:
