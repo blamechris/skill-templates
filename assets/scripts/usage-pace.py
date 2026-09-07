@@ -432,15 +432,68 @@ def _is_reset(prev, cur):
     return cur < prev - RESET_DROP or (cur == 0 and prev > 0)
 
 
+# Instants at which the CAP changed while the meter's zero did not. A reset is a fall
+# and _is_reset sees it; a cap change is the opposite shape -- the same spend reads as a
+# HIGHER percentage once the cap shrinks -- so the reset guard is blind to it, and a pair
+# or a regression period spanning one is differenced across two caps instead of two
+# zeros. Same failure class, same treatment: split there, and drop what straddles it.
+#
+# Each entry is a WINDOW, not an instant, because the /usage banner says only "50%
+# higher through September 13": the expiry is somewhere in that day, in a timezone it
+# does not name. Anything inside the window is ambiguous and is discarded rather than
+# assigned to a side. The boost's START is unknown and cannot be listed -- readings from
+# before it are already on file under the same cap assumption; see meter-readings.md.
+MULTIPLIER_WINDOWS = (
+    (datetime(2026, 9, 13, 0, 0, tzinfo=PT).timestamp(),
+     datetime(2026, 9, 14, 0, 0, tzinfo=PT).timestamp(),
+     "the +50% boost expired (banner: \"through September 13\"; exact instant unknown, "
+     "so the whole day is the window)"),
+)
+
+
+def multiplier_change_between(t0, t1, windows=MULTIPLIER_WINDOWS):
+    """Did the cap change between two instants (epoch seconds)? Returns why, or None.
+
+    A pair is disqualified when its interval OVERLAPS a window at all, which also
+    catches a reading taken inside one: whether the change had already happened at
+    that reading is unknowable, so the reading cannot be assigned to either cap.
+    A pair entirely before or entirely after a window is untouched -- which is what
+    makes the expiry measurable at all: one pair each side, compared.
+    """
+    lo, hi = (t0, t1) if t0 <= t1 else (t1, t0)
+    for w0, w1, why in windows:
+        # Half-open on the far side (a reading AT w1 is after the window) and closed
+        # on the near side (a reading AT w0 is inside it): the conservative edge.
+        if lo < w1 and hi >= w0:
+            return why
+    return None
+
+
 def _segments(samples):
-    """Split the series at every reset -- weekly boundary or out-of-band alike."""
-    segs, start = [], 0
-    for i in range(1, len(samples)):
-        # Splicing two different zero points into one regression is the failure here.
-        if _is_reset(samples[i - 1][1], samples[i][1]):
-            segs.append(samples[start:i])
-            start = i
-    segs.append(samples[start:])
+    """Split the series at every reset -- weekly boundary or out-of-band alike -- and at
+    every cap change, discarding samples that fall inside a change window."""
+    segs, cur, prev = [], [], None
+    for t, pct in samples:
+        t_s = t / 1000.0
+        if multiplier_change_between(t_s, t_s):
+            # Inside the window: which cap this sample was measured against is unknown.
+            # It joins neither side, and it ends the side before it.
+            if cur:
+                segs.append(cur)
+            cur, prev = [], None
+            continue
+        # Splicing two different zero points into one regression is the failure here;
+        # two different CAPS is the same failure with the opposite sign. The second
+        # clause is for a window that no sample landed in -- a sampling gap -- which
+        # the first branch cannot see.
+        if prev is not None and (_is_reset(prev[1], pct)
+                                 or multiplier_change_between(prev[0], t_s)):
+            segs.append(cur)
+            cur = []
+        cur.append((t, pct))
+        prev = (t_s, pct)
+    if cur or not segs:          # callers index [-1]; never hand back nothing
+        segs.append(cur)
     return segs
 
 
@@ -823,6 +876,14 @@ def differential_caps(rows, unit="$"):
                                  f"positive, so the percentage guard cannot catch this; "
                                  f"differencing across two zero points is what produced "
                                  f"$20,598 against a measured $2,363. Dropped")
+                    continue
+                why = ta and tb and multiplier_change_between(ta, tb)
+                if why:
+                    notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} SPANS a cap change "
+                                 f"-- {why}. The percentage guard cannot see this either: "
+                                 f"a smaller cap makes the same spend read HIGHER, so the "
+                                 f"delta is positive and the pair looks healthy. It is a "
+                                 f"difference across two caps, not one. Dropped")
                     continue
                 if dp < 0 or dm < 0:
                     notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} went DOWN "

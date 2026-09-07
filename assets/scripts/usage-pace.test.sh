@@ -1179,5 +1179,85 @@ print("off=%.1f reached=%s zero_before_week=%s" % (
   && ok "a zero instant is never reported from before the week opened" \
   || bad "the zero instant stays inside the week" "got=$(flat "$got")"
 
+# ------------------------- 16. A CAP CHANGE IS A RISE, AND THE RESET GUARD IS BLIND TO IT
+# The +50% boost expires 2026-09-13, mid-week for the 09-09->09-16 meter week. A smaller
+# cap makes the same spend read HIGHER, so a pair straddling it has a POSITIVE delta and
+# passes every guard above -- and differences across two caps. skill-templates#248.
+
+# (l) the predicate: overlap with the window, in either direction, including a reading
+#     taken INSIDE it; nothing outside.
+got=$(pymod '
+D=lambda d,h: up.datetime(2026,9,d,h,0,tzinfo=up.PT).timestamp()
+r=[up.multiplier_change_between(D(12,9), D(12,21)),   # both before
+   up.multiplier_change_between(D(14,9), D(15,9)),    # both after
+   up.multiplier_change_between(D(12,9), D(14,9)),    # straddles
+   up.multiplier_change_between(D(14,9), D(12,9)),    # straddles, reversed
+   up.multiplier_change_between(D(12,9), D(13,12)),   # second reading INSIDE the window
+   up.multiplier_change_between(D(13,12), D(13,12))]  # a single instant inside it
+print(" ".join("none" if x is None else ("boost" if "boost" in x else "?") for x in r))')
+[ "$got" = "none none boost boost boost boost" ] \
+  && ok "multiplier_change_between: overlap with the expiry window, either direction, else none" \
+  || bad "multiplier_change_between overlap rule" "got=$(flat "$got")"
+
+# (m) the differential: a +40-point pair straddling 09-13 is dropped with a note naming the
+#     boost; the same pair shifted entirely past the window is kept. Meter samples are
+#     flat-climbing with no reset, so this is the ONLY guard that can act.
+BOOSTPLAN=$TMP/boost-plan.json
+BOOSTR=$TMP/boost-readings.md
+python3 - "$BOOSTPLAN" "$BOOSTR" <<'MK'
+import json, sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
+PT=ZoneInfo("America/Los_Angeles")
+T=lambda d,h: int(datetime(2026,9,d,h,0,tzinfo=PT).timestamp()*1000)
+smp=[{"t":T(10,0)+i*3600_000,"u":{"sd":min(99,i)}} for i in range(24*6)]   # 09-10 -> 09-16, no reset
+open(sys.argv[1],"w").write(json.dumps({"version":2,"samples":smp}))
+def row(d,h,pct,usd): return f"| 2026-09-16 | 2026-09-{d:02d}T{h:02d}:00-07:00 | {pct}% | {pct}% | {usd:.2f} | {usd:.2f} | 1 | 1 | 1 | 1 | x |"
+open(sys.argv[2],"w").write("\n".join([
+ "| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok | all_ieq | fable_ieq | note |",
+ "|---|---|---|---|---|---|---|---|---|---|---|",
+ row(12,9,10,200.0), row(14,9,50,1200.0),     # straddles the 09-13 window
+ row(14,12,55,1300.0), row(15,12,95,2300.0),  # entirely after it
+])+"\n")
+MK
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[4]); up.READINGS=pathlib.Path(sys.argv[3])
+d,n=up.differential_caps(up.read_readings())
+spans=[x for x in n if 'SPANS a cap change' in x and 'boost' in x]
+print(len(d['all']), len(spans), 'reset-note' if any('STRADDLES' in x for x in n) else 'no-reset-note',
+      round(d['all'][0]) if d['all'] else None)" "$BOOSTR" "$BOOSTPLAN" 2>&1)
+# 2 notes, not 1: the loop runs once per meter (all, fable) and each drops its own
+[ "$got" = "1 2 no-reset-note 2500" ] \
+  && ok "a +40-point pair spanning the boost expiry is dropped and named; the pair after it is kept" \
+  || bad "differential drops the pair spanning a cap change" "got=$(flat "$got")"
+
+# (n) the regression sees the same event: a reset-free series across 09-13 is split into a
+#     before and an after, and no sample from inside the window is in either.
+got=$(pymod "
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[3])
+segs=up._segments(up.plan_samples())
+w0,w1,_=up.MULTIPLIER_WINDOWS[0]
+inside=sum(1 for seg in segs for t,_ in seg if w0 <= t/1000 < w1)
+print(len(segs), inside, all(len(seg)>0 for seg in segs))" "$BOOSTPLAN" 2>&1)
+[ "$got" = "2 0 True" ] \
+  && ok "_segments splits a regression period at the cap change and discards the ambiguous day" \
+  || bad "_segments splits at the cap change" "got=$(flat "$got")"
+
+# (n2) a window that NO sample landed in -- a sampling gap over the whole day -- still splits.
+got=$(pymod '
+D=lambda d,h: int(up.datetime(2026,9,d,h,0,tzinfo=up.PT).timestamp()*1000)
+smp=[(D(12,h),h) for h in range(0,24)]+[(D(14,h),24+h) for h in range(0,24)]
+segs=up._segments(smp)
+print(len(segs), [len(x) for x in segs])')
+[ "$got" = "2 [24, 24]" ] \
+  && ok "_segments splits at a cap change even when no sample fell inside the window" \
+  || bad "_segments splits across a sampling gap over the window" "got=$(flat "$got")"
+
+# (n3) the empty-input contract callers rely on ([-1] indexing) survives the rewrite.
+got=$(pymod 'print(up._segments([]), up._segments([(1,1),(2,2)]))')
+[ "$got" = "[[]] [[(1, 1), (2, 2)]]" ] \
+  && ok "_segments still returns one (possibly empty) segment for empty input" \
+  || bad "_segments empty-input contract" "got=$(flat "$got")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
