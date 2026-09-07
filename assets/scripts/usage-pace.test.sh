@@ -1259,5 +1259,39 @@ got=$(pymod 'print(up._segments([]), up._segments([(1,1),(2,2)]))')
   && ok "_segments still returns one (possibly empty) segment for empty input" \
   || bad "_segments empty-input contract" "got=$(flat "$got")"
 
+# ------------------------- 17. A WINDOW SPLIT IS NOT A RESET (#250, items 1-2)
+# (o) every sample of the week inside the window: _segments gives [[]], and meter_offset
+#     used to index it. The hook calls pace() unwrapped, so that was a traceback per prompt.
+got=$(pymod '
+import tempfile
+D=lambda d,h: int(up.datetime(2026,9,d,h,0,tzinfo=up.PT).timestamp()*1000)
+smp=[{"t":D(13,h),"u":{"sd":h}} for h in range(1,20)]
+up.PLAN_SAMPLES=pathlib.Path(tempfile.mkdtemp())/"p.json"
+up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":smp}))
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+print(up.meter_offset("2026-09-16", force=True))')
+[ "$got" = "(0.0, 0.0, None, '"'"''"'"', True)" ] \
+  && ok "a week sampled only inside the cap-change window anchors to nothing instead of crashing" \
+  || bad "all-in-window week does not crash meter_offset" "got=$(flat "$got")"
+
+# (p) a week that spans the window with NO reset: the last segment starts at the window
+#     end, which is not a moved zero. It must take the quiet path and print no WARNING.
+#     And a RESET hidden inside the window must still be seen as one.
+got=$(pymod '
+import tempfile
+D=lambda d,h: int(up.datetime(2026,9,d,h,0,tzinfo=up.PT).timestamp()*1000)
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+up.PLAN_SAMPLES=pathlib.Path(tempfile.mkdtemp())/"p.json"
+cont=[{"t":D(10,h),"u":{"sd":h}} for h in range(0,24)]+[{"t":D(14,h),"u":{"sd":40+h}} for h in range(0,24)]
+up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":cont}))
+a=up.meter_offset("2026-09-16", force=True)
+rst=[{"t":D(10,h),"u":{"sd":40+h}} for h in range(0,24)]+[{"t":D(14,h),"u":{"sd":h}} for h in range(0,24)]
+up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":rst}))
+b=up.meter_offset("2026-09-16", force=True)
+print("continuous:", a[3]=="" and a[4], "| reset-in-window:", "reset" in b[3])')
+[ "$got" = "continuous: True | reset-in-window: True" ] \
+  && ok "a segment that begins at the window is a moved zero only if the meter fell across it" \
+  || bad "window split vs reset in meter_offset" "got=$(flat "$got")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

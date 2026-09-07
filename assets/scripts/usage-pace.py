@@ -646,10 +646,18 @@ def meter_offset(week, force=False):
     samples = [x for x in plan_samples() if x[0] >= open_ms]
     if not samples:
         return 0.0, 0.0, None, "", True
-    seg = _segments(samples)[-1]
-    # The common case, and the one that must stay untouched: no out-of-band reset this
-    # week, so the meter's zero IS the week open and it has forgotten nothing.
-    if seg[0][0] <= samples[0][0]:
+    segs = [x for x in _segments(samples) if x]
+    if not segs:
+        # every sample of the week fell inside a cap-change window -- nothing to anchor
+        # on. _segments hands back [[]] for that, and indexing it crashed the hook (#250).
+        return 0.0, 0.0, None, "", True
+    seg = segs[-1]
+    # The zero moved only if this segment begins at a RESET. A segment can also begin at
+    # a cap-change window (#249), across which the meter is continuous: the same test
+    # _segments used to split there says whether the boundary was a fall. Reading every
+    # non-first segment as a reset printed "meter reset out of band 09-14 00:00 PT" on
+    # every prompt for the rest of the boost-expiry week (#250).
+    if len(segs) == 1 or not _is_reset(segs[-2][-1][1], seg[0][1]):
         return 0.0, 0.0, None, "", True
 
     cached = _cached_anchor(week, seg[0][0]) if not force else None
