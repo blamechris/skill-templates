@@ -1259,5 +1259,47 @@ got=$(pymod 'print(up._segments([]), up._segments([(1,1),(2,2)]))')
   && ok "_segments still returns one (possibly empty) segment for empty input" \
   || bad "_segments empty-input contract" "got=$(flat "$got")"
 
+# ------------------------- 17. A WINDOW SPLIT IS NOT A RESET (#250, items 1-2)
+# (o) every sample of the week inside the window: _segments gives [[]], and meter_offset
+#     used to index it. The hook calls pace() unwrapped, so that was a traceback per prompt.
+got=$(pymod '
+import tempfile
+D=lambda d,h: int(up.datetime(2026,9,d,h,0,tzinfo=up.PT).timestamp()*1000)
+smp=[{"t":D(13,h),"u":{"sd":h}} for h in range(1,20)]
+up.PLAN_SAMPLES=pathlib.Path(tempfile.mkdtemp())/"p.json"
+up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":smp}))
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+r=up.meter_offset("2026-09-16", force=True)
+print(r[0], r[1], r[2], "quiet" if r[3]=="" else "NOTE", r[4])')
+[ "$got" = "0.0 0.0 None quiet True" ] \
+  && ok "a week sampled only inside the cap-change window anchors to nothing instead of crashing" \
+  || bad "all-in-window week does not crash meter_offset" "got=$(flat "$got")"
+
+# (p) a week that spans the window with NO reset: the last segment starts at the window
+#     end, which is not a moved zero. It must take the quiet path and print no WARNING.
+#     And a RESET hidden inside the window must still be seen as one.
+got=$(pymod '
+import tempfile
+D=lambda d,h: int(up.datetime(2026,9,d,h,0,tzinfo=up.PT).timestamp()*1000)
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+up.PLAN_SAMPLES=pathlib.Path(tempfile.mkdtemp())/"p.json"
+# spend series stubbed, as in (k): the reset half must reach the anchoring fit, and on a
+# machine with no transcripts (CI) the real walk is empty and meter_offset returns quietly
+# for the wrong reason -- which is exactly what happened on the first push of #251.
+O=up.week_bounds("2026-09-16")[0].timestamp()*1000
+times=[O+1000.0+i*3600_000 for i in range(24*7)]
+cum=[0.0]+[(i+1)*10.0 for i in range(24*7)]
+up._cum_events=lambda unit="$": (times, cum, list(cum))
+cont=[{"t":D(10,h),"u":{"sd":h}} for h in range(0,24)]+[{"t":D(14,h),"u":{"sd":40+h}} for h in range(0,24)]
+up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":cont}))
+a=up.meter_offset("2026-09-16", force=True)
+rst=[{"t":D(10,h),"u":{"sd":40+h}} for h in range(0,24)]+[{"t":D(14,h),"u":{"sd":h}} for h in range(0,24)]
+up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":rst}))
+b=up.meter_offset("2026-09-16", force=True)
+print("continuous:", a[3]=="" and a[4], "| reset-in-window:", "reset" in b[3])')
+[ "$got" = "continuous: True | reset-in-window: True" ] \
+  && ok "a segment that begins at the window is a moved zero only if the meter fell across it" \
+  || bad "window split vs reset in meter_offset" "got=$(flat "$got")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
