@@ -646,12 +646,12 @@ def meter_offset(week, force=False):
     samples = [x for x in plan_samples() if x[0] >= open_ms]
     if not samples:
         return 0.0, 0.0, None, "", True
-    segs = [x for x in _segments(samples) if x]
-    if not segs:
-        # every sample of the week fell inside a cap-change window -- nothing to anchor
-        # on. _segments hands back [[]] for that, and indexing it crashed the hook (#250).
-        return 0.0, 0.0, None, "", True
+    segs = _segments(samples)
     seg = segs[-1]
+    # _segments hands back [[]] when every sample fell inside a cap-change window. The
+    # old fast-path test indexed seg[0] before anything else and crashed the hook on it
+    # (#250); the test below reads len(segs) first, and a lone segment -- empty or not --
+    # is the quiet case, so nothing here touches seg[0] until it is known to exist.
     # The zero moved only if this segment begins at a RESET. A segment can also begin at
     # a cap-change window (#249), across which the meter is continuous: the same test
     # _segments used to split there says whether the boundary was a fall. Reading every
