@@ -1269,8 +1269,9 @@ smp=[{"t":D(13,h),"u":{"sd":h}} for h in range(1,20)]
 up.PLAN_SAMPLES=pathlib.Path(tempfile.mkdtemp())/"p.json"
 up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":smp}))
 up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
-print(up.meter_offset("2026-09-16", force=True))')
-[ "$got" = "(0.0, 0.0, None, '"'"''"'"', True)" ] \
+r=up.meter_offset("2026-09-16", force=True)
+print(r[0], r[1], r[2], "quiet" if r[3]=="" else "NOTE", r[4])')
+[ "$got" = "0.0 0.0 None quiet True" ] \
   && ok "a week sampled only inside the cap-change window anchors to nothing instead of crashing" \
   || bad "all-in-window week does not crash meter_offset" "got=$(flat "$got")"
 
