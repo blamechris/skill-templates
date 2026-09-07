@@ -1283,6 +1283,13 @@ import tempfile
 D=lambda d,h: int(up.datetime(2026,9,d,h,0,tzinfo=up.PT).timestamp()*1000)
 up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
 up.PLAN_SAMPLES=pathlib.Path(tempfile.mkdtemp())/"p.json"
+# spend series stubbed, as in (k): the reset half must reach the anchoring fit, and on a
+# machine with no transcripts (CI) the real walk is empty and meter_offset returns quietly
+# for the wrong reason -- which is exactly what happened on the first push of #251.
+O=up.week_bounds("2026-09-16")[0].timestamp()*1000
+times=[O+1000.0+i*3600_000 for i in range(24*7)]
+cum=[0.0]+[(i+1)*10.0 for i in range(24*7)]
+up._cum_events=lambda unit="$": (times, cum, list(cum))
 cont=[{"t":D(10,h),"u":{"sd":h}} for h in range(0,24)]+[{"t":D(14,h),"u":{"sd":40+h}} for h in range(0,24)]
 up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,"samples":cont}))
 a=up.meter_offset("2026-09-16", force=True)
