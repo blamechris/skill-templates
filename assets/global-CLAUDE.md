@@ -236,7 +236,8 @@ itself within ~10 requests. Rules:
   the usage benchmark (`~/Obsidian/no-it-all/briefs/usage-benchmark.md`) — generate it
   with `python3 ~/.claude/scripts/usage-benchmark-row.py` and replace only the
   `<workload note>` placeholder with a one-line workload note (duration + workload
-  class make rows comparable; the measured `· subagents:` suffix stays as emitted); if it
+  class make rows comparable; the measured `· subagents:` and `· work:` suffixes stay as
+  emitted); if it
   resolves to a session ID that already has a row, neither append nor overwrite — the
   counters are cumulative and both corrupt the record; ② the next-session seed, below.
 
@@ -480,9 +481,18 @@ test gates). Depth scales with blast radius:
   times, 27–70 agents, in its first week; hence no tilde).
 Nitpick-severity findings never get refuter panels. Ultracode stays on for repo
 marathon sessions only; planning/chat/fleet sessions run without it (invoke
-per-task when wanted). Benchmark rows carry `· subagents: <eff>M/<count>`
-(weighted eff units, e.g. `4.5M/61`, `0.0M/0`), measured and emitted by
-`usage-benchmark-row.py` — keep the emitted value, never hand-type it.
+per-task when wanted). Benchmark rows carry two measured suffixes —
+`· subagents: <eff>M/<count>` (weighted eff units, e.g. `4.5M/61`, `0.0M/0`) and
+`· work: <n>pr/<n>iss` (merged PRs and closed issues the session is credited
+with) — both emitted by `usage-benchmark-row.py`; keep the emitted values, never
+hand-type them. **`work: n/a` is not a zero.** It means GitHub could not be
+asked, and replacing it with `0` understates a column that is read across
+sessions. The work suffix exists because this ledger could state spend to four
+significant figures and could not state output at all: $/merged-PR went **$17 →
+$34** across the five weeks in which wave restarts, subagent tiering and the pace
+check were all built, and not one of those mechanisms measured the thing it was
+built to improve. A numerator living in prose workload notes is not a numerator —
+parsing those notes returns 7,587 PRs for a single week.
 
 ## Follow-on protocol (all projects)
 
