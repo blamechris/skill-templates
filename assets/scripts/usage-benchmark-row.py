@@ -193,19 +193,12 @@ def scan_work(transcript_path, t0, t1):
     prominently ... NEVER infer or invent"). A row that says 0 because the
     laptop was offline would corrupt the $/PR series the same way an inflated
     eff column corrupted the one above it (skill-templates#207)."""
-    # `gh api user --jq .login` emits a bare string, not JSON, so it is read
-    # raw rather than through _gh_json. Deriving the owner instead of hardcoding
-    # one keeps this copy portable to any machine that bootstraps from it.
-    try:
-        r = subprocess.run(["gh", "api", "user", "--jq", ".login"],
-                           capture_output=True, text=True, timeout=GH_TIMEOUT)
-        owner = r.stdout.strip() if r.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
-        owner = None
-    if not owner:
-        return "n/a"
-
-    # --- 1. nominate, from the transcript's raw bytes ---------------------
+    # --- 1. NOMINATE, from the transcript's raw bytes ---------------------
+    # This runs FIRST, and the ordering is load-bearing: a session that never
+    # named a PR or issue is credited with none BY DEFINITION, and that answer
+    # needs no network. Asking gh first made an offline machine print 'n/a' for
+    # a row whose true value was a certain 0 — turning a known fact into an
+    # unknown one, which is the opposite of what the n/a distinction is for.
     qualified, bare = set(), set()
     url_re = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/(?:pull|issues)/(\d+)")
     ref_re = re.compile(r"\b([\w.-]+/[\w.-]+)#(\d+)\b")
@@ -223,6 +216,19 @@ def scan_work(transcript_path, t0, t1):
         return "n/a"
     if not qualified and not bare:
         return "0pr/0iss"
+
+    # --- 2. ADJUDICATE, and only GitHub may ------------------------------
+    # `gh api user --jq .login` emits a bare string, not JSON, so it is read
+    # raw rather than through _gh_json. Deriving the owner instead of hardcoding
+    # one keeps this copy portable to any machine that bootstraps from it.
+    try:
+        r = subprocess.run(["gh", "api", "user", "--jq", ".login"],
+                           capture_output=True, text=True, timeout=GH_TIMEOUT)
+        owner = r.stdout.strip() if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        owner = None
+    if not owner:
+        return "n/a"
 
     def credited(rows):
         """Keep only what this session nominated. A bare '#245' carries no repo,
