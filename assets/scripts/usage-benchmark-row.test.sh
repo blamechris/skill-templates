@@ -151,7 +151,7 @@ row "$A"
 [ "$(field "$out" 4)" = 2.0 ] \
   && ok "the duration column spans first to last timestamp, in hours" \
   || bad "the duration column spans first to last timestamp, in hours" "$(flat "$out")"
-[ "$(field "$out" 9)" = "<workload note> · subagents: 0.0M/0" ] \
+[ "$(field "$out" 9)" = "<workload note> · subagents: 0.0M/0 · work: 0pr/0iss" ] \
   && ok "the note column is a placeholder plus a measured subagents suffix (one format, 0.0M/0 when none)" \
   || bad "the note column is a placeholder plus a measured subagents suffix (one format, 0.0M/0 when none)" "$(flat "$out")"
 
@@ -336,7 +336,7 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
 PY
 out=$(HOME="$SUBH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$SDIR/$UUID.jsonl" 2>/dev/null); rc=$?
-[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "<workload note> · subagents: 6.2M/2" ] \
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "<workload note> · subagents: 6.2M/2 · work: 0pr/0iss" ] \
   && ok "subagent transcripts are found (incl. nested workflows/), deduped, and emitted as 6.2M/2" \
   || bad "subagent transcripts are found (incl. nested workflows/), deduped, and emitted as 6.2M/2" \
          "rc=$rc $(flat "$out")"
@@ -346,6 +346,120 @@ out=$(HOME="$SUBH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$SDIR/$UUID.jsonl
 [ "$(field "$out" 5)" = 100 ] && [ "$(field "$out" 6)" = 3.1 ] \
   && ok "main-thread columns are unchanged by subagent measurement (100 turns / 3.1M)" \
   || bad "main-thread columns are unchanged by subagent measurement (100 turns / 3.1M)" "$(flat "$out")"
+
+# ============ F — the work numerator: nominated AND adjudicated, or nothing
+echo; echo "F. work numerator"
+
+# The numerator exists because the denominator was measured to death while the
+# thing it was meant to improve was not measured at all: $/merged-PR doubled
+# ($17 -> $34) across the five weeks in which wave restarts, tiering and the
+# pace check were all built. Every assertion below is about ATTRIBUTION, which
+# is the only hard part — three sessions overlap on this machine routinely, so
+# a numerator that credits by time window alone credits all three for one PR.
+#
+# gh is stubbed. These tests must not depend on a network, on credentials, or on
+# what happens to be merged today; the point is the FILTER, not GitHub.
+GHBIN="$TMP/ghbin"; mkdir -p "$GHBIN"
+cat > "$GHBIN/gh" <<'SH'
+#!/usr/bin/env bash
+[ "${GH_FAIL:-0}" = 1 ] && exit 1
+[ "$1" = api ] && { printf 'testowner\n'; exit 0; }
+if [ "$1" = search ]; then
+  case "$2" in
+    prs)    printf '%s\n' "${GH_PRS:-[]}"; exit 0 ;;
+    issues) printf '%s\n' "${GH_ISS:-[]}"; exit 0 ;;
+  esac
+fi
+exit 1
+SH
+chmod +x "$GHBIN/gh"
+
+PRS='[{"number":7658,"repository":{"nameWithOwner":"blamechris/chroxy"}}]'
+ISS='[{"number":7647,"repository":{"nameWithOwner":"blamechris/chroxy"}}]'
+
+# gen_ref <path> <text embedded in every line> — a transcript that MENTIONS things
+gen_ref() {
+  "$PY" - "$1" "$2" <<'PY'
+import json, sys
+path, text = sys.argv[1], sys.argv[2]
+usage = {"input_tokens": 1000, "cache_read_input_tokens": 100000,
+         "cache_creation_input_tokens": 5000, "output_tokens": 2000}
+with open(path, "w", encoding="utf-8") as f:
+    for i in range(10):
+        f.write(json.dumps({"type": "assistant",
+                            "timestamp": "2026-08-11T0%d:00:00.000Z" % (i % 10),
+                            "message": {"id": "msg_%d" % i, "usage": dict(usage)},
+                            "pad": text}) + "\n")
+PY
+}
+# work <path> — the work cell only, with the gh stub first on PATH
+work() {
+  local o
+  o=$(PATH="$GHBIN:$PATH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$1" 2>/dev/null)
+  printf '%s' "$(field "$o" 9)" | sed 's/.*· work: //'
+}
+
+F="$TMP/$UUID.jsonl"
+
+# Nominated AND merged in-window: the only case that scores.
+gen_ref "$F" "shipped #7658 today, closing #7647"
+got=$(GH_PRS="$PRS" GH_ISS="$ISS" work "$F")
+[ "$got" = "1pr/1iss" ] \
+  && ok "a PR and issue this session named, merged/closed in its window, are credited" \
+  || bad "a PR and issue this session named, merged/closed in its window, are credited" "got=$got"
+
+# ADJUDICATION WITHOUT NOMINATION — the concurrency case. Another session merged
+# it inside this session's window; this session never mentioned it. Crediting it
+# here is the same collision class as the newest-mtime fallback in pick_transcript.
+gen_ref "$F" "a session that shipped nothing and named nothing"
+got=$(GH_PRS="$PRS" GH_ISS="$ISS" work "$F")
+[ "$got" = "0pr/0iss" ] \
+  && ok "a PR merged in-window that this session never named is NOT credited" \
+  || bad "a PR merged in-window that this session never named is NOT credited" "got=$got"
+
+# NOMINATION WITHOUT ADJUDICATION — the reading-the-ledger case. gh IS consulted
+# here and still credits nothing, which is the discrimination that matters: a
+# report-only session naming a dozen open PRs must score zero.
+gen_ref "$F" "reviewing open issues #999 and #1000, merging none"
+got=$(GH_PRS="$PRS" GH_ISS="$ISS" work "$F")
+[ "$got" = "0pr/0iss" ] \
+  && ok "numbers this session named but did not merge/close are NOT credited" \
+  || bad "numbers this session named but did not merge/close are NOT credited" "got=$got"
+
+# A qualified reference carries a repo and must match it. Same number, different
+# repo, is a different piece of work — #7658 exists in every repo eventually.
+gen_ref "$F" "see https://github.com/blamechris/other-repo/pull/7658"
+got=$(GH_PRS="$PRS" GH_ISS="$ISS" work "$F")
+[ "$got" = "0pr/0iss" ] \
+  && ok "a repo-qualified reference does not credit the same number in another repo" \
+  || bad "a repo-qualified reference does not credit the same number in another repo" "got=$got"
+
+# gh unreachable WITH candidates: genuinely unknown, and must say so. A 0 here
+# would silently understate the numerator and corrupt the $/PR series.
+gen_ref "$F" "shipped #7658 today"
+got=$(GH_FAIL=1 work "$F")
+[ "$got" = "n/a" ] \
+  && ok "gh unreachable with candidates pending yields n/a, never a fabricated 0" \
+  || bad "gh unreachable with candidates pending yields n/a, never a fabricated 0" "got=$got"
+
+# gh unreachable WITHOUT candidates: NOT unknown. A session that named nothing
+# is credited with nothing by definition, and no network can change that. This
+# is why nomination runs before the gh call.
+gen_ref "$F" "a session that named nothing at all"
+got=$(GH_FAIL=1 work "$F")
+[ "$got" = "0pr/0iss" ] \
+  && ok "gh unreachable with NO candidates is a certain 0, not n/a" \
+  || bad "gh unreachable with NO candidates is a certain 0, not n/a" "got=$got"
+
+# The numerator must never disturb the columns above it — the whole file is one
+# table read across sessions.
+gen_ref "$F" "shipped #7658 today"
+out=$(GH_PRS="$PRS" GH_ISS="$ISS" PATH="$GHBIN:$PATH" env -u CLAUDE_CODE_SESSION_ID \
+      "$PY" "$SUT" "$F" 2>/dev/null)
+[ "$(field "$out" 5)" = 10 ] && [ "$(field "$out" 6)" = 0.3 ] \
+  && ok "the work suffix leaves the usage columns untouched" \
+  || bad "the work suffix leaves the usage columns untouched" "$(flat "$out")"
+
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
