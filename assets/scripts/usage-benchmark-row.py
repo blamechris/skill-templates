@@ -24,10 +24,16 @@ nothing is emitted, so nothing wrong can be appended):
     not a licence to fall through to the same heuristic.
   - an explicit argument matching no transcript.
 
-The row's workload-note cell is emitted with the `· subagents: <eff>/<count>`
-suffix already measured (from the session's subagents/ transcripts, same dedup
-and weights); replace only the `<workload note>` text and KEEP the suffix —
-hand-typed subagent figures produced 12+ unparseable formats in one week.
+The row's workload-note cell is emitted with TWO measured suffixes already
+filled in — `· subagents: <eff>M/<count>` (from the session's subagents/
+transcripts, same dedup and weights) and `· work: <n>pr/<n>iss` (merged PRs and
+closed issues this session is credited with, see scan_work). Replace only the
+`<workload note>` text and KEEP both suffixes — hand-typed subagent figures
+produced 12+ unparseable formats in one week, and the work figures exist
+precisely so the numerator stops living in unparseable prose: a scan of the
+ledger's own workload notes returned 7,587 PRs for a single week.
+
+`work:` may read `n/a`, which is NOT the same as `0pr/0iss` — see scan_work.
 
 Which transcript was chosen, and how, is printed to stderr so a wrong pick is
 visible instead of silent.
@@ -48,7 +54,7 @@ machine bootstrapped from it (`cp assets/scripts/usage-benchmark-row.py
 session-lifecycle's End step 2 is "neither append nor overwrite" once a row
 exists. skill-templates#207.
 """
-import json, glob, os, sys
+import json, glob, os, re, subprocess, sys
 from datetime import datetime
 
 W_IN, W_CR, W_CW, W_OUT = 1.0, 0.1, 2.0, 5.0
@@ -130,6 +136,119 @@ def scan_subagents(transcript_path):
                             + u.get("output_tokens", 0) * W_OUT)
     return eff, count
 
+# --- work numerator -------------------------------------------------------
+# The ledger could state spend to four significant figures and could not state
+# WORK at all, so "are we getting more efficient?" was unanswerable for five
+# weeks while $/merged-PR quietly doubled ($17 -> $34, weeks closing 2026-08-12
+# and 2026-09-09). The denominator was measured to death; this is the numerator.
+#
+# Attribution is the whole difficulty, and it is done with TWO independent
+# filters that must BOTH pass:
+#
+#   1. NOMINATED by the transcript — the number appears somewhere in this
+#      session's own JSONL.
+#   2. ADJUDICATED by GitHub — it actually merged/closed inside this session's
+#      [t0, t1] window, per `gh search`.
+#
+# Neither alone works. A pure time window credits every concurrently-running
+# session with the same PR (three sessions overlap on this machine as a matter
+# of routine, which is the same collision class as the mtime fallback removed
+# from pick_transcript above). A pure transcript scan credits a session for
+# merely READING a ledger full of old PR numbers.
+#
+# This keeps the docstring's "transcript text is opaque data" promise intact:
+# the text can only ever NARROW a set that GitHub produced. No number, state, or
+# timestamp is ever taken from transcript text — GitHub is the sole authority on
+# all three, and the transcript is not trusted, only consulted.
+GH_TIMEOUT = 30
+
+def _gh_json(args):
+    """Run a gh command, return parsed JSON, or None if gh cannot answer."""
+    try:
+        r = subprocess.run(["gh"] + args, capture_output=True, text=True, timeout=GH_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return None  # gh absent, or the network hung: not measurable
+    if r.returncode != 0:
+        return None  # unauthenticated, rate-limited, offline
+    try:
+        return json.loads(r.stdout)
+    except Exception:
+        return None
+
+def _window(t0, t1):
+    """ISO stamps -> a gh search range. Fractional seconds are stripped; gh
+    rejects them, and a rejected query returns rc!=0, i.e. a silent n/a."""
+    def clean(t):
+        t = t.split(".")[0]
+        return t if t.endswith("Z") else t + "Z"
+    return f"{clean(t0)}..{clean(t1)}"
+
+def scan_work(transcript_path, t0, t1):
+    """Return the `work: ` note for the row: merged PRs and closed issues this
+    session can be credited with, or 'n/a' when GitHub could not be asked.
+
+    'n/a' and '0pr/0iss' are DELIBERATELY different strings. Measured-zero and
+    could-not-measure are different facts, and collapsing them is exactly the
+    error the meter ledger forbids for a missing reading ("print MISSING
+    prominently ... NEVER infer or invent"). A row that says 0 because the
+    laptop was offline would corrupt the $/PR series the same way an inflated
+    eff column corrupted the one above it (skill-templates#207)."""
+    # `gh api user --jq .login` emits a bare string, not JSON, so it is read
+    # raw rather than through _gh_json. Deriving the owner instead of hardcoding
+    # one keeps this copy portable to any machine that bootstraps from it.
+    try:
+        r = subprocess.run(["gh", "api", "user", "--jq", ".login"],
+                           capture_output=True, text=True, timeout=GH_TIMEOUT)
+        owner = r.stdout.strip() if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        owner = None
+    if not owner:
+        return "n/a"
+
+    # --- 1. nominate, from the transcript's raw bytes ---------------------
+    qualified, bare = set(), set()
+    url_re = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/(?:pull|issues)/(\d+)")
+    ref_re = re.compile(r"\b([\w.-]+/[\w.-]+)#(\d+)\b")
+    bare_re = re.compile(r"(?<![\w/#])#(\d+)\b")
+    try:
+        with open(transcript_path, errors="replace") as f:
+            for line in f:
+                for m in url_re.finditer(line):
+                    qualified.add((m.group(1), int(m.group(2))))
+                for m in ref_re.finditer(line):
+                    qualified.add((m.group(1), int(m.group(2))))
+                for m in bare_re.finditer(line):
+                    bare.add(int(m.group(1)))
+    except OSError:
+        return "n/a"
+    if not qualified and not bare:
+        return "0pr/0iss"
+
+    def credited(rows):
+        """Keep only what this session nominated. A bare '#245' carries no repo,
+        so it matches on number alone — deliberately loose, because the window
+        filter is the one doing the real work and a session that never mentioned
+        a number at all is the case worth excluding."""
+        n = 0
+        for row in rows or []:
+            num = row.get("number")
+            repo = (row.get("repository") or {}).get("nameWithOwner")
+            if (repo, num) in qualified or num in bare:
+                n += 1
+        return n
+
+    win = _window(t0, t1)
+    prs = _gh_json(["search", "prs", "--owner", owner, "--merged",
+                    "--merged-at", win, "--limit", "200",
+                    "--json", "number,repository"])
+    iss = _gh_json(["search", "issues", "--owner", owner, "--state", "closed",
+                    "--closed", win, "--limit", "200",
+                    "--json", "number,repository"])
+    if prs is None or iss is None:
+        return "n/a"
+    return f"{credited(prs)}pr/{credited(iss)}iss"
+
+
 path, how = pick_transcript()
 n = 0; eff = 0.0; out = 0; t0 = t1 = None
 seen = set()
@@ -172,14 +291,18 @@ sub_eff, sub_count = scan_subagents(path)
 # One format for every row, zero included ("0.0M/0") — two shapes in one column
 # is the hand-typed drift this suffix replaces, in miniature.
 sub_note = f"{sub_eff/1e6:.1f}M/{sub_count}"
+work_note = scan_work(path, t0, t1)
 dur = (datetime.fromisoformat(t1.replace("Z", "+00:00"))
        - datetime.fromisoformat(t0.replace("Z", "+00:00"))).total_seconds() / 3600
 sid = os.path.basename(path)[:8]
 date = t0[5:10]
 print(f"| {date} | {sid} | {dur:.1f} | {n} | {eff/1e6:.1f} | {out/1e3:.0f} | {eff/n/1e3:.1f} "
-      f"| <workload note> · subagents: {sub_note} |")
+      f"| <workload note> · subagents: {sub_note} · work: {work_note} |")
 print(f"\nresolved {sid} via {how}", file=sys.stderr)
 print(f"  transcript: {path}", file=sys.stderr)
 print(f"  If that is not the session you are ending, STOP — pass the id explicitly.", file=sys.stderr)
 print(f"\n(append to ~/Obsidian/no-it-all/briefs/usage-benchmark.md; replace only the "
-      f"<workload note> text — the measured subagents suffix stays)", file=sys.stderr)
+      f"<workload note> text — the measured subagents and work suffixes stay)", file=sys.stderr)
+if work_note == "n/a":
+    print("  work: n/a — GitHub could not be asked (gh missing, unauthenticated, or "
+          "offline). This is NOT a measured zero; do not replace it with one.", file=sys.stderr)
