@@ -1648,6 +1648,36 @@ case "$d_line" in
   *) ok "the derived line claims no live percentage" ;;
 esac
 
+# The cached --calibrate median must not reach the pacing path at ALL. It is a median
+# ACROSS meter weeks with no staleness check, and it short-circuited resolve_cap before
+# both zero-point-independent methods: divided into this week's spend it printed "96% of
+# cap | NEAR CAP" while the live meter read 79. It is still the right answer to the
+# question --caps asks, so the assertion is two-sided -- absent from the readout, present
+# in --caps.
+mkfix "$NOSAMP" '{"sd":82,"recent_n":4,"recent_tok":1000000}' >/dev/null
+rm -rf "$NOSAMP/Library"
+mkdir -p "$NOSAMP/.claude/usage-history"
+printf '{"all": 99999.0, "periods": 6, "r2": 0.99, "at": "2020-01-01T00:00"}'   > "$NOSAMP/.claude/usage-history/pace-calibration.json"
+d_line=$(HOME="$NOSAMP" "$PY" "$SUT" --oneline 2>&1)
+case "$d_line" in
+  *99,999*) bad "the pacing path ignores the cached calibrate median" "$(flat "$d_line")" ;;
+  *) ok "the pacing path ignores the cached calibrate median, however stale" ;;
+esac
+# ...and resolve_cap still serves it to the caller that WANTS a cross-week cap, so the
+# distinction is in the argument and not in a deleted capability.
+mk 20 20 600.00 600.00 1000000000 1000000000 100000000 100000000 \
+   60 60 1800.00 1800.00 3000000000 3000000000 300000000 300000000
+printf '{"all": 99999.0, "periods": 6, "r2": 0.99, "at": "2020-01-01T00:00"}' > "$TMP/calib.json"
+got=$(pymod "
+up.READINGS=pathlib.Path(sys.argv[3]); up.CALIB=pathlib.Path(sys.argv[4])
+up.PLAN_SAMPLES=pathlib.Path(sys.argv[3]+'.absent')
+print('%.0f %.0f' % (up.resolve_cap('all', up.read_readings())[0],
+                     up.resolve_cap('all', up.read_readings(), use_cached=False)[0]))" \
+  "$R" "$TMP/calib.json" 2>&1)
+[ "$got" = "99999 3000" ] \
+  && ok "resolve_cap serves the cached median on request and the pair without it" \
+  || bad "resolve_cap serves the cached median on request and the pair without it" "got=$(flat "$got")"
+
 # --json must carry the live fields, not only the formatted line: the hook consumes the
 # payload and the previous payload had no live percentage in it at all.
 fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000}')

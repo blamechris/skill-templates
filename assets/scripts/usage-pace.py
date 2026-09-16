@@ -1111,8 +1111,9 @@ def resolve_cap(kind, rows, use_cached=True):
         med = caps[len(caps) // 2] if len(caps) % 2 else (caps[len(caps) // 2 - 1] + caps[len(caps) // 2]) / 2
         return med, (f"median of {len(caps)} single reading(s) -- ABSOLUTE, assumes the "
                      f"meter zeroed at the week open; wrong after an out-of-band reset"), True
-    return (FALLBACK[kind], "measured elsewhere, not calibrated on this machine "
-            "(record a reading pair to replace it)", False)
+    return (FALLBACK[kind], "derived elsewhere from other weeks' statistics, not measured "
+            "on this machine and not this week's rate (record a reading pair to replace "
+            "it, or read the live meter)", False)
 
 
 # ---------------------------------------------------------------- pace
@@ -1212,8 +1213,8 @@ def pace(now=None, force=False, prefer="live"):
     if samp:
         anchor_ms, prev_ms, label = observed_anchor(open_ms)
         spend, fable = window_spend(bk, anchor_ms, now_ms)
-        gap = window_spend(bk, prev_ms, anchor_ms)[0] if prev_ms is not None else 0.0
-        gap_f = window_spend(bk, prev_ms, anchor_ms)[1] if prev_ms is not None else 0.0
+        gap, gap_f = (window_spend(bk, prev_ms, anchor_ms) if prev_ms is not None
+                      else (0.0, 0.0))
         lo = derive(samp["sd"], spend, burn_1h, burn_3h, hours_to_reset)
         hi = derive(samp["sd"], spend + gap, burn_1h, burn_3h, hours_to_reset)
         p.update({
@@ -1622,8 +1623,6 @@ def main():
     g.add_argument("--oneline", action="store_true", help="human one-liner")
     g.add_argument("--json", action="store_true", help="everything, machine-readable")
     g.add_argument("--hook", action="store_true", help="UserPromptSubmit hook mode")
-    g.add_argument("--derived", action="store_true",
-                   help="ignore the live sample and show the derived arithmetic instead")
     g.add_argument("--at-now", action="store_true", help="spend+timestamp for a meter reading")
     g.add_argument("--caps", action="store_true", help="implied caps from every meter reading")
     g.add_argument("--calibrate", action="store_true",
@@ -1642,6 +1641,10 @@ def main():
     ap.add_argument("--margin", type=float, default=0.15,
                     help="accepted and ignored (see --help notes); kept for callers")
     ap.add_argument("--force", action="store_true", help="ignore the incremental cache")
+    # NOT in the mutually exclusive group above: `--json --derived` is a reasonable thing
+    # to ask for, and argparse would have refused it there.
+    ap.add_argument("--derived", action="store_true",
+                    help="ignore the live sample and show the derived arithmetic instead")
     a = ap.parse_args()
 
     if a.hook:
@@ -1748,7 +1751,8 @@ def main():
     if a.caps:
         rows = read_readings()
         if not rows:
-            print("no meter readings recorded — every cap in use was measured elsewhere:")
+            print("no meter readings recorded — every cap below is derived from other "
+                  "weeks' statistics, not measured here:")
             for k, v in FALLBACK.items():
                 print(f"  {k:6s} ${v:,.0f}")
             return 0
