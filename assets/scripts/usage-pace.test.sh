@@ -181,11 +181,17 @@ h_reset = (up.week_bounds(wk)[1].astimezone(timezone.utc) - now).total_seconds()
 
 MIN_MOVED = 5.0   # below this the rate is provisional and the meter is NOT carried forward
 
-def figures(at):
-    """The readout's chain, from a spend-at-sample figure."""
+def figures(at, gate=True):
+    """The readout's chain, from a spend-at-sample figure.
+
+    `gate=False` is the identical world with the PROVISIONAL GATE removed -- the mutant,
+    computed here because "the lockout warning is withheld" is a vacuous claim unless the
+    ungated world would have fired it. A caller asserting the gate reads `gate_matters`
+    and SKIPs rather than passing on a world where nothing was being withheld.
+    """
     moved = sd - anchor_sd
     rate = at / moved if moved > 0 and at > 0 else None
-    prov = rate is not None and moved < MIN_MOVED
+    prov = rate is not None and moved < MIN_MOVED and gate
     pct_now = sd + (since / rate if rate and not prov else 0.0)
     pts_left = max(0.0, 100.0 - pct_now)
     usd_left = pts_left * rate if rate else None
@@ -197,6 +203,7 @@ def figures(at):
 
 lo_f = figures(at_s)
 hi_f = figures(at_s + gap)                    # the other end of the reset-gap range
+lo_u = figures(at_s, gate=False)              # ...and the same world without the gate
 fwd = (" ≈ %.0f%% now" % lo_f["pct_now"]) if "%.0f" % lo_f["pct_now"] != "%.0f" % sd else ""
 print(json.dumps({
     "usable": usable, "sd": sd, "anchor_sd": anchor_sd,
@@ -218,6 +225,9 @@ print(json.dumps({
     "prov_s": ("${:,.1f}/pt PROVISIONAL (the meter has moved {:,.0f} pt since the reset)"
                .format(lo_f["rate"], sd - anchor_sd) if lo_f["prov"] else ""),
     "warn_a": bool(lo_f["wall"] < 0.5 * h_reset and not lo_f["prov"]),
+    # Would warning (a) fire in this world if the provisional gate were deleted? Only then
+    # does asserting its absence assert anything.
+    "gate_matters": bool(lo_u["wall"] < 0.5 * h_reset),
     "warn_b": bool(lo_f["landing"] < 90 and h_reset < 24),
     "sd_s": "sd %.0f%%" % sd, "fh_s": "fh %.0f%%" % float(fh), "fwd_s": fwd,
     "spend_s": "spent ${:,.0f} since".format(spend),
@@ -1957,10 +1967,22 @@ fi
 # NOT carried forward, the line says the rate is provisional and how far the meter moved,
 # and the warning is withheld. This world is every session started within an hour of a
 # Wednesday reset.
-fx=$(mkfix "$LIVEHOME" '{"sd":1,"fh":1,"age_min":5,"reqs":[[40,1000000,"claude-fable-5"],[3,1000000,"claude-fable-5"]]}')
+#
+# The world is chosen so that the GATE is what withholds the warning, and not the
+# arithmetic: a small pre-sample spend ($5, so the one point of movement prices at $5/pt)
+# and a large burst after it ($150 in the last hour). Ungated, the meter carries forward to
+# ~31%, the headroom prices at $345 and the wall lands 2.3h out against a reset 12h away --
+# so warning (a) fires. Gated, it is withheld. The previous world's wall was 49h against a
+# 6.2h threshold, so `lost=False` held whether the gate existed or not and deleting the
+# gate left that assertion green; the fixture now computes the ungated world too and the
+# case SKIPs rather than asserting nothing.
+fx=$(mkfix "$LIVEHOME" '{"sd":1,"fh":1,"age_min":5,"reqs":[[40,100000,"claude-fable-5"],[3,3000000,"claude-fable-5"]]}')
 prov_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
 if [ "$(fixf "$fx" usable)" != "True" ]; then
   skipt "a one-point rate is provisional and does not extrapolate" "too close to a meter reset"
+elif [ "$(fixf "$fx" gate_matters)" != "True" ]; then
+  skipt "a one-point rate is provisional and does not extrapolate" \
+        "this clock is too near the reset for the ungated world to warn, so lost=False would prove nothing"
 else
   w1=$(fixf "$fx" prov_s)
   got=$(HOME="$LIVEHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
