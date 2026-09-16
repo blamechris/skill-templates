@@ -1459,15 +1459,26 @@ def warnings_for(p):
 
 
 def _rng(lo, hi, f="${:,.0f}"):
-    """One number when both ends format the same, `lo-hi` when they do not.
+    """One number when both ends format the same, `low-high` when they do not.
 
     Comparing the FORMATTED strings, not the values: a range narrower than the precision
     being printed is noise, and "$2,572-$2,572" reads as an error in the tool.
+
+    The ends are ORDERED here rather than trusted from the caller, because "lo" and "hi"
+    name the two ends of the reset-gap range -- the anchor's low and high spend -- and not
+    every figure is increasing in that. `landing` is monotonically DECREASING in it (more
+    spend attributed to the anchor means a higher $/pt, which buys fewer points per hour),
+    so it printed "lands 43-40%", a range spelled backwards. `usd_left` and
+    `need_per_hour` are products of one increasing and one decreasing factor and can fall
+    either way depending on the world. Ordering one call site would have left the other
+    two to be discovered separately.
     """
     if lo is None:
         return "?"
-    a = f.format(lo)
-    b = f.format(hi if hi is not None else lo)
+    if hi is None:
+        hi = lo
+    lo, hi = min(lo, hi), max(lo, hi)
+    a, b = f.format(lo), f.format(hi)
     return a if a == b else f"{a}-{b}"
 
 

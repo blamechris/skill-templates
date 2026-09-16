@@ -193,6 +193,13 @@ print(json.dumps({
     "rate": lo_f["rate"], "pct_now": lo_f["pct_now"], "pts_left": lo_f["pts_left"],
     "gap": gap, "gap_s": "${:,.0f}".format(gap),
     "rate_rng_s": "${:,.1f}-${:,.1f}/pt".format(lo_f["rate"], hi_f["rate"]),
+    # `landing` is DECREASING in the gap-spend end, so its range is the one that can print
+    # backwards. Stated low-to-high here, which is how a range is read.
+    "landing_rng_s": "→ lands {:,.0f}-{:,.0f}%".format(
+        min(lo_f["landing"], hi_f["landing"]), max(lo_f["landing"], hi_f["landing"])),
+    "landing_rng_ok": bool(
+        lo_f["landing"] <= 100 and hi_f["landing"] <= 100
+        and "{:,.0f}".format(lo_f["landing"]) != "{:,.0f}".format(hi_f["landing"])),
     "spend_rng_s": "spent ${:,.0f}-${:,.0f} since".format(spend, spend + gap),
     "usd_left": lo_f["usd_left"], "burn1": burn1, "burn3": burn3, "h_reset": h_reset,
     "wall": lo_f["wall"], "landing": lo_f["landing"], "need": lo_f["need"],
@@ -1824,6 +1831,24 @@ else
     *"$w1"*"$w2"*) ok "an anchor the meter did not zero at is DIFFERENCED (sd - anchor_sd)" ;;
     *) bad "an anchor above zero is differenced, not divided by the current reading" \
           "want $w1/$w2 || $(flat "$part_line")" ;;
+  esac
+fi
+
+# --- a range reads low-to-high, and `landing` is the end that falls the other way -------
+# The two ends of every live figure are "the anchor's spend" and "the anchor's spend plus
+# the reset gap", and `landing` is monotonically DECREASING in that: more spend attributed
+# to the anchor means a higher $/pt, which buys fewer points per hour. So the one figure
+# whose range could print backwards did, as "lands 43-40%". Needs a world with BOTH a gap
+# and a landing under 100, which no other case in this file builds.
+fx=$(mkfix "$LIVEHOME" '{"sd":8,"fh":2,"age_min":5,"gap_n":1,"gap_tok":400000,"reqs":[[40,4000000,"claude-fable-5"],[3,100000,"claude-fable-5"]]}')
+rng_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ] || [ "$(fixf "$fx" landing_rng_ok)" != "True" ]; then
+  skipt "the landing range prints low-to-high" "this clock does not build a sub-100 landing range"
+else
+  want=$(fixf "$fx" landing_rng_s)
+  case "$rng_line" in
+    *"$want"*) ok "the landing range prints low-to-high, not descending" ;;
+    *) bad "the landing range prints low-to-high" "want $want || $(flat "$rng_line")" ;;
   esac
 fi
 
