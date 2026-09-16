@@ -1983,6 +1983,94 @@ print("%s | rate=%s | %s" % (p["source"], p["rate"], p["rate_reason"]))')
   esac
 fi
 
+# --- ...and the reason must be the RIGHT one, which the world above cannot show --------
+# The case above has spend and a meter that did not move, so it only ever exercises one of
+# the two branches. The other two worlds are the common ones and both were mis-worded:
+#   - neither spend nor movement (a session opening on a fresh week) satisfies BOTH
+#     conditions, and with movement tested first "no spend recorded" was unreachable;
+#   - the DERIVED path has no meter to have moved -- its percentage is `100 * spend / cap`
+#     -- so any sentence about "the meter" there describes a reading never taken.
+# Asserted as a function first, because all three branches are reachable in one call each
+# and only two of them can be built as a world.
+got=$(pymod "
+d = lambda **kw: up.derive(**dict({'pct': 0.0, 'anchor_sd': 0.0, 'spend_at_pct': 0.0,
+                                   'spend_since': 0.0, 'burn_1h': 0.0, 'burn_3h': 0.0,
+                                   'hours_to_reset': 10.0}, **kw))['rate_reason']
+print('%s | %s | %s' % (
+    d(),                                       # no spend and no movement: BOTH conditions
+    d(spend_at_pct=12.0),                      # a real meter sitting on one integer
+    d(spend_at_pct=12.0, has_meter=False)))    # ...and a path with no meter at all
+" 2>&1)
+want="no spend recorded since the reset | the meter has not moved since the reset (still 0%) | the derived percentage is still 0%, so there is nothing to divide by"
+[ "$got" = "$want" ] \
+  && ok "the missing-rate reason names the missing numerator first, and never names a meter the path does not have" \
+  || bad "the missing-rate reason is the right one for each of its three worlds" \
+        "got=$(flat "$got") want=$(flat "$want")"
+
+# Both halves as WORLDS, since the wording is what a session actually reads.
+# (a) the derived path with nothing behind it: no sample file, no transcripts. This is a
+# fresh week on a machine with no desktop app, and it printed "the meter has not moved
+# since the reset (still 0%)" -- a meter reading, on the path defined by having none.
+EMPTYHOME=$TMP/emptyhome
+rm -rf "$EMPTYHOME"; mkdir -p "$EMPTYHOME/.claude/projects/p"
+e_line=$(HOME="$EMPTYHOME" "$PY" "$SUT" --oneline 2>&1)
+got=$(HOME="$EMPTYHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+import json, sys
+p = json.load(sys.stdin)
+print("%s | rate=%s | %s" % (p["source"], p["rate"], p["rate_reason"]))')
+case "$got:$e_line" in
+  *"meter has not moved"*)
+     bad "the derived path does not explain a missing rate with a meter" \
+         "got=$got || $(flat "$e_line")" ;;
+  "derived | rate=None | no spend recorded since the reset":*"no \$/pt yet — no spend recorded since the reset"*)
+     ok "the derived path with no spend says so, and says nothing about a meter" ;;
+  *) bad "the derived path with no spend says so" "got=$got || $(flat "$e_line")" ;;
+esac
+
+# (b) the LIVE path with a real reading and no spend at all: the meter is genuinely flat
+# AND there is no numerator, so both conditions hold here too and the branch order decides
+# what is printed. The missing spend is the honest answer -- there is nothing to divide,
+# whatever the meter did -- and it is the one the reader can act on.
+ZEROHOME=$TMP/zerohome
+rm -rf "$ZEROHOME"
+mkdir -p "$ZEROHOME/.claude/projects/p" "$ZEROHOME/Library/Application Support/Claude"
+built=$("$PY" - "$SUT" "$ZEROHOME" <<'ZEROEOF'
+import importlib.util, json, pathlib, sys
+from datetime import datetime, timezone
+spec = importlib.util.spec_from_file_location("up", sys.argv[1])
+up = importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+home = pathlib.Path(sys.argv[2])
+now_ms = datetime.now(timezone.utc).timestamp() * 1000
+open_ms = up.week_bounds(up.week_close(datetime.now(timezone.utc)))[0] \
+            .astimezone(timezone.utc).timestamp() * 1000
+a = max(now_ms - 90 * 60_000, open_ms + 60_000)      # the reset, seen late at 40%
+if now_ms - a < 4 * 60_000:
+    print("skip"); raise SystemExit(0)
+(home / "Library" / "Application Support" / "Claude" / "plan-usage-history.json").write_text(
+    json.dumps({"version": 2, "samples": [
+        {"t": int(a - 300_000), "u": {"sd": 100, "fh": 40}},
+        {"t": int(a), "u": {"sd": 40, "fh": 4}},
+        {"t": int((a + now_ms) / 2), "u": {"sd": 40, "fh": 4}}]}))
+(home / ".claude" / "projects" / "p" / "t.jsonl").write_text("")   # ...and no spend at all
+print("built")
+ZEROEOF
+)
+if [ "$built" != "built" ]; then
+  skipt "a live reading with no spend behind it names the missing spend" "too close to a meter reset"
+else
+  z_line=$(HOME="$ZEROHOME" "$PY" "$SUT" --oneline 2>&1)
+  got=$(HOME="$ZEROHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+import json, sys
+p = json.load(sys.stdin)
+print("%s | sd=%s | rate=%s | %s" % (p["source"], p["sd"], p["rate"], p["rate_reason"]))')
+  case "$got" in
+    "live | sd=40.0 | rate=None | no spend recorded since the reset")
+       ok "a live meter with no spend behind it reports the missing spend, not the flat meter" ;;
+    *) bad "a live reading with no spend behind it names the missing spend" \
+          "got=$(flat "$got") || $(flat "$z_line")" ;;
+  esac
+fi
+
 # ------ a sample from BEFORE this meter period is not a reading of this meter -------
 # The deterministic shape: after every Wednesday 15:59 PT reset the newest persisted
 # sample is still the PRIOR week's, until the app's next /usage poll -- 15 to 60 minutes

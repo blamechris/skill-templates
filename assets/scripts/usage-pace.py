@@ -1166,7 +1166,7 @@ def resolve_cap(kind, rows, use_cached=True):
 # ---------------------------------------------------------------- pace
 
 def derive(pct, anchor_sd, spend_at_pct, spend_since, burn_1h, burn_3h,
-           hours_to_reset, min_moved=MIN_MOVED):
+           hours_to_reset, min_moved=MIN_MOVED, has_meter=True):
     """Everything downstream of one percentage and the spend measured against it.
 
     `rate` is the self-calibrating cap: this week's own dollars per meter point. It is
@@ -1225,9 +1225,23 @@ def derive(pct, anchor_sd, spend_at_pct, spend_since, burn_1h, burn_3h,
     # or to distrust the tool. Both causes are ordinary rather than exceptional: the meter
     # sits on one integer for the first stretch of a period, and a session can open with no
     # spend behind it at all.
+    #
+    # SPEND is tested first because the two conditions are not exclusive: a session opening
+    # with nothing behind it has no spend AND no movement, and testing movement first made
+    # "no spend recorded" unreachable in exactly that world -- the commonest one there is.
+    # Of the two, the missing numerator is the one that names what the reader can do about
+    # it (spend something, or wait), where "the meter has not moved" invites opening /usage
+    # to refresh a reading that is already correct.
+    #
+    # And `has_meter` is what keeps the sentence honest: the DERIVED path has no meter at
+    # all -- its percentage is `100 * spend / cap`, an arithmetic result -- so "the meter
+    # has not moved (still 0%)" there is a claim about a reading the script never took.
     rate_reason = None if rate is not None else (
-        "the meter has not moved since the reset (still %.0f%%)" % (pct or 0.0)
-        if moved <= 0 else "no spend recorded since the reset")
+        "no spend recorded since the reset" if spend_at_pct <= 0
+        else "the meter has not moved since the reset (still %.0f%%)" % (pct or 0.0)
+        if has_meter
+        else "the derived percentage is still %.0f%%, so there is nothing to divide by"
+             % (pct or 0.0))
     provisional = rate is not None and moved < min_moved
     pct_now = (pct or 0.0) + (spend_since / rate
                               if rate and not provisional and spend_since > 0 else 0.0)
@@ -1388,7 +1402,11 @@ def pace(now=None, force=False, prefer="live"):
         # `all_cap_basis` states in the line. Gating on `moved` here would instead have
         # silenced the lockout warning through the whole early-week stretch where a derived
         # percentage is small, which is the opposite of the intent.
-        d = derive(pct, 0.0, all_, 0.0, burn_1h, burn_3h, hours_to_reset, min_moved=0.0)
+        #
+        # `has_meter=False` for the same reason: there is no meter on this path, so a
+        # missing rate here must not be explained as a meter that has not moved.
+        d = derive(pct, 0.0, all_, 0.0, burn_1h, burn_3h, hours_to_reset, min_moved=0.0,
+                   has_meter=False)
         p.update({
             "source": "derived", "sd": None, "fh": None,
             "sample_at": None, "sample_age_min": None, "stale": False,
