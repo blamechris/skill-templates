@@ -54,21 +54,41 @@ STATE = HIST / "pace-state.json"
 READINGS = HOME / "Obsidian" / "no-it-all" / "briefs" / "meter-readings.md"
 PT = ZoneInfo("America/Los_Angeles")
 WEEK_WD, WEEK_H, WEEK_MIN = 2, 15, 59          # Wednesday 15:59 PT
+# How far past the week close scan() still remembers a key it is not billing. See the
+# straddle comment in scan(): wide enough to cover the widest partial-to-complete pair
+# measured (661s), narrow enough that `seen` stays this week's ~21k keys and not the
+# corpus's ~162k.
+STRADDLE_GRACE_MS = 3_600_000
 
-# Claude Code writes ONE assistant message to the transcript twice under a single
-# requestId: a partial record (output_tokens ~2) when the turn starts, and the complete
-# one minutes later. Both carry the same (message id, requestId), so the dedup has to
-# choose between them -- and keeping the FIRST, which is what this file did until
-# 2026-09-16, bills the stub. Measured that day on this machine, over the 41,616 records
-# the current meter week had produced: 21,285 keys, of which 10,696 had a later and larger
-# record, first-occurrence $2,590.81 against $2,854.45 -- every dollar this file has ever
-# printed 10.2% low, --calibrate, --caps and every recorded reading included. Each of the
-# seven calibration periods on file moves UP under supersession, by 2.0% to 12.9% (#256).
+# Claude Code writes one assistant message's usage block to the transcript more than once
+# under a single requestId: a partial record (output_tokens ~2) when the turn starts, and
+# the complete one shortly after. Both carry the same (message id, requestId), so the
+# dedup has to choose between them -- and keeping the FIRST, which is what this file did
+# until 2026-09-16, bills the stub. Measured that day on this machine, over the 41,616
+# records the current meter week had produced: 21,285 keys, of which 10,696 had a later
+# and larger record, first-occurrence $2,590.81 against $2,854.45 -- 10.2% low for that
+# week's all-models total, --calibrate, --caps and every recorded reading included. Each
+# of the seven calibration periods on file moves UP under supersession, 2.0% to 12.9%.
 #
-# The complete record is always the LAST one for a key, and last == max exactly. This
-# supersedes on the greater (cost, timestamp) rather than on "last seen", because scan
-# order is not write order: `rglob` order is arbitrary, one request lands in more than
-# one transcript (resumes, sidechains), and an incremental scan sees the two halves in
+# THE SHIFT IS NOT UNIFORM ACROSS THE BUCKETS THIS FILE PRINTS, and which bucket moves
+# decides which downstream numbers actually have to be re-measured. Re-measured over all
+# of history on 2026-09-16, per meter week, first-occurrence against supersession:
+#     main   +0.00% in EVERY one of the eight weeks on file
+#     fable  +0.00% .. +5.29%   (+0.00% for the current week)
+#     sub    +6.43% .. +32.09%
+#     all    +3.47% .. +14.40%
+# All 59,192 superseded keys in that corpus are SIDECHAIN records, which is why the main
+# bucket does not move at all: the duplication is a subagent-transcript behaviour. So the
+# subagent SHARE moves too (this week 62.2% -> 65.8% of all-in), and the Fable numerator
+# -- main-thread-only by doctrine -- barely moves. Anything derived from the FABLE total
+# is therefore ~1% stale, not ~10%; only the all-models and subagent figures carry the
+# full correction (#256).
+#
+# Supersession is on the greater (cost, timestamp) rather than on "last seen". "Last" is
+# not merely unsafe in principle: 1,094 keys ($25.00) have a last-WRITTEN record cheaper
+# than their maximum, because one request lands in more than one transcript (resumes,
+# sidechains) and the later copy can be the truncated one. Scan order is not write order
+# either -- `rglob` order is arbitrary, and an incremental scan sees the two halves in
 # different passes. Max is the same answer from any order and is idempotent; "last" is
 # neither.
 #
@@ -407,10 +427,12 @@ def scan_detail(week, force=False):
     transcript (resumes, sidechains); without it a resumed session double-counts.
 
     Duplicates SUPERSEDE rather than being dropped (see COST_POLICY): the partial record
-    and the complete one share a key and land in different minutes -- usually in
-    different scans -- so the complete one has to remove what the partial added and
-    re-add itself at its own timestamp. That is why `seen` maps each key to the
-    contribution made for it instead of merely remembering the key.
+    and the complete one share a key, and a hook firing between them sees only the first
+    -- so the complete one has to remove what the partial added and re-add itself at its
+    own timestamp. That is why `seen` maps each key to the contribution made for it
+    instead of merely remembering the key. The measured gap is small (2.1s median), so the
+    two usually land in one scan and often in one minute; it is the incremental path, not
+    the clock, that makes the subtraction necessary.
 
     The per-minute index exists because the live readout needs spend since an ARBITRARY
     instant (the meter's observed zero) and over the last hour and three hours, and the
@@ -840,12 +862,13 @@ def _cum_events(unit="$"):
     desktop app's samples carry NO Fable meter, so the Fable side of an out-of-band
     reset can only be recovered by summing Fable spend up to the zero instant.
 
-    Supersession matters MORE here than in the week total, because this series is
-    indexed by instant: the partial record and the complete one are ~11 minutes apart,
-    and the meter bills the complete one's minute. Keeping the first put the stub's cost
-    at the stub's instant, which is what the regression fitted and what the anchor
-    localised the meter's zero against -- so the defect was not only ~10% of dollars, it
-    was ~10% of dollars placed at the wrong minute.
+    Supersession matters here for the same reason it matters in the week total -- the
+    VALUE, not the instant. Measured over 59,192 superseded pairs, the partial-to-complete
+    gap is 2.1s at the median and 8.7s at p90, so the two records almost always land in
+    the same minute and the series' x-axis barely moves; the widest pair on record is
+    661s, and the fixture in section 18 of the suite uses that tail deliberately rather
+    than as a typical case. What DID move is what the regression fitted and what the
+    anchor localised the meter's zero against: a cumulative curve built from stub costs.
     """
     idx = {"$": 0, "raw": 1, "ieq": 2}[unit]
     best = {}
