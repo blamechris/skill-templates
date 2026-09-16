@@ -463,6 +463,15 @@ jobs:
         # not, that a 48-minute-old sample is flagged stale and a 5-minute-old one is
         # not, that NEAR CAP appears nowhere, and that with no sample file at all the
         # line says "derived" instead of presenting a computed number as the meter.
+        #
+        # "Outside the script" is literal: the fixture writes out the per-million prices
+        # and the minute-bucket rule itself rather than calling cost_usd and bucket_of, so
+        # a mispriced tier fails HERE and not only in the machine-only comparison against
+        # usage-trend.py, which this runner skips. It also pins a sample from before the
+        # meter period being refused rather than reported, an anchor the app saw late being
+        # differenced rather than divided, and every figure the readout prints -- the
+        # landing, the need-per-hour and the hours-to-wall that warning (a) is built from
+        # were each asserted by nothing while a doubling mutation kept the suite green.
         run: ./assets/scripts/usage-pace.test.sh
 
       - name: fleet-check regression tests

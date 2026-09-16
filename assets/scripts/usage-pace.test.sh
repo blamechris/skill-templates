@@ -51,25 +51,33 @@ PYEOF
 
 # ------------------------------------------------------- fixture HOME (the live meter)
 # Builds a fake HOME whose live meter sample, transcripts and arithmetic are all KNOWN,
-# and prints the expectations as JSON -- formatted exactly as the readout formats them, so
-# an assertion compares the script's own line against arithmetic done OUTSIDE the script.
+# and prints the expectations as JSON -- formatted exactly as the readout formats them.
 # The script resolves the sample file under HOME, which is what makes the fixture possible
 # at all; nothing here reaches machine state.
+#
+# The expectations are computed from the PRICES and the BUCKET RULE written out below, not
+# from up.cost_usd / up.bucket_of. That is the whole point of the section: while the
+# fixture called the script's own pricing, mutating Fable's output price from $50 to $70
+# per million left the suite green on a CI-shaped HOME -- every dollar figure moved
+# together and nothing outside the script disagreed.
 FIXPY=$TMP/fixture-home.py
 cat > "$FIXPY" <<'FIXEOF'
 """Build a fake HOME whose live meter, transcripts and arithmetic are all KNOWN.
 
-Emits the expectations as JSON on stdout, formatted exactly as the readout formats them,
-so an assertion compares the script's line against arithmetic done outside the script.
-Placement rules, all load-bearing:
-  - one fable request stream, because the hook only speaks to a session on Fable;
-  - "old" requests land 71-100 minutes ago: inside the 3h burn window, outside the 1h one,
-    so burn_1h and burn_3h are both exact and neither sits on a boundary;
-  - "recent" requests land 2-25 minutes ago, inside both;
-  - the meter series is prev(sd 100) -> anchor(sd 0) -> newest(sd), so the anchor is an
-    observed reset and the newest sample is the live reading.
-`usable` is false when the meter week opened too recently to place the old requests after
-the anchor -- the caller SKIPs rather than asserting on a world it could not build.
+Emits the expectations as JSON on stdout, formatted exactly as the readout formats them.
+
+`reqs` places every request EXPLICITLY: [minutes_ago, output_tokens, model]. Explicit
+because the figures now split at the sample -- the rate belongs over the meter as it was
+READ, so spend before the sample and spend after it are different quantities, and a
+fixture that scatters requests over a range cannot say which side each landed on.
+
+Two things are reimplemented here rather than imported, and both are deliberate:
+  - PRICES, from docs/the pricing table, as plain dollars per million output tokens;
+  - the BUCKET rule (`ms // 60000`, windows half-open [lo, hi)), which is how the script
+    documents its per-minute index.
+Everything else about the world is stated in the config. `usable` is false when the meter
+week opened too recently to place every request after the anchor -- the caller SKIPs
+rather than asserting on a world it could not build.
 """
 import importlib.util, json, pathlib, shutil, sys
 from datetime import datetime, timezone
@@ -78,87 +86,125 @@ spec = importlib.util.spec_from_file_location("up", sys.argv[1])
 up = importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
 home = pathlib.Path(sys.argv[2]); cfg = json.loads(sys.argv[3])
 
+# Dollars per million OUTPUT tokens. Independent of the script's PRICING table on purpose.
+PRICES = {"claude-fable-5": 50.0, "claude-sonnet-4-5": 15.0, "claude-opus-5": 25.0}
+FABLE = "claude-fable-5"
+BUCKET = lambda ms: int(ms // 60000)      # the script's documented per-minute index
+
 sd = float(cfg["sd"]); fh = cfg.get("fh", 8)
+# What the meter READ at the anchor. Normally 0 -- but the app samples when its UI polls
+# /usage, so the first post-reset sample can land after points are already burned, and a
+# 100 -> 40 pair still passes the LIVE_DROP test. The denominator is then the points
+# MOVED, not the current reading.
+anchor_sd = float(cfg.get("anchor_sd", 0))
 age_min = float(cfg.get("age_min", 5))
-old_n, old_tok = int(cfg.get("old_n", 0)), int(cfg.get("old_tok", 2_000_000))
+# [minutes_ago, output_tokens, model]. Default: one block before the sample and one after,
+# so spend_at_sample and spend_since_sample are both non-zero in the ordinary case.
+reqs = cfg.get("reqs") or [[40, 1_000_000, FABLE], [3, 200_000, FABLE]]
 gap_n, gap_tok = int(cfg.get("gap_n", 0)), int(cfg.get("gap_tok", 400_000))
-rec_n, rec_tok = int(cfg.get("recent_n", 4)), int(cfg.get("recent_tok", 20_000))
 now = datetime.now(timezone.utc)
 now_ms = now.timestamp() * 1000
 wk = up.week_close(now)
 open_ms = up.week_bounds(wk)[0].astimezone(timezone.utc).timestamp() * 1000
 anchor = max(now_ms - 120 * 60_000, open_ms + 60_000)
-usable = (old_n == 0 or now_ms - anchor > 101 * 60_000) and now_ms - anchor > 26 * 60_000
+samp_ms = now_ms - age_min * 60_000
+# Every request, the gap request and the sample must sit strictly after the anchor, and
+# the anchor's own two samples before it.
+oldest = max([r[0] for r in reqs] + [age_min]) + 2
+usable = (now_ms - anchor) > oldest * 60_000 and samp_ms > anchor
 
-# Remove only what THIS fixture owns. It used to wipe the whole fake HOME, and
-# ~/.claude/usage-history/pace-state.json went with it -- the hook's turn counter and its
-# acknowledgment. The ack test rebuilds the world between the three runs, so every run
-# started from no state at all and its yes/no/yes came out of the three worlds alone:
-# deleting s.pop("acked") or the `acked == v` suppression outright left 116/116 green.
-# A fixture builder that resets state the test is measuring is a test that cannot fail.
 shutil.rmtree(home / ".claude" / "projects", ignore_errors=True)
 shutil.rmtree(home / "Library", ignore_errors=True)
 # The spend cache is derived from the transcripts about to be rewritten. _cache_stale
 # would invalidate it, but leaving one behind makes every later assertion depend on that
 # path instead of on the fixture, so it goes -- explicitly, and it is the ONLY thing
-# under usage-history/ this builder may remove.
+# under usage-history/ this builder may remove. It used to wipe the whole fake HOME, and
+# ~/.claude/usage-history/pace-state.json went with it -- the hook's turn counter and its
+# acknowledgment -- so the ack test rebuilt the world between runs and every run began
+# with no state at all. A fixture that resets what the test measures is a test that
+# cannot fail: deleting the acknowledgment logic outright left 116/116 green.
 (home / ".claude" / "usage-history" / "pace-cache.json").unlink(missing_ok=True)
 (home / ".claude" / "projects" / "p").mkdir(parents=True, exist_ok=True)
 (home / "Library" / "Application Support" / "Claude").mkdir(parents=True, exist_ok=True)
 
-def spread(n, lo_min, hi_min):
-    if n <= 0:
-        return []
-    if n == 1:
-        return [now_ms - (lo_min + hi_min) / 2 * 60_000]
-    return [now_ms - (hi_min - (hi_min - lo_min) * i / (n - 1)) * 60_000 for i in range(n)]
-
 # The gap request sits between the two samples the reset happened between: spend that
 # cannot be attributed to either side of the meter's zero. The prev sample is 5 minutes
 # back so that a one-minute bucket lands strictly inside the gap whatever the alignment.
-ev = ([(t, old_tok) for t in spread(old_n, 71, 100)]
-      + [(t, rec_tok) for t in spread(rec_n, 2, 25)]
-      + [(anchor - 150_000, gap_tok)] * gap_n)
+ev = [(now_ms - m * 60_000, tok, model) for m, tok, model in reqs] \
+     + [(anchor - 150_000, gap_tok, FABLE)] * gap_n
 ev.sort()
 lines = [json.dumps({"type": "assistant", "timestamp":
          datetime.fromtimestamp(t / 1000, timezone.utc).isoformat().replace("+00:00", "Z"),
-         "message": {"id": "f%d" % i, "model": "claude-fable-5",
+         "message": {"id": "f%d" % i, "model": model,
                      "usage": {"output_tokens": tok}}}, separators=(",", ":"))
-         for i, (t, tok) in enumerate(ev)]
+         for i, (t, tok, model) in enumerate(ev)]
 (home / ".claude" / "projects" / "p" / "t.jsonl").write_text("\n".join(lines) + "\n")
 
 samples = [{"t": int(anchor - 300_000), "u": {"sd": 100, "fh": 40}},
-           {"t": int(anchor), "u": {"sd": 0, "fh": 0}},
-           {"t": int(now_ms - age_min * 60_000), "u": {"sd": sd, "fh": fh}}]
+           {"t": int(anchor), "u": {"sd": anchor_sd, "fh": 0}},
+           {"t": int(samp_ms), "u": {"sd": sd, "fh": fh}}]
 (home / "Library" / "Application Support" / "Claude" / "plan-usage-history.json").write_text(
     json.dumps({"version": 2, "samples": samples}))
 
-cost = lambda tok: up.cost_usd({"output_tokens": tok}, "claude-fable-5")
-spend = old_n * cost(old_tok) + rec_n * cost(rec_tok)
-gap = gap_n * cost(gap_tok)
-burn1 = rec_n * cost(rec_tok)
-burn3 = spend / 3.0
-rate = spend / sd
-pts_left = 100.0 - sd
-usd_left = pts_left * rate
+# --- the arithmetic, from PRICES and BUCKET only -------------------------------------
+def total(lo_ms, hi_ms, fable_only=False):
+    lo, hi = BUCKET(lo_ms), BUCKET(hi_ms)
+    s = 0.0
+    for t, tok, model in ev:
+        if not (lo <= BUCKET(t) < hi):
+            continue
+        if fable_only and model != FABLE:
+            continue
+        s += tok * PRICES[model] / 1e6
+    return s
+
+spend = total(anchor, now_ms)                 # since the meter's zero, to now
+at_s = total(anchor, samp_ms)                 # ...as of the instant the meter was READ
+since = total(samp_ms, now_ms)                # ...burned in the sampling gap since
+fable = total(anchor, now_ms, fable_only=True)
+gap = total(anchor - 300_000, anchor)
+burn1 = total(now_ms - 3600_000, now_ms)
+burn3 = total(now_ms - 3 * 3600_000, now_ms) / 3.0
 h_reset = (up.week_bounds(wk)[1].astimezone(timezone.utc) - now).total_seconds() / 3600.0
-wall = usd_left / burn1 if burn1 else float("inf")
-landing = sd + burn3 * h_reset / rate
+
+def figures(at):
+    """The readout's chain, from a spend-at-sample figure."""
+    moved = sd - anchor_sd
+    rate = at / moved if moved > 0 and at > 0 else None
+    pct_now = sd + (since / rate if rate else 0.0)
+    pts_left = max(0.0, 100.0 - pct_now)
+    usd_left = pts_left * rate if rate else None
+    wall = (usd_left / burn1 if usd_left is not None and burn1 > 0 else float("inf"))
+    return {"rate": rate, "pct_now": pct_now, "pts_left": pts_left, "usd_left": usd_left,
+            "wall": wall, "landing": pct_now + burn3 * h_reset / rate if rate else None,
+            "need": usd_left / h_reset if usd_left is not None and h_reset > 0 else None}
+
+lo_f = figures(at_s)
+hi_f = figures(at_s + gap)                    # the other end of the reset-gap range
+fwd = (" ≈ %.0f%% now" % lo_f["pct_now"]) if "%.0f" % lo_f["pct_now"] != "%.0f" % sd else ""
 print(json.dumps({
-    "usable": usable, "sd": sd, "spend": spend, "rate": rate, "pts_left": pts_left,
+    "usable": usable, "sd": sd, "anchor_sd": anchor_sd,
+    "spend": spend, "at_s": at_s, "since": since,
+    "rate": lo_f["rate"], "pct_now": lo_f["pct_now"], "pts_left": lo_f["pts_left"],
     "gap": gap, "gap_s": "${:,.0f}".format(gap),
-    "rate_rng_s": "${:,.1f}-${:,.1f}/pt".format(rate, (spend + gap) / sd),
-    "spend_rng_s": "${:,.0f}-${:,.0f}".format(spend, spend + gap),
-    "usd_left": usd_left, "burn1": burn1, "burn3": burn3, "h_reset": h_reset,
-    "wall": wall, "landing": landing,
-    "warn_a": bool(wall < 0.5 * h_reset), "warn_b": bool(landing < 90 and h_reset < 24),
-    "sd_s": "sd %.0f%%" % sd, "fh_s": "fh %.0f%%" % float(fh),
-    "spend_s": "${:,.0f}".format(spend), "rate_s": "${:,.1f}/pt".format(rate),
-    "left_s": "{:.0f} pts ≈ ${:,.0f} left".format(pts_left, usd_left),
+    "rate_rng_s": "${:,.1f}-${:,.1f}/pt".format(lo_f["rate"], hi_f["rate"]),
+    "spend_rng_s": "spent ${:,.0f}-${:,.0f} since".format(spend, spend + gap),
+    "usd_left": lo_f["usd_left"], "burn1": burn1, "burn3": burn3, "h_reset": h_reset,
+    "wall": lo_f["wall"], "landing": lo_f["landing"], "need": lo_f["need"],
+    "warn_a": bool(lo_f["wall"] < 0.5 * h_reset),
+    "warn_b": bool(lo_f["landing"] < 90 and h_reset < 24),
+    "sd_s": "sd %.0f%%" % sd, "fh_s": "fh %.0f%%" % float(fh), "fwd_s": fwd,
+    "spend_s": "spent ${:,.0f} since".format(spend),
+    "fable_s": "${:,.0f} fable".format(fable),
+    "rate_s": "${:,.1f}/pt".format(lo_f["rate"]),
+    "left_s": "{:.0f} pts ≈ ${:,.0f} left".format(lo_f["pts_left"], lo_f["usd_left"]),
     "burn_s": "burn ${:,.0f}/h (3h ${:,.0f}/h)".format(burn1, burn3),
-    "landing_s": "lands {:,.0f}%".format(landing),
+    "reset_s": "reset in {:.1f}h".format(h_reset),
+    "landing_s": ("→ lands >100% (the wall comes first)" if lo_f["landing"] > 100
+                  else "→ lands {:,.0f}%".format(lo_f["landing"])),
+    "need_s": "need ${:,.0f}/h to reach the wall".format(lo_f["need"]),
     "sample_s": "sample %s" % datetime.fromtimestamp(
-        (now_ms - age_min * 60_000) / 1000, timezone.utc).strftime("%H:%M") + "Z",
+        samp_ms / 1000, timezone.utc).strftime("%H:%M") + "Z",
 }))
 FIXEOF
 mkfix() { "$PY" "$FIXPY" "$SUT" "$1" "$2"; }
@@ -383,7 +429,7 @@ cat > "$TMP/fable.jsonl" <<'FABLEJ'
 FABLEJ
 # sd 95 with every request inside the last hour: the wall is minutes away and the reset
 # is hours away, so warning (a) is true for any clock more than ~6 minutes from a reset.
-fx=$(mkfix "$HOOKHOME" '{"sd":95,"fh":12,"age_min":3,"recent_n":4,"recent_tok":1000000}')
+fx=$(mkfix "$HOOKHOME" '{"sd":95,"fh":12,"age_min":3,"reqs":[[10,20000000,"claude-fable-5"],[2,1000,"claude-fable-5"]]}')
 hookrun() { printf '{"session_id":"s1","transcript_path":"%s"}' "$TMP/fable.jsonl" \
   | HOME="$HOOKHOME" "$PY" "$SUT" --hook --every 1 2>&1; }
 if [ "$(fixf "$fx" usable)" = "True" ] && [ "$(fixf "$fx" warn_a)" = "True" ]; then
@@ -500,8 +546,8 @@ mkdir -p "$ACKHOME/.claude/projects"
 ackrun() { printf '{"session_id":"s1","transcript_path":"%s"}' "$TMP/fable.jsonl" \
   | HOME="$ACKHOME" "$PY" "$SUT" --hook --every 1 2>&1; }
 spoke() { printf '%s' "$1" | grep -q 'usage-pace' && echo yes || echo no; }
-loud='{"sd":95,"fh":12,"age_min":3,"recent_n":4,"recent_tok":1000000}'
-quiet='{"sd":95,"fh":12,"age_min":3,"recent_n":1,"recent_tok":1000,"old_n":1,"old_tok":2000000}'
+loud='{"sd":95,"fh":12,"age_min":3,"reqs":[[10,20000000,"claude-fable-5"],[2,1000,"claude-fable-5"]]}'
+quiet='{"sd":95,"fh":12,"age_min":3,"reqs":[[95,20000000,"claude-fable-5"],[2,1000,"claude-fable-5"]]}'
 f1=$(mkfix "$ACKHOME" "$loud"); a1=$(ackrun)
 f2=$(mkfix "$ACKHOME" "$quiet"); a2=$(ackrun)
 f3=$(mkfix "$ACKHOME" "$loud"); a3=$(ackrun)
@@ -1603,24 +1649,52 @@ BKBAD
 # is that no number in the line is invented -- the old code had this same file open and
 # printed week-spend-over-a-cached-cap beside it, reading 96% while the meter read 79.
 LIVEHOME=$TMP/livehome
-fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000}')
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"reqs":[[95,20000000,"claude-fable-5"],[80,10000000,"claude-fable-5"],[40,6000000,"claude-fable-5"],[30,10000000,"claude-sonnet-4-5"],[3,1000000,"claude-fable-5"]]}')
 line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
 if [ "$(fixf "$fx" usable)" != "True" ]; then
   skipt "the live readout reports the fixture's own meter" "too close to a meter reset"
 else
+  # Every printed field, and each one has to be distinguishable from its neighbours.
+  # `spend_s` carries "spent ... since" rather than a bare dollar amount: while it was a
+  # bare "$2,000", DOUBLING only the displayed spend left the suite green, because the
+  # fixture's fable figure and its burn_1h happened to format the same string. So this
+  # world also spends some SONNET (fable_s differs from spend_s) and puts a block outside
+  # the one-hour window (burn_s differs from both).
   miss=""
-  for k in sd_s fh_s sample_s spend_s rate_s left_s burn_s; do
+  for k in sd_s fwd_s fh_s sample_s spend_s fable_s rate_s left_s burn_s \
+           reset_s landing_s need_s; do
     want=$(fixf "$fx" "$k")
     case "$line" in *"$want"*) ;; *) miss="$miss [$k=$want]" ;; esac
   done
   [ -z "$miss" ] \
-    && ok "--oneline reports the fixture's sd, fh, sample age, spend, \$/pt and burn" \
+    && ok "--oneline reports every one of the fixture's own figures, field by field" \
     || bad "--oneline reports the fixture's own figures" "missing:$miss || $(flat "$line")"
+
+  # ...and the NUMBERS behind them, from --json, to the cent. A string match cannot pin a
+  # figure whose neighbour prints the same rounded text, and four of these were pinned by
+  # nothing at all: doubling landing, need_per_hour or hours_to_wall each left the suite
+  # green. hours_to_wall is the worst of those -- it is the ONLY input to warning (a), and
+  # the warning itself was unit-tested exclusively with injected dictionaries, so the guard
+  # was covered and its producer was not.
+  got=$(HOME="$LIVEHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+import json, sys
+p = json.load(sys.stdin); w = json.loads(sys.argv[1])
+pairs = [("rate","rate"), ("pct_now","pct_now"), ("pts_left","pts_left"),
+         ("usd_left","usd_left"), ("hours_to_wall","wall"), ("landing","landing"),
+         ("need_per_hour","need"), ("burn_1h","burn1"), ("burn_3h","burn3"),
+         ("hours_to_reset","h_reset"), ("spend","spend"), ("spend_at_sample","at_s"),
+         ("spend_since_sample","since")]
+off = [k for k, j in pairs
+       if p.get(k) is None or abs(p[k] - w[j]) > max(0.01, abs(w[j]) * 1e-6)]
+print("OFF", off or "none")' "$fx")
+  [ "$got" = "OFF none" ] \
+    && ok "--json's rate, pct_now, headroom, wall, landing and need match the fixture exactly" \
+    || bad "--json's derived figures match the fixture" "got=$(flat "$got")"
 
   # The discriminating case: SAME transcripts, a different meter sample. A computed
   # percentage cannot move here and a read one must -- and \$/pt must move with it,
   # because the rate is this week's spend over this week's points.
-  fx2=$(mkfix "$LIVEHOME" '{"sd":41,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000}')
+  fx2=$(mkfix "$LIVEHOME" '{"sd":41,"fh":8,"age_min":5,"reqs":[[95,20000000,"claude-fable-5"],[80,10000000,"claude-fable-5"],[40,6000000,"claude-fable-5"],[30,10000000,"claude-sonnet-4-5"],[3,1000000,"claude-fable-5"]]}')
   line2=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
   w1=$(fixf "$fx2" sd_s); w2=$(fixf "$fx2" rate_s); w3=$(fixf "$fx2" left_s)
   case "$line2" in
@@ -1637,9 +1711,9 @@ esac
 
 # The stale flag is a threshold, so both sides of it are asserted. A 48-minute-old sample
 # read as current is the same defect as a computed one read as measured.
-fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":48,"recent_n":40,"recent_tok":1000000}')
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":48,"reqs":[[95,20000000,"claude-fable-5"],[80,10000000,"claude-fable-5"],[60,6000000,"claude-fable-5"],[55,10000000,"claude-sonnet-4-5"],[3,1000000,"claude-fable-5"]]}')
 stale_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
-fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000}')
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"reqs":[[95,20000000,"claude-fable-5"],[80,10000000,"claude-fable-5"],[40,6000000,"claude-fable-5"],[30,10000000,"claude-sonnet-4-5"],[3,1000000,"claude-fable-5"]]}')
 fresh_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
 case "$stale_line$fresh_line" in
   *"SAMPLE STALE 48m"*) case "$fresh_line" in
@@ -1651,7 +1725,7 @@ esac
 
 # Spend the meter's own samples cannot attribute to either side of the reset: the figures
 # become a RANGE rather than being fitted. Fitting it is what took $215 off the week.
-fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000,"gap_n":1,"gap_tok":4000000}')
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"gap_n":1,"gap_tok":4000000,"reqs":[[95,20000000,"claude-fable-5"],[80,10000000,"claude-fable-5"],[40,6000000,"claude-fable-5"],[30,10000000,"claude-sonnet-4-5"],[3,1000000,"claude-fable-5"]]}')
 gap_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
 if [ "$(fixf "$fx" usable)" != "True" ]; then
   skipt "spend inside the reset gap is carried as a range" "too close to a meter reset"
@@ -1664,10 +1738,126 @@ else
   esac
 fi
 
+
+# A landing BELOW 100 prints the number itself rather than the ">100% (the wall comes
+# first)" branch, and only this world exercises that half of the formatter. Low sd, so
+# the same burn buys many more points than it does at 82.
+fx=$(mkfix "$LIVEHOME" '{"sd":8,"fh":2,"age_min":5,"reqs":[[40,4000000,"claude-fable-5"],[3,100000,"claude-fable-5"]]}')
+land_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ]; then
+  skipt "a landing under 100% prints the number" "too close to a meter reset"
+else
+  w1=$(fixf "$fx" landing_s); w2=$(fixf "$fx" need_s)
+  case "$land_line$w1" in
+    *">100%"*) skipt "a landing under 100% prints the number" "this clock lands over 100" ;;
+    *) case "$land_line" in
+         *"$w1"*"$w2"*) ok "a landing under 100% prints the fixture's own percentage" ;;
+         *) bad "a landing under 100% prints the number" "want $w1/$w2 || $(flat "$land_line")" ;;
+       esac ;;
+  esac
+fi
+
+
+# The reset the app SAW LATE: sd fell 100 -> 40, which passes LIVE_DROP, but the meter did
+# not land on zero. Spend since that anchor bought (sd - 40) points, not sd of them, and
+# dividing by the current reading priced 42 points of movement as 82 -- roughly half the
+# true $/pt, which halves the headroom and fires the lockout warning spuriously. Every
+# other fixture world anchors at 0, where the two are identical, so only this one can tell.
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"anchor_sd":40,"reqs":[[40,20000000,"claude-fable-5"],[3,1000000,"claude-fable-5"]]}')
+part_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ]; then
+  skipt "a reset the app saw late is differenced, not divided" "too close to a meter reset"
+else
+  w1=$(fixf "$fx" rate_s); w2=$(fixf "$fx" left_s)
+  case "$part_line" in
+    *"$w1"*"$w2"*) ok "an anchor the meter did not zero at is DIFFERENCED (sd - anchor_sd)" ;;
+    *) bad "an anchor above zero is differenced, not divided by the current reading" \
+          "want $w1/$w2 || $(flat "$part_line")" ;;
+  esac
+fi
+
+# ------ a sample from BEFORE this meter period is not a reading of this meter -------
+# The deterministic shape: after every Wednesday 15:59 PT reset the newest persisted
+# sample is still the PRIOR week's, until the app's next /usage poll -- 15 to 60 minutes
+# normally, and the whole of any closed-laptop gap (the record has a 29.7h one). Pairing
+# that ~95% with the new week's near-zero spend collapsed the rate, collapsed the
+# headroom, put the wall minutes away and made --hook inject "the rest of the week is
+# lost" into an unattended session. `stale` was a display flag and never disqualified
+# anything, so nothing stopped it.
+PREHOME=$TMP/prehome
+mkdir -p "$PREHOME/.claude/projects/p" "$PREHOME/Library/Application Support/Claude"
+"$PY" - "$SUT" "$PREHOME" <<'PREEOF'
+import importlib.util, json, pathlib, sys
+from datetime import datetime, timezone
+spec = importlib.util.spec_from_file_location("up", sys.argv[1])
+up = importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+home = pathlib.Path(sys.argv[2])
+now = datetime.now(timezone.utc); now_ms = now.timestamp() * 1000
+open_ms = up.week_bounds(up.week_close(now))[0].astimezone(timezone.utc).timestamp() * 1000
+# the newest sample is two hours BEFORE the week opened, reading the old week's 95%
+(home / "Library" / "Application Support" / "Claude" / "plan-usage-history.json").write_text(
+    json.dumps({"version": 2, "samples": [
+        {"t": int(open_ms - 3 * 3600_000), "u": {"sd": 94, "fh": 30}},
+        {"t": int(open_ms - 2 * 3600_000), "u": {"sd": 95, "fh": 31}}]}))
+# ...and there is real in-week fable spend, so the live path had something to divide
+lines = [json.dumps({"type": "assistant", "timestamp":
+         datetime.fromtimestamp((now_ms - (20 - i) * 60_000) / 1000, timezone.utc)
+         .isoformat().replace("+00:00", "Z"),
+         "message": {"id": "p%d" % i, "model": "claude-fable-5",
+                     "usage": {"output_tokens": 800_000}}}, separators=(",", ":"))
+         for i in range(15)]
+(home / ".claude" / "projects" / "p" / "t.jsonl").write_text("\n".join(lines) + "\n")
+PREEOF
+pre_line=$(HOME="$PREHOME" "$PY" "$SUT" --oneline 2>&1)
+case "$pre_line" in
+  *"derived — newest sample predates this meter week"*)
+     ok "a sample older than the meter period is refused as the live reading, and says why" ;;
+  *) bad "a pre-period sample is refused as the live reading" "$(flat "$pre_line")" ;;
+esac
+# The refusal NAMES the percentage it refused -- that is the point of saying why -- so the
+# property is positional: the meter field is the first thing on the line, and a refused
+# sample must not be sitting in it.
+case "$pre_line" in
+  "sd "*) bad "the refused sample's percentage is not printed as the meter" "$(flat "$pre_line")" ;;
+  *) ok "the refused sample's percentage is not printed as the meter" ;;
+esac
+# and the CONSEQUENCE, which is the reason this matters: the headroom must not be the five
+# points the old week had left. The derived cap is in the thousands and the spend is $600,
+# so anything under 50 points left means the pre-period sample still reached the arithmetic.
+got=$(HOME="$PREHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+import json, sys
+p = json.load(sys.stdin)
+print("source=%s sd=%s roomy=%s" % (p["source"], p["sd"], p["pts_left"] > 50))')
+[ "$got" = "source=derived sd=None roomy=True" ] \
+  && ok "the headroom after refusing a pre-period sample is the week's, not the old week's" \
+  || bad "the headroom after refusing a pre-period sample is this week's" "got=$(flat "$got")"
+
+# ---------------- observed_anchor, directly: nothing named it before ----------------
+# The PR body claims a fix here -- a drop counts when its LATER sample is in-week, because
+# the scheduled reset lands BETWEEN two samples -- and re-introducing that bug left the
+# suite green: the fixture cannot place the earlier sample before the week open. It takes
+# an injectable `samples`, so test it as a function.
+O=1000000000000
+got=$(pymod "
+o = $O
+# the ordinary scheduled reset: the earlier sample sits BEFORE the week open
+a = up.observed_anchor(o, [(o - 400_000, 100.0, 1.0), (o + 600_000, 0.0, 0.0)])
+# no drop at all since the boundary -> the boundary IS the zero, and anchor_sd is 0
+b = up.observed_anchor(o, [(o + 60_000, 40.0, 1.0), (o + 120_000, 55.0, 2.0)])
+# a drop that does NOT land on zero: anchor_sd carries the 40 so the caller can difference
+c = up.observed_anchor(o, [(o + 60_000, 100.0, 1.0), (o + 120_000, 40.0, 2.0)])
+# a fall smaller than LIVE_DROP is noise, not a reset
+d = up.observed_anchor(o, [(o + 60_000, 55.0, 1.0), (o + 120_000, 45.0, 2.0)])
+print('%d %.0f | %d %.0f %s | %d %.0f | %d %.0f' % (
+    a[0] - o, a[2], b[0] - o, b[2], b[1] is None, c[0] - o, c[2], d[0] - o, d[2]))")
+[ "$got" = "600000 0 | 0 0 True | 120000 40 | 0 0" ] \
+  && ok "observed_anchor: the reset between samples, the no-drop fallback, and anchor_sd" \
+  || bad "observed_anchor handles its four cases" "got=$(flat "$got")"
+
 # And with no sample file at all -- a headless or non-desktop machine -- the line must say
 # the percentage is derived rather than presenting it as the meter.
 NOSAMP=$TMP/nosamplehome
-mkfix "$NOSAMP" '{"sd":82,"recent_n":4,"recent_tok":1000000}' >/dev/null
+mkfix "$NOSAMP" '{"sd":82,"reqs":[[40,20000000,"claude-fable-5"],[3,1000000,"claude-fable-5"]]}' >/dev/null
 rm -rf "$NOSAMP/Library"
 d_line=$(HOME="$NOSAMP" "$PY" "$SUT" --oneline 2>&1)
 case "$d_line" in
@@ -1685,7 +1875,7 @@ esac
 # cap | NEAR CAP" while the live meter read 79. It is still the right answer to the
 # question --caps asks, so the assertion is two-sided -- absent from the readout, present
 # in --caps.
-mkfix "$NOSAMP" '{"sd":82,"recent_n":4,"recent_tok":1000000}' >/dev/null
+mkfix "$NOSAMP" '{"sd":82,"reqs":[[40,20000000,"claude-fable-5"],[3,1000000,"claude-fable-5"]]}' >/dev/null
 rm -rf "$NOSAMP/Library"
 mkdir -p "$NOSAMP/.claude/usage-history"
 printf '{"all": 99999.0, "periods": 6, "r2": 0.99, "at": "2020-01-01T00:00"}'   > "$NOSAMP/.claude/usage-history/pace-calibration.json"
@@ -1711,7 +1901,7 @@ print('%.0f %.0f' % (up.resolve_cap('all', up.read_readings())[0],
 
 # --json must carry the live fields, not only the formatted line: the hook consumes the
 # payload and the previous payload had no live percentage in it at all.
-fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000}')
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"reqs":[[95,20000000,"claude-fable-5"],[80,10000000,"claude-fable-5"],[40,6000000,"claude-fable-5"],[30,10000000,"claude-sonnet-4-5"],[3,1000000,"claude-fable-5"]]}')
 got=$(HOME="$LIVEHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
 import json,sys
 p=json.load(sys.stdin)
