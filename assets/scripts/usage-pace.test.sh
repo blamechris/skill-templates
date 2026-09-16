@@ -87,6 +87,17 @@ spec = importlib.util.spec_from_file_location("up", sys.argv[1])
 up = importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
 home = pathlib.Path(sys.argv[2]); cfg = json.loads(sys.argv[3])
 
+# This builder rmtree's `home/Library` and `home/.claude/projects`, and `home` arrives as a
+# command-line argument. One mistyped variable in a caller -- or an inherited $HOME reaching
+# it -- and that is the real desktop app's sample history and the real transcript tree. So
+# the caller must DECLARE the temp root it is working inside (argv[4]) and the builder
+# refuses any home outside it, before touching anything. A guard placed after the first
+# rmtree would be decoration.
+tmproot = pathlib.Path(sys.argv[4]).resolve()
+_h = home.resolve()
+if not (_h == tmproot or tmproot in _h.parents):
+    sys.exit("REFUSE: fixture HOME %s is not under the test temp dir %s" % (_h, tmproot))
+
 # Dollars per million OUTPUT tokens. Independent of the script's PRICING table on purpose.
 PRICES = {"claude-fable-5": 50.0, "claude-sonnet-4-5": 15.0, "claude-opus-5": 25.0}
 FABLE = "claude-fable-5"
@@ -222,8 +233,31 @@ print(json.dumps({
         samp_ms / 1000, timezone.utc).strftime("%H:%M") + "Z",
 }))
 FIXEOF
-mkfix() { "$PY" "$FIXPY" "$SUT" "$1" "$2"; }
+mkfix() { "$PY" "$FIXPY" "$SUT" "$1" "$2" "$TMP"; }
 fixf()  { printf '%s' "$1" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$2"; }
+
+# ------------------------------------------------- 0. the fixture builder is fenced in
+# It rmtree's home/Library and home/.claude/projects, and `home` is an argv. On the machine
+# this suite runs on, those two paths under the real $HOME are the desktop app's sample
+# history and every transcript ever written -- neither of which is recoverable, and the
+# second of which is the only record the usage ledger is built from. So the builder is
+# tested for REFUSING before it is trusted to build: a home outside the declared temp root
+# must exit non-zero with nothing deleted.
+DECOY=$TMP/decoy
+mkdir -p "$DECOY/Library/Application Support/Claude" "$DECOY/.claude/projects/p"
+printf 'irreplaceable' > "$DECOY/Library/sentinel.txt"
+printf 'irreplaceable' > "$DECOY/.claude/projects/p/sentinel.jsonl"
+out=$("$PY" "$FIXPY" "$SUT" "$DECOY" '{"sd":82}' "$TMP/somewhere-else" 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && [ -f "$DECOY/Library/sentinel.txt" ] \
+   && [ -f "$DECOY/.claude/projects/p/sentinel.jsonl" ]; then
+  case "$out" in
+    *REFUSE*) ok "the fixture builder refuses a HOME outside the declared temp dir, deleting nothing" ;;
+    *) bad "the fixture builder refuses a HOME outside the temp dir" "rc=$rc says nothing: $(flat "$out")" ;;
+  esac
+else
+  bad "the fixture builder refuses a HOME outside the declared temp dir, deleting nothing" \
+      "rc=$rc sentinels: $([ -f "$DECOY/Library/sentinel.txt" ] && echo kept || echo DELETED)/$([ -f "$DECOY/.claude/projects/p/sentinel.jsonl" ] && echo kept || echo DELETED)"
+fi
 
 # ------------------------------------------------------------- 1. hook is inert
 # The hook runs on EVERY prompt submit. Anything but a clean silent exit 0 on
