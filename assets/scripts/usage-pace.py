@@ -1220,6 +1220,14 @@ def derive(pct, anchor_sd, spend_at_pct, spend_since, burn_1h, burn_3h,
     """
     moved = (pct or 0.0) - (anchor_sd or 0.0)
     rate = spend_at_pct / moved if moved > 0 and spend_at_pct > 0 else None
+    # WHY there is no rate, because every figure built on it degrades to "?" and a readout
+    # of bare question marks tells the reader nothing about whether to wait, to open /usage,
+    # or to distrust the tool. Both causes are ordinary rather than exceptional: the meter
+    # sits on one integer for the first stretch of a period, and a session can open with no
+    # spend behind it at all.
+    rate_reason = None if rate is not None else (
+        "the meter has not moved since the reset (still %.0f%%)" % (pct or 0.0)
+        if moved <= 0 else "no spend recorded since the reset")
     provisional = rate is not None and moved < min_moved
     pct_now = (pct or 0.0) + (spend_since / rate
                               if rate and not provisional and spend_since > 0 else 0.0)
@@ -1229,7 +1237,7 @@ def derive(pct, anchor_sd, spend_at_pct, spend_since, burn_1h, burn_3h,
             else math.inf if usd_left is not None else None)
     return {
         "rate": rate, "pct_now": pct_now, "pts_left": pts_left, "usd_left": usd_left,
-        "moved": moved, "provisional": provisional,
+        "moved": moved, "provisional": provisional, "rate_reason": rate_reason,
         "hours_to_wall": wall,
         "landing": (pct_now + burn_3h * hours_to_reset / rate) if rate else None,
         "need_per_hour": (usd_left / hours_to_reset
@@ -1507,23 +1515,40 @@ def fmt(p, margin=None):
         f"spent {_rng(p['spend'], p['spend_hi'])} since {p['anchor_label']}"
         if p["source"] == "live" else f"spent ${p['spend']:,.0f}",
         f"{_rng(p['fable'], p['fable_hi'])} fable",
-        # A rate calibrated on fewer than MIN_MOVED points says so, in the field itself.
-        # It is still the best estimate there is, and it is still what every dollar figure
-        # on the line is built from -- but `pct_now` is not extrapolated with it and the
-        # lockout warning is withheld, so the line must not read as though it were trusted.
-        (f"{_rng(p['rate'], p['rate_hi'], '${:,.1f}')}/pt"
-         + (f" PROVISIONAL (the meter has moved {p['moved']:.0f} pt since the reset)"
-            if p.get("provisional") else "")),
-        f"{p['pts_left']:.0f} pts ≈ {_rng(p['usd_left'], p['usd_left_hi'])} left",
-        f"reset in {p['hours_to_reset']:.1f}h",
-        f"burn ${p['burn_1h']:,.0f}/h (3h ${p['burn_3h']:,.0f}/h)",
-        # A landing above 100 is not a percentage of anything -- it means the wall arrives
-        # first, which warning (a) states in hours. Printing "lands 544%" invites exactly
-        # the arithmetic-dressed-as-a-reading reading this file is trying to stop.
-        (f"→ lands >100% (the wall comes first)" if (p["landing"] or 0) > 100
-         else f"→ lands {_rng(p['landing'], p['landing_hi'], '{:,.0f}')}%"),
-        f"need {_rng(p['need_per_hour'], p['need_per_hour_hi'])}/h to reach the wall",
     ]
+    # With no rate there is no $/pt, no headroom in dollars, no wall and no landing, and
+    # printing four of them as "?" -- "?/pt · 100 pts ≈ ? left · → lands ?%" -- says
+    # nothing about whether to wait, to open /usage, or to distrust the tool. Both causes
+    # are ordinary (the meter sits on one integer early in a period; a session can open
+    # with no spend behind it), so the line names the cause once and drops the fields that
+    # would only repeat it.
+    if p.get("rate") is None:
+        parts += [f"no $/pt yet — {p.get('rate_reason') or 'the rate is not computable'}",
+                  f"{p['pts_left']:.0f} pts left, dollars unknown until it is",
+                  f"reset in {p['hours_to_reset']:.1f}h",
+                  f"burn ${p['burn_1h']:,.0f}/h (3h ${p['burn_3h']:,.0f}/h)",
+                  "→ no landing or wall without a $/pt"]
+    else:
+        parts += [
+            # A rate calibrated on fewer than MIN_MOVED points says so, in the field
+            # itself. It is still the best estimate there is, and it is still what every
+            # dollar figure on the line is built from -- but `pct_now` is not extrapolated
+            # with it and the lockout warning is withheld, so the line must not read as
+            # though it were trusted.
+            (f"{_rng(p['rate'], p['rate_hi'], '${:,.1f}')}/pt"
+             + (f" PROVISIONAL (the meter has moved {p['moved']:.0f} pt since the reset)"
+                if p.get("provisional") else "")),
+            f"{p['pts_left']:.0f} pts ≈ {_rng(p['usd_left'], p['usd_left_hi'])} left",
+            f"reset in {p['hours_to_reset']:.1f}h",
+            f"burn ${p['burn_1h']:,.0f}/h (3h ${p['burn_3h']:,.0f}/h)",
+            # A landing above 100 is not a percentage of anything -- it means the wall
+            # arrives first, which warning (a) states in hours. Printing "lands 544%"
+            # invites exactly the arithmetic-dressed-as-a-reading reading this file is
+            # trying to stop.
+            (f"→ lands >100% (the wall comes first)" if (p["landing"] or 0) > 100
+             else f"→ lands {_rng(p['landing'], p['landing_hi'], '{:,.0f}')}%"),
+            f"need {_rng(p['need_per_hour'], p['need_per_hour_hi'])}/h to reach the wall",
+        ]
     fr = p.get("fable_reading")
     if fr:
         age = f", {fr['age_h']:.0f}h old" if fr.get("age_h") is not None else ""

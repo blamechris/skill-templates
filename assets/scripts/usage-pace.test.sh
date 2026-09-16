@@ -1928,6 +1928,61 @@ case "$moved_line$got" in
   *) bad "a meter that has moved past MIN_MOVED extrapolates" "got=$(flat "$got")" ;;
 esac
 
+# --------- no rate at all: the line must say WHY, not print four question marks ---------
+# The meter reads an integer, so between two of its points there is nothing to divide by:
+# `moved == 0` and the rate is None. Everything built on it then degraded to "?" --
+# "?/pt · 100 pts ≈ ? left · → lands ?%" -- which says nothing about whether to wait, to
+# open /usage, or to distrust the tool. The fixture builder cannot make this world (its own
+# arithmetic divides by `moved`), so the sample file is written directly: a reset the app
+# saw at 40, and the newest sample still reading 40.
+FLATHOME=$TMP/flathome
+mkdir -p "$FLATHOME/.claude/projects/p" "$FLATHOME/Library/Application Support/Claude"
+built=$("$PY" - "$SUT" "$FLATHOME" <<'FLATEOF'
+import importlib.util, json, pathlib, sys
+from datetime import datetime, timezone
+spec = importlib.util.spec_from_file_location("up", sys.argv[1])
+up = importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+home = pathlib.Path(sys.argv[2])
+now = datetime.now(timezone.utc); now_ms = now.timestamp() * 1000
+open_ms = up.week_bounds(up.week_close(now))[0].astimezone(timezone.utc).timestamp() * 1000
+a = max(now_ms - 90 * 60_000, open_ms + 60_000)     # the reset, seen late at 40%
+if now_ms - a < 4 * 60_000:
+    print("skip"); raise SystemExit(0)
+(home / "Library" / "Application Support" / "Claude" / "plan-usage-history.json").write_text(
+    json.dumps({"version": 2, "samples": [
+        {"t": int(a - 300_000), "u": {"sd": 100, "fh": 40}},
+        {"t": int(a), "u": {"sd": 40, "fh": 4}},
+        {"t": int((a + now_ms) / 2), "u": {"sd": 40, "fh": 4}}]}))   # ...and it has not moved
+# real spend since the anchor, so the missing rate is the meter's fault and not the ledger's
+mid = (a + now_ms) / 2
+(home / ".claude" / "projects" / "p" / "t.jsonl").write_text("\n".join(
+    json.dumps({"type": "assistant", "timestamp":
+                datetime.fromtimestamp((mid + i * 1000) / 1000, timezone.utc)
+                .isoformat().replace("+00:00", "Z"),
+                "message": {"id": "z%d" % i, "model": "claude-fable-5",
+                            "usage": {"output_tokens": 400_000}}}, separators=(",", ":"))
+    for i in range(3)) + "\n")
+print("built")
+FLATEOF
+)
+if [ "$built" != "built" ]; then
+  skipt "a missing rate names its cause instead of printing ?" "too close to a meter reset"
+else
+  flat_line=$(HOME="$FLATHOME" "$PY" "$SUT" --oneline 2>&1)
+  got=$(HOME="$FLATHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+import json, sys
+p = json.load(sys.stdin)
+print("%s | rate=%s | %s" % (p["source"], p["rate"], p["rate_reason"]))')
+  case "$got:$flat_line" in
+    "live | rate=None | the meter has not moved since the reset (still 40%)":*"?"*)
+       bad "a missing rate names its cause instead of printing ?" \
+           "a bare ? survives: $(flat "$flat_line")" ;;
+    "live | rate=None | the meter has not moved since the reset (still 40%)":*"no \$/pt yet — the meter has not moved since the reset (still 40%)"*)
+       ok "with no rate the line names the cause and prints no bare ? fields" ;;
+    *) bad "a missing rate names its cause instead of printing ?" "got=$got || $(flat "$flat_line")" ;;
+  esac
+fi
+
 # ------ a sample from BEFORE this meter period is not a reading of this meter -------
 # The deterministic shape: after every Wednesday 15:59 PT reset the newest persisted
 # sample is still the PRIOR week's, until the app's next /usage poll -- 15 to 60 minutes
