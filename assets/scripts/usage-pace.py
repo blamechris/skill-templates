@@ -55,6 +55,33 @@ READINGS = HOME / "Obsidian" / "no-it-all" / "briefs" / "meter-readings.md"
 PT = ZoneInfo("America/Los_Angeles")
 WEEK_WD, WEEK_H, WEEK_MIN = 2, 15, 59          # Wednesday 15:59 PT
 
+# Claude Code writes ONE assistant message to the transcript twice under a single
+# requestId: a partial record (output_tokens ~2) when the turn starts, and the complete
+# one minutes later. Both carry the same (message id, requestId), so the dedup has to
+# choose between them -- and keeping the FIRST, which is what this file did until
+# 2026-09-16, bills the stub. Measured that day on this machine, over the 41,616 records
+# the current meter week had produced: 21,285 keys, of which 10,696 had a later and larger
+# record, first-occurrence $2,590.81 against $2,854.45 -- every dollar this file has ever
+# printed 10.2% low, --calibrate, --caps and every recorded reading included. Each of the
+# seven calibration periods on file moves UP under supersession, by 2.0% to 12.9% (#256).
+#
+# The complete record is always the LAST one for a key, and last == max exactly. This
+# supersedes on the greater (cost, timestamp) rather than on "last seen", because scan
+# order is not write order: `rglob` order is arbitrary, one request lands in more than
+# one transcript (resumes, sidechains), and an incremental scan sees the two halves in
+# different passes. Max is the same answer from any order and is idempotent; "last" is
+# neither.
+#
+# COST_POLICY stamps values DERIVED from that choice, so they are not silently mixed with
+# values computed under the old one. The incremental cache and the meter anchor are both
+# recomputed when the stamp changes. A hand-run --calibrate is not recomputed -- it is
+# disclosed instead (resolve_cap), because a cap 9% low divided into a numerator that is
+# no longer 9% low overstates the percentage by 9%, which is a wrong VERDICT and not just
+# a wrong dollar figure.
+COST_POLICY = "supersede-partial-1"
+CACHE_V = 2        # bumped with COST_POLICY: a v1 cache records no per-key contribution,
+                   # so nothing in it can be superseded in place -- rescan once instead.
+
 # DERIVED figures, used only when there is no live sample AND no reading on file -- i.e.
 # on a machine with no desktop app, which is the only place the derived path runs at all.
 # They are statistics, not measurements: all-models is a regression over 6 meter periods
@@ -134,26 +161,36 @@ def week_bounds(close_label):
 
 # ---------------------------------------------------------------- incremental scan
 
+def _fresh_cache(week):
+    return {"week": week, "v": CACHE_V, "files": {}, "totals": {}, "seen": {}}
+
+
 def _load_cache(week):
-    """Cache is per-week; a new week discards the old one rather than migrating it."""
+    """Cache is per-week; a new week discards the old one rather than migrating it.
+
+    `seen` is a MAP now, not a set: a key's contribution has to be subtractable, or the
+    complete record arriving in a later scan than its partial cannot replace it. A v1
+    cache carries bare keys with no contribution, which is unrepairable in place -- the
+    version check sends it through one full rescan (~7s, once).
+    """
     try:
         c = json.loads(CACHE.read_text())
         # A non-dict is VALID json (`[1,2,3]`, `null`, `"x"`): json.loads succeeds and
         # the .get() below raised AttributeError, which was NOT caught -- so a
         # malformed cache crashed the hook with no self-repair. ValueError covers
         # JSONDecodeError and UnicodeDecodeError (invalid UTF-8) alike.
-        if isinstance(c, dict) and c.get("week") == week and isinstance(c.get("files"), dict):
-            c["seen"] = set(c.get("seen") or [])
+        if (isinstance(c, dict) and c.get("week") == week and c.get("v") == CACHE_V
+                and isinstance(c.get("files"), dict) and isinstance(c.get("seen"), dict)):
             c["totals"] = c["totals"] if isinstance(c.get("totals"), dict) else {}
             return c
     except (OSError, ValueError, TypeError, AttributeError):
         pass
-    return {"week": week, "files": {}, "totals": {}, "seen": set()}
+    return _fresh_cache(week)
 
 
 def _save_cache(c):
     out = dict(c)
-    out["seen"] = sorted(c["seen"])
+    out["v"] = CACHE_V
     tmp = CACHE.with_suffix(".tmp")
     try:
         # Create the parent: it does not exist on a freshly bootstrapped machine, and
@@ -190,6 +227,67 @@ def token_measures(u):
     raw = i + o + cr + c5 + c1
     ieq = i + cr * 0.1 + c5 * 1.25 + c1 * 2.0 + o * 5.0
     return raw, ieq
+
+
+# One cached `seen` entry: [cost, raw, ieq, ts_ms, tier, is_sub, applied].
+#   cost/ts_ms  -- the supersession comparator, and the reason ts is stored at all.
+#   raw/ieq     -- the parallel unit accumulators, which must be subtractable too.
+#   applied     -- 0 for a record whose timestamp falls OUTSIDE this week. The key is
+#                  still remembered, so a third record for it is compared and not
+#                  re-added, but nothing of it is in the week's totals.
+_C_COST, _C_RAW, _C_IEQ, _C_TS, _C_TIER, _C_SUB, _C_APPLIED = range(7)
+_BAD = object()      # a cached entry that cannot be trusted; see _prior()
+
+
+def _prior(seen, k):
+    """The cached contribution for `k`: the entry, None, or _BAD.
+
+    Validated at LOOKUP rather than on load. Untouched entries cannot hurt anything --
+    their cost is already in the totals -- and checking 20k of them on every hook
+    invocation buys nothing. An entry that IS touched and is malformed cannot be
+    subtracted, so the caller leaves the totals exactly as they are and skips the
+    record: keeping one stub's cost is a bounded error, where unpacking garbage is a
+    crash in a UserPromptSubmit hook and double-counting is an unbounded one.
+    """
+    v = seen.get(k)
+    if v is None:
+        return None
+    if (isinstance(v, list) and len(v) == 7 and isinstance(v[_C_TIER], str)
+            and all(isinstance(v[i], (int, float)) and not isinstance(v[i], bool)
+                    and math.isfinite(v[i])
+                    for i in (_C_COST, _C_RAW, _C_IEQ, _C_TS))):
+        return v
+    return _BAD
+
+
+def _apply(tot, bk, sign, entry):
+    """Add (sign=+1) or remove (sign=-1) one request's contribution to every bucket.
+
+    Every accumulator a record feeds lives here, so a supersession subtracts from
+    exactly the set the original addition fed -- including the tier and main/sub splits,
+    which are read by the Fable scope check and the subagent breach line, and the
+    per-minute index the live readout is measured from (see `window_spend`). Without
+    that last one, a superseded partial's cost stayed in whichever minute it first
+    landed in forever, while the totals it was subtracted from moved on -- so `bk`'s
+    sum would silently stop matching `tot`, and the live readout would keep counting
+    a stub the totals no longer do. The stored tier and timestamp are used rather than
+    the new record's: they agree today (same model, same message, same instant), and
+    trusting the stored ones is what makes the subtraction exact.
+    """
+    if not entry[_C_APPLIED]:
+        return
+    cost, rawt, ieq = entry[_C_COST], entry[_C_RAW], entry[_C_IEQ]
+    t, is_sub = entry[_C_TIER], entry[_C_SUB]
+    for key, v in (("all", cost), (t, cost), ("sub" if is_sub else "main", cost),
+                   ("all_raw", rawt), ("all_ieq", ieq),
+                   (f"{t}_raw", rawt), (f"{t}_ieq", ieq)):
+        tot[key] = tot.get(key, 0.0) + sign * v
+    if is_sub:
+        tot[f"sub_{t}"] = tot.get(f"sub_{t}", 0.0) + sign * cost
+    b = bk.setdefault(bucket_of(entry[_C_TS]), [0.0, 0.0])
+    b[0] += sign * cost
+    if t == "fable":
+        b[1] += sign * cost
 
 
 def _cache_stale(files):
@@ -308,6 +406,12 @@ def scan_detail(week, force=False):
     Dedup by (message id, requestId) is kept because one request can land in more than one
     transcript (resumes, sidechains); without it a resumed session double-counts.
 
+    Duplicates SUPERSEDE rather than being dropped (see COST_POLICY): the partial record
+    and the complete one share a key and land in different minutes -- usually in
+    different scans -- so the complete one has to remove what the partial added and
+    re-add itself at its own timestamp. That is why `seen` maps each key to the
+    contribution made for it instead of merely remembering the key.
+
     The per-minute index exists because the live readout needs spend since an ARBITRARY
     instant (the meter's observed zero) and over the last hour and three hours, and the
     week totals cannot answer either. It is built here rather than by a second walk for
@@ -316,10 +420,9 @@ def scan_detail(week, force=False):
     offset. `_cum_events` still walks every transcript ever for `--calibrate`, and takes
     ~4 seconds doing it; that is acceptable once, and not on every fortieth prompt.
     """
-    fresh = {"week": week, "files": {}, "totals": {}, "seen": set()}
-    c = fresh if force else _load_cache(week)
+    c = _fresh_cache(week) if force else _load_cache(week)
     if not force and _cache_stale(c["files"]):
-        c = {"week": week, "files": {}, "totals": {}, "seen": set()}
+        c = _fresh_cache(week)
     tot = {k: float(v) for k, v in c.get("totals", {}).items()}
     bk = {} if force else _load_buckets(c)
     # The index and the totals are two accumulators over the same events, so they must
@@ -389,31 +492,35 @@ def scan_detail(week, force=False):
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except ValueError:
                 continue
-            if week_close(dt) != week:
-                continue
             k = hashlib.md5(f"{m.get('id')}|{e.get('requestId')}".encode()).hexdigest()[:12]
-            if k in seen:
+            in_week = week_close(dt) == week
+            prev = _prior(seen, k)
+            if prev is _BAD:
                 continue
-            seen.add(k)
-            cost, t = cost_usd(u, model), tier(model)
-            raw, ieq = token_measures(u)
-            b = bk.setdefault(bucket_of(dt.timestamp() * 1000), [0.0, 0.0])
-            b[0] += cost
-            if t == "fable":
-                b[1] += cost
-            tot["all"] = tot.get("all", 0.0) + cost
-            tot[t] = tot.get(t, 0.0) + cost
-            tot["sub" if is_sub else "main"] = tot.get("sub" if is_sub else "main", 0.0) + cost
+            # The week test now runs AFTER the key is known, because a key already
+            # counted has to be reachable by a superseding record even when that record
+            # falls outside the week: the meter bills at the COMPLETE record's minute, so
+            # a partial inside the week whose completion lands past the close belongs to
+            # the next week, not to this one.
+            if prev is None and not in_week:
+                continue
+            # Round once, so the value cached is byte-identical to the value applied:
+            # a later subtraction then cancels the addition exactly.
+            cost = round(cost_usd(u, model), 9)
+            ts_ms = dt.timestamp() * 1000
+            if prev is not None and (cost, ts_ms) <= (prev[_C_COST], prev[_C_TS]):
+                continue                    # a duplicate that adds nothing; see COST_POLICY
+            rawt, ieq = token_measures(u)
             # Parallel accumulators in the two non-dollar candidate units, so a
             # meter reading can identify WHICH unit the meter counts (see
             # `--units`). Cheap to carry; impossible to reconstruct once
             # transcripts are pruned.
-            tot["all_raw"] = tot.get("all_raw", 0.0) + raw
-            tot["all_ieq"] = tot.get("all_ieq", 0.0) + ieq
-            tot[f"{t}_raw"] = tot.get(f"{t}_raw", 0.0) + raw
-            tot[f"{t}_ieq"] = tot.get(f"{t}_ieq", 0.0) + ieq
-            if is_sub:
-                tot[f"sub_{t}"] = tot.get(f"sub_{t}", 0.0) + cost
+            entry = [cost, rawt, round(ieq, 6), ts_ms, tier(model),
+                     1 if is_sub else 0, 1 if in_week else 0]
+            if prev is not None:
+                _apply(tot, bk, -1.0, prev)  # the partial's contribution comes back out
+            _apply(tot, bk, 1.0, entry)
+            seen[k] = entry
         # Outside the line loop: the offset must advance even when this chunk held no
         # parseable assistant records, or those bytes are re-read on every scan forever.
         files[key] = [off + consumed, mtime]
@@ -732,9 +839,16 @@ def _cum_events(unit="$"):
     is what the anchor cache exists to avoid. The Fable column rides along because the
     desktop app's samples carry NO Fable meter, so the Fable side of an out-of-band
     reset can only be recovered by summing Fable spend up to the zero instant.
+
+    Supersession matters MORE here than in the week total, because this series is
+    indexed by instant: the partial record and the complete one are ~11 minutes apart,
+    and the meter bills the complete one's minute. Keeping the first put the stub's cost
+    at the stub's instant, which is what the regression fitted and what the anchor
+    localised the meter's zero against -- so the defect was not only ~10% of dollars, it
+    was ~10% of dollars placed at the wrong minute.
     """
     idx = {"$": 0, "raw": 1, "ieq": 2}[unit]
-    ev, seen = [], set()
+    best = {}
     for path in ROOT.rglob("*.jsonl"):
         if "memory" in path.parts or "tool-results" in path.parts:
             continue
@@ -756,10 +870,10 @@ def _cum_events(unit="$"):
                 u, model = m.get("usage"), m.get("model") or ""
                 if not u or not model or model == "<synthetic>":
                     continue
-                k = (m.get("id"), e.get("requestId"))
-                if k in seen:
-                    continue
-                seen.add(k)
+                # The timestamp is parsed BEFORE the key is claimed. It used to be parsed
+                # after: a record with a missing or unparseable timestamp added its key
+                # to `seen` and then skipped, so a later GOOD duplicate of it was
+                # discarded as already-seen and the request vanished from the series.
                 ts = e.get("timestamp")
                 if not ts:
                     continue
@@ -767,12 +881,20 @@ def _cum_events(unit="$"):
                     d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 except ValueError:
                     continue
+                k = (m.get("id"), e.get("requestId"))
+                cost, t_ms = cost_usd(u, model), d.timestamp() * 1000
+                prior = best.get(k)
+                if prior is not None and (cost, t_ms) <= (prior[0], prior[1]):
+                    continue
                 rawt, ieq = token_measures(u)
-                v = (cost_usd(u, model), rawt, ieq)[idx]
-                ev.append((d.timestamp() * 1000, v, v if tier(model) == "fable" else 0.0))
-    if not ev:
+                v = (cost, rawt, ieq)[idx]
+                # (comparator cost, instant) first, so the tuple sorts and compares by
+                # the same rule whichever unit is being summed: the record that wins is
+                # the complete one in every unit, not a different one per unit.
+                best[k] = (cost, t_ms, v, v if tier(model) == "fable" else 0.0)
+    if not best:
         return [], [0.0], [0.0]
-    ev.sort()
+    ev = sorted((t_ms, v, vf) for _, t_ms, v, vf in best.values())
     times = [e[0] for e in ev]
     cum, cumf = [0.0], [0.0]
     for _, v, vf in ev:
@@ -926,11 +1048,18 @@ def meter_offset(week, force=False):
 def _cached_anchor(week, seg_start):
     """The offset is a CONSTANT once the reset is past -- it does not drift as spend
     accrues -- so it is computed once per period, not once per invocation. Only a new
-    reset or a new week invalidates it, which is what the key checks."""
+    reset, a new week, or a change in how spend is counted invalidates it, which is what
+    the key checks.
+
+    The policy stamp is part of the key because the offset is DOLLARS, subtracted from a
+    numerator counted under the same policy. An anchor cached under the first-occurrence
+    dedup is ~10% low and would have survived for the rest of the meter period, quietly
+    under-correcting a numerator that had just been fixed (#256)."""
     try:
         d = json.loads(CALIB.read_text())
         a = d.get("anchor") if isinstance(d, dict) else None
         if (isinstance(a, dict) and a.get("week") == week and a.get("seg") == seg_start
+                and a.get("policy") == COST_POLICY
                 and all(isinstance(a.get(k), (int, float)) and not isinstance(a.get(k), bool)
                         and math.isfinite(a[k]) for k in ("all", "fable"))):
             z = a.get("zero")
@@ -966,7 +1095,7 @@ def _merge_calib(update):
 
 def _save_anchor(week, seg_start, off, offf, zero_ms, note):
     _merge_calib({"anchor": {"week": week, "seg": seg_start, "all": off, "fable": offf,
-                             "zero": zero_ms, "note": note,
+                             "zero": zero_ms, "note": note, "policy": COST_POLICY,
                              "at": datetime.now(PT).isoformat(timespec="minutes")}})
 
 
@@ -1149,9 +1278,20 @@ def resolve_cap(kind, rows, use_cached=True):
             rng = (f", range ${lo:,.0f}-${hi:,.0f}"
                    if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else "")
             age = f", measured {c['at'][:16]}" if isinstance(c.get("at"), str) else ""
+            # A cached cap measured under the old first-occurrence dedup reads low --
+            # 2.0% to 12.9% per period as measured -- and the numerator divided into it no
+            # longer does, so the percentage reads HIGH by that much -- a wrong verdict, not just a wrong dollar figure. It is disclosed
+            # rather than rejected: this is a MEASUREMENT with a date on it, the file's
+            # rule for a number it cannot trust is to say so (see meter_offset), and
+            # rejecting it would fall back to a hand-recorded reading that carries the
+            # same policy without saying which.
+            stale = ("" if c.get("policy") == COST_POLICY else
+                     " -- WARNING: measured under the superseded first-occurrence dedup "
+                     "(pre-#256), so it reads LOW and this percentage reads high; re-run "
+                     "--calibrate")
             return (c["all"], f"regression over {c.get('periods', '?')} meter period(s) "
                               f"from the app's own 15-minute samples (R2 {c.get('r2', 0):.3f}"
-                              f"{rng}{age}) -- zero-point independent", True)
+                              f"{rng}{age}) -- zero-point independent{stale}", True)
     dcaps, _ = differential_caps(rows)
     if dcaps[kind]:
         v = sorted(dcaps[kind])
@@ -1907,7 +2047,7 @@ def main():
             CALIB.parent.mkdir(parents=True, exist_ok=True)
             lo, hi = min(v), max(v)
             _merge_calib({"all": med, "periods": len(good), "r2": r2m,
-                          "lo": lo, "hi": hi,
+                          "lo": lo, "hi": hi, "policy": COST_POLICY,
                           "at": datetime.now().astimezone().isoformat(timespec="minutes")})
             print(f"\nall-models cap ${med:,.0f} (median of {len(good)} well-fit period(s), "
                   f"mean R2 {r2m:.3f})  — cached for the pace check")
