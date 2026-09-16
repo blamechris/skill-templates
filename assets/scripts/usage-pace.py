@@ -574,6 +574,7 @@ def live_sample(now_ms=None, samples=None):
 
 LIVE_DROP = 15.0        # a fall this large between two samples is a reset, not noise
 STALE_MIN = 30.0        # a sample older than this is called stale in the readout
+MIN_MOVED = 5.0         # points the meter must have moved before its $/pt may extrapolate
 
 
 def observed_anchor(open_ms, samples=None):
@@ -1164,7 +1165,8 @@ def resolve_cap(kind, rows, use_cached=True):
 
 # ---------------------------------------------------------------- pace
 
-def derive(pct, anchor_sd, spend_at_pct, spend_since, burn_1h, burn_3h, hours_to_reset):
+def derive(pct, anchor_sd, spend_at_pct, spend_since, burn_1h, burn_3h,
+           hours_to_reset, min_moved=MIN_MOVED):
     """Everything downstream of one percentage and the spend measured against it.
 
     `rate` is the self-calibrating cap: this week's own dollars per meter point. It is
@@ -1193,6 +1195,24 @@ def derive(pct, anchor_sd, spend_at_pct, spend_since, burn_1h, burn_3h, hours_to
     that has to answer "where are we now" (the headroom, the wall, the landing) uses it,
     because the alternative is to answer with a number that was true forty minutes ago.
 
+    ...but only once the meter has MOVED enough to have a rate worth extrapolating with.
+    `pct` is an integer percentage eyeballed off a UI, so at `moved == 1` the rate is one
+    rounded point: the true movement is anywhere in [0.5, 1.5) and the rate is therefore
+    uncertain by a factor of three, before any question of whether the first points of a
+    period cost what the rest do. Everything downstream inherits that -- pts_left,
+    usd_left, hours_to_wall, landing -- and hours_to_wall is the sole input to the lockout
+    warning, which says the rest of the week is lost. That sentence must never be produced
+    by a one-point rate, and in the first hour after every reset a one-point rate is
+    exactly what is on offer.
+
+    So below MIN_MOVED the rate is marked `provisional`: `pct_now` stays at the meter's own
+    reading rather than being extrapolated, the readout says the rate is provisional and
+    how far the meter has moved, and `warnings_for` withholds the lockout line. The rate is
+    still reported -- it is the best estimate available and the only one there is -- and the
+    dollar figures built from it are still shown, because the alternative is a blank readout
+    for the first hour of every week. What is withheld is the two things that require the
+    rate to be TRUSTED: the extrapolation, and the warning.
+
     `landing` is where the meter ends up at the reset if the last three hours continue:
     the three-hour average is used rather than the one-hour one because a single hour of a
     long session is noisy. `hours_to_wall` uses the one-hour rate instead, because the
@@ -1200,13 +1220,16 @@ def derive(pct, anchor_sd, spend_at_pct, spend_since, burn_1h, burn_3h, hours_to
     """
     moved = (pct or 0.0) - (anchor_sd or 0.0)
     rate = spend_at_pct / moved if moved > 0 and spend_at_pct > 0 else None
-    pct_now = (pct or 0.0) + (spend_since / rate if rate and spend_since > 0 else 0.0)
+    provisional = rate is not None and moved < min_moved
+    pct_now = (pct or 0.0) + (spend_since / rate
+                              if rate and not provisional and spend_since > 0 else 0.0)
     pts_left = max(0.0, 100.0 - pct_now)
     usd_left = pts_left * rate if rate else None
     wall = (usd_left / burn_1h if usd_left is not None and burn_1h > 0
             else math.inf if usd_left is not None else None)
     return {
         "rate": rate, "pct_now": pct_now, "pts_left": pts_left, "usd_left": usd_left,
+        "moved": moved, "provisional": provisional,
         "hours_to_wall": wall,
         "landing": (pct_now + burn_3h * hours_to_reset / rate) if rate else None,
         "need_per_hour": (usd_left / hours_to_reset
@@ -1349,7 +1372,15 @@ def pace(now=None, force=False, prefer="live"):
         pct = 100.0 * all_ / cap if cap else 0.0
         # No sample, so there is no sampling gap and no anchor reading: one instant, and
         # `pct_now` comes back equal to `pct`.
-        d = derive(pct, 0.0, all_, 0.0, burn_1h, burn_3h, hours_to_reset)
+        #
+        # `min_moved=0` because the provisional gate would be a false label here. `pct` is
+        # `100 * all_ / cap`, so `all_ / pct` is `cap / 100` ALGEBRAICALLY -- the rate is the
+        # cap, not a measurement over points the meter moved, and how few points it is
+        # divided by says nothing about its precision. Its uncertainty is the cap's, which
+        # `all_cap_basis` states in the line. Gating on `moved` here would instead have
+        # silenced the lockout warning through the whole early-week stretch where a derived
+        # percentage is small, which is the opposite of the intent.
+        d = derive(pct, 0.0, all_, 0.0, burn_1h, burn_3h, hours_to_reset, min_moved=0.0)
         p.update({
             "source": "derived", "sd": None, "fh": None,
             "sample_at": None, "sample_age_min": None, "stale": False,
@@ -1398,10 +1429,21 @@ def warnings_for(p):
     end gives the earliest wall and the highest landing, so it warns early about lockout
     and late about waste -- the intended asymmetry, since one costs the rest of the week
     and the other costs nothing to learn an hour later.
+
+    One thing DOES gate warning (a), and it is not the sample's age: a `provisional` rate,
+    which is one calibrated on fewer than MIN_MOVED points of meter movement. hours_to_wall
+    is that rate's only consumer here, and in the first hour after a reset the rate is a
+    single rounded point -- uncertain by a factor of three before any question of whether
+    the first points of a period cost what the rest do. "The rest of the week is lost" is
+    not a sentence to derive from that. Warning (b) is not gated the same way: its landing
+    figure is no better founded, but the worst it can do is suggest spending quota that
+    would otherwise be destroyed, and it cannot fire in the first hour of a week anyway
+    (it needs `h < 24`).
     """
     out = []
     h, w = p.get("hours_to_reset"), p.get("hours_to_wall")
-    if (h and w is not None and math.isfinite(w) and w < 0.5 * h):
+    if (h and w is not None and math.isfinite(w) and w < 0.5 * h
+            and not p.get("provisional")):
         when = p.get("wall_at") or f"in {w:.1f}h"
         out.append(("lockout", f"At this burn you reach the wall around {when}, "
                                f"{h - w:.0f}h before the reset -- the rest of the "
@@ -1454,7 +1496,13 @@ def fmt(p, margin=None):
         f"spent {_rng(p['spend'], p['spend_hi'])} since {p['anchor_label']}"
         if p["source"] == "live" else f"spent ${p['spend']:,.0f}",
         f"{_rng(p['fable'], p['fable_hi'])} fable",
-        f"{_rng(p['rate'], p['rate_hi'], '${:,.1f}')}/pt",
+        # A rate calibrated on fewer than MIN_MOVED points says so, in the field itself.
+        # It is still the best estimate there is, and it is still what every dollar figure
+        # on the line is built from -- but `pct_now` is not extrapolated with it and the
+        # lockout warning is withheld, so the line must not read as though it were trusted.
+        (f"{_rng(p['rate'], p['rate_hi'], '${:,.1f}')}/pt"
+         + (f" PROVISIONAL (the meter has moved {p['moved']:.0f} pt since the reset)"
+            if p.get("provisional") else "")),
         f"{p['pts_left']:.0f} pts ≈ {_rng(p['usd_left'], p['usd_left_hi'])} left",
         f"reset in {p['hours_to_reset']:.1f}h",
         f"burn ${p['burn_1h']:,.0f}/h (3h ${p['burn_3h']:,.0f}/h)",

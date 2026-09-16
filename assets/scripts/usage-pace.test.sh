@@ -168,17 +168,21 @@ burn1 = total(now_ms - 3600_000, now_ms)
 burn3 = total(now_ms - 3 * 3600_000, now_ms) / 3.0
 h_reset = (up.week_bounds(wk)[1].astimezone(timezone.utc) - now).total_seconds() / 3600.0
 
+MIN_MOVED = 5.0   # below this the rate is provisional and the meter is NOT carried forward
+
 def figures(at):
     """The readout's chain, from a spend-at-sample figure."""
     moved = sd - anchor_sd
     rate = at / moved if moved > 0 and at > 0 else None
-    pct_now = sd + (since / rate if rate else 0.0)
+    prov = rate is not None and moved < MIN_MOVED
+    pct_now = sd + (since / rate if rate and not prov else 0.0)
     pts_left = max(0.0, 100.0 - pct_now)
     usd_left = pts_left * rate if rate else None
     wall = (usd_left / burn1 if usd_left is not None and burn1 > 0 else float("inf"))
     return {"rate": rate, "pct_now": pct_now, "pts_left": pts_left, "usd_left": usd_left,
             "wall": wall, "landing": pct_now + burn3 * h_reset / rate if rate else None,
-            "need": usd_left / h_reset if usd_left is not None and h_reset > 0 else None}
+            "need": usd_left / h_reset if usd_left is not None and h_reset > 0 else None,
+            "prov": prov}
 
 lo_f = figures(at_s)
 hi_f = figures(at_s + gap)                    # the other end of the reset-gap range
@@ -192,7 +196,10 @@ print(json.dumps({
     "spend_rng_s": "spent ${:,.0f}-${:,.0f} since".format(spend, spend + gap),
     "usd_left": lo_f["usd_left"], "burn1": burn1, "burn3": burn3, "h_reset": h_reset,
     "wall": lo_f["wall"], "landing": lo_f["landing"], "need": lo_f["need"],
-    "warn_a": bool(lo_f["wall"] < 0.5 * h_reset),
+    "prov": lo_f["prov"],
+    "prov_s": ("${:,.1f}/pt PROVISIONAL (the meter has moved {:,.0f} pt since the reset)"
+               .format(lo_f["rate"], sd - anchor_sd) if lo_f["prov"] else ""),
+    "warn_a": bool(lo_f["wall"] < 0.5 * h_reset and not lo_f["prov"]),
     "warn_b": bool(lo_f["landing"] < 90 and h_reset < 24),
     "sd_s": "sd %.0f%%" % sd, "fh_s": "fh %.0f%%" % float(fh), "fwd_s": fwd,
     "spend_s": "spent ${:,.0f} since".format(spend),
@@ -1308,6 +1315,26 @@ q=$(pymod 'print(",".join(k for k,_ in up.warnings_for(
   && ok "warning (a) is silent just the other side of 0.5 x hours_to_reset" \
   || bad "warning (a) is silent just the other side of 0.5 x hours_to_reset" "got=$(flat "$q")"
 # (b) quota that will expire unspent, and ONLY inside the last day of the week.
+#     ...and (a) alone is withheld when the rate behind hours_to_wall is PROVISIONAL --
+#     calibrated on fewer than MIN_MOVED points of meter movement, which is every reading
+#     taken in the first hour after a reset. One rounded point of movement makes the rate
+#     uncertain by a factor of three, and "the rest of the week is lost" must not come out
+#     of that. The identical world with the flag off must still warn, or this asserts
+#     nothing but that a key exists.
+q=$(pymod 'print(",".join(k for k,_ in up.warnings_for(
+    {"hours_to_reset":100.0,"hours_to_wall":40.0,"landing":150.0,"rate":20.0,
+     "provisional":True})))')
+[ -z "$q" ] \
+  && ok "warning (a) is withheld while the rate is provisional (a one-point rate cannot say the week is lost)" \
+  || bad "warning (a) is withheld while the rate is provisional" "got=$(flat "$q")"
+# (b) is NOT gated the same way: at worst it suggests spending quota that would be
+#     destroyed, and it cannot fire in the first hour of a week anyway (it needs h < 24).
+q=$(pymod 'print(",".join(k for k,_ in up.warnings_for(
+    {"hours_to_reset":20.0,"hours_to_wall":999.0,"landing":80.0,"rate":20.0,
+     "provisional":True})))')
+[ "$q" = "waste" ] \
+  && ok "warning (b) still fires on a provisional rate (it can only suggest spending)" \
+  || bad "warning (b) still fires on a provisional rate" "got=$(flat "$q")"
 q=$(pymod 'print(",".join(k for k,_ in up.warnings_for(
     {"hours_to_reset":20.0,"hours_to_wall":999.0,"landing":80.0,"rate":20.0})))')
 [ "$q" = "waste" ] \
@@ -1799,6 +1826,48 @@ else
           "want $w1/$w2 || $(flat "$part_line")" ;;
   esac
 fi
+
+# --- the first hour after a reset: one point of movement is not a calibrated rate -------
+# The meter reads an integer percentage, so at `moved == 1` the rate is a single rounded
+# point -- the true movement is anywhere in [0.5, 1.5), so the rate is uncertain by a factor
+# of three before any question of whether the first points of a period cost what the rest
+# do. pct_now, pts_left, usd_left, hours_to_wall and landing are all built on it, and
+# hours_to_wall is the only input to the lockout warning. So below MIN_MOVED the meter is
+# NOT carried forward, the line says the rate is provisional and how far the meter moved,
+# and the warning is withheld. This world is every session started within an hour of a
+# Wednesday reset.
+fx=$(mkfix "$LIVEHOME" '{"sd":1,"fh":1,"age_min":5,"reqs":[[40,1000000,"claude-fable-5"],[3,1000000,"claude-fable-5"]]}')
+prov_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ]; then
+  skipt "a one-point rate is provisional and does not extrapolate" "too close to a meter reset"
+else
+  w1=$(fixf "$fx" prov_s)
+  got=$(HOME="$LIVEHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+import json, sys
+p = json.load(sys.stdin)
+print("prov=%s carried=%s lost=%s" % (
+    p.get("provisional"), abs(p["pct_now"] - p["sd"]) < 1e-9,
+    any("rest of the week is lost" in m for m in p["warnings"])))')
+  case "$prov_line" in *"$w1"*) mark=named ;; *) mark="unnamed(want $w1)" ;; esac
+  { [ "$got" = "prov=True carried=True lost=False" ] && [ "$mark" = named ]; } \
+    && ok "a one-point rate is provisional: the meter is not carried forward, the line says so, and nothing claims the week is lost" \
+    || bad "a one-point rate is provisional and does not extrapolate" \
+          "got=$got mark=$mark || $(flat "$prov_line")"
+fi
+
+# ...and the gate is a threshold, so the other side of it is asserted too: a meter that HAS
+# moved (every other world in this section moves 42 or more) extrapolates and is not marked.
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"reqs":[[40,20000000,"claude-fable-5"],[3,1000000,"claude-fable-5"]]}')
+moved_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+got=$(HOME="$LIVEHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+import json, sys
+p = json.load(sys.stdin)
+print("prov=%s carried=%s" % (p.get("provisional"), p["pct_now"] > p["sd"]))')
+case "$moved_line$got" in
+  *PROVISIONAL*) bad "a meter that has moved is not marked provisional" "$(flat "$moved_line")" ;;
+  *"prov=False carried=True"*) ok "a meter that has moved past MIN_MOVED extrapolates and is not marked" ;;
+  *) bad "a meter that has moved past MIN_MOVED extrapolates" "got=$(flat "$got")" ;;
+esac
 
 # ------ a sample from BEFORE this meter period is not a reading of this meter -------
 # The deterministic shape: after every Wednesday 15:59 PT reset the newest persisted
