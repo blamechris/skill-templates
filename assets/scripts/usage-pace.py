@@ -249,18 +249,40 @@ def _load_buckets(c):
 
 
 def window_spend(bk, lo_ms, hi_ms=None):
-    """(all, fable) dollars in [lo, hi), from the per-minute index.
+    """(all, fable) dollars in (lo, hi], from the per-minute index.
 
-    Resolution is one minute, so an instant mid-minute pulls in that whole minute. At
-    the burn rates this file deals in (tens of dollars an hour) that is under a dollar
-    against a four-figure total -- and the alternative, a full transcript walk per
-    invocation, costs ~4 seconds on every hook fire.
+    Resolution is one minute, so a window is a whole number of minute buckets and one of
+    its two ends has to give. Which end is not a matter of taste: `hi_ms` is almost always
+    NOW (or the instant the meter was read) and is almost never on a minute boundary, so
+    rounding the top end DOWN -- which `[lo, hi)` over buckets did -- dropped the minute
+    in progress entirely. That is the minute the most recent request landed in, so the
+    live figures ran up to a minute behind: `spend since the reset`, the rate's numerator,
+    and `burn_1h` (the sole input to the wall, and so to the lockout warning) each
+    understated by whatever had just been spent.
+
+    So the buckets are `(bucket_of(lo), bucket_of(hi)]` -- the top end rounds UP to include
+    the minute in progress, and the bottom end rounds up with it. That keeps the one
+    property the callers depend on, which a "include both ends" fix would have destroyed:
+    adjacent windows PARTITION. `window(anchor, s) + window(s, now) == window(anchor, now)`
+    exactly, for any split instant `s`, because the bucket containing `s` belongs to the
+    lower window and to nothing else. `pace` splits at the sample for precisely that
+    reason, and prints `spend` beside the two halves it is made of.
+
+    What the bottom end gives up is the bucket containing `lo` itself, and in both callers
+    that is the right bucket to give up. `lo` is the meter's zero: that minute STRADDLES
+    the reset, so its spend cannot be attributed to either side of it -- and it now lands
+    in the `(prev, anchor]` gap window, which `pace` already reports as a range for exactly
+    this reason. When no reset was seen at all, `lo` is the week open and the bucket
+    straddling it is partly last week's.
+
+    A full transcript walk per invocation would resolve the whole question and costs ~4
+    seconds on every hook fire, which is why the index is per-minute in the first place.
     """
     lo = bucket_of(lo_ms)
     hi = bucket_of(hi_ms) if hi_ms is not None else None
     a = f = 0.0
     for m, v in bk.items():
-        if m < lo or (hi is not None and m >= hi):
+        if m <= lo or (hi is not None and m > hi):
             continue
         a += v[0]
         f += v[1]

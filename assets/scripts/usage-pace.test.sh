@@ -73,7 +73,8 @@ fixture that scatters requests over a range cannot say which side each landed on
 
 Two things are reimplemented here rather than imported, and both are deliberate:
   - PRICES, from docs/the pricing table, as plain dollars per million output tokens;
-  - the BUCKET rule (`ms // 60000`, windows half-open [lo, hi)), which is how the script
+  - the BUCKET rule (`ms // 60000`, windows `(lo, hi]` over those buckets -- the minute in
+    progress counts, the minute containing the anchor does not), which is how the script
     documents its per-minute index.
 Everything else about the world is stated in the config. `usable` is false when the meter
 week opened too recently to place every request after the anchor -- the caller SKIPs
@@ -151,7 +152,7 @@ def total(lo_ms, hi_ms, fable_only=False):
     lo, hi = BUCKET(lo_ms), BUCKET(hi_ms)
     s = 0.0
     for t, tok, model in ev:
-        if not (lo <= BUCKET(t) < hi):
+        if not (lo < BUCKET(t) <= hi):          # (lo, hi]: the minute in progress counts
             continue
         if fable_only and model != FABLE:
             continue
@@ -1596,6 +1597,29 @@ BKPY
 [ "$got" = "totals=True fable=True incr=True win=True win2=True" ] \
   && ok "the per-minute index agrees with the totals, and windows it exactly" \
   || bad "the per-minute index agrees with the totals" "got=$(flat "$got")"
+
+# The WINDOW BOUNDARY, both ends, because `hi_ms` is almost always NOW and almost never on
+# a minute boundary. Rounding the top end down dropped the minute in progress outright --
+# the minute the newest request landed in -- so `spend since the reset`, the rate's
+# numerator and `burn_1h` (the only input to the wall, and so to the lockout warning) each
+# ran up to a minute behind. The partition property is asserted with it: a fix that simply
+# included both ends would double-count the bucket a split instant falls in, and `pace`
+# splits at the sample and prints `spend` beside the two halves it is made of.
+got=$(pymod "
+T = 1_000_000_000_000 + 37_123          # deliberately mid-minute, as now_ms always is
+m = up.bucket_of(T)
+bk = {m - 2: [5.0, 1.0], m - 1: [7.0, 2.0], m: [11.0, 3.0], m + 1: [13.0, 4.0]}
+now_min = up.window_spend(bk, T - 5 * 60_000, T)[0]          # must include T's own minute
+after  = up.window_spend(bk, T - 5 * 60_000, T)[1]
+beyond = up.window_spend(bk, T - 5 * 60_000, T - 60_000)[0]   # must stop before it
+S = T - 90_000                                                # a mid-minute split instant
+whole = up.window_spend(bk, T - 5 * 60_000, T)[0]
+lo_h  = up.window_spend(bk, T - 5 * 60_000, S)[0]
+hi_h  = up.window_spend(bk, S, T)[0]
+print('%.0f %.0f %.0f %s' % (now_min, after, beyond, abs(lo_h + hi_h - whole) < 1e-9))")
+[ "$got" = "23 6 12 True" ] \
+  && ok "window_spend counts the minute containing hi_ms, and adjacent windows partition" \
+  || bad "window_spend counts the minute containing hi_ms and partitions" "got=$(flat "$got")"
 
 # A shrunk transcript must leave no stale spend in the INDEX either. The totals case is
 # pinned above; the index is a second accumulator in the same file and a revert of its
