@@ -1874,10 +1874,72 @@ fi
 # to the anchor means a higher $/pt, which buys fewer points per hour. So the one figure
 # whose range could print backwards did, as "lands 43-40%". Needs a world with BOTH a gap
 # and a landing under 100, which no other case in this file builds.
+#
+# THE CLOCK CANNOT SKIP THESE TWO, and until they existed it skipped the only assertion
+# there was. The fixture world below needs a landing under 100 at BOTH ends, and
+# `landing_lo = pct_now + burn_3h * h / rate` crosses 100 at h = 30.6 there -- so for 137
+# of a meter week's 168 hours the case reported SKIP and the fix was asserted by nothing.
+# The fixture cannot be made clock-independent either: every request it writes lands within
+# the last three hours, so burn_3h is at least a third of the spend that bought the meter's
+# movement, and extrapolating that over a full week's 168 hours always exceeds 100 unless
+# the meter moved less than ~1.6 points -- which is the provisional world, not this one.
+# So the property is pinned at the two levels that have no clock in them at all: the range
+# formatter itself, and a pace() run over a FIXED now.
+got=$(pymod "
+p = dict(source='live', sd=8.0, sample_at='12:00Z', sample_age_min=5.0, pct_now=8.0,
+         fh=2.0, spend=100.0, spend_hi=110.0, anchor_label='the reset', fable=100.0,
+         fable_hi=110.0, rate=6.25, rate_hi=6.875, provisional=False, moved=8.0,
+         pts_left=91.0, usd_left=570.0, usd_left_hi=628.0, hours_to_reset=6.0,
+         burn_1h=5.0, burn_3h=20.0, landing=46.0, landing_hi=43.0,
+         need_per_hour=95.0, need_per_hour_hi=105.0, fable_reading=None)
+print('%s | %s' % (up._rng(46.0, 43.0, '{:,.0f}'),
+                   [q for q in up.fmt(p).split(' · ') if q.startswith('→')][0]))" 2>&1)
+[ "$got" = "43-46 | → lands 43-46%" ] \
+  && ok "a descending pair of ends still prints low-to-high, in _rng and in the line it reaches" \
+  || bad "a descending pair of ends prints low-to-high" "got=$(flat "$got")"
+
+# ...and end to end through pace() on a fixed `now`, because the formatter being right is
+# not the same claim as the two ends arriving in the order the defect produced: `landing`
+# 28.0 with `landing_hi` 26.2, a range that reads backwards unless someone orders it.
+got=$(pymod "
+import json, shutil
+tmp = pathlib.Path(sys.argv[3]); root = tmp / 'fixnow'
+shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT = root; up.HIST = tmp; up.CACHE = tmp / 'fixnow_c.json'
+up.STATE = tmp / 'fixnow_s.json'; up.READINGS = tmp / 'no-readings.md'
+# A Wednesday six hours before its own reset: hours_to_reset is 6.0 by construction, so
+# nothing in this world depends on when the suite runs.
+close = up.week_bounds(up.week_close(
+    up.datetime(2026, 9, 9, 12, 0, tzinfo=up.timezone.utc)))[1]
+now = close.astimezone(up.timezone.utc) - up.timedelta(hours=6)
+now_ms = now.timestamp() * 1000
+a = now_ms - 120 * 60_000                     # the reset
+samp = a + 60 * 60_000                        # the sample, an hour into the period
+def rec(i, ms, tok):
+    return json.dumps({'type': 'assistant', 'timestamp':
+        up.datetime.fromtimestamp(ms / 1000, up.timezone.utc).isoformat()
+          .replace('+00:00', 'Z'),
+        'message': {'id': 'r%d' % i, 'model': 'claude-fable-5',
+                    'usage': {'output_tokens': tok}}}, separators=(',', ':'))
+(root / 't.jsonl').write_text('\n'.join([
+    rec(0, a - 150_000, 100_000),             # \$5 inside the reset gap -> a range at all
+    rec(1, a + 10 * 60_000, 1_000_000),       # \$50 before the sample  -> the rate
+    rec(2, now_ms - 3 * 60_000, 100_000)]) + '\n')   # \$5 after it     -> the carry
+up._plan_raw = lambda: [(a - 300_000, 100.0, 40.0), (a, 0.0, 0.0), (samp, 8.0, 2.0)]
+p = up.pace(now=now)
+print('%.1f %.1f | %s' % (p['landing'], p['landing_hi'],
+      [q for q in up.fmt(p).split(' · ') if q.startswith('→')][0]))" "$TMP" 2>&1)
+[ "$got" = "28.0 26.2 | → lands 26-28%" ] \
+  && ok "pace() on a fixed now produces a descending pair and prints it ascending" \
+  || bad "pace() on a fixed now prints its descending landing range low-to-high" \
+        "got=$(flat "$got")"
+
+# The same property once more through the real CLI and a real HOME, which is the only
+# version of it a user sees -- and the one the clock can refuse to build.
 fx=$(mkfix "$LIVEHOME" '{"sd":8,"fh":2,"age_min":5,"gap_n":1,"gap_tok":400000,"reqs":[[40,4000000,"claude-fable-5"],[3,100000,"claude-fable-5"]]}')
 rng_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
 if [ "$(fixf "$fx" usable)" != "True" ] || [ "$(fixf "$fx" landing_rng_ok)" != "True" ]; then
-  skipt "the landing range prints low-to-high" "this clock does not build a sub-100 landing range"
+  skipt "the landing range prints low-to-high (via the CLI)" "this clock does not build a sub-100 landing range"
 else
   want=$(fixf "$fx" landing_rng_s)
   case "$rng_line" in
