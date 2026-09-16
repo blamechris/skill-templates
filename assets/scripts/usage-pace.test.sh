@@ -90,9 +90,21 @@ open_ms = up.week_bounds(wk)[0].astimezone(timezone.utc).timestamp() * 1000
 anchor = max(now_ms - 120 * 60_000, open_ms + 60_000)
 usable = (old_n == 0 or now_ms - anchor > 101 * 60_000) and now_ms - anchor > 26 * 60_000
 
-shutil.rmtree(home, ignore_errors=True)
-(home / ".claude" / "projects" / "p").mkdir(parents=True)
-(home / "Library" / "Application Support" / "Claude").mkdir(parents=True)
+# Remove only what THIS fixture owns. It used to wipe the whole fake HOME, and
+# ~/.claude/usage-history/pace-state.json went with it -- the hook's turn counter and its
+# acknowledgment. The ack test rebuilds the world between the three runs, so every run
+# started from no state at all and its yes/no/yes came out of the three worlds alone:
+# deleting s.pop("acked") or the `acked == v` suppression outright left 116/116 green.
+# A fixture builder that resets state the test is measuring is a test that cannot fail.
+shutil.rmtree(home / ".claude" / "projects", ignore_errors=True)
+shutil.rmtree(home / "Library", ignore_errors=True)
+# The spend cache is derived from the transcripts about to be rewritten. _cache_stale
+# would invalidate it, but leaving one behind makes every later assertion depend on that
+# path instead of on the fixture, so it goes -- explicitly, and it is the ONLY thing
+# under usage-history/ this builder may remove.
+(home / ".claude" / "usage-history" / "pace-cache.json").unlink(missing_ok=True)
+(home / ".claude" / "projects" / "p").mkdir(parents=True, exist_ok=True)
+(home / "Library" / "Application Support" / "Claude").mkdir(parents=True, exist_ok=True)
 
 def spread(n, lo_min, hi_min):
     if n <= 0:
@@ -501,6 +513,25 @@ if [ "$(fixf "$f2" usable)" = "True" ] \
     || bad "warned -> quiet -> warned speaks again" "spoke: $(spoke "$a1")/$(spoke "$a2")/$(spoke "$a3")"
 else
   skipt "warned -> quiet -> warned speaks again" "the clock cannot build both worlds now"
+fi
+
+# (i2) ...and the OTHER half of the same mechanism: the SAME verdict twice must speak
+#      once. Deleting the `acked == v` suppression outright left the suite green, because
+#      the sequence above never repeats a verdict without a quiet turn between -- so the
+#      clearing was pinned and the nagging was not. Without this, a session gets the same
+#      <usage-pace> block injected every --every turns for the rest of the week.
+NAGHOME=$TMP/naghome
+mkdir -p "$NAGHOME/.claude/projects"
+nagrun() { printf '{"session_id":"n1","transcript_path":"%s"}' "$TMP/fable.jsonl" \
+  | HOME="$NAGHOME" "$PY" "$SUT" --hook --every 1 2>&1; }
+f1=$(mkfix "$NAGHOME" "$loud"); n1=$(nagrun)
+f2=$(mkfix "$NAGHOME" "$loud"); n2=$(nagrun)
+if [ "$(fixf "$f1" warn_a)" = "True" ] && [ "$(fixf "$f2" warn_a)" = "True" ]; then
+  [ "$(spoke "$n1")" = yes ] && [ "$(spoke "$n2")" = no ] \
+    && ok "the same verdict twice speaks once (the acknowledgment suppresses the nag)" \
+    || bad "the same verdict twice speaks once" "spoke: $(spoke "$n1")/$(spoke "$n2")"
+else
+  skipt "the same verdict twice speaks once" "the clock cannot build the warning world now"
 fi
 
 # (j) A record still being appended must be counted EXACTLY once — not zero times
