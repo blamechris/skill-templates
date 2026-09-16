@@ -2291,12 +2291,33 @@ print('%s %s reads=%d' % (p['source'], p['sd'], len(calls)))" "$TMP")
 # on its own, four times over: once in `meter_offset`, and once each in the two
 # `resolve_cap` calls ("all" and "fable"), each of which reads it again inside
 # `differential_caps` -- on top of the one read `pace` itself already takes at the top
-# for `observed_anchor`. `scan_detail`/`read_readings` are stubbed to keep this about the
-# sample file, not the transcript scan; `prefer="derived"` forces the branch directly
-# rather than depending on a live sample being absent or rejected.
+# for `observed_anchor`. `scan_detail` is stubbed to keep this about the sample file, not
+# the transcript scan; `prefer="derived"` forces the branch directly rather than depending
+# on a live sample being absent or rejected.
+#
+# `read_readings` must come back with a REAL pair in this meter week, not `[]` -- an empty
+# reading list means `differential_caps`' per-pair loop body (where the `samples` snapshot
+# actually gets used, via `reset_between(ta, tb, samples)`) never runs at all, so a mutant
+# that drops `samples` from that one call goes undetected: the pass-through it guards is
+# never reached. Two readings a plausible cap-differential apart -- 20pts/$500 apart on
+# "all", 15pts/$150 on "fable", both above MIN_DELTA_PCT and both readings well clear of
+# the one hard-coded multiplier window -- exercise the real differential path in both
+# `resolve_cap` calls (this machine's actual state once a reading pair exists, since
+# recording pairs is what `--record` is for) while still resolving in one shared read.
 got=$(pymod "
+wk = up.week_close(up.datetime.now(up.timezone.utc))
+t1 = (up.datetime.now(up.timezone.utc) - up.timedelta(hours=3)).isoformat()
+t2 = (up.datetime.now(up.timezone.utc) - up.timedelta(hours=1)).isoformat()
+readings = [
+    {'week': wk, 'at': t1, 'note': '', 'all_pct': 20.0, 'fable_pct': 10.0,
+     'all_at': 500.0, 'fable_at': 100.0, 'all_raw': None, 'fable_raw': None,
+     'all_ieq': None, 'fable_ieq': None},
+    {'week': wk, 'at': t2, 'note': '', 'all_pct': 40.0, 'fable_pct': 25.0,
+     'all_at': 1000.0, 'fable_at': 250.0, 'all_raw': None, 'fable_raw': None,
+     'all_ieq': None, 'fable_ieq': None},
+]
 up.scan_detail = lambda *a, **k: ({}, {})
-up.read_readings = lambda: []
+up.read_readings = lambda: readings
 calls = []
 def fake():
     calls.append(1)
@@ -2400,6 +2421,35 @@ print('%.0f %.0f' % (up.resolve_cap('all', up.read_readings())[0],
 [ "$got" = "99999 3000" ] \
   && ok "resolve_cap serves the cached median on request and the pair without it" \
   || bad "resolve_cap serves the cached median on request and the pair without it" "got=$(flat "$got")"
+
+# `--caps` takes its own copy of the #257 fix: one `plan_samples()` read shared by both
+# `resolve_cap` calls ("all" and "fable"), same as `pace()`'s derived path above. Nothing
+# had pinned that half of the PR -- reverting just those three lines (both resolve_cap
+# calls back to reading the sample file on their own) left the suite fully green. `CALIB`
+# points at a file that does not exist so the cached-median branch is skipped and the
+# differential path -- the one that actually reads `samples` -- runs for both meters.
+mk 20 10 500.00 100.00 1000000000 200000000 100000000 20000000 \
+   40 25 1000.00 250.00 2000000000 500000000 200000000 50000000
+got=$("$PY" - "$SUT" "$R" <<'PYEOF' 2>&1
+import contextlib, importlib.util, io, pathlib, sys
+spec = importlib.util.spec_from_file_location("up", sys.argv[1])
+up = importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+up.READINGS = pathlib.Path(sys.argv[2])
+up.CALIB = pathlib.Path(sys.argv[2] + '.nope')
+calls = []
+def fake():
+    calls.append(1)
+    return []
+up._plan_raw = fake
+sys.argv = ["x", "--caps"]
+with contextlib.redirect_stdout(io.StringIO()):
+    up.main()
+print("reads=%d" % len(calls))
+PYEOF
+)
+[ "$got" = "reads=1" ] \
+  && ok "--caps reads the sample file once, shared by both resolve_cap calls" \
+  || bad "--caps reads the sample file once, shared by both resolve_cap calls" "got=$(flat "$got")"
 
 # --json must carry the live fields, not only the formatted line: the hook consumes the
 # payload and the previous payload had no live percentage in it at all.
