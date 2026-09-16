@@ -2286,6 +2286,28 @@ print('%s %s reads=%d' % (p['source'], p['sd'], len(calls)))" "$TMP")
   && ok "the live path reads the sample file once, so the sample and the anchor agree" \
   || bad "the live path reads the sample file once" "got=$(flat "$got")"
 
+# ------- the DERIVED path shares that same snapshot too (#257) -------
+# 40a4942 fixed the live path above; the derived path was left reading the sample file
+# on its own, four times over: once in `meter_offset`, and once each in the two
+# `resolve_cap` calls ("all" and "fable"), each of which reads it again inside
+# `differential_caps` -- on top of the one read `pace` itself already takes at the top
+# for `observed_anchor`. `scan_detail`/`read_readings` are stubbed to keep this about the
+# sample file, not the transcript scan; `prefer="derived"` forces the branch directly
+# rather than depending on a live sample being absent or rejected.
+got=$(pymod "
+up.scan_detail = lambda *a, **k: ({}, {})
+up.read_readings = lambda: []
+calls = []
+def fake():
+    calls.append(1)
+    return []
+up._plan_raw = fake
+p = up.pace(prefer='derived')
+print('%s reads=%d' % (p['source'], len(calls)))")
+[ "$got" = "derived reads=1" ] \
+  && ok "the derived path reads the sample file once, sharing meter_offset's and both resolve_cap's view" \
+  || bad "the derived path reads the sample file once" "got=$(flat "$got")"
+
 # ...and the OTHER side of that guard, which nothing pinned: a sample taken shortly AFTER
 # the anchor is a reading OF this meter period and must be accepted, however old it is. The
 # refusal above was the only tested side, so an over-strict guard -- `samp["t"] < anchor_ms
