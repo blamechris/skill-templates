@@ -1856,6 +1856,37 @@ print("source=%s sd=%s roomy=%s" % (p["source"], p["sd"], p["pts_left"] > 50))')
   && ok "the headroom after refusing a pre-period sample is the week's, not the old week's" \
   || bad "the headroom after refusing a pre-period sample is this week's" "got=$(flat "$got")"
 
+# ------- the sample and the anchor are two facts about ONE snapshot of the file -------
+# The live path compares them (`samp["t"] < anchor_ms` refuses a sample from an older
+# meter period), and the file is written at every /usage poll rather than on a clock. Read
+# twice, a write can land between the reads and the comparison is then between two
+# different files. The damaging direction is the one asserted here: the FIRST read supplies
+# the sample and the SECOND supplies an anchor from a reset the first did not contain, so a
+# good live sample is refused as pre-period and the readout drops silently to `derived`.
+got=$(pymod "
+tmp = pathlib.Path(sys.argv[3])
+up.ROOT = tmp / 'rawroot'; up.ROOT.mkdir(parents=True, exist_ok=True)
+up.HIST = tmp; up.CACHE = tmp / 'rawcache.json'; up.STATE = tmp / 'rawstate.json'
+up.READINGS = tmp / 'no-readings.md'
+now_ms = up.datetime.now(up.timezone.utc).timestamp() * 1000
+open_ms = up.week_bounds(up.week_close(up.datetime.now(up.timezone.utc)))[0] \
+             .astimezone(up.timezone.utc).timestamp() * 1000
+a = max(now_ms - 90 * 60_000, open_ms + 60_000)     # the reset the meter actually had
+s = a + 30 * 60_000                                 # ...and a sample well after it
+A = [(a - 300_000, 100.0, 40.0), (a, 0.0, 0.0), (s, 60.0, 8.0)]
+# the app's NEXT write: a further reset, recorded after the snapshot above was taken
+B = A + [(s + 60_000, 100.0, 40.0), (s + 120_000, 0.0, 0.0)]
+snaps, calls = [list(A), list(B)], []
+def fake():
+    calls.append(1)
+    return snaps.pop(0) if snaps else list(B)
+up._plan_raw = fake
+p = up.pace()
+print('%s %s reads=%d' % (p['source'], p['sd'], len(calls)))" "$TMP")
+[ "$got" = "live 60.0 reads=1" ] \
+  && ok "the live path reads the sample file once, so the sample and the anchor agree" \
+  || bad "the live path reads the sample file once" "got=$(flat "$got")"
+
 # ---------------- observed_anchor, directly: nothing named it before ----------------
 # The PR body claims a fix here -- a drop counts when its LATER sample is in-week, because
 # the scheduled reset lands BETWEEN two samples -- and re-introducing that bug left the

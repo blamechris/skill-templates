@@ -542,7 +542,7 @@ def plan_samples():
     return [(t, sd) for t, sd, _ in _plan_raw()]
 
 
-def live_sample(now_ms=None):
+def live_sample(now_ms=None, samples=None):
     """The newest persisted meter reading: the authoritative live percentage.
 
     Sampling is NOT on a clock -- the app writes when its UI polls /usage, so samples
@@ -555,8 +555,14 @@ def live_sample(now_ms=None):
     one, it is a reading of something else. What staleness inside the period costs is
     handled by arithmetic instead of refusal -- `derive` measures the rate at the sample's
     own instant and carries the meter forward over the gap.
+
+    `samples` is injectable for the same reason `observed_anchor`'s is: the caller that
+    needs both must read the file ONCE and hand the same snapshot to each. The app writes
+    it every ~15 minutes and at every /usage poll, so two reads a few milliseconds apart
+    can straddle a write -- and the two answers then disagree about which meter period is
+    current, which is the one disagreement this file cannot afford.
     """
-    raw = _plan_raw()
+    raw = _plan_raw() if samples is None else samples
     if not raw:
         return None
     t, sd, fh = raw[-1]
@@ -1270,8 +1276,17 @@ def pace(now=None, force=False, prefer="live"):
         "burn_1h": burn_1h, "burn_3h": burn_3h,
         "fable_reading": fable_reading(rows, now),
     }
-    samp = live_sample(now_ms) if prefer == "live" else None
-    anchor_ms, prev_ms, anchor_sd, label = observed_anchor(open_ms)
+    # ONE read of the sample file, shared by both readers of it. The sample and the anchor
+    # are two facts about the same snapshot, and the whole live path turns on comparing
+    # them: `samp["t"] < anchor_ms` refuses the sample as belonging to an older meter
+    # period. Read twice, the app can write between the reads -- it writes at every /usage
+    # poll, not on a clock -- and the comparison is then between two different files. The
+    # damaging direction is the one that lands: the older read supplies the sample and the
+    # newer read supplies an anchor from a reset it did not contain, so a perfectly good
+    # live sample is refused as pre-period and the readout silently drops to `derived`.
+    raw = _plan_raw()
+    samp = live_sample(now_ms, samples=raw) if prefer == "live" else None
+    anchor_ms, prev_ms, anchor_sd, label = observed_anchor(open_ms, samples=raw)
     # A sample taken BEFORE the anchor is not a reading of this meter period, and age alone
     # never disqualified it -- `stale` was a display flag and nothing else. The shape is
     # deterministic, not an edge case: after every Wednesday 15:59 PT reset the newest
