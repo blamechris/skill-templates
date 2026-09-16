@@ -484,6 +484,7 @@ def scan_detail(week, force=False):
         c = {"week": week, "files": {}, "totals": {}, "seen": set()}
         tot, bk = {}, {}
     seen, files = c["seen"], c["files"]
+    close_ms = week_bounds(week)[1].timestamp() * 1000
     for path in ROOT.rglob("*.jsonl"):
         parts = path.parts
         if "memory" in parts or "tool-results" in parts:
@@ -543,20 +544,36 @@ def scan_detail(week, force=False):
                 continue
             k = hashlib.md5(f"{m.get('id')}|{e.get('requestId')}".encode()).hexdigest()[:12]
             in_week = week_close(dt) == week
-            prev = _prior(seen, k)
-            if prev is _BAD:
-                continue
-            # The week test now runs AFTER the key is known, because a key already
-            # counted has to be reachable by a superseding record even when that record
-            # falls outside the week: the meter bills at the COMPLETE record's minute, so
-            # a partial inside the week whose completion lands past the close belongs to
-            # the next week, not to this one.
-            if prev is None and not in_week:
-                continue
             # Round once, so the value cached is byte-identical to the value applied:
             # a later subtraction then cancels the addition exactly.
             cost = round(cost_usd(u, model), 9)
             ts_ms = dt.timestamp() * 1000
+            prev = _prior(seen, k)
+            if prev is _BAD:
+                continue
+            # The week test runs AFTER the key is known, because a key already counted has
+            # to be reachable by a superseding record even when that record falls outside
+            # the week: the meter bills at the COMPLETE record's minute, so a partial
+            # inside the week whose completion lands past the close belongs to the next
+            # week, not to this one.
+            #
+            # An out-of-week record is REMEMBERED near the close rather than skipped, at
+            # applied=0, and the reason is order-independence rather than economy. Skipping
+            # it leaves its key unclaimed, so an in-week partial met later in the same scan
+            # looks like a first sighting and is billed at the stub -- exactly the defect
+            # #256 removed, resurrected by scan order alone. Measured on the section-18
+            # fixture: partial-first gave $0.0000 and complete-first gave the stub's
+            # $0.2001 for the same two records. Max-wins is supposed to be the same answer
+            # from any order; this is where it was not.
+            #
+            # Bounded to STRADDLE_GRACE_MS of the close because remembering EVERY key in
+            # the corpus, rather than this week's, grows `seen` from ~21k entries to ~162k
+            # and the cache file with it. A record further from the close than that cannot
+            # be the partner of an in-week one: the measured partial-to-complete gap is
+            # 2.1s at the median and 661s at the widest on record, so an hour is ~5x the
+            # worst observed pair.
+            if prev is None and not in_week and abs(ts_ms - close_ms) > STRADDLE_GRACE_MS:
+                continue
             if prev is not None and (cost, ts_ms) <= (prev[_C_COST], prev[_C_TS]):
                 continue                    # a duplicate that adds nothing; see COST_POLICY
             rawt, ieq = token_measures(u)

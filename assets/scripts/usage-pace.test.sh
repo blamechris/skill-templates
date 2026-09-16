@@ -2869,5 +2869,72 @@ case "$got" in
   *) bad "a reading pair spanning the counting change is dropped and named" "got=$(flat "$got")" ;;
 esac
 
+# (e) THE WEEK CLOSE. Billing at the complete record's minute means a partial inside the
+#     week whose completion lands past the close belongs to the NEXT week -- and that has
+#     to hold whichever record the scan reaches first, because max-wins is justified by
+#     being order-independent. Remembering the key only when it was in-week broke exactly
+#     that: in complete-first order the out-of-week record claimed nothing, so the in-week
+#     partial looked like a first sighting and was billed at the stub -- the #256 defect,
+#     back, from scan order alone. Both orders must give $0 for the week and the complete
+#     cost for the next, once.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_19E' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+base=fix/"e19"; shutil.rmtree(base, ignore_errors=True); base.mkdir(parents=True)
+WK="2026-09-16"
+close=up.week_bounds(WK)[1]; close_ms=close.timestamp()*1000
+NXT=up.week_close(close+up.timedelta(seconds=1))
+t_p, t_c = close_ms-60000, close_ms+6*60000      # 15:58 PT in WK, 16:05 PT in NXT
+res={}
+for label, lines in (("pf", [rec(t_p, PARTIAL), rec(t_c, COMPLETE)]),
+                     ("cf", [rec(t_c, COMPLETE), rec(t_p, PARTIAL)])):
+    root=base/label; root.mkdir(parents=True)
+    up.ROOT=root; up.HIST=base; up.CACHE=base/(label+".json")
+    (root/"t.jsonl").write_text("\n".join(lines)+"\n")
+    res[label]=(up.scan(WK, force=True).get("all", 0.0),
+                up.scan(NXT, force=True).get("all", 0.0))
+print("pf=(%.4f,%.4f) cf=(%.4f,%.4f) A=%.4f C=%.4f" % (
+    res["pf"][0], res["pf"][1], res["cf"][0], res["cf"][1], A, C),
+    "ORDER-FREE" if res["pf"]==res["cf"] else "ORDER-DEPENDENT",
+    "NEXT-WEEK" if all(abs(v[0]) < 1e-9 and abs(v[1]-C) < 1e-9 for v in res.values())
+    else ("STUB-BILLED" if any(abs(v[0]-A) < 1e-9 for v in res.values()) else "WRONG"))
+PY_19E
+)
+printf '%s' "$got" | grep -q 'ORDER-FREE NEXT-WEEK' \
+  && ok "a pair straddling the week close bills the next week, in either scan order" \
+  || bad "a pair straddling the week close bills the next week in either order" "$(flat "$got")"
+
+# (f) ...and remembering out-of-week keys stays BOUNDED. Without a window `seen` would grow
+#     from this week's keys to the whole corpus's, and it is written to the cache file on
+#     every scan. A record far from the close cannot be the partner of an in-week one: the
+#     measured partial-to-complete gap is 2.1s median, 661s at the widest on record.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_19F' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+base=fix/"f19"; shutil.rmtree(base, ignore_errors=True); root=base/"p"
+root.mkdir(parents=True)
+up.ROOT=root; up.HIST=base; up.CACHE=base/"c.json"
+WK="2026-09-16"
+close_ms=up.week_bounds(WK)[1].timestamp()*1000
+lines=[rec(close_ms+6*60000, COMPLETE, "near", "near"),             # inside the grace
+       rec(close_ms+5*86400000, COMPLETE, "far", "far")]            # five days later
+(root/"t.jsonl").write_text("\n".join(lines)+"\n")
+up.scan(WK, force=True)
+seen=up.json.loads(up.CACHE.read_text())["seen"]
+near=up.hashlib.md5(b"near|near").hexdigest()[:12]
+far=up.hashlib.md5(b"far|far").hexdigest()[:12]
+print("keys=%d near=%s far=%s" % (len(seen), near in seen, far in seen),
+      "BOUNDED" if near in seen and far not in seen else "SEEN-GREW",
+      "APPLIED-0" if all(e[up._C_APPLIED]==0 for e in seen.values()) else "APPLIED-1")
+PY_19F
+)
+printf '%s' "$got" | grep -q 'BOUNDED APPLIED-0' \
+  && ok "out-of-week keys are remembered only near the close, and contribute nothing" \
+  || bad "out-of-week keys are remembered only near the close" "$(flat "$got")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
