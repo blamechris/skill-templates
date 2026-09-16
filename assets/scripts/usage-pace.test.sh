@@ -2392,6 +2392,341 @@ print("MISSING",[k for k in need if k not in p] or "none", p.get("source"), p.ge
   && ok "--json carries the live percentage and every derived figure" \
   || bad "--json carries the live percentage and every derived figure" "got=$(flat "$got")"
 
+# ------------------- 20. A RE-WRITTEN USAGE BLOCK SUPERSEDES ITS PARTIAL (#256)
+# Claude Code writes ONE assistant message to the transcript twice under a single
+# requestId: a partial record (output_tokens 2) when the turn starts, and the complete
+# one minutes later. The dedup kept the FIRST, so every dollar this file ever printed was
+# the stub's. Measured on this machine 2026-09-16: 10,696 of 21,285 keys superseded in the
+# live meter week, $2,590.81 first-occurrence against $2,854.45 -- 10.2% low (9.0% when
+# #256 was filed hours earlier, over 20,088 requests; the ratio grows with the week).
+#
+# The fixture below is the real pair's shape: the two records differ ONLY in
+# output_tokens, they share their (message id, requestId), they land in DIFFERENT minutes,
+# and the output token count is tuned so the complete record costs 1.0987x the partial --
+# inside the measured range, so "moves by ~10%" asserts a number that was measured rather
+# than a round one. Every case here fails on the first-occurrence policy.
+FIX=$TMP/supersede
+mkdir -p "$FIX"
+cat > "$FIX/fixture.py" <<'FIXPY'
+# Shared fixture: imported by each case with exec(open(...).read()).
+PARTIAL = {"input_tokens": 4, "cache_read_input_tokens": 400000, "output_tokens": 2}
+COMPLETE = {"input_tokens": 4, "cache_read_input_tokens": 400000, "output_tokens": 792}
+MODEL = "claude-opus-5"
+
+def iso(ms):
+    return up.datetime.fromtimestamp(ms / 1000, up.timezone.utc).isoformat().replace("+00:00", "Z")
+
+def rec(ms, usage, mid="m1", req="r1"):
+    return up.json.dumps({"type": "assistant", "timestamp": iso(ms), "requestId": req,
+                          "message": {"id": mid, "model": MODEL, "usage": usage}},
+                         separators=(",", ":"))
+
+A = up.cost_usd(PARTIAL, MODEL)     # what the old policy billed: the stub
+C = up.cost_usd(COMPLETE, MODEL)    # what the meter actually bills
+FIXPY
+
+# (a) One key, two records in one file: the week total is the COMPLETE cost, once.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_A' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+root=fix/"a"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=fix; up.CACHE=fix/"a.json"
+T=1788000000000
+WK=up.week_close(up.datetime.fromtimestamp(T/1000, up.timezone.utc))
+(root/"t.jsonl").write_text(rec(T, PARTIAL)+"\n"+rec(T+11*60000, COMPLETE)+"\n")
+tot=up.scan(WK, force=True)
+print("all=%.6f C=%.6f A=%.6f ratio=%.4f opus=%.6f main=%.6f" % (
+    tot["all"], C, A, C/A, tot["opus"], tot["main"]),
+    "COMPLETE" if abs(tot["all"]-C) < 1e-9 else ("STUB" if abs(tot["all"]-A) < 1e-9 else "OTHER"),
+    "SPLITS" if abs(tot["opus"]-C) < 1e-9 and abs(tot["main"]-C) < 1e-9 else "SPLITS-WRONG",
+    "9PCT" if 1.09 < C/A < 1.11 else "FIXTURE-OFF")
+PY_A
+)
+case "$got" in
+  *"COMPLETE SPLITS 9PCT"*) ok "two records for one key bill the COMPLETE cost, once, in every bucket" ;;
+  *) bad "two records for one key bill the COMPLETE cost, once" "$(flat "$got")" ;;
+esac
+
+# (b) A later record that is SMALLER changes nothing. This is what separates "the greatest
+#     cost wins" from "the last one wins": scan order is rglob order, a request lands in
+#     more than one transcript, and an incremental scan sees the halves in separate passes,
+#     so last-seen is not last-written.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_B' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+root=fix/"b"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=fix; up.CACHE=fix/"b.json"
+T=1788000000000
+WK=up.week_close(up.datetime.fromtimestamp(T/1000, up.timezone.utc))
+f=root/"t.jsonl"
+f.write_text(rec(T, COMPLETE)+"\n")                      # complete first
+one=up.scan(WK, force=True)["all"]
+f.write_text(rec(T, COMPLETE)+"\n"+rec(T+11*60000, PARTIAL)+"\n")   # stub arrives after
+two=up.scan(WK)["all"]                                   # incremental, as it would happen
+three=up.scan(WK, force=True)["all"]
+print("one=%.6f two=%.6f three=%.6f C=%.6f" % (one, two, three, C),
+      "HELD" if abs(two-C) < 1e-9 and abs(three-C) < 1e-9 else "REGRESSED")
+PY_B
+)
+printf '%s' "$got" | grep -q 'HELD' \
+  && ok "a smaller later record for the same key changes nothing (max wins, not last)" \
+  || bad "a smaller later record for the same key changes nothing" "$(flat "$got")"
+
+# (c) THE CACHE CASE. The two records land in different minutes and, in life, in different
+#     scans: the first scan sees only the partial and writes its cost into the cached
+#     totals, and the second must take that cost back OUT. Every bucket is compared, not
+#     just "all" -- the tier and main/sub splits feed the Fable scope check.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_C' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+root=fix/"c"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=fix; up.CACHE=fix/"c.json"
+T=1788000000000
+WK=up.week_close(up.datetime.fromtimestamp(T/1000, up.timezone.utc))
+f=root/"t.jsonl"
+f.write_text(rec(T, PARTIAL)+"\n")
+first=dict(up.scan(WK))
+with open(f, "a") as fh: fh.write(rec(T+11*60000, COMPLETE)+"\n")   # pure append
+second=dict(up.scan(WK))
+up.CACHE.unlink()
+once=dict(up.scan(WK, force=True))                                  # single-scan truth
+same=set(second)==set(once) and all(abs(second[k]-once[k]) < 1e-9 for k in once)
+print("first=%.6f second=%.6f once=%.6f C=%.6f keys=%d" % (
+    first["all"], second["all"], once["all"], C, len(once)),
+    "CONVERGED" if same and abs(second["all"]-C) < 1e-9 else "DIVERGED",
+    "STUB-FIRST" if abs(first["all"]-A) < 1e-9 else "?")
+PY_C
+)
+printf '%s' "$got" | grep -q 'CONVERGED STUB-FIRST' \
+  && ok "the incremental path converges on the single-scan totals across two scans" \
+  || bad "the incremental path converges on the single-scan totals" "$(flat "$got")"
+
+# (d) ...and the cost is billed at the COMPLETE record's minute, which is the minute the
+#     meter bills by evidence. This is the half that the week total cannot see: the cap
+#     regression and the meter anchor index spend by instant, so keeping the partial put
+#     ~10% of every dollar at the wrong minute as well as at the wrong value.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_D' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+root=fix/"d"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root
+T=1788000000000
+(root/"t.jsonl").write_text(rec(T, PARTIAL)+"\n"+rec(T+11*60000, COMPLETE)+"\n")
+times, cum, _ = up._cum_events("$")
+at = lambda ms: cum[up.bisect.bisect_right(times, ms)]
+print("events=%d mid=%.6f after=%.6f C=%.6f" % (len(times), at(T+60000), at(T+12*60000), C),
+      "AT-COMPLETE" if len(times)==1 and at(T+60000)==0.0 and abs(at(T+12*60000)-C) < 1e-12
+      else "AT-PARTIAL")
+PY_D
+)
+printf '%s' "$got" | grep -q 'AT-COMPLETE' \
+  && ok "the spend series bills the request at the complete record's minute, not the stub's" \
+  || bad "the spend series bills the request at the complete record's minute" "$(flat "$got")"
+
+# (e) --calibrate's arithmetic moves by that ~10%, in the right direction. Every request in
+#     this fixture is written twice, one minute apart, against a meter climbing one point
+#     per ten requests: the cap is 1000x a request's cost, so the answer is $1,000*C under
+#     supersession and $1,000*A -- 9.9% lower -- under first-occurrence. The real command is
+#     then driven end to end, because the cached cap is what the pace check divides by.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_E' 2>&1
+import contextlib, importlib.util, io, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+root=fix/"e"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=fix; up.CACHE=fix/"e_c.json"; up.CALIB=fix/"e_k.json"
+up.READINGS=fix/"e_r.md"
+T=1788000000000
+lines=[]
+for i in range(400):
+    slot=T+i*60000
+    lines.append(rec(slot+59000, PARTIAL,  "m%d"%i, "r%d"%i))
+    lines.append(rec(slot+61000, COMPLETE, "m%d"%i, "r%d"%i))
+(root/"t.jsonl").write_text("\n".join(lines)+"\n")
+# Samples at +30s of the minute, so no partial/complete pair straddles one: the expected
+# cap is exact, not approximate.
+up.PLAN_SAMPLES=fix/"e_p.json"
+up.PLAN_SAMPLES.write_text(up.json.dumps({"version":2,
+    "samples":[{"t":T+j*600000+30000,"u":{"sd":j}} for j in range(40)]}))
+caps=up.sampled_caps()
+cap=caps[0][1] if caps else 0.0
+out=io.StringIO(); sys.argv=["x","--calibrate"]
+with contextlib.redirect_stdout(out): rc=up.main()
+k=up.json.loads(up.CALIB.read_text())
+print("n=%d cap=%.2f complete=%.2f stub=%.2f moved=%.4f cached=%.2f policy=%s" % (
+    len(caps), cap, 1000*C, 1000*A, cap/(1000*A), k.get("all", 0), k.get("policy")),
+    "COMPLETE" if abs(cap-1000*C) < 0.01 else "LOW",
+    "MOVED-9PCT" if 1.09 < cap/(1000*A) < 1.11 else "UNMOVED",
+    "STAMPED" if k.get("policy")==up.COST_POLICY and abs(k.get("all",0)-1000*C) < 0.01 else "UNSTAMPED")
+PY_E
+)
+printf '%s' "$got" | grep -q 'COMPLETE MOVED-9PCT STAMPED' \
+  && ok "--calibrate's cap rises with the fixed numerator and is stamped with the policy" \
+  || bad "--calibrate's cap rises with the fixed numerator and is stamped" "$(flat "$got")"
+
+# (f) ...and so does a recorded reading, which is where --caps gets its dollars. The row
+#     record() appends IS the numerator a cap is implied from, so a reading taken under the
+#     old policy understated the cap it implies by the same ~10%.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_F' 2>&1
+import contextlib, importlib.util, io, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+root=fix/"f"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=fix; up.CACHE=fix/"f_c.json"; up.CALIB=fix/"f_k.json"
+up.READINGS=fix/"f_r.md"; up.PLAN_SAMPLES=fix/"f_absent.json"
+now=up.datetime.now().astimezone(); wk=up.week_close(now)
+open_ms=up.week_bounds(wk)[0].timestamp()*1000
+t=max(open_ms+1000, now.timestamp()*1000-60000)
+lines=[]
+for i in range(1000):
+    lines.append(rec(t, PARTIAL, "m%d"%i, "r%d"%i))
+    lines.append(rec(t+1000, COMPLETE, "m%d"%i, "r%d"%i))
+(root/"t.jsonl").write_text("\n".join(lines)+"\n")
+out=io.StringIO()
+with contextlib.redirect_stdout(out): rc=up.record(10.0, 1.0, "fixture")
+row=[r for r in up.read_readings() if r["week"]==wk][-1]
+caps=up.implied_caps(up.read_readings())["all"]
+print("rc=%s recorded=%.2f complete=%.2f stub=%.2f cap=%.2f moved=%.4f" % (
+    rc, row["all_at"], 1000*C, 1000*A, caps[0] if caps else 0, row["all_at"]/(1000*A)),
+    "COMPLETE" if abs(row["all_at"]-1000*C) < 0.01 else "STUB",
+    "CAP" if caps and abs(caps[0]-1000*C*10) < 1.0 else "NOCAP")
+PY_F
+)
+printf '%s' "$got" | grep -q 'COMPLETE CAP' \
+  && ok "a recorded reading carries the complete-record total, so the cap it implies moves too" \
+  || bad "a recorded reading carries the complete-record total" "$(flat "$got")"
+
+# (g) A cache written under another counting policy must be DISCARDED, not read: trusting
+#     its keys keeps the old policy alive for the rest of the week and trusting its totals
+#     adds to them. TWO shapes, because they are guarded separately and the second masks
+#     the first: a v1 cache whose `seen` is a bare LIST of keys (no per-key cost, so nothing
+#     in it can be superseded in place), and one whose `seen` is a perfectly well-formed
+#     map written at a version this code does not know. Only the version check rejects the
+#     second, and a test using the first alone left removing that check fully green.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_G' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+root=fix/"g"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=fix; up.CACHE=fix/"g_c.json"
+T=1788000000000
+WK=up.week_close(up.datetime.fromtimestamp(T/1000, up.timezone.utc))
+(root/"t.jsonl").write_text(rec(T, PARTIAL)+"\n"+rec(T+11*60000, COMPLETE)+"\n")
+key=up.hashlib.md5(b"m1|r1").hexdigest()[:12]
+def stale(seen):
+    up.CACHE.write_text(up.json.dumps({"week":WK,"files":{},"totals":{"all":999.0},
+                                       "seen":seen}))
+    tot=up.scan(WK)
+    fresh=up.json.loads(up.CACHE.read_text())
+    return ("discarded" if abs(tot["all"]-C) < 1e-9 and fresh.get("v")==up.CACHE_V
+            else "TRUSTED(%.4f)" % tot["all"])
+v1=stale([key])                                       # bare key list: no cost to subtract
+other=stale({key: [A, 0, 0.0, T, "opus", 0, 1]})      # well-formed map, unknown version
+print("v1=%s other-version=%s C=%.6f" % (v1, other, C),
+      "DISCARDED" if v1=="discarded" and other=="discarded" else "TRUSTED")
+PY_G
+)
+printf '%s' "$got" | grep -q 'DISCARDED' \
+  && ok "a pre-supersession cache is discarded rather than migrated or added to" \
+  || bad "a pre-supersession cache is discarded" "$(flat "$got")"
+
+# (h) A cached entry that cannot be trusted must neither crash the hook nor double-count.
+#     Keeping the stub's cost for one key is a bounded error; unpacking garbage in a
+#     UserPromptSubmit hook and adding a second copy of a cost are not.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_H' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+root=fix/"h"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=fix; up.CACHE=fix/"h_c.json"
+T=1788000000000
+WK=up.week_close(up.datetime.fromtimestamp(T/1000, up.timezone.utc))
+f=root/"t.jsonl"
+f.write_text(rec(T, PARTIAL)+"\n")
+up.scan(WK)
+c=up.json.loads(up.CACHE.read_text())
+key=next(iter(c["seen"]))
+c["seen"][key]="corrupt"                      # externally mangled, cannot be subtracted
+up.CACHE.write_text(up.json.dumps(c))
+with open(f, "a") as fh: fh.write(rec(T+11*60000, COMPLETE)+"\n")
+try:
+    tot=up.scan(WK); v=tot["all"]
+    print("all=%.6f A=%.6f sum=%.6f" % (v, A, A+C),
+          "HELD" if abs(v-A) < 1e-9 else ("DOUBLED" if abs(v-(A+C)) < 1e-9 else "OTHER"))
+except Exception as e:
+    print("CRASH", type(e).__name__, e)
+PY_H
+)
+printf '%s' "$got" | grep -q 'HELD' \
+  && ok "an untrustworthy cached entry neither crashes the scan nor double-counts" \
+  || bad "an untrustworthy cached entry neither crashes nor double-counts" "$(flat "$got")"
+
+# (i) The meter anchor is DOLLARS, subtracted from a numerator counted under this policy.
+#     One cached under the old one is ~10% low and, keyed only by week and period, would have
+#     survived the rest of the meter period -- under-correcting a numerator just fixed.
+got=$(pymod '
+import tempfile
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+base={"week":"2026-09-16","seg":1,"all":100.0,"fable":10.0,"zero":None,"note":"n"}
+def probe(extra):
+    up.CALIB.write_text(up.json.dumps({"anchor":dict(base, **extra)}))
+    return "used" if up._cached_anchor("2026-09-16", 1) else "recomputed"
+print(probe({"policy": up.COST_POLICY}), probe({"policy":"supersede-none"}), probe({}))')
+[ "$got" = "used recomputed recomputed" ] \
+  && ok "an anchor cached under another counting policy is recomputed, not reused" \
+  || bad "an anchor cached under another counting policy is recomputed" "got=$(flat "$got")"
+
+# (j) A hand-run --calibrate is a MEASUREMENT with a date on it, so it is disclosed rather
+#     than discarded: a cap measured low, divided into a numerator that is no longer low,
+#     reads HIGH by the same margin -- a wrong verdict and not merely a wrong dollar figure.
+got=$(pymod '
+import tempfile
+up.CALIB=pathlib.Path(tempfile.mkdtemp())/"k.json"
+up.READINGS=up.CALIB.with_name("absent.md")
+def basis(extra):
+    up.CALIB.write_text(up.json.dumps(dict({"all":2363.0,"periods":6,"r2":0.994}, **extra)))
+    return up.resolve_cap("all", [])[1]
+old, new = basis({}), basis({"policy": up.COST_POLICY})
+print("pre-#256" in old, "WARNING" in old, "pre-#256" in new or "WARNING" in new)')
+[ "$got" = "True True False" ] \
+  && ok "a cap measured under the old dedup is disclosed in the basis, not silently divided by" \
+  || bad "a cap measured under the old dedup is disclosed in the basis" "got=$(flat "$got")"
+
+# (k) The key is claimed only by a record that HAS a usable timestamp. It used to be
+#     claimed first: a record with a missing or unparseable timestamp added its key to
+#     `seen` and then skipped, so the good duplicate behind it was discarded as
+#     already-seen and the request left the spend series entirely. Supersession makes that
+#     ordering load-bearing -- the comparator IS the timestamp -- so it is pinned here.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_K' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+root=fix/"k"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root
+T=1788000000000
+stamped=up.json.loads(rec(T, COMPLETE)); stamped["timestamp"]="not-a-date"
+(root/"t.jsonl").write_text(up.json.dumps(stamped, separators=(",",":"))+"\n"
+                            +rec(T+60000, COMPLETE)+"\n")
+times, cum, _ = up._cum_events("$")
+print("events=%d total=%.6f C=%.6f" % (len(times), cum[-1], C),
+      "COUNTED" if len(times)==1 and abs(cum[-1]-C) < 1e-12 else "SWALLOWED")
+PY_K
+)
+printf '%s' "$got" | grep -q 'COUNTED' \
+  && ok "a timestamp-less record does not swallow its key from the record that has one" \
+  || bad "a timestamp-less record does not swallow its key" "$(flat "$got")"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
