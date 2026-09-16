@@ -272,8 +272,13 @@ def window_spend(bk, lo_ms, hi_ms=None):
     that is the right bucket to give up. `lo` is the meter's zero: that minute STRADDLES
     the reset, so its spend cannot be attributed to either side of it -- and it now lands
     in the `(prev, anchor]` gap window, which `pace` already reports as a range for exactly
-    this reason. When no reset was seen at all, `lo` is the week open and the bucket
-    straddling it is partly last week's.
+    this reason. When no reset was seen at all, `lo` is the week open -- and that bucket is
+    NOT partly last week's, however much it looks as though it should be: `scan_detail`
+    keeps only events whose own `week_close` is this week, so no dollar of last week's is
+    ever in this week's index to drop. What the drop costs there is up to the first minute
+    of THIS week's own spend, and that is the honest reason to accept it -- one bucket, at
+    the start of a week measured in hours, against a partition property every split figure
+    on the line depends on.
 
     A full transcript walk per invocation would resolve the whole question and costs ~4
     seconds on every hook fire, which is why the index is per-minute in the first place.

@@ -1699,6 +1699,47 @@ print('%.0f %.0f %.0f %s' % (now_min, after, beyond, abs(lo_h + hi_h - whole) < 
   && ok "window_spend counts the minute containing hi_ms, and adjacent windows partition" \
   || bad "window_spend counts the minute containing hi_ms and partitions" "got=$(flat "$got")"
 
+# WHAT THE BOTTOM END GIVES UP, at the one `lo` that is not a reset: the week open. The
+# docstring justified dropping that bucket by calling it "partly last week's", and it is
+# not -- `scan_detail` keeps only events whose own week_close is this week, so no dollar of
+# last week's is ever in this week's index to drop. What the drop actually costs is up to
+# the first minute of THIS week's spend, which is the honest reason to accept it (one
+# bucket, at the start of a week measured in hours, in exchange for the partition
+# property). Asserted rather than reasoned about, because the docstring's claim is exactly
+# the kind that survives by being plausible.
+got=$("$PY" - "$SUT" "$TMP" <<'OPENPY' 2>&1
+import importlib.util, json, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"bkopen"
+shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/"bkopen_c.json"
+week="2026-09-09"
+open_ms=up.week_bounds(week)[0].astimezone(up.timezone.utc).timestamp()*1000
+b=up.bucket_of(open_ms)
+def rec(i, ms, tok):
+    return json.dumps({"type":"assistant","timestamp":
+        up.datetime.fromtimestamp(ms/1000, up.timezone.utc).isoformat().replace("+00:00","Z"),
+        "message":{"id":"o%d"%i,"model":"claude-opus-5","usage":{"output_tokens":tok}}},
+        separators=(",",":"))
+# 30 seconds BEFORE the open (last week's), and two after it -- the first in the open's own
+# bucket, the second in the next one.
+(root/"t.jsonl").write_text("\n".join([
+    rec(0, open_ms - 30_000, 400_000), rec(1, open_ms + 30_000, 800_000),
+    rec(2, open_ms + 90_000, 1_200_000)]) + "\n")
+tot, bk = up.scan_detail(week, force=True)
+c = lambda tok: up.cost_usd({"output_tokens": tok}, "claude-opus-5")
+print("tot=%s before_open=%s in_bucket=%s window=%s" % (
+    abs(tot["all"] - (c(800_000) + c(1_200_000))) < 1e-9,   # last week's is not counted
+    [m for m in bk if m < b] == [],                         # ...and not in the index
+    abs(bk[b][0] - c(800_000)) < 1e-9,                      # the open's bucket is in-week
+    abs(up.window_spend(bk, open_ms, None)[0] - c(1_200_000)) < 1e-9))  # ...and is dropped
+OPENPY
+)
+[ "$got" = "tot=True before_open=True in_bucket=True window=True" ] \
+  && ok "the index holds only this week's spend, so the bucket at the week open is this week's to drop" \
+  || bad "the bucket at the week open holds only this week's spend" "got=$(flat "$got")"
+
 # A shrunk transcript must leave no stale spend in the INDEX either. The totals case is
 # pinned above; the index is a second accumulator in the same file and a revert of its
 # share of _cache_stale would leave that case green.
