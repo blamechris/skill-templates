@@ -475,9 +475,11 @@ jobs:
         #
         # Since #256 it also pins the dedup POLICY: an assistant message written twice
         # under one requestId is billed at its COMPLETE record, at that record's minute,
-        # whether the two halves arrive in one scan or in two -- the defect that made
-        # every dollar this script printed 9-10% low, and the one thing here that no
-        # local run can notice, because both numbers look perfectly plausible.
+        # whichever record the scan reaches first and whether the two halves arrive in
+        # one scan or in two -- the defect that made this script's ALL-MODELS total read
+        # 3.5-14.4% low per week (the main-thread total did not move at all; the
+        # duplication is sidechain-only). It is the one thing here no local run can
+        # notice, because both numbers look perfectly plausible.
         run: ./assets/scripts/usage-pace.test.sh
 
       - name: fleet-check regression tests
