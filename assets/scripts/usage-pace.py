@@ -12,7 +12,10 @@ truth. This script had it open and printed a derived number beside it anyway: we
 divided by a cached median cap, which read "96% of cap | NEAR CAP" while the live meter
 read 79. Every percentage in --oneline, --hook and --json now comes from that file, with
 the age of the sample beside it, because a sample can be forty minutes old and its age is
-part of the reading.
+part of the reading. A sample from BEFORE this meter period is not a reading of it at all
+and is refused: the app stops sampling across a closed laptop, so after a Wednesday reset
+the newest one on file is still the old week's ~95%, and pairing that with the new week's
+spend put the wall minutes away and had --hook announce the week was lost.
 
 The cap in the pacing path is this week's OWN rate -- spend since the meter's observed
 zero, divided by the points the meter has moved -- and it self-calibrates on every call.
@@ -524,6 +527,12 @@ def live_sample(now_ms=None):
     cluster around those moments and the newest one can be 15 or 48 minutes old. The age
     is returned with it and printed with it, because a stale percentage read as current
     is the same defect as a computed one read as measured.
+
+    The age is reported here and ACTED ON in `pace`, which refuses a sample older than the
+    anchor outright: a reading of the previous meter period is not a stale reading of this
+    one, it is a reading of something else. What staleness inside the period costs is
+    handled by arithmetic instead of refusal -- `derive` measures the rate at the sample's
+    own instant and carries the meter forward over the gap.
     """
     raw = _plan_raw()
     if not raw:
@@ -540,7 +549,7 @@ STALE_MIN = 30.0        # a sample older than this is called stale in the readou
 
 
 def observed_anchor(open_ms, samples=None):
-    """The meter's zero, taken from the samples themselves: (anchor_ms, prev_ms, label).
+    """The meter's zero: (anchor_ms, prev_ms, anchor_sd, label).
 
     The right anchor is the LATER sample of the newest pair across which the meter fell.
     On 2026-09-09 that pair is sd=100 at 22:52:56Z -> sd=0 at 23:09:58Z with $0.00 of
@@ -561,6 +570,15 @@ def observed_anchor(open_ms, samples=None):
     back to the boundary instant, and anchored eleven minutes early -- counting spend
     against a meter that had not yet zeroed. With no drop at all since the boundary, the
     boundary is the zero.
+
+    `anchor_sd` is the meter's reading AT the anchor, and it is returned because a fall of
+    LIVE_DROP or more does not prove the meter landed on zero. The app samples when its UI
+    polls /usage, so the first post-reset sample can arrive after points have already been
+    burned: a 100 -> 40 pair passes the threshold, and dividing spend-since-40 by a
+    CURRENT reading of 82 then prices 42 points of movement as 82 -- roughly half the true
+    $/pt, which halves the headroom and fires the lockout warning spuriously. The caller
+    differences instead (`sd - anchor_sd`), which is exact whatever the anchor read and
+    needs no near-zero requirement of its own.
     """
     s = _plan_raw() if samples is None else samples
     for i in range(len(s) - 1, 0, -1):
@@ -568,9 +586,9 @@ def observed_anchor(open_ms, samples=None):
             break
         if s[i - 1][1] - s[i][1] >= LIVE_DROP:
             when = datetime.fromtimestamp(s[i][0] / 1000, PT)
-            return (s[i][0], s[i - 1][0],
+            return (s[i][0], s[i - 1][0], s[i][1],
                     f"the {when:%m-%d %H:%M} PT reset (sd {s[i - 1][1]:.0f} -> {s[i][1]:.0f})")
-    return open_ms, None, "the Wed 15:59 PT boundary (no reset seen since)"
+    return open_ms, None, 0.0, "the Wed 15:59 PT boundary (no reset seen since)"
 
 
 def _is_reset(prev, cur):
@@ -1118,8 +1136,8 @@ def resolve_cap(kind, rows, use_cached=True):
 
 # ---------------------------------------------------------------- pace
 
-def derive(pct, spend, burn_1h, burn_3h, hours_to_reset):
-    """Everything downstream of one percentage and one spend figure.
+def derive(pct, anchor_sd, spend_at_pct, spend_since, burn_1h, burn_3h, hours_to_reset):
+    """Everything downstream of one percentage and the spend measured against it.
 
     `rate` is the self-calibrating cap: this week's own dollars per meter point. It is
     right by construction whatever the cap happens to be this week, which is the property
@@ -1128,20 +1146,41 @@ def derive(pct, spend, burn_1h, burn_3h, hours_to_reset):
     twenty points, while its marginal rate from 20 to 75 points sits inside the prior
     weeks' range.
 
+    TWO instants, kept apart, because conflating them is what made the rate drift with the
+    sample's age. `spend_at_pct` is the spend as of the moment the METER was read -- the
+    only numerator that belongs over `pct` -- and `spend_since` is what has been burned in
+    the sampling gap since. Dividing spend-to-now by a forty-minute-old percentage credited
+    the gap's spend as headroom: measured on this machine at a 95-minute sample age, $2,334
+    at sample time gave $28.46/pt and $512 left, while spend-to-now gave $29.76/pt and $536
+    left -- $106 of consumption reported as room, in the direction that silences the
+    lockout warning.
+
+    `anchor_sd` is the meter's reading at the anchor, and the denominator is the points it
+    has MOVED since. A fall of LIVE_DROP identifies the reset; it does not prove the meter
+    landed on zero, and a 100 -> 40 anchor read against a current 82 prices 42 points of
+    movement as 82.
+
+    `pct_now` is `pct` carried forward over the gap at that rate. It is the meter
+    EXTRAPOLATED, never the meter read, and the readout labels it as such -- everything
+    that has to answer "where are we now" (the headroom, the wall, the landing) uses it,
+    because the alternative is to answer with a number that was true forty minutes ago.
+
     `landing` is where the meter ends up at the reset if the last three hours continue:
     the three-hour average is used rather than the one-hour one because a single hour of a
     long session is noisy. `hours_to_wall` uses the one-hour rate instead, because the
     question it answers is about right now.
     """
-    rate = spend / pct if pct and pct > 0 and spend > 0 else None
-    pts_left = max(0.0, 100.0 - (pct or 0.0))
+    moved = (pct or 0.0) - (anchor_sd or 0.0)
+    rate = spend_at_pct / moved if moved > 0 and spend_at_pct > 0 else None
+    pct_now = (pct or 0.0) + (spend_since / rate if rate and spend_since > 0 else 0.0)
+    pts_left = max(0.0, 100.0 - pct_now)
     usd_left = pts_left * rate if rate else None
     wall = (usd_left / burn_1h if usd_left is not None and burn_1h > 0
             else math.inf if usd_left is not None else None)
     return {
-        "rate": rate, "pts_left": pts_left, "usd_left": usd_left,
+        "rate": rate, "pct_now": pct_now, "pts_left": pts_left, "usd_left": usd_left,
         "hours_to_wall": wall,
-        "landing": (pct + burn_3h * hours_to_reset / rate) if rate else None,
+        "landing": (pct_now + burn_3h * hours_to_reset / rate) if rate else None,
         "need_per_hour": (usd_left / hours_to_reset
                           if usd_left is not None and hours_to_reset > 0 else None),
     }
@@ -1210,19 +1249,38 @@ def pace(now=None, force=False, prefer="live"):
         "fable_reading": fable_reading(rows, now),
     }
     samp = live_sample(now_ms) if prefer == "live" else None
+    anchor_ms, prev_ms, anchor_sd, label = observed_anchor(open_ms)
+    # A sample taken BEFORE the anchor is not a reading of this meter period, and age alone
+    # never disqualified it -- `stale` was a display flag and nothing else. The shape is
+    # deterministic, not an edge case: after every Wednesday 15:59 PT reset the newest
+    # persisted sample is still the prior week's, so the readout paired the OLD week's ~95%
+    # with the NEW week's near-zero spend. Rate collapsed, headroom collapsed, hours_to_wall
+    # went to minutes, and --hook injected "the rest of the week is lost" into the session
+    # unattended. Reproduced with a sample two hours before the week open and $800 of
+    # in-week spend: it printed sd 95%, $42 left, and warned -- against a true ~33%. The
+    # window is every gap until the app's next /usage poll, and the record has a 29.7h one.
+    rejected = None
+    if samp and samp["t"] < anchor_ms:
+        rejected = (f"newest sample predates this meter week "
+                    f"(sd {samp['sd']:.0f}%, {samp['age_min']:,.0f}m old)")
+        samp = None
     if samp:
-        anchor_ms, prev_ms, label = observed_anchor(open_ms)
         spend, fable = window_spend(bk, anchor_ms, now_ms)
+        # Split at the sample, not at now: the rate belongs over the meter as it was READ.
+        at_s, _ = window_spend(bk, anchor_ms, samp["t"])
+        since, _ = window_spend(bk, samp["t"], now_ms)
         gap, gap_f = (window_spend(bk, prev_ms, anchor_ms) if prev_ms is not None
                       else (0.0, 0.0))
-        lo = derive(samp["sd"], spend, burn_1h, burn_3h, hours_to_reset)
-        hi = derive(samp["sd"], spend + gap, burn_1h, burn_3h, hours_to_reset)
+        lo = derive(samp["sd"], anchor_sd, at_s, since, burn_1h, burn_3h, hours_to_reset)
+        hi = derive(samp["sd"], anchor_sd, at_s + gap, since,
+                    burn_1h, burn_3h, hours_to_reset)
         p.update({
             "source": "live",
             "sd": samp["sd"], "fh": samp["fh"],
             "sample_at": samp["at"], "sample_age_min": samp["age_min"],
             "stale": samp["age_min"] > STALE_MIN,
-            "pct": samp["sd"],
+            "pct": samp["sd"], "anchor_sd": anchor_sd,
+            "spend_at_sample": at_s, "spend_since_sample": since,
             "anchor": datetime.fromtimestamp(anchor_ms / 1000, timezone.utc)
                       .isoformat(timespec="seconds"),
             "anchor_label": label,
@@ -1252,10 +1310,13 @@ def pace(now=None, force=False, prefer="live"):
         cap, basis, calibrated = resolve_cap("all", rows, use_cached=False)
         fcap, fbasis, fcalibrated = resolve_cap("fable", rows, use_cached=False)
         pct = 100.0 * all_ / cap if cap else 0.0
-        d = derive(pct, all_, burn_1h, burn_3h, hours_to_reset)
+        # No sample, so there is no sampling gap and no anchor reading: one instant, and
+        # `pct_now` comes back equal to `pct`.
+        d = derive(pct, 0.0, all_, 0.0, burn_1h, burn_3h, hours_to_reset)
         p.update({
             "source": "derived", "sd": None, "fh": None,
             "sample_at": None, "sample_age_min": None, "stale": False,
+            "anchor_sd": 0.0, "spend_at_sample": all_, "spend_since_sample": 0.0,
             "pct": pct, "spend": all_, "spend_hi": all_,
             "fable": fable, "fable_hi": fable, "gap_spend": 0.0,
             "offset_all": off_all, "offset_fable": off_fbl,
@@ -1268,6 +1329,7 @@ def pace(now=None, force=False, prefer="live"):
         for k, v in d.items():
             p[k] = v
             p[k + "_hi"] = v
+    p["live_rejected"] = rejected
     w = p.get("hours_to_wall")
     p["wall_at"] = (f"{(now + timedelta(hours=w)).astimezone(PT):%a %H:%M} PT"
                     if w is not None and math.isfinite(w) else None)
@@ -1288,6 +1350,12 @@ def warnings_for(p):
     observed on this account -- the "29 hours with nothing served" in the record was a
     closed laptop, and requests near 100% were served -- so these name the arrival time
     and stop there.
+
+    Neither is gated on the sample's age, and does not need to be: `pace` refuses a sample
+    from before this meter period (which is what made these fire on a post-reset week with
+    the prior week's ~95% still in the file), and `derive` accounts for the remaining gap
+    rather than ignoring it. A gate here would have silenced the warnings in the ordinary
+    case -- the newest sample on this machine is routinely 40 to 95 minutes old.
 
     Evaluated on the low end of the range, which is the anchor the readout reports. That
     end gives the earliest wall and the highest landing, so it warns early about lockout
@@ -1327,10 +1395,22 @@ def _rng(lo, hi, f="${:,.0f}"):
 def fmt(p, margin=None):
     """The one-liner. `margin` is accepted and ignored -- see hook()."""
     if p["source"] == "live":
-        parts = [f"sd {p['sd']:.0f}% (sample {p['sample_at']}, {p['sample_age_min']:.0f}m old)",
+        # `pct_now` is sd carried over the sampling gap at this week's own rate. Shown
+        # only when it rounds to something else, and always as "≈ N% now" beside the read
+        # value -- the reading is what the app recorded, and the extrapolation is labelled
+        # rather than substituted for it.
+        fwd = (f" ≈ {p['pct_now']:.0f}% now" if p.get("pct_now") is not None
+               and f"{p['pct_now']:.0f}" != f"{p['sd']:.0f}" else "")
+        parts = [f"sd {p['sd']:.0f}% (sample {p['sample_at']}, "
+                 f"{p['sample_age_min']:,.0f}m old){fwd}",
                  f"fh {p['fh']:.0f}%" if p["fh"] is not None else "fh n/a"]
     else:
-        parts = ["derived — no live sample",
+        # Two reasons to be here, and they are not the same reason. No sample file at all
+        # is a machine without the desktop app; a sample that predates this meter period
+        # is the app having missed the reset, which is the more dangerous of the two
+        # because the number it would have supplied looks perfectly current.
+        parts = [f"derived — {p['live_rejected']}" if p.get("live_rejected")
+                 else "derived — no live sample",
                  f"all-models ~{p['pct']:.0f}% of cap ${p['all_cap']:,.0f} "
                  f"({p['all_cap_basis']})"]
     parts += [
@@ -1357,7 +1437,7 @@ def fmt(p, margin=None):
         parts.append("fable % unknown (no reading this week)")
     line = " · ".join(parts)
     if p.get("stale"):
-        line += (f"  [SAMPLE STALE {p['sample_age_min']:.0f}m — open /usage to refresh]")
+        line += (f"  [SAMPLE STALE {p['sample_age_min']:,.0f}m — open /usage to refresh]")
     if p.get("gap_spend"):
         line += (f"  [${p['gap_spend']:,.0f} of spend sits inside the reset gap, so every "
                  f"figure above is a range]")
