@@ -1,33 +1,41 @@
 #!/usr/bin/env python3
-"""Pace Fable consumption against the meter week's elapsed time.
+"""Report the live usage meter, and what this week's own burn does to it.
 
 The instrument here is deliberately NOT a ceiling. Decided 2026-09-02, replacing the
 $500/week cap: the subscription meter resets Wed 15:59 PT and does NOT roll over, so
 unspent quota is destroyed, not saved -- a dollar cap below the real ceiling throws away
 paid capacity, and $500 was well below it.
 
-The fallbacks below are MEASUREMENTS, and they were not always. Until 2026-09-05 they
-were "observed-unclamped floors": the highest week seen to run without an obvious clamp,
-asserted as a lower bound on the cap. That inference is false, and both instances of it
-were falsified by measurement within a day of each other. The all-models floor said the
-cap was above $2,920; regression over the desktop app's own meter samples puts it at
-~$2,363, and the meter is on record sitting at 100% for ~29 hours during the very week
-that "ran unclamped". The Fable floor said above $963; a reading pair measured $920 --
-BELOW the week that supposedly proved it. A clamp is not conspicuous from inside a
-transcript, which is exactly why "no clamp was observed" cannot support "the cap is
-higher than this".
+THE PERCENTAGE IS READ, NEVER COMPUTED. The desktop app persists the real meter to
+plan-usage-history.json every time its UI polls /usage, and that file is the ground
+truth. This script had it open and printed a derived number beside it anyway: week spend
+divided by a cached median cap, which read "96% of cap | NEAR CAP" while the live meter
+read 79. Every percentage in --oneline, --hook and --json now comes from that file, with
+the age of the sample beside it, because a sample can be forty minutes old and its age is
+part of the reading.
+
+The cap in the pacing path is this week's OWN rate -- spend since the meter's observed
+zero, divided by the points the meter has moved -- and it self-calibrates on every call.
+That replaces every cached, regressed or inferred cap, because the cap is not a constant:
+per-week endpoint caps over clean periods measured $2,505 / $2,374 / $2,417 / $2,536, and
+dividing this week's spend by another week's median is what produced the 96/79 split.
 
 What actually failed in the week closing 2026-09-02 was not the total. Two sessions ran
 100% Fable for 600 and 542 consecutive requests and never once ran the running-total
-command -- 1,142 requests, zero lookups. So this surfaces a number and asks for an
+command -- 1,142 requests, zero lookups. So this surfaces numbers and asks for an
 acknowledgment; it never refuses. A refusal can only destroy quota, and nobody was
 overspending on purpose.
+
+It also makes no claim about what 100% does. Lockout has never been observed here -- the
+"29 hours with nothing served" in the record was a closed laptop, and requests near 100%
+were served -- so the warnings below talk about the wall's ARRIVAL TIME, never about what
+is on the other side of it.
 
 Entry points:
   --oneline     human one-liner (what a session runs by hand)
   --json        machine-readable, everything
-  --hook        UserPromptSubmit hook: prints ONLY when a session on Fable is ahead of
-                pace, and only every --every turns. Silent and cheap otherwise.
+  --hook        UserPromptSubmit hook: prints ONLY when the burn would waste or exhaust
+                the week, and only every --every turns. Silent and cheap otherwise.
   --at-now      the (spend, timestamp) half of a meter reading, for the `meter` function
 """
 import argparse, bisect, hashlib, json, math, os, sys, time
@@ -44,11 +52,14 @@ READINGS = HOME / "Obsidian" / "no-it-all" / "briefs" / "meter-readings.md"
 PT = ZoneInfo("America/Los_Angeles")
 WEEK_WD, WEEK_H, WEEK_MIN = 2, 15, 59          # Wednesday 15:59 PT
 
-# Fallbacks when this machine has no calibration of its own. These are MEASURED, not
-# inferred: all-models by regression over 6 meter periods (mean R2 0.994, 2026-09-04),
-# Fable by a reading pair 17 points apart (2026-09-05). Both replaced a larger number
-# that came from "this week ran without a clamp, so the cap is above it" -- an inference
-# both measurements falsified. A machine with its own readings never uses these.
+# DERIVED figures, used only when there is no live sample AND no reading on file -- i.e.
+# on a machine with no desktop app, which is the only place the derived path runs at all.
+# They are statistics, not measurements: all-models is a regression over 6 meter periods
+# (mean R2 0.994, 2026-09-04) whose own periods span $1,979-$2,870, and Fable is one
+# reading pair 17 points apart (2026-09-05). Both replaced a larger number that came from
+# "this week ran without a clamp, so the cap is above it" -- an inference both figures
+# falsified, which is why neither is called a measurement here either. The live readout
+# never touches them; the cap it uses is this week's own rate.
 FALLBACK = {"fable": 920.0, "all": 2363.0}
 
 PRICING = [
@@ -281,6 +292,15 @@ def scan_detail(week, force=False):
         c = {"week": week, "files": {}, "totals": {}, "seen": set()}
     tot = {k: float(v) for k, v in c.get("totals", {}).items()}
     bk = {} if force else _load_buckets(c)
+    # The index and the totals are two accumulators over the same events, so they must
+    # agree; when they do not, the cache predates the index (or lost part of it) and the
+    # offsets say there is nothing left to read. That combination is silent and badly
+    # wrong: on the first run after this file gained the index, spend since the anchor
+    # came back as $61 against a true $2,533, because only the minutes scanned AFTER the
+    # upgrade were in it. A full rescan is ~5s and happens once.
+    if not force and abs(sum(v[0] for v in bk.values()) - tot.get("all", 0.0)) > 0.01:
+        c = {"week": week, "files": {}, "totals": {}, "seen": set()}
+        tot, bk = {}, {}
     seen, files = c["seen"], c["files"]
     for path in ROOT.rglob("*.jsonl"):
         parts = path.parts
@@ -456,8 +476,25 @@ RESET_DROP = 2           # a sd fall of more than this is a reset, not noise
 MIN_SEG_SPAN = 15        # a period must cover this many points to be worth fitting
 
 
-def plan_samples():
-    """Sorted (epoch_ms, weekly_pct) from the desktop app, or [] when unavailable."""
+def _num(v):
+    """A finite number, or None. json.loads accepts Infinity/NaN and bool subclasses int.
+
+    A NaN `sd` reaches _fit and produces a NaN slope, which the `b <= 0` guard does NOT
+    reject -- every NaN comparison is False. Today the R2 filter happens to catch it
+    downstream; relying on that is relying on an accident.
+    """
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+        return float(v)
+    return None
+
+
+def _plan_raw():
+    """Sorted (epoch_ms, weekly_pct, five_hour_pct_or_None) from the desktop app.
+
+    One parser, two views: `plan_samples` drops `fh` for the regression machinery, and
+    `live_sample` needs it. A second reader of the same file is how two answers to one
+    question start.
+    """
     try:
         d = json.loads(PLAN_SAMPLES.read_text())
     except (OSError, ValueError):
@@ -468,18 +505,72 @@ def plan_samples():
     for x in d["samples"]:
         if not isinstance(x, dict):
             continue
-        u = x.get("u")
-        t, sd = x.get("t"), (u.get("sd") if isinstance(u, dict) else None)
-        # Same validation as cached_calibration, and for the same reason: json.loads
-        # accepts Infinity/NaN, and bool subclasses int. A NaN `sd` reaches _fit and
-        # produces a NaN slope, which the `b <= 0` guard does NOT reject -- every NaN
-        # comparison is False. Today the R2 filter happens to catch it downstream;
-        # relying on that is relying on an accident.
-        if (isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t)
-                and isinstance(sd, (int, float)) and not isinstance(sd, bool)
-                and math.isfinite(sd)):
-            out.append((float(t), float(sd)))
+        u = x.get("u") if isinstance(x.get("u"), dict) else {}
+        t, sd = _num(x.get("t")), _num(u.get("sd"))
+        if t is not None and sd is not None:
+            out.append((t, sd, _num(u.get("fh"))))
     return sorted(out)
+
+
+def plan_samples():
+    """Sorted (epoch_ms, weekly_pct) from the desktop app, or [] when unavailable."""
+    return [(t, sd) for t, sd, _ in _plan_raw()]
+
+
+def live_sample(now_ms=None):
+    """The newest persisted meter reading: the authoritative live percentage.
+
+    Sampling is NOT on a clock -- the app writes when its UI polls /usage, so samples
+    cluster around those moments and the newest one can be 15 or 48 minutes old. The age
+    is returned with it and printed with it, because a stale percentage read as current
+    is the same defect as a computed one read as measured.
+    """
+    raw = _plan_raw()
+    if not raw:
+        return None
+    t, sd, fh = raw[-1]
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000 if now_ms is None else now_ms
+    return {"t": t, "sd": sd, "fh": fh,
+            "at": f"{datetime.fromtimestamp(t / 1000, timezone.utc):%H:%M}Z",
+            "age_min": max(0.0, (now_ms - t) / 60000.0)}
+
+
+LIVE_DROP = 15.0        # a fall this large between two samples is a reset, not noise
+STALE_MIN = 30.0        # a sample older than this is called stale in the readout
+
+
+def observed_anchor(open_ms, samples=None):
+    """The meter's zero, taken from the samples themselves: (anchor_ms, prev_ms, label).
+
+    The right anchor is the LATER sample of the newest pair across which the meter fell.
+    On 2026-09-09 that pair is sd=100 at 22:52:56Z -> sd=0 at 23:09:58Z with $0.00 of
+    local spend in the 17-minute gap, so the anchor is exact and there is nothing to
+    estimate. `prev_ms` is returned so the caller can price that gap: when it holds
+    spend, the total is a RANGE (anchored at either sample) and is reported as one,
+    rather than fitted.
+
+    Fitting is what the previous code did -- it subtracted a regression INTERCEPT as
+    "spend the meter already forgot" and took $215 off a week where the samples show
+    nothing was forgotten, the intercept having absorbed an anomaly in the period's
+    first 20 points instead.
+
+    A drop counts when the LATER sample lands at or after the week open, and the earlier
+    one may sit before it -- which is the ordinary shape of the SCHEDULED reset, not an
+    edge case: the 2026-09-09 boundary fell at 22:59Z between samples at 22:52:56Z (sd
+    100) and 23:09:58Z (sd 0). Requiring both samples to be in-week hid that pair, fell
+    back to the boundary instant, and anchored eleven minutes early -- counting spend
+    against a meter that had not yet zeroed. With no drop at all since the boundary, the
+    boundary is the zero.
+    """
+    s = _plan_raw() if samples is None else samples
+    for i in range(len(s) - 1, 0, -1):
+        if s[i][0] < open_ms:
+            break
+        if s[i - 1][1] - s[i][1] >= LIVE_DROP:
+            when = datetime.fromtimestamp(s[i][0] / 1000, PT)
+            return (s[i][0], s[i - 1][0],
+                    f"the {when:%m-%d %H:%M} PT reset (sd {s[i - 1][1]:.0f} -> {s[i][1]:.0f})")
+    return open_ms, None, "the Wed 15:59 PT boundary (no reset seen since)"
 
 
 def _is_reset(prev, cur):
@@ -981,14 +1072,21 @@ def spread(vals):
     return max(vals) / min(vals)
 
 
-def resolve_cap(kind, rows):
-    """Best available cap, and how much to trust it.
+def resolve_cap(kind, rows, use_cached=True):
+    """Best available cap, and how much to trust it. For --caps and the derived path only.
 
     Differential first: it is immune to where the meter's zero sits, and after the
     2026-09-04 quota reset the absolute method's assumption (zero == week open) is
     known to be wrong. Absolute is the fallback, and says so.
+
+    `use_cached=False` skips the cached --calibrate median, and the pacing path passes it.
+    That median is a median ACROSS weeks with no staleness check, and it short-circuits
+    before both zero-point-independent methods; divided into this week's spend it printed
+    "96% of cap | NEAR CAP" while the live meter read 79. It is still the right answer for
+    the question --caps asks (what has the cap been?) and the wrong one for the question
+    pacing asks (what is it THIS week?), which the live rate answers directly.
     """
-    if kind == "all":
+    if kind == "all" and use_cached:
         c = cached_calibration()
         if c:
             lo, hi = c.get("lo"), c.get("hi")
@@ -1019,7 +1117,72 @@ def resolve_cap(kind, rows):
 
 # ---------------------------------------------------------------- pace
 
-def pace(now=None, force=False):
+def derive(pct, spend, burn_1h, burn_3h, hours_to_reset):
+    """Everything downstream of one percentage and one spend figure.
+
+    `rate` is the self-calibrating cap: this week's own dollars per meter point. It is
+    right by construction whatever the cap happens to be this week, which is the property
+    no cached number has -- clean weekly endpoint caps measured $2,505 / $2,374 / $2,417 /
+    $2,536, and this week reads ~$3,160 at its endpoint because of an anomaly in its first
+    twenty points, while its marginal rate from 20 to 75 points sits inside the prior
+    weeks' range.
+
+    `landing` is where the meter ends up at the reset if the last three hours continue:
+    the three-hour average is used rather than the one-hour one because a single hour of a
+    long session is noisy. `hours_to_wall` uses the one-hour rate instead, because the
+    question it answers is about right now.
+    """
+    rate = spend / pct if pct and pct > 0 and spend > 0 else None
+    pts_left = max(0.0, 100.0 - (pct or 0.0))
+    usd_left = pts_left * rate if rate else None
+    wall = (usd_left / burn_1h if usd_left is not None and burn_1h > 0
+            else math.inf if usd_left is not None else None)
+    return {
+        "rate": rate, "pts_left": pts_left, "usd_left": usd_left,
+        "hours_to_wall": wall,
+        "landing": (pct + burn_3h * hours_to_reset / rate) if rate else None,
+        "need_per_hour": (usd_left / hours_to_reset
+                          if usd_left is not None and hours_to_reset > 0 else None),
+    }
+
+
+def fable_reading(rows, now):
+    """The Fable meter as last read by hand: (pct, age, $/pt), or None.
+
+    The app's sample file carries `sd` and `fh` and NO Fable field, so this ledger is the
+    only source for the Fable percentage and it is exactly as fresh as the last --record.
+    The rate comes from the newest usable PAIR, for the same reason differential_caps
+    prefers pairs: a difference cancels the meter's zero.
+    """
+    rs = sorted([r for r in rows if r.get("fable_pct") is not None], key=_reading_instant)
+    if not rs:
+        return None
+    last = rs[-1]
+    kind, inst = _reading_instant(last)
+    rate = None
+    if len(rs) >= 2:
+        a, b = rs[-2], rs[-1]
+        dp = b["fable_pct"] - a["fable_pct"]
+        dm = (b.get("fable_at") or 0.0) - (a.get("fable_at") or 0.0)
+        if dp > 0 and dm > 0:
+            rate = dm / dp
+    return {"pct": last["fable_pct"], "rate": rate, "at": last.get("at"),
+            "age_h": ((now.timestamp() - inst) / 3600.0) if kind == 0 else None}
+
+
+def pace(now=None, force=False, prefer="live"):
+    """The week as the METER sees it. Two modes, and the first is the point of this file.
+
+    LIVE -- the desktop app has persisted a real meter percentage, so it is reported
+    verbatim with its age, and this week's own $/pt turns the remaining points into
+    dollars, hours and a landing percentage. No cap, cached or regressed, and no intercept
+    enters this path.
+
+    DERIVED -- there is no sample file at all (no desktop app on this machine). Only then
+    does the old arithmetic run: week spend re-anchored by `meter_offset`, divided by
+    `resolve_cap`. Everything built from it is labelled derived, every time, because a
+    computed percentage presented as the percentage is the defect this rewrite removes.
+    """
     now = now or datetime.now().astimezone()
     wk = week_close(now)
     open_, close = week_bounds(wk)
@@ -1028,69 +1191,178 @@ def pace(now=None, force=False):
     # fields -- so the week containing a DST transition measures 604800s instead of
     # its true 608400s, skewing every elapsed fraction in it.
     _u = lambda d: d.astimezone(timezone.utc)
+    now_ms = _u(now).timestamp() * 1000
+    open_ms = _u(open_).timestamp() * 1000
     span = (_u(close) - _u(open_)).total_seconds()
-    elapsed = max(0.0, min(1.0, (_u(now) - _u(open_)).total_seconds() / span))
-    tot = scan(wk, force=force)
+    hours_to_reset = max(0.0, (_u(close) - _u(now)).total_seconds() / 3600.0)
+    tot, bk = scan_detail(wk, force=force)
     rows = [r for r in read_readings() if r["week"] == wk]
-    # Every figure below describes THE METER, so it is measured from the meter's zero.
-    # That is the week open until an out-of-band reset moves it; `week_*` keeps the
-    # raw week totals, which is what a recorded reading stores.
-    off_all, off_fbl, zero_ms, anchor, anchor_exact = meter_offset(wk, force=force)
-    # Pace over the window the METER is pacing over. Leaving a 7-day denominator under a
-    # re-anchored numerator would compare a 5-day budget against a 7-day clock and call
-    # a genuinely hot week "on pace".
-    if zero_ms:
-        zero_dt = datetime.fromtimestamp(zero_ms / 1000, PT)
-        if open_ < zero_dt < close:
-            span = (_u(close) - _u(zero_dt)).total_seconds()
-            elapsed = max(0.0, min(1.0, (_u(now) - _u(zero_dt)).total_seconds() / span))
-    week_fable, week_all = tot.get("fable", 0.0), tot.get("all", 0.0)
-    fable, all_ = max(0.0, week_fable - off_fbl), max(0.0, week_all - off_all)
-    cap, basis, calibrated = resolve_cap("fable", rows)
-    consumed = fable / cap if cap else 0.0
-    # The all-models meter is the one that actually hit 100% and locked the account out
-    # for ~29 hours in the week closing 2026-09-02, and nothing paced it. It does now.
-    all_cap, all_basis, all_calibrated = resolve_cap("all", rows)
-    all_consumed = all_ / all_cap if all_cap else 0.0
-    return {
+    burn_1h = window_spend(bk, now_ms - 3600_000, now_ms)[0]
+    burn_3h = window_spend(bk, now_ms - 3 * 3600_000, now_ms)[0] / 3.0
+    p = {
         "week": wk, "now": now.astimezone(PT).isoformat(timespec="minutes"),
-        "elapsed": elapsed, "days_left": (_u(close) - _u(now)).total_seconds() / 86400,
-        "fable": fable, "all": all_,
-        "week_fable": week_fable, "week_all": week_all,
-        "offset_fable": off_fbl, "offset_all": off_all,
-        "anchor": anchor, "anchor_exact": anchor_exact,
+        "hours_to_reset": hours_to_reset,
+        "week_all": tot.get("all", 0.0), "week_fable": tot.get("fable", 0.0),
         "main": tot.get("main", 0.0), "sub": tot.get("sub", 0.0),
         "sub_fable": tot.get("sub_fable", 0.0),
-        "cap": cap, "cap_basis": basis, "calibrated": calibrated,
-        "all_cap": all_cap, "all_cap_basis": all_basis, "all_calibrated": all_calibrated,
-        "consumed": consumed, "ahead_by": consumed - elapsed,
-        "all_consumed": all_consumed, "all_ahead_by": all_consumed - elapsed,
-        "projected": fable / elapsed if elapsed > 0.02 else 0.0,
+        "burn_1h": burn_1h, "burn_3h": burn_3h,
+        "fable_reading": fable_reading(rows, now),
     }
+    samp = live_sample(now_ms) if prefer == "live" else None
+    if samp:
+        anchor_ms, prev_ms, label = observed_anchor(open_ms)
+        spend, fable = window_spend(bk, anchor_ms, now_ms)
+        gap = window_spend(bk, prev_ms, anchor_ms)[0] if prev_ms is not None else 0.0
+        gap_f = window_spend(bk, prev_ms, anchor_ms)[1] if prev_ms is not None else 0.0
+        lo = derive(samp["sd"], spend, burn_1h, burn_3h, hours_to_reset)
+        hi = derive(samp["sd"], spend + gap, burn_1h, burn_3h, hours_to_reset)
+        p.update({
+            "source": "live",
+            "sd": samp["sd"], "fh": samp["fh"],
+            "sample_at": samp["at"], "sample_age_min": samp["age_min"],
+            "stale": samp["age_min"] > STALE_MIN,
+            "pct": samp["sd"],
+            "anchor": datetime.fromtimestamp(anchor_ms / 1000, timezone.utc)
+                      .isoformat(timespec="seconds"),
+            "anchor_label": label,
+            "spend": spend, "spend_hi": spend + gap,
+            "fable": fable, "fable_hi": fable + gap_f,
+            "gap_spend": gap,
+            "elapsed": max(0.0, min(1.0, (now_ms - anchor_ms) / 1000.0
+                                    / max(1.0, (_u(close).timestamp() - anchor_ms / 1000)))),
+        })
+        # Every derived figure carries both ends of the range the gap implies. When the
+        # gap is empty -- the normal case, and the actual case for this meter week -- the
+        # two ends are identical and the formatter collapses them to one number.
+        for k, v in lo.items():
+            p[k] = v
+            p[k + "_hi"] = hi[k]
+    else:
+        off_all, off_fbl, zero_ms, anchor, anchor_exact = meter_offset(wk, force=force)
+        elapsed = max(0.0, min(1.0, (now_ms / 1000 - _u(open_).timestamp()) / span))
+        if zero_ms:
+            zero_dt = datetime.fromtimestamp(zero_ms / 1000, PT)
+            if open_ < zero_dt < close:
+                z = _u(zero_dt).timestamp()
+                elapsed = max(0.0, min(1.0, (now_ms / 1000 - z)
+                                       / max(1.0, _u(close).timestamp() - z)))
+        all_ = max(0.0, tot.get("all", 0.0) - off_all)
+        fable = max(0.0, tot.get("fable", 0.0) - off_fbl)
+        cap, basis, calibrated = resolve_cap("all", rows, use_cached=False)
+        fcap, fbasis, fcalibrated = resolve_cap("fable", rows, use_cached=False)
+        pct = 100.0 * all_ / cap if cap else 0.0
+        d = derive(pct, all_, burn_1h, burn_3h, hours_to_reset)
+        p.update({
+            "source": "derived", "sd": None, "fh": None,
+            "sample_at": None, "sample_age_min": None, "stale": False,
+            "pct": pct, "spend": all_, "spend_hi": all_,
+            "fable": fable, "fable_hi": fable, "gap_spend": 0.0,
+            "offset_all": off_all, "offset_fable": off_fbl,
+            "anchor": anchor, "anchor_exact": anchor_exact, "anchor_label": anchor or "",
+            "elapsed": elapsed,
+            "cap": fcap, "cap_basis": fbasis, "calibrated": fcalibrated,
+            "all_cap": cap, "all_cap_basis": basis, "all_calibrated": calibrated,
+            "consumed": fable / fcap if fcap else 0.0,
+        })
+        for k, v in d.items():
+            p[k] = v
+            p[k + "_hi"] = v
+    w = p.get("hours_to_wall")
+    p["wall_at"] = (f"{(now + timedelta(hours=w)).astimezone(PT):%a %H:%M} PT"
+                    if w is not None and math.isfinite(w) else None)
+    p["warnings"] = [m for _, m in warnings_for(p)]
+    return p
 
 
-def verdict(p, margin):
-    """Ahead of pace, or nearly out of week. Neither is a refusal.
+def warnings_for(p):
+    """The only two things worth interrupting a session for: [(key, message), ...].
 
-    Both meters count. Pacing only Fable watched the meter that never locked the
-    account out while ignoring the one that did -- all-models has reached >=98% in four
-    of the last five weeks. Whichever is further along decides.
+    Both are about the SHAPE of the week, never its size. There is nothing here about
+    being ahead of pace or near the cap -- a week that paces to 100% is the system working,
+    and the retired NEAR CAP line was a derived percentage over a cached median cap that
+    read 96% while the meter read 79. Being at 90% of a cap is not a problem. Being locked
+    out on Monday is, and so is destroying quota at the reset.
+
+    Neither warning says what happens AT the wall. Lockout at 100% has never actually been
+    observed on this account -- the "29 hours with nothing served" in the record was a
+    closed laptop, and requests near 100% were served -- so these name the arrival time
+    and stop there.
+
+    Evaluated on the low end of the range, which is the anchor the readout reports. That
+    end gives the earliest wall and the highest landing, so it warns early about lockout
+    and late about waste -- the intended asymmetry, since one costs the rest of the week
+    and the other costs nothing to learn an hour later.
     """
-    if max(p["consumed"], p["all_consumed"]) >= 0.90:
-        return "near-cap"
-    if max(p["ahead_by"], p["all_ahead_by"]) > margin:
-        return "ahead"
-    return "ok"
+    out = []
+    h, w = p.get("hours_to_reset"), p.get("hours_to_wall")
+    if (h and w is not None and math.isfinite(w) and w < 0.5 * h):
+        when = p.get("wall_at") or f"in {w:.1f}h"
+        out.append(("lockout", f"At this burn you reach the wall around {when}, "
+                               f"{h - w:.0f}h before the reset -- the rest of the "
+                               f"week is lost."))
+    land, rate = p.get("landing"), p.get("rate")
+    if land is not None and land < 90 and h is not None and h < 24:
+        pts = 100.0 - land
+        usd = f" = ${pts * rate:,.0f}" if rate else ""
+        out.append(("waste", f"On the last three hours' burn the week lands at "
+                             f"{land:.0f}%: {pts:.0f} points{usd} will expire unspent "
+                             f"at the reset."))
+    return out
 
 
-def fmt(p, margin):
-    v = verdict(p, margin)
-    mark = {"ok": "on pace", "ahead": "AHEAD OF PACE", "near-cap": "NEAR CAP"}[v]
-    warn = "" if p["anchor_exact"] else f" | WARNING: {p['anchor']}"
-    return (f"fable ${p['fable']:,.0f} = {100*p['consumed']:.0f}% of cap ${p['cap']:,.0f} "
-            f"({p['cap_basis']}) | all-models ${p['all']:,.0f} = "
-            f"{100*p['all_consumed']:.0f}% of cap ${p['all_cap']:,.0f} | week "
-            f"{100*p['elapsed']:.0f}% elapsed, {p['days_left']:.1f}d left | {mark}{warn}")
+def _rng(lo, hi, f="${:,.0f}"):
+    """One number when both ends format the same, `lo-hi` when they do not.
+
+    Comparing the FORMATTED strings, not the values: a range narrower than the precision
+    being printed is noise, and "$2,572-$2,572" reads as an error in the tool.
+    """
+    if lo is None:
+        return "?"
+    a = f.format(lo)
+    b = f.format(hi if hi is not None else lo)
+    return a if a == b else f"{a}-{b}"
+
+
+def fmt(p, margin=None):
+    """The one-liner. `margin` is accepted and ignored -- see hook()."""
+    if p["source"] == "live":
+        parts = [f"sd {p['sd']:.0f}% (sample {p['sample_at']}, {p['sample_age_min']:.0f}m old)",
+                 f"fh {p['fh']:.0f}%" if p["fh"] is not None else "fh n/a"]
+    else:
+        parts = ["derived — no live sample",
+                 f"all-models ~{p['pct']:.0f}% of cap ${p['all_cap']:,.0f} "
+                 f"({p['all_cap_basis']})"]
+    parts += [
+        f"spent {_rng(p['spend'], p['spend_hi'])} since {p['anchor_label']}"
+        if p["source"] == "live" else f"spent ${p['spend']:,.0f}",
+        f"{_rng(p['fable'], p['fable_hi'])} fable",
+        f"{_rng(p['rate'], p['rate_hi'], '${:,.1f}')}/pt",
+        f"{p['pts_left']:.0f} pts ≈ {_rng(p['usd_left'], p['usd_left_hi'])} left",
+        f"reset in {p['hours_to_reset']:.1f}h",
+        f"burn ${p['burn_1h']:,.0f}/h (3h ${p['burn_3h']:,.0f}/h)",
+        # A landing above 100 is not a percentage of anything -- it means the wall arrives
+        # first, which warning (a) states in hours. Printing "lands 544%" invites exactly
+        # the arithmetic-dressed-as-a-reading reading this file is trying to stop.
+        (f"→ lands >100% (the wall comes first)" if (p["landing"] or 0) > 100
+         else f"→ lands {_rng(p['landing'], p['landing_hi'], '{:,.0f}')}%"),
+        f"need {_rng(p['need_per_hour'], p['need_per_hour_hi'])}/h to reach the wall",
+    ]
+    fr = p.get("fable_reading")
+    if fr:
+        age = f", {fr['age_h']:.0f}h old" if fr.get("age_h") is not None else ""
+        rate = f", {_rng(fr['rate'], fr['rate'], '${:,.1f}')}/pt" if fr.get("rate") else ""
+        parts.append(f"fable {fr['pct']:.0f}%{age}{rate}")
+    else:
+        parts.append("fable % unknown (no reading this week)")
+    line = " · ".join(parts)
+    if p.get("stale"):
+        line += (f"  [SAMPLE STALE {p['sample_age_min']:.0f}m — open /usage to refresh]")
+    if p.get("gap_spend"):
+        line += (f"  [${p['gap_spend']:,.0f} of spend sits inside the reset gap, so every "
+                 f"figure above is a range]")
+    if p["source"] == "derived" and not p.get("anchor_exact", True):
+        line += f" | WARNING: {p['anchor']}"
+    return line
 
 
 # ---------------------------------------------------------------- hook
@@ -1155,11 +1427,12 @@ def hook(args):
         return 0
 
     p = pace()
-    v = verdict(p, args.margin)
-    if v == "ok":
-        # Clear the acknowledgment: without this, ahead -> ok -> ahead stays silent,
-        # because `acked` still holds the verdict from before the session came back
-        # on pace and the `acked == v` check below suppresses the new alert.
+    warns = warnings_for(p)
+    v = "+".join(k for k, _ in warns)
+    if not v:
+        # Clear the acknowledgment: without this, warned -> quiet -> warned stays silent,
+        # because `acked` still holds the verdict from before the situation cleared and
+        # the `acked == v` check below suppresses the new alert.
         s.pop("acked", None)
         s["last_fire_turn"] = s["turns"]
         st[sid] = s
@@ -1167,7 +1440,7 @@ def hook(args):
         return 0
 
     # Re-surfacing the same verdict every N turns after an acknowledgment is nagging,
-    # not information. Escalating to near-cap always speaks again.
+    # not information. A NEW warning joining the set changes the key and speaks again.
     if s.get("acked") == v:
         s["last_fire_turn"] = s["turns"]
         st[sid] = s
@@ -1179,19 +1452,18 @@ def hook(args):
     st[sid] = s
     _write_state(st)
 
-    head = ("FABLE PACE — near the cap" if v == "near-cap" else "FABLE PACE — ahead of the week")
+    body = "\n".join(f"  - {m}" for _, m in warns)
+    breach = ("\n  RULE BREACH: $%.2f of fable spend is in SUBAGENTS, which the scope "
+              "forbids outright." % p["sub_fable"]) if p["sub_fable"] > 0 else ""
     print(f"""<usage-pace>
-{head}. This is a prompt to decide, NOT a limit — continuing is always allowed and
-a week that paces to 100% is the system working. Unspent quota does not roll over.
+THE METER, and what this burn does to it. Information, not a limit — continuing is
+always allowed, and a week that paces to 100% is the system working. What is NOT fine
+is arriving at the wall days early, or handing back quota the reset destroys.
 
-  {fmt(p, args.margin)}
-  at this rate the week ends near ${p['projected']:,.0f} of fable spend
-""" + ("""  the cap above is a floor, not a measurement — no meter reading exists for this
-  week, so the real cap is HIGHER and this reading errs toward surfacing early.
-  Running `meter` records one (it prompts; any day, any time).
-""" if not p["calibrated"] else "") + f"""{'  RULE BREACH: $%.2f of fable spend is in SUBAGENTS, which the scope forbids outright.' % p['sub_fable'] if p['sub_fable'] > 0 else ''}
-Tell the user where the week stands in one line and ask whether to stay on Fable or
-drop to Opus for this work. Then do what they say. Do not re-raise this unprompted.
+  {fmt(p)}
+{body}{breach}
+Tell the user where the week stands in one line and what you propose to do about it.
+Then do what they say. Do not re-raise this unprompted.
 </usage-pace>""")
     return 0
 
@@ -1350,6 +1622,8 @@ def main():
     g.add_argument("--oneline", action="store_true", help="human one-liner")
     g.add_argument("--json", action="store_true", help="everything, machine-readable")
     g.add_argument("--hook", action="store_true", help="UserPromptSubmit hook mode")
+    g.add_argument("--derived", action="store_true",
+                   help="ignore the live sample and show the derived arithmetic instead")
     g.add_argument("--at-now", action="store_true", help="spend+timestamp for a meter reading")
     g.add_argument("--caps", action="store_true", help="implied caps from every meter reading")
     g.add_argument("--calibrate", action="store_true",
@@ -1360,8 +1634,13 @@ def main():
                    help="record a meter reading: [all-pct] [fable-pct] [note]; "
                         "with no values, prompts for them")
     ap.add_argument("--every", type=int, default=40, help="hook: turns between checks (default 40)")
+    # Kept, accepted and ignored. It tuned "how far ahead of elapsed time before
+    # speaking", and speaking is no longer a function of elapsed time at all -- the hook
+    # warns about the wall arriving early and about quota expiring, neither of which has a
+    # margin to tune. Removing the flag would break every settings.json and shell alias
+    # already passing it, for no gain.
     ap.add_argument("--margin", type=float, default=0.15,
-                    help="hook: how far ahead of elapsed time before speaking (default 0.15)")
+                    help="accepted and ignored (see --help notes); kept for callers")
     ap.add_argument("--force", action="store_true", help="ignore the incremental cache")
     a = ap.parse_args()
 
@@ -1510,11 +1789,11 @@ def main():
             print(f"  {k:6s} cap ${cap:,.0f}  ({basis})")
         return 0
 
-    p = pace(force=a.force)
+    p = pace(force=a.force, prefer="derived" if a.derived else "live")
     if a.json:
         print(json.dumps(p, indent=2))
     else:
-        print(fmt(p, a.margin))
+        print(fmt(p))
     return 0
 
 
