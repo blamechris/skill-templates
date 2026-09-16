@@ -2800,5 +2800,74 @@ print("FB-FALLBACK" if up.STALE_CAP_NOTE in fb and "0-5%" in fb else "fable-undi
   && ok "FALLBACK and the reading-derived branches disclose the policy, at the right magnitude" \
   || bad "FALLBACK and the reading-derived branches disclose the policy" "got=$(flat "$got")"
 
+# (c) THE READINGS TABLE IS APPEND-ONLY AND TRANSCRIPTS GET PRUNED, so a row's numerator
+#     can never be recomputed: an unstamped row is permanently unclassifiable. The column
+#     has to be in the HEADER too -- the parser resolves by name, so a twelfth field under
+#     an eleven-column header is written and never read. The rows already on file are NOT
+#     rewritten: an empty cell is the true statement about them, and annotating history is
+#     the maintainer's call (#260).
+got=$("$PY" - "$SUT" "$TMP" <<'PY_19C' 2>&1
+import contextlib, importlib.util, io, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+d=pathlib.Path(sys.argv[2])/"s19c"; shutil.rmtree(d, ignore_errors=True)
+root=d/"proj"; root.mkdir(parents=True)
+up.ROOT=root; up.HIST=d; up.CACHE=d/"c.json"; up.CALIB=d/"k.json"
+up.READINGS=d/"r.md"; up.PLAN_SAMPLES=d/"absent.json"
+U={"input_tokens":4,"cache_read_input_tokens":400000,"output_tokens":792}
+now=up.datetime.now().astimezone(); wk=up.week_close(now)
+t=max(up.week_bounds(wk)[0].timestamp()*1000+1000, now.timestamp()*1000-60000)
+iso=up.datetime.fromtimestamp(t/1000, up.timezone.utc).isoformat().replace("+00:00","Z")
+(root/"t.jsonl").write_text(up.json.dumps({"type":"assistant","timestamp":iso,
+    "requestId":"r1","message":{"id":"m1","model":"claude-opus-5","usage":U}})+"\n")
+OLD=f"| {wk} | {wk}T00:14-07:00 | 79% | 5% | 2317.93 | 237.42 | 1 | 1 | 1 | 1 | old |"
+up.READINGS.write_text(
+ "| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok "
+ "| all_ieq | fable_ieq | note |\n"
+ "|---|---|---|---|---|---|---|---|---|---|---|\n" + OLD + "\n")
+with contextlib.redirect_stdout(io.StringIO()): up.record(90.0, 6.0, "after")
+with contextlib.redirect_stdout(io.StringIO()): up.record(91.0, 7.0, "again")
+lines=[l for l in up.READINGS.read_text().splitlines() if l.startswith("|")]
+hdr=[x.strip() for x in lines[0].strip("|").split("|")]
+sep=[x.strip() for x in lines[1].strip("|").split("|")]
+pols=[r.get("policy") for r in up.read_readings()]
+print("hdr_policy=%d sep=%d rows=%d pols=%s old_intact=%s" % (
+    hdr.count("policy"), len(sep), len(lines)-2, pols, lines[2]==OLD),
+    "STAMPED" if pols==[None, up.COST_POLICY, up.COST_POLICY] else "NO-STAMP",
+    "HEADER-ONCE" if hdr.count("policy")==1 and len(sep)==len(hdr) else "HEADER-WRONG",
+    "HISTORY-UNTOUCHED" if lines[2]==OLD else "HISTORY-REWRITTEN")
+PY_19C
+)
+printf '%s' "$got" | grep -q 'STAMPED HEADER-ONCE HISTORY-UNTOUCHED' \
+  && ok "a recorded row carries the policy stamp; the header gains the column once, history untouched" \
+  || bad "a recorded row carries the policy stamp and the header gains the column once" "$(flat "$got")"
+
+# (d) A PAIR THAT STRADDLES THE COUNTING CHANGE IS DROPPED AND NAMED, alongside the reset
+#     and cap-multiplier guards -- and this one is the dangerous direction. The later
+#     measure absorbs the whole step while the percentage delta does not, so the cap reads
+#     HIGH, and a cap too high makes the pace check go QUIET. Numbers are this machine's:
+#     the row on file reads 79% / $2,317.93 under the old dedup, and a post-merge row at
+#     90% carries $2,890 -- the same week's spend counted the new way (+10.6% measured).
+got=$(pymod '
+base = {"week":"2026-09-16","note":"","all_raw":None,"fable_raw":None,
+        "all_ieq":None,"fable_ieq":None,"fable_pct":5.0,"fable_at":237.42}
+a = dict(base, at="2026-09-16T00:14", all_pct=79.0, all_at=2317.93, policy=None)
+b = dict(base, at="2026-09-16T05:22", all_pct=90.0, all_at=2890.00,
+         fable_pct=6.0, policy=up.COST_POLICY)
+up.PLAN_SAMPLES = pathlib.Path("/nonexistent/samples.json")
+mixed, notes = up.differential_caps([a, b])
+same, _ = up.differential_caps([a, dict(b, policy=None)])
+would = 100.0 * (b["all_at"] - a["all_at"]) / (b["all_pct"] - a["all_pct"])
+consistent = 100.0 * (b["all_at"]/1.106 - a["all_at"]) / (b["all_pct"] - a["all_pct"])
+print("DROPPED" if not mixed["all"] else "KEPT(%.0f)" % mixed["all"][0],
+      "NAMED" if any("COUNTED" in n for n in notes) else "SILENT",
+      "PAIRS-OTHERWISE" if same["all"] else "DROPPED-ANYWAY",
+      "READS-HIGH" if would > 1.9 * consistent else "harmless",
+      "would=%.0f consistent=%.0f" % (would, consistent))')
+case "$got" in
+  "DROPPED NAMED PAIRS-OTHERWISE READS-HIGH"*) ok "a reading pair spanning the counting change is dropped and named ($got)" ;;
+  *) bad "a reading pair spanning the counting change is dropped and named" "got=$(flat "$got")" ;;
+esac
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

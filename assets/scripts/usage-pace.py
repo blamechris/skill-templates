@@ -587,9 +587,12 @@ def read_readings():
     """Parse meter-readings.md.
 
     Columns are resolved by header name rather than position: the schema gained token
-    columns on 2026-09-02 and will likely grow again, and an index-based parser
-    silently mis-reads the old shape rather than failing loudly. Missing columns come
-    back as None, which the analysis treats as "not measured" rather than zero.
+    columns on 2026-09-02, a `policy` column on 2026-09-16, and will likely grow again;
+    an index-based parser silently mis-reads the old shape rather than failing loudly.
+    Missing columns come back as None, which the analysis treats as "not measured" rather
+    than zero -- and for `policy` that is exactly the right reading: a row written before
+    the stamp existed was measured under the first-occurrence dedup (#256), which is a
+    DIFFERENT counting policy and not an unknown one.
     """
     rows = []
     if not READINGS.exists():
@@ -615,7 +618,8 @@ def read_readings():
                 return float(v)
             except ValueError:
                 return None
-        rec = {"week": f[0], "at": get("read at"), "note": get("note")}
+        rec = {"week": f[0], "at": get("read at"), "note": get("note"),
+               "policy": get("policy") or None}
         for k, col in NUM.items():
             rec[k] = num(col)
         if rec["all_pct"] is None or rec["fable_pct"] is None:
@@ -1245,6 +1249,14 @@ def differential_caps(rows, unit="$"):
     than differenced into a negative cap. A delta below MIN_DELTA_PCT is dropped
     because both percentages are read by eye as integers: at a 5-point delta a +/-1
     point rounding is a 20% error in the cap, while at 40 points it is 2.5%.
+
+    Two more, of one shape: a pair is also dropped when the two readings were taken under
+    different NUMERATORS -- a cap-multiplier change between them (the meter's scale moved)
+    or a change in how spend is counted (the measure's scale moved, #256). Both slip past
+    the percentage guard because both leave the delta positive, and the counting-policy
+    case is the dangerous direction: the later measure absorbs the whole step while the
+    percentage does not, so the cap reads HIGH and a cap too high makes the pace check go
+    QUIET. Every drop is named in `notes` rather than silently omitted.
     """
     ak, fk = next((a, f) for u, a, f, _ in UNITS if u == unit)
     out, notes = {"all": [], "fable": []}, []
@@ -1271,6 +1283,17 @@ def differential_caps(rows, unit="$"):
                                  f"positive, so the percentage guard cannot catch this; "
                                  f"differencing across two zero points is what produced "
                                  f"$20,598 against a measured $2,363. Dropped")
+                    continue
+                if (a.get("policy") or None) != (b.get("policy") or None):
+                    notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} SPANS a change in "
+                                 f"how spend is COUNTED "
+                                 f"({a.get('policy') or 'pre-#256 first-occurrence'} -> "
+                                 f"{b.get('policy') or 'pre-#256 first-occurrence'}). The "
+                                 f"later measure absorbs the whole step in the numerator "
+                                 f"while the percentage delta does not, so the implied cap "
+                                 f"reads HIGH -- and unlike the two guards above, a cap too "
+                                 f"high SILENCES the pace check instead of over-warning. "
+                                 f"The percentage guard cannot see this either. Dropped")
                     continue
                 why = ta and tb and multiplier_change_between(ta, tb)
                 if why:
@@ -1927,6 +1950,35 @@ MIN_PCT = 5.0   # below this, spend/(pct/100) amplifies rounding in the percenta
                 # into hundreds of dollars of implied cap -- record it, don't imply from it
 
 
+def _ensure_policy_column():
+    """Give an existing readings table a `policy` column -- HEADER ONLY.
+
+    A row appended with a twelfth field that the header does not name is unreadable: the
+    parser resolves by name, so the stamp would be written and never seen, and the straddle
+    guard in `differential_caps` would never fire. The header therefore has to move before
+    the first stamped row lands.
+
+    The rows already on file are NOT rewritten. An empty policy cell is exactly the true
+    statement about them -- measured under the first-occurrence dedup -- and read_readings
+    reads a short row's missing cell as None, which is what the guard compares. Annotating
+    the historical rows is a maintainer's call (#260), not a side effect of appending one.
+    """
+    if not READINGS.exists():
+        return
+    lines = READINGS.read_text().splitlines()
+    hdr_at = next((i for i, ln in enumerate(lines)
+                   if ln.startswith("|") and "week-close" in ln), None)
+    if hdr_at is None:
+        return
+    if "policy" in [x.strip() for x in lines[hdr_at].strip().strip("|").split("|")]:
+        return
+    lines[hdr_at] = lines[hdr_at].rstrip() + " policy |"
+    sep = hdr_at + 1
+    if sep < len(lines) and lines[sep].startswith("|") and set(lines[sep].strip()) <= set("-:| "):
+        lines[sep] = lines[sep].rstrip() + "---|"
+    READINGS.write_text("\n".join(lines) + "\n")
+
+
 def record(all_pct, fable_pct, note):
     """Write one meter reading, capturing spend at the same instant as the percentage.
 
@@ -1934,6 +1986,12 @@ def record(all_pct, fable_pct, note):
     implementation. A confirmation printed by zsh with its own arithmetic was reporting
     caps from readings that implied_caps() then correctly discarded -- a second derivation
     disagreeing with the first, which is the defect class this repo keeps re-learning.
+
+    The row carries COST_POLICY. This table is append-only and transcripts are pruned, so a
+    row's numerator can never be recomputed later: an unstamped row is permanently
+    unclassifiable, and a cap differenced across one old and one new row reads HIGH, which
+    is the direction that silences the pace check. Stamping at write time is one column;
+    reconstructing the policy afterwards is not possible at all.
     """
     for name, v in (("all-models", all_pct), ("fable", fable_pct)):
         if not (0.0 <= v <= 100.0):
@@ -1965,14 +2023,15 @@ def record(all_pct, fable_pct, note):
             "Several rows per week is better than one — each is an independent estimate,\n"
             "and two readings bracketing a stretch of known model mix are stronger still.\n\n"
             "| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok "
-            "| all_ieq | fable_ieq | note |\n"
-            "|---|---|---|---|---|---|---|---|---|---|---|\n")
+            "| all_ieq | fable_ieq | note | policy |\n"
+            "|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+    _ensure_policy_column()
     with open(READINGS, "a") as fh:
         fh.write(f"| {wk} | {at} | {all_pct:g}% | {fable_pct:g}% | "
                  f"{all_at:.2f} | {fable_at:.2f} | "
                  f"{tot.get('all_raw', 0):.0f} | {tot.get('fable_raw', 0):.0f} | "
                  f"{tot.get('all_ieq', 0):.0f} | {tot.get('fable_ieq', 0):.0f} | "
-                 f"{note.replace('|', ' ')} |\n")
+                 f"{note.replace('|', ' ')} | {COST_POLICY} |\n")
 
     try:
         (HIST / f"READING-DUE-{wk}").unlink()
