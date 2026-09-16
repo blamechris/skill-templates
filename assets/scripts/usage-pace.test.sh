@@ -2728,5 +2728,77 @@ printf '%s' "$got" | grep -q 'COUNTED' \
   && ok "a timestamp-less record does not swallow its key from the record that has one" \
   || bad "a timestamp-less record does not swallow its key" "$(flat "$got")"
 
+# ------------- 19. THE DISCLOSURE HAS TO REACH THE LINE PEOPLE READ (#256 fix round)
+# Section 18 pinned the supersession itself. This section pins the three places the FIRST
+# cut of it did not reach: the one-liner and the hook (the disclosure lived in `--caps`
+# alone), the append-only readings table (rows carried no policy stamp, so a cap
+# differenced across the change reads HIGH -- the direction that silences the check), and
+# the week close (remembering a key only when it was in-week made the total depend on scan
+# order, and one order re-billed the stub).
+
+# (a) THE ONE-LINER AND THE HOOK. A cap measured under the old dedup reads LOW, so the
+#     percentage divided into it reads HIGH and can flip the verdict to NEAR CAP on a week
+#     that is not -- which is the whole argument for disclosing instead of rejecting. The
+#     marker therefore has to appear where the percentage appears. Numbers below: an honest
+#     cap of $2,551 against a cached $2,415 (both real, measured on this machine before and
+#     after #256), with spend at 86% of the honest cap -- 91% of the stale one, which trips
+#     near-cap.
+got=$(pymod '
+import tempfile
+d = pathlib.Path(tempfile.mkdtemp())
+up.CALIB = d/"k.json"; up.READINGS = d/"absent.md"; up.STATE = d/"s.json"
+def basis(extra):
+    up.CALIB.write_text(up.json.dumps(dict({"all":2414.94,"periods":7,"r2":0.997}, **extra)))
+    return up.resolve_cap("all", [])
+cap, b_old, _ = basis({})
+_,   b_new, _ = basis({"policy": up.COST_POLICY})
+spend = 0.86 * 2551.0
+mk = lambda b: {"fable":0.0,"all":spend,"cap":920.0,"cap_basis":"fb","all_cap":cap,
+                "all_cap_basis":b,"consumed":0.0,"all_consumed":spend/cap,"elapsed":0.93,
+                "days_left":0.5,"ahead_by":0.0,"all_ahead_by":0.0,"anchor_exact":True,
+                "anchor":"","projected":0.0,"calibrated":True,"sub_fable":0.0,
+                "week":"2026-09-16","now":"x"}
+line_old, line_new = up.fmt(mk(b_old), 0.15), up.fmt(mk(b_new), 0.15)
+up.pace = lambda: mk(b_old)
+up.last_model = lambda t: "claude-fable-5"
+import argparse, contextlib, io
+out = io.StringIO()
+sys.stdin = io.StringIO(up.json.dumps({"session_id":"s1","transcript_path":"/x"}))
+with contextlib.redirect_stdout(out):
+    up.hook(argparse.Namespace(every=1, margin=0.15))
+hook_out = out.getvalue()
+print("ONELINE" if up.STALE_CAP_NOTE in line_old else "oneline-silent",
+      "HOOK" if up.STALE_CAP_NOTE in hook_out else "hook-silent",
+      "NEARCAP" if "NEAR CAP" in line_old else "no-verdict-flip",
+      "HONEST-86" if round(100*spend/2551.0) == 86 and round(100*spend/cap) == 91 else "fixture-off",
+      "QUIET-WHEN-STAMPED" if up.STALE_CAP_NOTE not in line_new else "always-warns")')
+[ "$got" = "ONELINE HOOK NEARCAP HONEST-86 QUIET-WHEN-STAMPED" ] \
+  && ok "the stale-cap warning reaches the one-liner AND the hook, and goes quiet when stamped" \
+  || bad "the stale-cap warning reaches the one-liner and the hook" "got=$(flat "$got")"
+
+# (b) THE FABLE CAP CAN BE DISCLOSED AT ALL. The cached calibration is all-models only, so
+#     every Fable cap comes from a reading, a reading pair, or FALLBACK -- and until this
+#     round none of those three branches could carry the disclosure. The magnitude is
+#     per-meter on purpose: the duplication is sidechain-only and Fable is main-thread
+#     only, so the Fable numerator moved 0-5% where all-models moved 3.5-14.4%. One
+#     figure for both would overstate the Fable case fivefold.
+got=$(pymod '
+import tempfile
+d = pathlib.Path(tempfile.mkdtemp())
+up.CALIB = d/"absent.json"; up.READINGS = d/"absent.md"; up.PLAN_SAMPLES = d/"absent.json"
+fb, al = up.resolve_cap("fable", [])[1], up.resolve_cap("all", [])[1]
+row = lambda pol: [{"week":"w","at":"t","note":"","policy":pol,"all_pct":50.0,
+                    "fable_pct":50.0,"all_at":1000.0,"fable_at":100.0,
+                    "all_raw":None,"fable_raw":None,"all_ieq":None,"fable_ieq":None}]
+old_row = up.resolve_cap("fable", row(None))[1]
+new_row = up.resolve_cap("fable", row(up.COST_POLICY))[1]
+print("FB-FALLBACK" if up.STALE_CAP_NOTE in fb and "0-5%" in fb else "fable-undisclosed",
+      "ALL-FALLBACK" if up.STALE_CAP_NOTE in al and "3.5-14.4%" in al else "all-undisclosed",
+      "OLD-ROW" if up.STALE_CAP_NOTE in old_row else "row-undisclosed",
+      "NEW-ROW-QUIET" if up.STALE_CAP_NOTE not in new_row else "row-always-warns")')
+[ "$got" = "FB-FALLBACK ALL-FALLBACK OLD-ROW NEW-ROW-QUIET" ] \
+  && ok "FALLBACK and the reading-derived branches disclose the policy, at the right magnitude" \
+  || bad "FALLBACK and the reading-derived branches disclose the policy" "got=$(flat "$got")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

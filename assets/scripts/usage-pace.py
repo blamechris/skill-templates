@@ -102,6 +102,26 @@ COST_POLICY = "supersede-partial-1"
 CACHE_V = 2        # bumped with COST_POLICY: a v1 cache records no per-key contribution,
                    # so nothing in it can be superseded in place -- rescan once instead.
 
+# ONE derivation of the staleness sentence. `resolve_cap` builds a basis string with it and
+# `fmt` looks for it to decide whether the one-liner has to carry a warning of its own: a
+# second hand-typed copy in the formatter is the thing that would drift, and a marker only
+# `--caps` prints is a disclosure nobody reads. Every caller goes through `_stale_note`.
+STALE_CAP_NOTE = ("measured under the superseded first-occurrence dedup (pre-#256), so it "
+                  "reads LOW and this percentage reads high")
+
+
+def _stale_note(kind, remedy):
+    """The disclosure for a cap measured before COST_POLICY, at the magnitude that applies
+    to THIS meter.
+
+    The two meters did not move together and quoting one figure for both would overstate
+    the Fable case fivefold: the duplication is sidechain-only, and Fable is main-thread
+    only by doctrine, so the all-models numerator moved 3.5%-14.4% per week while the
+    Fable numerator moved 0%-5% (0% for the week this was measured in).
+    """
+    mag = "3.5-14.4%" if kind == "all" else "0-5%"
+    return f" -- WARNING: {STALE_CAP_NOTE} (this meter's numerator moved {mag}); {remedy}"
+
 # DERIVED figures, used only when there is no live sample AND no reading on file -- i.e.
 # on a machine with no desktop app, which is the only place the derived path runs at all.
 # They are statistics, not measurements: all-models is a regression over 6 meter periods
@@ -110,6 +130,13 @@ CACHE_V = 2        # bumped with COST_POLICY: a v1 cache records no per-key cont
 # "this week ran without a clamp, so the cap is above it" -- an inference both figures
 # falsified, which is why neither is called a measurement here either. The live readout
 # never touches them; the cap it uses is this week's own rate.
+#
+# Both were also measured BEFORE COST_POLICY, so both read low against a numerator
+# counted the new way -- the all-models figure by 3.5%-14.4%, the Fable figure by 0%-5%
+# (the superseded duplication is sidechain-only, and Fable is main-thread only by
+# doctrine). resolve_cap discloses that via `_stale_note` rather than silently correcting
+# it, because a guessed multiplier on a measurement is not a measurement; the remedy is
+# `--calibrate` or a reading pair on this machine.
 FALLBACK = {"fable": 920.0, "all": 2363.0}
 
 PRICING = [
@@ -1303,32 +1330,41 @@ def resolve_cap(kind, rows, use_cached=True):
             age = f", measured {c['at'][:16]}" if isinstance(c.get("at"), str) else ""
             # A cached cap measured under the old first-occurrence dedup reads low --
             # 2.0% to 12.9% per period as measured -- and the numerator divided into it no
-            # longer does, so the percentage reads HIGH by that much -- a wrong verdict, not just a wrong dollar figure. It is disclosed
-            # rather than rejected: this is a MEASUREMENT with a date on it, the file's
-            # rule for a number it cannot trust is to say so (see meter_offset), and
-            # rejecting it would fall back to a hand-recorded reading that carries the
-            # same policy without saying which.
+            # longer does, so the percentage reads HIGH by that much: a wrong VERDICT, not
+            # just a wrong dollar figure. It is disclosed rather than rejected because this
+            # is a MEASUREMENT with a date on it, and the file's rule for a number it
+            # cannot trust is to say so (see meter_offset) -- but "disclosed" has to mean
+            # disclosed WHERE THE PERCENTAGE IS READ, which is `fmt`, not `--caps`.
             stale = ("" if c.get("policy") == COST_POLICY else
-                     " -- WARNING: measured under the superseded first-occurrence dedup "
-                     "(pre-#256), so it reads LOW and this percentage reads high; re-run "
-                     "--calibrate")
+                     _stale_note("all", "re-run --calibrate"))
             return (c["all"], f"regression over {c.get('periods', '?')} meter period(s) "
                               f"from the app's own 15-minute samples (R2 {c.get('r2', 0):.3f}"
                               f"{rng}{age}) -- zero-point independent{stale}", True)
+    # The reading-derived branches need the same disclosure as the cached one, and for
+    # kind == "fable" they are the ONLY branches -- the cached calibration is all-models
+    # only, so without this the Fable cap, which is the number the hook gates on, could
+    # never be reported as stale under any circumstances.
+    stale_rows = _stale_note(kind, "record a fresh reading") if any(
+        (r.get("policy") or None) != COST_POLICY for r in rows) else ""
     dcaps, _ = differential_caps(rows)
     if dcaps[kind]:
         v = sorted(dcaps[kind])
         med = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
-        return med, f"differential of {len(v)} reading pair(s) -- zero-point independent", True
+        return med, (f"differential of {len(v)} reading pair(s) -- zero-point "
+                     f"independent{stale_rows}"), True
     caps = implied_caps(rows)[kind]
     if caps:
         caps = sorted(caps)
         med = caps[len(caps) // 2] if len(caps) % 2 else (caps[len(caps) // 2 - 1] + caps[len(caps) // 2]) / 2
         return med, (f"median of {len(caps)} single reading(s) -- ABSOLUTE, assumes the "
-                     f"meter zeroed at the week open; wrong after an out-of-band reset"), True
-    return (FALLBACK[kind], "derived elsewhere from other weeks' statistics, not measured "
-            "on this machine and not this week's rate (record a reading pair to replace "
-            "it, or read the live meter)", False)
+                     f"meter zeroed at the week open; wrong after an out-of-band "
+                     f"reset{stale_rows}"), True
+    # FALLBACK is the most common path of all -- it is what a freshly bootstrapped machine
+    # uses -- and both of its figures were measured under the pre-#256 dedup, so it gets
+    # the disclosure too rather than being the one branch with none.
+    return (FALLBACK[kind], "measured elsewhere, not calibrated on this machine "
+            "(record a reading pair to replace it)"
+            + _stale_note(kind, "calibrate or record a reading pair here"), False)
 
 
 # ---------------------------------------------------------------- pace
