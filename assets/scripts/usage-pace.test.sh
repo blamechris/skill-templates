@@ -1662,7 +1662,10 @@ tot2,bk2=up.scan_detail(week, force=True)        # ground truth
 sum_all=sum(v[0] for v in bk.values()); sum_fbl=sum(v[1] for v in bk.values())
 # a window that must contain exactly the 4 fable requests and nothing else
 w=up.window_spend(bk, t0+99*60_000, t0+110*60_000)
-# ...and one that contains exactly the first 3 opus requests
+# ...and one over 3 minutes of the opus run: minutes 1, 2 and 3, NOT the first three.
+# `(lo, hi]` gives up the bucket containing `lo`, so the request at t0 itself is outside it
+# -- the count is 3 either way, which is exactly why a comment claiming "the first 3" could
+# sit here being wrong while the arithmetic stayed right.
 w2=up.window_spend(bk, t0, t0+3*60_000)
 print("totals=%s fable=%s incr=%s win=%s win2=%s" % (
   abs(sum_all-tot["all"])<1e-9,

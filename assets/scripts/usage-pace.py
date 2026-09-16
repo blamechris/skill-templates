@@ -1468,8 +1468,13 @@ def warnings_for(p):
     the first points of a period cost what the rest do. "The rest of the week is lost" is
     not a sentence to derive from that. Warning (b) is not gated the same way: its landing
     figure is no better founded, but the worst it can do is suggest spending quota that
-    would otherwise be destroyed, and it cannot fire in the first hour of a week anyway
-    (it needs `h < 24`).
+    would otherwise be destroyed -- which is the whole argument, and the only one. It is
+    NOT that a provisional rate implies an early week: `provisional` is `moved < MIN_MOVED`,
+    a statement about the meter and not the clock, and an out-of-band mid-week reset or an
+    anchor the app saw late (a 100 -> 40 fall) both put `moved` under 5 with `h` well inside
+    24. An earlier version of this paragraph claimed warning (b) "cannot fire in the first
+    hour of a week anyway", which is a different proposition, true of neither gate, and
+    would have made the absent gate look accidental rather than decided.
     """
     out = []
     h, w = p.get("hours_to_reset"), p.get("hours_to_wall")
@@ -1503,6 +1508,16 @@ def _rng(lo, hi, f="${:,.0f}"):
     `need_per_hour` are products of one increasing and one decreasing factor and can fall
     either way depending on the world. Ordering one call site would have left the other
     two to be discovered separately.
+
+    Sorting is right HERE and would be wrong for the cap range, and the difference is
+    whether the ends are ordered by construction. `lo`/`hi` here are two ends of a
+    computation whose direction varies by figure, so their order carries no information and
+    ordering them destroys nothing. `--calibrate`'s `lo`/`hi` are a measured minimum and
+    maximum: an inversion there means the writer swapped them, so it must stay visible
+    rather than be tidied away, and it renders verbatim -- pinned, in both directions, at
+    "the cached basis carries the range low-to-high" and "an inverted lo/hi renders
+    verbatim" in the suite. Whoever reaches for this helper from that basis string will
+    have removed the only evidence of the bug it would be hiding.
     """
     if lo is None:
         return "?"
