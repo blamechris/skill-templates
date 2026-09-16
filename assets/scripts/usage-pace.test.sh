@@ -1981,6 +1981,32 @@ print('%s %s reads=%d' % (p['source'], p['sd'], len(calls)))" "$TMP")
   && ok "the live path reads the sample file once, so the sample and the anchor agree" \
   || bad "the live path reads the sample file once" "got=$(flat "$got")"
 
+# ...and the OTHER side of that guard, which nothing pinned: a sample taken shortly AFTER
+# the anchor is a reading OF this meter period and must be accepted, however old it is. The
+# refusal above was the only tested side, so an over-strict guard -- `samp["t"] < anchor_ms
+# + 3_600_000`, refusing anything inside the first hour of a period -- left the suite fully
+# green while silently dropping the readout to `derived` for the first hour of every week,
+# which is precisely the stretch the provisional-rate case above is also about. The sample
+# here lands 10 minutes after the anchor and is 110 minutes old, so it is accepted AND
+# flagged stale: the two are independent, and age alone never disqualifies a reading.
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":110,"reqs":[[115,20000000,"claude-fable-5"],[3,1000000,"claude-fable-5"]]}')
+post_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ]; then
+  skipt "a sample just after the anchor is accepted as live" "too close to a meter reset"
+else
+  got=$(HOME="$LIVEHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+import json, sys
+p = json.load(sys.stdin)
+print("source=%s sd=%s stale=%s age=%d rejected=%s" % (
+    p["source"], p["sd"], p["stale"], round(p["sample_age_min"]), p["live_rejected"]))')
+  w1=$(fixf "$fx" rate_s)
+  case "$got:$post_line" in
+    "source=live sd=82.0 stale=True age=110 rejected=None":*"$w1"*)
+       ok "a sample 10 minutes after the anchor is accepted as live (and flagged stale, which is a different claim)" ;;
+    *) bad "a sample just after the anchor is accepted as live" "got=$got want rate $w1 || $(flat "$post_line")" ;;
+  esac
+fi
+
 # ---------------- observed_anchor, directly: nothing named it before ----------------
 # The PR body claims a fix here -- a drop counts when its LATER sample is in-week, because
 # the scheduled reset lands BETWEEN two samples -- and re-introducing that bug left the
