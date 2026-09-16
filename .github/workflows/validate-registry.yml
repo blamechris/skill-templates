@@ -453,6 +453,16 @@ jobs:
         # fast path that would make it silently blind to a writer spacing change;
         # --units reports a tie as a tie instead of naming a unit that merely tied;
         # and the reading parser still tolerates the pre-token schema.
+        #
+        # Since the live readout landed it also pins the thing the whole script is for:
+        # the percentage is READ from the desktop app's sample file and never computed.
+        # The fixture builds that file under a fake HOME — which works on this runner
+        # precisely because the path is resolved relative to HOME — then asserts the
+        # printed sd, $/pt and remaining dollars against arithmetic done outside the
+        # script, that halving the fixture's sd moves the line while the transcripts do
+        # not, that a 48-minute-old sample is flagged stale and a 5-minute-old one is
+        # not, that NEAR CAP appears nowhere, and that with no sample file at all the
+        # line says "derived" instead of presenting a computed number as the meter.
         run: ./assets/scripts/usage-pace.test.sh
 
       - name: fleet-check regression tests

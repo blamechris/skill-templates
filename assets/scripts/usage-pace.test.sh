@@ -81,6 +81,7 @@ home = pathlib.Path(sys.argv[2]); cfg = json.loads(sys.argv[3])
 sd = float(cfg["sd"]); fh = cfg.get("fh", 8)
 age_min = float(cfg.get("age_min", 5))
 old_n, old_tok = int(cfg.get("old_n", 0)), int(cfg.get("old_tok", 2_000_000))
+gap_n, gap_tok = int(cfg.get("gap_n", 0)), int(cfg.get("gap_tok", 400_000))
 rec_n, rec_tok = int(cfg.get("recent_n", 4)), int(cfg.get("recent_tok", 20_000))
 now = datetime.now(timezone.utc)
 now_ms = now.timestamp() * 1000
@@ -100,7 +101,12 @@ def spread(n, lo_min, hi_min):
         return [now_ms - (lo_min + hi_min) / 2 * 60_000]
     return [now_ms - (hi_min - (hi_min - lo_min) * i / (n - 1)) * 60_000 for i in range(n)]
 
-ev = [(t, old_tok) for t in spread(old_n, 71, 100)] + [(t, rec_tok) for t in spread(rec_n, 2, 25)]
+# The gap request sits between the two samples the reset happened between: spend that
+# cannot be attributed to either side of the meter's zero. The prev sample is 5 minutes
+# back so that a one-minute bucket lands strictly inside the gap whatever the alignment.
+ev = ([(t, old_tok) for t in spread(old_n, 71, 100)]
+      + [(t, rec_tok) for t in spread(rec_n, 2, 25)]
+      + [(anchor - 150_000, gap_tok)] * gap_n)
 ev.sort()
 lines = [json.dumps({"type": "assistant", "timestamp":
          datetime.fromtimestamp(t / 1000, timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -109,7 +115,7 @@ lines = [json.dumps({"type": "assistant", "timestamp":
          for i, (t, tok) in enumerate(ev)]
 (home / ".claude" / "projects" / "p" / "t.jsonl").write_text("\n".join(lines) + "\n")
 
-samples = [{"t": int(anchor - 60_000), "u": {"sd": 100, "fh": 40}},
+samples = [{"t": int(anchor - 300_000), "u": {"sd": 100, "fh": 40}},
            {"t": int(anchor), "u": {"sd": 0, "fh": 0}},
            {"t": int(now_ms - age_min * 60_000), "u": {"sd": sd, "fh": fh}}]
 (home / "Library" / "Application Support" / "Claude" / "plan-usage-history.json").write_text(
@@ -117,6 +123,7 @@ samples = [{"t": int(anchor - 60_000), "u": {"sd": 100, "fh": 40}},
 
 cost = lambda tok: up.cost_usd({"output_tokens": tok}, "claude-fable-5")
 spend = old_n * cost(old_tok) + rec_n * cost(rec_tok)
+gap = gap_n * cost(gap_tok)
 burn1 = rec_n * cost(rec_tok)
 burn3 = spend / 3.0
 rate = spend / sd
@@ -127,6 +134,9 @@ wall = usd_left / burn1 if burn1 else float("inf")
 landing = sd + burn3 * h_reset / rate
 print(json.dumps({
     "usable": usable, "sd": sd, "spend": spend, "rate": rate, "pts_left": pts_left,
+    "gap": gap, "gap_s": "${:,.0f}".format(gap),
+    "rate_rng_s": "${:,.1f}-${:,.1f}/pt".format(rate, (spend + gap) / sd),
+    "spend_rng_s": "${:,.0f}-${:,.0f}".format(spend, spend + gap),
     "usd_left": usd_left, "burn1": burn1, "burn3": burn3, "h_reset": h_reset,
     "wall": wall, "landing": landing,
     "warn_a": bool(wall < 0.5 * h_reset), "warn_b": bool(landing < 90 and h_reset < 24),
@@ -1554,6 +1564,102 @@ BKBAD
 [ "$got" = "OK {7: [1.5, 0.5]}" ] \
   && ok "a malformed per-minute index is dropped, not trusted, and never raises" \
   || bad "a malformed per-minute index is dropped" "got=$(flat "$got")"
+
+
+# ----------------------- 19. THE LIVE READOUT (the percentage is READ, not computed)
+# Every case here drives the real command against a fixture HOME: a known meter sample, a
+# known transcript, and expectations computed OUTSIDE the script. The point of the section
+# is that no number in the line is invented -- the old code had this same file open and
+# printed week-spend-over-a-cached-cap beside it, reading 96% while the meter read 79.
+LIVEHOME=$TMP/livehome
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000}')
+line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ]; then
+  skipt "the live readout reports the fixture's own meter" "too close to a meter reset"
+else
+  miss=""
+  for k in sd_s fh_s sample_s spend_s rate_s left_s burn_s; do
+    want=$(fixf "$fx" "$k")
+    case "$line" in *"$want"*) ;; *) miss="$miss [$k=$want]" ;; esac
+  done
+  [ -z "$miss" ] \
+    && ok "--oneline reports the fixture's sd, fh, sample age, spend, \$/pt and burn" \
+    || bad "--oneline reports the fixture's own figures" "missing:$miss || $(flat "$line")"
+
+  # The discriminating case: SAME transcripts, a different meter sample. A computed
+  # percentage cannot move here and a read one must -- and \$/pt must move with it,
+  # because the rate is this week's spend over this week's points.
+  fx2=$(mkfix "$LIVEHOME" '{"sd":41,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000}')
+  line2=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+  w1=$(fixf "$fx2" sd_s); w2=$(fixf "$fx2" rate_s); w3=$(fixf "$fx2" left_s)
+  case "$line2" in
+    *"$w1"*"$w2"*"$w3"*) ok "halving the fixture's sd halves the meter and doubles \$/pt (it is READ)" ;;
+    *) bad "the printed percentage follows the sample, not the spend" "want $w1/$w2/$w3 || $(flat "$line2")" ;;
+  esac
+fi
+
+# NEAR CAP is gone from every path, whatever the fixture says.
+case "$line" in
+  *"NEAR CAP"*|*"AHEAD OF PACE"*) bad "--oneline never prints NEAR CAP or AHEAD OF PACE" "$(flat "$line")" ;;
+  *) ok "--oneline never prints NEAR CAP or AHEAD OF PACE" ;;
+esac
+
+# The stale flag is a threshold, so both sides of it are asserted. A 48-minute-old sample
+# read as current is the same defect as a computed one read as measured.
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":48,"recent_n":40,"recent_tok":1000000}')
+stale_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000}')
+fresh_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+case "$stale_line$fresh_line" in
+  *"SAMPLE STALE 48m"*) case "$fresh_line" in
+      *"STALE"*) bad "the stale flag appears past 30m and not before" "fresh line is flagged: $(flat "$fresh_line")" ;;
+      *) ok "the stale flag appears at 48m and not at 5m, and names the age" ;;
+    esac ;;
+  *) bad "the stale flag appears past 30m and not before" "$(flat "$stale_line")" ;;
+esac
+
+# Spend the meter's own samples cannot attribute to either side of the reset: the figures
+# become a RANGE rather than being fitted. Fitting it is what took $215 off the week.
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000,"gap_n":1,"gap_tok":4000000}')
+gap_line=$(HOME="$LIVEHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ]; then
+  skipt "spend inside the reset gap is carried as a range" "too close to a meter reset"
+else
+  w1=$(fixf "$fx" spend_rng_s); w2=$(fixf "$fx" rate_rng_s); w3=$(fixf "$fx" gap_s)
+  case "$gap_line" in
+    *"$w1"*"$w2"*"$w3 of spend sits inside the reset gap"*)
+       ok "spend inside the reset gap makes every figure a range, and says why" ;;
+    *) bad "spend inside the reset gap is carried as a range" "want $w1/$w2/$w3 || $(flat "$gap_line")" ;;
+  esac
+fi
+
+# And with no sample file at all -- a headless or non-desktop machine -- the line must say
+# the percentage is derived rather than presenting it as the meter.
+NOSAMP=$TMP/nosamplehome
+mkfix "$NOSAMP" '{"sd":82,"recent_n":4,"recent_tok":1000000}' >/dev/null
+rm -rf "$NOSAMP/Library"
+d_line=$(HOME="$NOSAMP" "$PY" "$SUT" --oneline 2>&1)
+case "$d_line" in
+  *"derived — no live sample"*"of cap"*) ok "with no sample file the line says derived and names the cap it used" ;;
+  *) bad "with no sample file the line says derived" "$(flat "$d_line")" ;;
+esac
+case "$d_line" in
+  *"sd "*) bad "the derived line claims no live percentage" "$(flat "$d_line")" ;;
+  *) ok "the derived line claims no live percentage" ;;
+esac
+
+# --json must carry the live fields, not only the formatted line: the hook consumes the
+# payload and the previous payload had no live percentage in it at all.
+fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":5,"recent_n":40,"recent_tok":1000000}')
+got=$(HOME="$LIVEHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+import json,sys
+p=json.load(sys.stdin)
+need=["sd","fh","sample_at","sample_age_min","stale","rate","pts_left","usd_left",
+      "hours_to_reset","burn_1h","burn_3h","hours_to_wall","landing","warnings","source"]
+print("MISSING",[k for k in need if k not in p] or "none", p.get("source"), p.get("sd"))')
+[ "$got" = "MISSING none live 82.0" ] \
+  && ok "--json carries the live percentage and every derived figure" \
+  || bad "--json carries the live percentage and every derived figure" "got=$(flat "$got")"
 
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
