@@ -210,19 +210,77 @@ def _cache_stale(files):
     return False
 
 
+def bucket_of(ms):
+    """The minute-since-epoch a millisecond instant belongs to."""
+    return int(ms // 60000)
+
+
+def _load_buckets(c):
+    """Per-minute spend from the cache, validated entry by entry.
+
+    A malformed entry is dropped rather than raising: this rides in the same file as
+    the totals, which `_load_cache` already treats as untrusted, and the pace check
+    must not crash on a cache some other version wrote.
+    """
+    bk = {}
+    for k, v in (c.get("bk") or {}).items() if isinstance(c.get("bk"), dict) else ():
+        try:
+            m = int(k)
+            a, f = float(v[0]), float(v[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if math.isfinite(a) and math.isfinite(f):
+            bk[m] = [a, f]
+    return bk
+
+
+def window_spend(bk, lo_ms, hi_ms=None):
+    """(all, fable) dollars in [lo, hi), from the per-minute index.
+
+    Resolution is one minute, so an instant mid-minute pulls in that whole minute. At
+    the burn rates this file deals in (tens of dollars an hour) that is under a dollar
+    against a four-figure total -- and the alternative, a full transcript walk per
+    invocation, costs ~4 seconds on every hook fire.
+    """
+    lo = bucket_of(lo_ms)
+    hi = bucket_of(hi_ms) if hi_ms is not None else None
+    a = f = 0.0
+    for m, v in bk.items():
+        if m < lo or (hi is not None and m >= hi):
+            continue
+        a += v[0]
+        f += v[1]
+    return a, f
+
+
 def scan(week, force=False):
-    """Totals for `week`, reading only bytes appended since the last call.
+    """Totals for `week` -- see scan_detail, of which this is the totals-only half."""
+    return scan_detail(week, force=force)[0]
+
+
+def scan_detail(week, force=False):
+    """(totals, per-minute buckets) for `week`, reading only bytes appended since the
+    last call.
 
     Transcripts are append-only JSONL, so a byte offset per file is sound. A file that
     shrank was rewritten or pruned -- reread it from zero rather than trusting the offset.
     Dedup by (message id, requestId) is kept because one request can land in more than one
     transcript (resumes, sidechains); without it a resumed session double-counts.
+
+    The per-minute index exists because the live readout needs spend since an ARBITRARY
+    instant (the meter's observed zero) and over the last hour and three hours, and the
+    week totals cannot answer either. It is built here rather than by a second walk for
+    one reason: the anchor is never earlier than the week open, so everything the readout
+    needs is inside the window this function already scans -- incrementally, from a byte
+    offset. `_cum_events` still walks every transcript ever for `--calibrate`, and takes
+    ~4 seconds doing it; that is acceptable once, and not on every fortieth prompt.
     """
     fresh = {"week": week, "files": {}, "totals": {}, "seen": set()}
     c = fresh if force else _load_cache(week)
     if not force and _cache_stale(c["files"]):
         c = {"week": week, "files": {}, "totals": {}, "seen": set()}
     tot = {k: float(v) for k, v in c.get("totals", {}).items()}
+    bk = {} if force else _load_buckets(c)
     seen, files = c["seen"], c["files"]
     for path in ROOT.rglob("*.jsonl"):
         parts = path.parts
@@ -289,6 +347,10 @@ def scan(week, force=False):
             seen.add(k)
             cost, t = cost_usd(u, model), tier(model)
             raw, ieq = token_measures(u)
+            b = bk.setdefault(bucket_of(dt.timestamp() * 1000), [0.0, 0.0])
+            b[0] += cost
+            if t == "fable":
+                b[1] += cost
             tot["all"] = tot.get("all", 0.0) + cost
             tot[t] = tot.get(t, 0.0) + cost
             tot["sub" if is_sub else "main"] = tot.get("sub" if is_sub else "main", 0.0) + cost
@@ -306,8 +368,11 @@ def scan(week, force=False):
         # parseable assistant records, or those bytes are re-read on every scan forever.
         files[key] = [off + consumed, mtime]
     c["totals"] = tot
+    # Keys are stringified because JSON object keys are strings anyway; _load_buckets
+    # turns them back into ints. A week holds at most 10,080 of them.
+    c["bk"] = {str(m): v for m, v in bk.items()}
     _save_cache(c)
-    return tot
+    return tot, bk
 
 
 # ---------------------------------------------------------------- cap resolution

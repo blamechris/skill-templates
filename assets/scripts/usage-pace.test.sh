@@ -1301,5 +1301,99 @@ print("continuous:", a[3]=="" and a[4], "| reset-in-window:", "reset" in b[3])')
   && ok "a segment that begins at the window is a moved zero only if the meter fell across it" \
   || bad "window split vs reset in meter_offset" "got=$(flat "$got")"
 
+# ------------------- 18. THE PER-MINUTE INDEX (what the live readout is measured from)
+# The live readout needs spend since an ARBITRARY instant (the meter's observed zero) and
+# over the last hour/three hours. The week totals cannot answer either, and a full
+# transcript walk per invocation costs ~4s. So scan() carries a per-minute index -- and it
+# must agree with the totals exactly, survive the incremental path, and not keep spend
+# from bytes that are gone.
+got=$("$PY" - "$SUT" "$TMP" <<'BKPY' 2>&1
+import importlib.util, json, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"bk"
+shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/"bk_c.json"
+week="2026-09-09"
+open_ms=up.week_bounds(week)[0].timestamp()*1000
+t0=open_ms+3_600_000
+def rec(i, ms, model):
+    return json.dumps({"type":"assistant","timestamp":
+        up.datetime.fromtimestamp(ms/1000, up.timezone.utc).isoformat().replace("+00:00","Z"),
+        "message":{"id":"b%d"%i,"model":model,"usage":{"output_tokens":80000}}},
+        separators=(",",":"))
+opus=up.cost_usd({"output_tokens":80000},"claude-opus-5")
+fbl =up.cost_usd({"output_tokens":80000},"claude-fable-5")
+# 10 opus at t0 + i minutes, then 4 fable at t0 + 100 minutes + i
+lines=[rec(i, t0+i*60_000, "claude-opus-5") for i in range(10)]
+lines+=[rec(100+i, t0+(100+i)*60_000, "claude-fable-5") for i in range(4)]
+f=root/"t.jsonl"; f.write_text("\n".join(lines[:6])+"\n")
+tot,bk=up.scan_detail(week)                      # first, partial
+f.write_text("\n".join(lines)+"\n")
+tot,bk=up.scan_detail(week)                      # incremental append
+tot2,bk2=up.scan_detail(week, force=True)        # ground truth
+sum_all=sum(v[0] for v in bk.values()); sum_fbl=sum(v[1] for v in bk.values())
+# a window that must contain exactly the 4 fable requests and nothing else
+w=up.window_spend(bk, t0+99*60_000, t0+110*60_000)
+# ...and one that contains exactly the first 3 opus requests
+w2=up.window_spend(bk, t0, t0+3*60_000)
+print("totals=%s fable=%s incr=%s win=%s win2=%s" % (
+  abs(sum_all-tot["all"])<1e-9,
+  abs(sum_fbl-tot.get("fable",0.0))<1e-9,
+  bk==bk2,
+  abs(w[0]-4*fbl)<1e-9 and abs(w[1]-4*fbl)<1e-9,
+  abs(w2[0]-3*opus)<1e-9 and w2[1]==0.0))
+BKPY
+)
+[ "$got" = "totals=True fable=True incr=True win=True win2=True" ] \
+  && ok "the per-minute index agrees with the totals, and windows it exactly" \
+  || bad "the per-minute index agrees with the totals" "got=$(flat "$got")"
+
+# A shrunk transcript must leave no stale spend in the INDEX either. The totals case is
+# pinned above; the index is a second accumulator in the same file and a revert of its
+# share of _cache_stale would leave that case green.
+got=$("$PY" - "$SUT" "$TMP" <<'BKSHRINK' 2>&1
+import importlib.util, json, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); root=tmp/"bks"
+shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
+up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/"bks_c.json"
+week="2026-09-09"
+t0=up.week_bounds(week)[0].timestamp()*1000+3_600_000
+def rec(i):
+    return json.dumps({"type":"assistant","timestamp":
+        up.datetime.fromtimestamp((t0+i*60_000)/1000, up.timezone.utc)
+          .isoformat().replace("+00:00","Z"),
+        "message":{"id":"s%d"%i,"model":"claude-opus-5","usage":{"output_tokens":80000}}},
+        separators=(",",":"))
+f=root/"t.jsonl"
+f.write_text(rec(1)+"\n"+rec(2)+"\n"); up.scan_detail(week)
+f.write_text(rec(9)+"\n")
+_,bk=up.scan_detail(week)
+_,bk2=up.scan_detail(week, force=True)
+print("MATCH" if bk==bk2 else "STALE %s != %s" % (sorted(bk), sorted(bk2)))
+BKSHRINK
+)
+[ "$got" = "MATCH" ] \
+  && ok "a shrunk transcript leaves no stale minute in the index" \
+  || bad "a shrunk transcript leaves no stale minute in the index" "got=$(flat "$got")"
+
+# A malformed index in the cache must be dropped entry by entry, never raise.
+got=$("$PY" - "$SUT" "$TMP" <<'BKBAD' 2>&1
+import importlib.util, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+for shape in ({"bk":[1,2]}, {"bk":{"x":[1,2]}}, {"bk":{"5":"nope"}}, {"bk":{"5":[1]}},
+              {"bk":{"5":[float("nan"),0]}}, {}, {"bk":None}):
+    assert up._load_buckets(shape) == {}, shape
+print("OK", up._load_buckets({"bk":{"7":[1.5,0.5]}}))
+BKBAD
+)
+[ "$got" = "OK {7: [1.5, 0.5]}" ] \
+  && ok "a malformed per-minute index is dropped, not trusted, and never raises" \
+  || bad "a malformed per-minute index is dropped" "got=$(flat "$got")"
+
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
