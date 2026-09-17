@@ -456,8 +456,8 @@ jobs:
         #
         # Since the live readout landed it also pins the thing the whole script is for:
         # the percentage is READ from the desktop app's sample file and never computed.
-        # The fixture builds that file under a fake HOME — which works on this runner
-        # precisely because the path is resolved relative to HOME — then asserts the
+        # The fixture builds that file under a fake HOME -- which works on this runner
+        # precisely because the path is resolved relative to HOME -- then asserts the
         # printed sd, $/pt and remaining dollars against arithmetic done outside the
         # script, that halving the fixture's sd moves the line while the transcripts do
         # not, that a 48-minute-old sample is flagged stale and a 5-minute-old one is
@@ -472,6 +472,14 @@ jobs:
         # differenced rather than divided, and every figure the readout prints -- the
         # landing, the need-per-hour and the hours-to-wall that warning (a) is built from
         # were each asserted by nothing while a doubling mutation kept the suite green.
+        #
+        # Since #256 it also pins the dedup POLICY: an assistant message written twice
+        # under one requestId is billed at its COMPLETE record, at that record's minute,
+        # whichever record the scan reaches first and whether the two halves arrive in
+        # one scan or in two -- the defect that made this script's ALL-MODELS total read
+        # 3.5-14.4% low per week (the main-thread total did not move at all; the
+        # duplication is sidechain-only). It is the one thing here no local run can
+        # notice, because both numbers look perfectly plausible.
         run: ./assets/scripts/usage-pace.test.sh
 
       - name: fleet-check regression tests

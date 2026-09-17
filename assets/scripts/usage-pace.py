@@ -54,6 +54,73 @@ STATE = HIST / "pace-state.json"
 READINGS = HOME / "Obsidian" / "no-it-all" / "briefs" / "meter-readings.md"
 PT = ZoneInfo("America/Los_Angeles")
 WEEK_WD, WEEK_H, WEEK_MIN = 2, 15, 59          # Wednesday 15:59 PT
+# How far past the week close scan() still remembers a key it is not billing. See the
+# straddle comment in scan(): wide enough to cover the widest partial-to-complete pair
+# measured (661s), narrow enough that `seen` stays this week's ~21k keys and not the
+# corpus's ~162k.
+STRADDLE_GRACE_MS = 3_600_000
+
+# Claude Code writes one assistant message's usage block to the transcript more than once
+# under a single requestId: a partial record (output_tokens ~2) when the turn starts, and
+# the complete one shortly after. Both carry the same (message id, requestId), so the
+# dedup has to choose between them -- and keeping the FIRST, which is what this file did
+# until 2026-09-16, bills the stub. Measured that day on this machine, over the 41,616
+# records the current meter week had produced: 21,285 keys, of which 10,696 had a later
+# and larger record, first-occurrence $2,590.81 against $2,854.45 -- 10.2% low for that
+# week's all-models total, --calibrate, --caps and every recorded reading included. Each
+# of the seven calibration periods on file moves UP under supersession, 2.0% to 12.9%.
+#
+# THE SHIFT IS NOT UNIFORM ACROSS THE BUCKETS THIS FILE PRINTS, and which bucket moves
+# decides which downstream numbers actually have to be re-measured. Re-measured over all
+# of history on 2026-09-16, per meter week, first-occurrence against supersession:
+#     main   +0.00% in EVERY one of the eight weeks on file
+#     fable  +0.00% .. +5.29%   (+0.00% for the current week)
+#     sub    +6.43% .. +32.09%
+#     all    +3.47% .. +14.40%
+# All 59,192 superseded keys in that corpus are SIDECHAIN records, which is why the main
+# bucket does not move at all: the duplication is a subagent-transcript behaviour. So the
+# subagent SHARE moves too (this week 62.2% -> 65.8% of all-in), and the Fable numerator
+# -- main-thread-only by doctrine -- barely moves. Anything derived from the FABLE total
+# is therefore ~1% stale, not ~10%; only the all-models and subagent figures carry the
+# full correction (#256).
+#
+# Supersession is on the greater (cost, timestamp) rather than on "last seen". "Last" is
+# not merely unsafe in principle: 1,094 keys ($25.00) have a last-WRITTEN record cheaper
+# than their maximum, because one request lands in more than one transcript (resumes,
+# sidechains) and the later copy can be the truncated one. Scan order is not write order
+# either -- `rglob` order is arbitrary, and an incremental scan sees the two halves in
+# different passes. Max is the same answer from any order and is idempotent; "last" is
+# neither.
+#
+# COST_POLICY stamps values DERIVED from that choice, so they are not silently mixed with
+# values computed under the old one. The incremental cache and the meter anchor are both
+# recomputed when the stamp changes. A hand-run --calibrate is not recomputed -- it is
+# disclosed instead (resolve_cap), because a cap 9% low divided into a numerator that is
+# no longer 9% low overstates the percentage by 9%, which is a wrong VERDICT and not just
+# a wrong dollar figure.
+COST_POLICY = "supersede-partial-1"
+CACHE_V = 2        # bumped with COST_POLICY: a v1 cache records no per-key contribution,
+                   # so nothing in it can be superseded in place -- rescan once instead.
+
+# ONE derivation of the staleness sentence. `resolve_cap` builds a basis string with it and
+# `fmt` looks for it to decide whether the one-liner has to carry a warning of its own: a
+# second hand-typed copy in the formatter is the thing that would drift, and a marker only
+# `--caps` prints is a disclosure nobody reads. Every caller goes through `_stale_note`.
+STALE_CAP_NOTE = ("measured under the superseded first-occurrence dedup (pre-#256), so it "
+                  "reads LOW and this percentage reads high")
+
+
+def _stale_note(kind, remedy):
+    """The disclosure for a cap measured before COST_POLICY, at the magnitude that applies
+    to THIS meter.
+
+    The two meters did not move together and quoting one figure for both would overstate
+    the Fable case fivefold: the duplication is sidechain-only, and Fable is main-thread
+    only by doctrine, so the all-models numerator moved 3.5%-14.4% per week while the
+    Fable numerator moved 0%-5% (0% for the week this was measured in).
+    """
+    mag = "3.5-14.4%" if kind == "all" else "0-5%"
+    return f" -- WARNING: {STALE_CAP_NOTE} (this meter's numerator moved {mag}); {remedy}"
 
 # DERIVED figures, used only when there is no live sample AND no reading on file -- i.e.
 # on a machine with no desktop app, which is the only place the derived path runs at all.
@@ -63,6 +130,13 @@ WEEK_WD, WEEK_H, WEEK_MIN = 2, 15, 59          # Wednesday 15:59 PT
 # "this week ran without a clamp, so the cap is above it" -- an inference both figures
 # falsified, which is why neither is called a measurement here either. The live readout
 # never touches them; the cap it uses is this week's own rate.
+#
+# Both were also measured BEFORE COST_POLICY, so both read low against a numerator
+# counted the new way -- the all-models figure by 3.5%-14.4%, the Fable figure by 0%-5%
+# (the superseded duplication is sidechain-only, and Fable is main-thread only by
+# doctrine). resolve_cap discloses that via `_stale_note` rather than silently correcting
+# it, because a guessed multiplier on a measurement is not a measurement; the remedy is
+# `--calibrate` or a reading pair on this machine.
 FALLBACK = {"fable": 920.0, "all": 2363.0}
 
 PRICING = [
@@ -134,26 +208,36 @@ def week_bounds(close_label):
 
 # ---------------------------------------------------------------- incremental scan
 
+def _fresh_cache(week):
+    return {"week": week, "v": CACHE_V, "files": {}, "totals": {}, "seen": {}}
+
+
 def _load_cache(week):
-    """Cache is per-week; a new week discards the old one rather than migrating it."""
+    """Cache is per-week; a new week discards the old one rather than migrating it.
+
+    `seen` is a MAP now, not a set: a key's contribution has to be subtractable, or the
+    complete record arriving in a later scan than its partial cannot replace it. A v1
+    cache carries bare keys with no contribution, which is unrepairable in place -- the
+    version check sends it through one full rescan (~7s, once).
+    """
     try:
         c = json.loads(CACHE.read_text())
         # A non-dict is VALID json (`[1,2,3]`, `null`, `"x"`): json.loads succeeds and
         # the .get() below raised AttributeError, which was NOT caught -- so a
         # malformed cache crashed the hook with no self-repair. ValueError covers
         # JSONDecodeError and UnicodeDecodeError (invalid UTF-8) alike.
-        if isinstance(c, dict) and c.get("week") == week and isinstance(c.get("files"), dict):
-            c["seen"] = set(c.get("seen") or [])
+        if (isinstance(c, dict) and c.get("week") == week and c.get("v") == CACHE_V
+                and isinstance(c.get("files"), dict) and isinstance(c.get("seen"), dict)):
             c["totals"] = c["totals"] if isinstance(c.get("totals"), dict) else {}
             return c
     except (OSError, ValueError, TypeError, AttributeError):
         pass
-    return {"week": week, "files": {}, "totals": {}, "seen": set()}
+    return _fresh_cache(week)
 
 
 def _save_cache(c):
     out = dict(c)
-    out["seen"] = sorted(c["seen"])
+    out["v"] = CACHE_V
     tmp = CACHE.with_suffix(".tmp")
     try:
         # Create the parent: it does not exist on a freshly bootstrapped machine, and
@@ -190,6 +274,67 @@ def token_measures(u):
     raw = i + o + cr + c5 + c1
     ieq = i + cr * 0.1 + c5 * 1.25 + c1 * 2.0 + o * 5.0
     return raw, ieq
+
+
+# One cached `seen` entry: [cost, raw, ieq, ts_ms, tier, is_sub, applied].
+#   cost/ts_ms  -- the supersession comparator, and the reason ts is stored at all.
+#   raw/ieq     -- the parallel unit accumulators, which must be subtractable too.
+#   applied     -- 0 for a record whose timestamp falls OUTSIDE this week. The key is
+#                  still remembered, so a third record for it is compared and not
+#                  re-added, but nothing of it is in the week's totals.
+_C_COST, _C_RAW, _C_IEQ, _C_TS, _C_TIER, _C_SUB, _C_APPLIED = range(7)
+_BAD = object()      # a cached entry that cannot be trusted; see _prior()
+
+
+def _prior(seen, k):
+    """The cached contribution for `k`: the entry, None, or _BAD.
+
+    Validated at LOOKUP rather than on load. Untouched entries cannot hurt anything --
+    their cost is already in the totals -- and checking 20k of them on every hook
+    invocation buys nothing. An entry that IS touched and is malformed cannot be
+    subtracted, so the caller leaves the totals exactly as they are and skips the
+    record: keeping one stub's cost is a bounded error, where unpacking garbage is a
+    crash in a UserPromptSubmit hook and double-counting is an unbounded one.
+    """
+    v = seen.get(k)
+    if v is None:
+        return None
+    if (isinstance(v, list) and len(v) == 7 and isinstance(v[_C_TIER], str)
+            and all(isinstance(v[i], (int, float)) and not isinstance(v[i], bool)
+                    and math.isfinite(v[i])
+                    for i in (_C_COST, _C_RAW, _C_IEQ, _C_TS))):
+        return v
+    return _BAD
+
+
+def _apply(tot, bk, sign, entry):
+    """Add (sign=+1) or remove (sign=-1) one request's contribution to every bucket.
+
+    Every accumulator a record feeds lives here, so a supersession subtracts from
+    exactly the set the original addition fed -- including the tier and main/sub splits,
+    which are read by the Fable scope check and the subagent breach line, and the
+    per-minute index the live readout is measured from (see `window_spend`). Without
+    that last one, a superseded partial's cost stayed in whichever minute it first
+    landed in forever, while the totals it was subtracted from moved on -- so `bk`'s
+    sum would silently stop matching `tot`, and the live readout would keep counting
+    a stub the totals no longer do. The stored tier and timestamp are used rather than
+    the new record's: they agree today (same model, same message, same instant), and
+    trusting the stored ones is what makes the subtraction exact.
+    """
+    if not entry[_C_APPLIED]:
+        return
+    cost, rawt, ieq = entry[_C_COST], entry[_C_RAW], entry[_C_IEQ]
+    t, is_sub = entry[_C_TIER], entry[_C_SUB]
+    for key, v in (("all", cost), (t, cost), ("sub" if is_sub else "main", cost),
+                   ("all_raw", rawt), ("all_ieq", ieq),
+                   (f"{t}_raw", rawt), (f"{t}_ieq", ieq)):
+        tot[key] = tot.get(key, 0.0) + sign * v
+    if is_sub:
+        tot[f"sub_{t}"] = tot.get(f"sub_{t}", 0.0) + sign * cost
+    b = bk.setdefault(bucket_of(entry[_C_TS]), [0.0, 0.0])
+    b[0] += sign * cost
+    if t == "fable":
+        b[1] += sign * cost
 
 
 def _cache_stale(files):
@@ -308,6 +453,14 @@ def scan_detail(week, force=False):
     Dedup by (message id, requestId) is kept because one request can land in more than one
     transcript (resumes, sidechains); without it a resumed session double-counts.
 
+    Duplicates SUPERSEDE rather than being dropped (see COST_POLICY): the partial record
+    and the complete one share a key, and a hook firing between them sees only the first
+    -- so the complete one has to remove what the partial added and re-add itself at its
+    own timestamp. That is why `seen` maps each key to the contribution made for it
+    instead of merely remembering the key. The measured gap is small (2.1s median), so the
+    two usually land in one scan and often in one minute; it is the incremental path, not
+    the clock, that makes the subtraction necessary.
+
     The per-minute index exists because the live readout needs spend since an ARBITRARY
     instant (the meter's observed zero) and over the last hour and three hours, and the
     week totals cannot answer either. It is built here rather than by a second walk for
@@ -316,10 +469,9 @@ def scan_detail(week, force=False):
     offset. `_cum_events` still walks every transcript ever for `--calibrate`, and takes
     ~4 seconds doing it; that is acceptable once, and not on every fortieth prompt.
     """
-    fresh = {"week": week, "files": {}, "totals": {}, "seen": set()}
-    c = fresh if force else _load_cache(week)
+    c = _fresh_cache(week) if force else _load_cache(week)
     if not force and _cache_stale(c["files"]):
-        c = {"week": week, "files": {}, "totals": {}, "seen": set()}
+        c = _fresh_cache(week)
     tot = {k: float(v) for k, v in c.get("totals", {}).items()}
     bk = {} if force else _load_buckets(c)
     # The index and the totals are two accumulators over the same events, so they must
@@ -332,6 +484,7 @@ def scan_detail(week, force=False):
         c = {"week": week, "files": {}, "totals": {}, "seen": set()}
         tot, bk = {}, {}
     seen, files = c["seen"], c["files"]
+    close_ms = week_bounds(week)[1].timestamp() * 1000
     for path in ROOT.rglob("*.jsonl"):
         parts = path.parts
         if "memory" in parts or "tool-results" in parts:
@@ -389,31 +542,51 @@ def scan_detail(week, force=False):
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except ValueError:
                 continue
-            if week_close(dt) != week:
-                continue
             k = hashlib.md5(f"{m.get('id')}|{e.get('requestId')}".encode()).hexdigest()[:12]
-            if k in seen:
+            in_week = week_close(dt) == week
+            # Round once, so the value cached is byte-identical to the value applied:
+            # a later subtraction then cancels the addition exactly.
+            cost = round(cost_usd(u, model), 9)
+            ts_ms = dt.timestamp() * 1000
+            prev = _prior(seen, k)
+            if prev is _BAD:
                 continue
-            seen.add(k)
-            cost, t = cost_usd(u, model), tier(model)
-            raw, ieq = token_measures(u)
-            b = bk.setdefault(bucket_of(dt.timestamp() * 1000), [0.0, 0.0])
-            b[0] += cost
-            if t == "fable":
-                b[1] += cost
-            tot["all"] = tot.get("all", 0.0) + cost
-            tot[t] = tot.get(t, 0.0) + cost
-            tot["sub" if is_sub else "main"] = tot.get("sub" if is_sub else "main", 0.0) + cost
+            # The week test runs AFTER the key is known, because a key already counted has
+            # to be reachable by a superseding record even when that record falls outside
+            # the week: the meter bills at the COMPLETE record's minute, so a partial
+            # inside the week whose completion lands past the close belongs to the next
+            # week, not to this one.
+            #
+            # An out-of-week record is REMEMBERED near the close rather than skipped, at
+            # applied=0, and the reason is order-independence rather than economy. Skipping
+            # it leaves its key unclaimed, so an in-week partial met later in the same scan
+            # looks like a first sighting and is billed at the stub -- exactly the defect
+            # #256 removed, resurrected by scan order alone. Measured on the section-18
+            # fixture: partial-first gave $0.0000 and complete-first gave the stub's
+            # $0.2001 for the same two records. Max-wins is supposed to be the same answer
+            # from any order; this is where it was not.
+            #
+            # Bounded to STRADDLE_GRACE_MS of the close because remembering EVERY key in
+            # the corpus, rather than this week's, grows `seen` from ~21k entries to ~162k
+            # and the cache file with it. A record further from the close than that cannot
+            # be the partner of an in-week one: the measured partial-to-complete gap is
+            # 2.1s at the median and 661s at the widest on record, so an hour is ~5x the
+            # worst observed pair.
+            if prev is None and not in_week and abs(ts_ms - close_ms) > STRADDLE_GRACE_MS:
+                continue
+            if prev is not None and (cost, ts_ms) <= (prev[_C_COST], prev[_C_TS]):
+                continue                    # a duplicate that adds nothing; see COST_POLICY
+            rawt, ieq = token_measures(u)
             # Parallel accumulators in the two non-dollar candidate units, so a
             # meter reading can identify WHICH unit the meter counts (see
             # `--units`). Cheap to carry; impossible to reconstruct once
             # transcripts are pruned.
-            tot["all_raw"] = tot.get("all_raw", 0.0) + raw
-            tot["all_ieq"] = tot.get("all_ieq", 0.0) + ieq
-            tot[f"{t}_raw"] = tot.get(f"{t}_raw", 0.0) + raw
-            tot[f"{t}_ieq"] = tot.get(f"{t}_ieq", 0.0) + ieq
-            if is_sub:
-                tot[f"sub_{t}"] = tot.get(f"sub_{t}", 0.0) + cost
+            entry = [cost, rawt, round(ieq, 6), ts_ms, tier(model),
+                     1 if is_sub else 0, 1 if in_week else 0]
+            if prev is not None:
+                _apply(tot, bk, -1.0, prev)  # the partial's contribution comes back out
+            _apply(tot, bk, 1.0, entry)
+            seen[k] = entry
         # Outside the line loop: the offset must advance even when this chunk held no
         # parseable assistant records, or those bytes are re-read on every scan forever.
         files[key] = [off + consumed, mtime]
@@ -431,9 +604,12 @@ def read_readings():
     """Parse meter-readings.md.
 
     Columns are resolved by header name rather than position: the schema gained token
-    columns on 2026-09-02 and will likely grow again, and an index-based parser
-    silently mis-reads the old shape rather than failing loudly. Missing columns come
-    back as None, which the analysis treats as "not measured" rather than zero.
+    columns on 2026-09-02, a `policy` column on 2026-09-16, and will likely grow again;
+    an index-based parser silently mis-reads the old shape rather than failing loudly.
+    Missing columns come back as None, which the analysis treats as "not measured" rather
+    than zero -- and for `policy` that is exactly the right reading: a row written before
+    the stamp existed was measured under the first-occurrence dedup (#256), which is a
+    DIFFERENT counting policy and not an unknown one.
     """
     rows = []
     if not READINGS.exists():
@@ -459,7 +635,8 @@ def read_readings():
                 return float(v)
             except ValueError:
                 return None
-        rec = {"week": f[0], "at": get("read at"), "note": get("note")}
+        rec = {"week": f[0], "at": get("read at"), "note": get("note"),
+               "policy": get("policy") or None}
         for k, col in NUM.items():
             rec[k] = num(col)
         if rec["all_pct"] is None or rec["fable_pct"] is None:
@@ -732,9 +909,17 @@ def _cum_events(unit="$"):
     is what the anchor cache exists to avoid. The Fable column rides along because the
     desktop app's samples carry NO Fable meter, so the Fable side of an out-of-band
     reset can only be recovered by summing Fable spend up to the zero instant.
+
+    Supersession matters here for the same reason it matters in the week total -- the
+    VALUE, not the instant. Measured over 59,192 superseded pairs, the partial-to-complete
+    gap is 2.1s at the median and 8.7s at p90, so the two records almost always land in
+    the same minute and the series' x-axis barely moves; the widest pair on record is
+    661s, and the fixture in section 18 of the suite uses that tail deliberately rather
+    than as a typical case. What DID move is what the regression fitted and what the
+    anchor localised the meter's zero against: a cumulative curve built from stub costs.
     """
     idx = {"$": 0, "raw": 1, "ieq": 2}[unit]
-    ev, seen = [], set()
+    best = {}
     for path in ROOT.rglob("*.jsonl"):
         if "memory" in path.parts or "tool-results" in path.parts:
             continue
@@ -756,10 +941,10 @@ def _cum_events(unit="$"):
                 u, model = m.get("usage"), m.get("model") or ""
                 if not u or not model or model == "<synthetic>":
                     continue
-                k = (m.get("id"), e.get("requestId"))
-                if k in seen:
-                    continue
-                seen.add(k)
+                # The timestamp is parsed BEFORE the key is claimed. It used to be parsed
+                # after: a record with a missing or unparseable timestamp added its key
+                # to `seen` and then skipped, so a later GOOD duplicate of it was
+                # discarded as already-seen and the request vanished from the series.
                 ts = e.get("timestamp")
                 if not ts:
                     continue
@@ -767,12 +952,20 @@ def _cum_events(unit="$"):
                     d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 except ValueError:
                     continue
+                k = (m.get("id"), e.get("requestId"))
+                cost, t_ms = cost_usd(u, model), d.timestamp() * 1000
+                prior = best.get(k)
+                if prior is not None and (cost, t_ms) <= (prior[0], prior[1]):
+                    continue
                 rawt, ieq = token_measures(u)
-                v = (cost_usd(u, model), rawt, ieq)[idx]
-                ev.append((d.timestamp() * 1000, v, v if tier(model) == "fable" else 0.0))
-    if not ev:
+                v = (cost, rawt, ieq)[idx]
+                # (comparator cost, instant) first, so the tuple sorts and compares by
+                # the same rule whichever unit is being summed: the record that wins is
+                # the complete one in every unit, not a different one per unit.
+                best[k] = (cost, t_ms, v, v if tier(model) == "fable" else 0.0)
+    if not best:
         return [], [0.0], [0.0]
-    ev.sort()
+    ev = sorted((t_ms, v, vf) for _, t_ms, v, vf in best.values())
     times = [e[0] for e in ev]
     cum, cumf = [0.0], [0.0]
     for _, v, vf in ev:
@@ -926,11 +1119,18 @@ def meter_offset(week, force=False):
 def _cached_anchor(week, seg_start):
     """The offset is a CONSTANT once the reset is past -- it does not drift as spend
     accrues -- so it is computed once per period, not once per invocation. Only a new
-    reset or a new week invalidates it, which is what the key checks."""
+    reset, a new week, or a change in how spend is counted invalidates it, which is what
+    the key checks.
+
+    The policy stamp is part of the key because the offset is DOLLARS, subtracted from a
+    numerator counted under the same policy. An anchor cached under the first-occurrence
+    dedup is ~10% low and would have survived for the rest of the meter period, quietly
+    under-correcting a numerator that had just been fixed (#256)."""
     try:
         d = json.loads(CALIB.read_text())
         a = d.get("anchor") if isinstance(d, dict) else None
         if (isinstance(a, dict) and a.get("week") == week and a.get("seg") == seg_start
+                and a.get("policy") == COST_POLICY
                 and all(isinstance(a.get(k), (int, float)) and not isinstance(a.get(k), bool)
                         and math.isfinite(a[k]) for k in ("all", "fable"))):
             z = a.get("zero")
@@ -966,7 +1166,7 @@ def _merge_calib(update):
 
 def _save_anchor(week, seg_start, off, offf, zero_ms, note):
     _merge_calib({"anchor": {"week": week, "seg": seg_start, "all": off, "fable": offf,
-                             "zero": zero_ms, "note": note,
+                             "zero": zero_ms, "note": note, "policy": COST_POLICY,
                              "at": datetime.now(PT).isoformat(timespec="minutes")}})
 
 
@@ -1066,6 +1266,14 @@ def differential_caps(rows, unit="$"):
     than differenced into a negative cap. A delta below MIN_DELTA_PCT is dropped
     because both percentages are read by eye as integers: at a 5-point delta a +/-1
     point rounding is a 20% error in the cap, while at 40 points it is 2.5%.
+
+    Two more, of one shape: a pair is also dropped when the two readings were taken under
+    different NUMERATORS -- a cap-multiplier change between them (the meter's scale moved)
+    or a change in how spend is counted (the measure's scale moved, #256). Both slip past
+    the percentage guard because both leave the delta positive, and the counting-policy
+    case is the dangerous direction: the later measure absorbs the whole step while the
+    percentage does not, so the cap reads HIGH and a cap too high makes the pace check go
+    QUIET. Every drop is named in `notes` rather than silently omitted.
     """
     ak, fk = next((a, f) for u, a, f, _ in UNITS if u == unit)
     out, notes = {"all": [], "fable": []}, []
@@ -1092,6 +1300,17 @@ def differential_caps(rows, unit="$"):
                                  f"positive, so the percentage guard cannot catch this; "
                                  f"differencing across two zero points is what produced "
                                  f"$20,598 against a measured $2,363. Dropped")
+                    continue
+                if (a.get("policy") or None) != (b.get("policy") or None):
+                    notes.append(f"{wk} {meter}: {a['at']} -> {b['at']} SPANS a change in "
+                                 f"how spend is COUNTED "
+                                 f"({a.get('policy') or 'pre-#256 first-occurrence'} -> "
+                                 f"{b.get('policy') or 'pre-#256 first-occurrence'}). The "
+                                 f"later measure absorbs the whole step in the numerator "
+                                 f"while the percentage delta does not, so the implied cap "
+                                 f"reads HIGH -- and unlike the two guards above, a cap too "
+                                 f"high SILENCES the pace check instead of over-warning. "
+                                 f"The percentage guard cannot see this either. Dropped")
                     continue
                 why = ta and tb and multiplier_change_between(ta, tb)
                 if why:
@@ -1149,23 +1368,43 @@ def resolve_cap(kind, rows, use_cached=True):
             rng = (f", range ${lo:,.0f}-${hi:,.0f}"
                    if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else "")
             age = f", measured {c['at'][:16]}" if isinstance(c.get("at"), str) else ""
+            # A cached cap measured under the old first-occurrence dedup reads low --
+            # 2.0% to 12.9% per period as measured -- and the numerator divided into it no
+            # longer does, so the percentage reads HIGH by that much: a wrong VERDICT, not
+            # just a wrong dollar figure. It is disclosed rather than rejected because this
+            # is a MEASUREMENT with a date on it, and the file's rule for a number it
+            # cannot trust is to say so (see meter_offset) -- but "disclosed" has to mean
+            # disclosed WHERE THE PERCENTAGE IS READ, which is `fmt`, not `--caps`.
+            stale = ("" if c.get("policy") == COST_POLICY else
+                     _stale_note("all", "re-run --calibrate"))
             return (c["all"], f"regression over {c.get('periods', '?')} meter period(s) "
                               f"from the app's own 15-minute samples (R2 {c.get('r2', 0):.3f}"
-                              f"{rng}{age}) -- zero-point independent", True)
+                              f"{rng}{age}) -- zero-point independent{stale}", True)
+    # The reading-derived branches need the same disclosure as the cached one, and for
+    # kind == "fable" they are the ONLY branches -- the cached calibration is all-models
+    # only, so without this the Fable cap, which is the number the hook gates on, could
+    # never be reported as stale under any circumstances.
+    stale_rows = _stale_note(kind, "record a fresh reading") if any(
+        (r.get("policy") or None) != COST_POLICY for r in rows) else ""
     dcaps, _ = differential_caps(rows)
     if dcaps[kind]:
         v = sorted(dcaps[kind])
         med = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
-        return med, f"differential of {len(v)} reading pair(s) -- zero-point independent", True
+        return med, (f"differential of {len(v)} reading pair(s) -- zero-point "
+                     f"independent{stale_rows}"), True
     caps = implied_caps(rows)[kind]
     if caps:
         caps = sorted(caps)
         med = caps[len(caps) // 2] if len(caps) % 2 else (caps[len(caps) // 2 - 1] + caps[len(caps) // 2]) / 2
         return med, (f"median of {len(caps)} single reading(s) -- ABSOLUTE, assumes the "
-                     f"meter zeroed at the week open; wrong after an out-of-band reset"), True
-    return (FALLBACK[kind], "derived elsewhere from other weeks' statistics, not measured "
-            "on this machine and not this week's rate (record a reading pair to replace "
-            "it, or read the live meter)", False)
+                     f"meter zeroed at the week open; wrong after an out-of-band "
+                     f"reset{stale_rows}"), True
+    # FALLBACK is the most common path of all -- it is what a freshly bootstrapped machine
+    # uses -- and both of its figures were measured under the pre-#256 dedup, so it gets
+    # the disclosure too rather than being the one branch with none.
+    return (FALLBACK[kind], "measured elsewhere, not calibrated on this machine "
+            "(record a reading pair to replace it)"
+            + _stale_note(kind, "calibrate or record a reading pair here"), False)
 
 
 # ---------------------------------------------------------------- pace
@@ -1728,6 +1967,35 @@ MIN_PCT = 5.0   # below this, spend/(pct/100) amplifies rounding in the percenta
                 # into hundreds of dollars of implied cap -- record it, don't imply from it
 
 
+def _ensure_policy_column():
+    """Give an existing readings table a `policy` column -- HEADER ONLY.
+
+    A row appended with a twelfth field that the header does not name is unreadable: the
+    parser resolves by name, so the stamp would be written and never seen, and the straddle
+    guard in `differential_caps` would never fire. The header therefore has to move before
+    the first stamped row lands.
+
+    The rows already on file are NOT rewritten. An empty policy cell is exactly the true
+    statement about them -- measured under the first-occurrence dedup -- and read_readings
+    reads a short row's missing cell as None, which is what the guard compares. Annotating
+    the historical rows is a maintainer's call (#260), not a side effect of appending one.
+    """
+    if not READINGS.exists():
+        return
+    lines = READINGS.read_text().splitlines()
+    hdr_at = next((i for i, ln in enumerate(lines)
+                   if ln.startswith("|") and "week-close" in ln), None)
+    if hdr_at is None:
+        return
+    if "policy" in [x.strip() for x in lines[hdr_at].strip().strip("|").split("|")]:
+        return
+    lines[hdr_at] = lines[hdr_at].rstrip() + " policy |"
+    sep = hdr_at + 1
+    if sep < len(lines) and lines[sep].startswith("|") and set(lines[sep].strip()) <= set("-:| "):
+        lines[sep] = lines[sep].rstrip() + "---|"
+    READINGS.write_text("\n".join(lines) + "\n")
+
+
 def record(all_pct, fable_pct, note):
     """Write one meter reading, capturing spend at the same instant as the percentage.
 
@@ -1735,6 +2003,12 @@ def record(all_pct, fable_pct, note):
     implementation. A confirmation printed by zsh with its own arithmetic was reporting
     caps from readings that implied_caps() then correctly discarded -- a second derivation
     disagreeing with the first, which is the defect class this repo keeps re-learning.
+
+    The row carries COST_POLICY. This table is append-only and transcripts are pruned, so a
+    row's numerator can never be recomputed later: an unstamped row is permanently
+    unclassifiable, and a cap differenced across one old and one new row reads HIGH, which
+    is the direction that silences the pace check. Stamping at write time is one column;
+    reconstructing the policy afterwards is not possible at all.
     """
     for name, v in (("all-models", all_pct), ("fable", fable_pct)):
         if not (0.0 <= v <= 100.0):
@@ -1766,14 +2040,15 @@ def record(all_pct, fable_pct, note):
             "Several rows per week is better than one — each is an independent estimate,\n"
             "and two readings bracketing a stretch of known model mix are stronger still.\n\n"
             "| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok "
-            "| all_ieq | fable_ieq | note |\n"
-            "|---|---|---|---|---|---|---|---|---|---|---|\n")
+            "| all_ieq | fable_ieq | note | policy |\n"
+            "|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+    _ensure_policy_column()
     with open(READINGS, "a") as fh:
         fh.write(f"| {wk} | {at} | {all_pct:g}% | {fable_pct:g}% | "
                  f"{all_at:.2f} | {fable_at:.2f} | "
                  f"{tot.get('all_raw', 0):.0f} | {tot.get('fable_raw', 0):.0f} | "
                  f"{tot.get('all_ieq', 0):.0f} | {tot.get('fable_ieq', 0):.0f} | "
-                 f"{note.replace('|', ' ')} |\n")
+                 f"{note.replace('|', ' ')} | {COST_POLICY} |\n")
 
     try:
         (HIST / f"READING-DUE-{wk}").unlink()
@@ -1907,7 +2182,7 @@ def main():
             CALIB.parent.mkdir(parents=True, exist_ok=True)
             lo, hi = min(v), max(v)
             _merge_calib({"all": med, "periods": len(good), "r2": r2m,
-                          "lo": lo, "hi": hi,
+                          "lo": lo, "hi": hi, "policy": COST_POLICY,
                           "at": datetime.now().astimezone().isoformat(timespec="minutes")})
             print(f"\nall-models cap ${med:,.0f} (median of {len(good)} well-fit period(s), "
                   f"mean R2 {r2m:.3f})  — cached for the pace check")
