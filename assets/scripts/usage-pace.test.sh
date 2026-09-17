@@ -2737,14 +2737,15 @@ printf '%s' "$got" | grep -q 'COUNTED' \
 # order, and one order re-billed the stub).
 
 # (a) THE ONE-LINER AND THE HOOK. A cap measured under the old dedup reads LOW, so the
-#     percentage divided into it reads HIGH and can flip the verdict to NEAR CAP on a week
-#     that is not -- which is the whole argument for disclosing instead of rejecting. The
-#     marker therefore has to appear where the percentage appears. Numbers below: an honest
-#     cap of $2,551 against a cached $2,415 (both real, measured on this machine before and
-#     after #256), with spend at 86% of the honest cap -- 91% of the stale one, which trips
-#     near-cap.
+#     percentage divided into it reads HIGH -- which is the whole argument for disclosing
+#     instead of rejecting. The marker therefore has to appear where the percentage
+#     appears: `fmt`'s derived branch prints `all_cap_basis` inline, so whatever
+#     `resolve_cap` appends to that string is what reaches the line and, through `fmt(p)`
+#     inside the printed block, the hook too. (#255 retired the cached-median verdict --
+#     NEAR CAP/AHEAD OF PACE no longer exist -- so this pins the disclosure travelling
+#     through the live derived line, not a flipped verdict.)
 got=$(pymod '
-import tempfile
+import argparse, contextlib, io, tempfile
 d = pathlib.Path(tempfile.mkdtemp())
 up.CALIB = d/"k.json"; up.READINGS = d/"absent.md"; up.STATE = d/"s.json"
 def basis(extra):
@@ -2752,27 +2753,26 @@ def basis(extra):
     return up.resolve_cap("all", [])
 cap, b_old, _ = basis({})
 _,   b_new, _ = basis({"policy": up.COST_POLICY})
-spend = 0.86 * 2551.0
-mk = lambda b: {"fable":0.0,"all":spend,"cap":920.0,"cap_basis":"fb","all_cap":cap,
-                "all_cap_basis":b,"consumed":0.0,"all_consumed":spend/cap,"elapsed":0.93,
-                "days_left":0.5,"ahead_by":0.0,"all_ahead_by":0.0,"anchor_exact":True,
-                "anchor":"","projected":0.0,"calibrated":True,"sub_fable":0.0,
-                "week":"2026-09-16","now":"x"}
-line_old, line_new = up.fmt(mk(b_old), 0.15), up.fmt(mk(b_new), 0.15)
-up.pace = lambda: mk(b_old)
+# A minimal but complete "derived" p: no rate, and a landing that alone trips warning (b)
+# ("waste") so the hook actually prints -- hook() is silent unless warnings_for(p) is
+# non-empty, and fmt(p) is what it prints THROUGH.
+mk = lambda b: {"source":"derived","pct":100.0*0.86*cap/cap,"all_cap":cap,
+                "all_cap_basis":b,"spend":0.86*cap,"fable":0.0,"fable_hi":0.0,
+                "rate":None,"rate_reason":None,"pts_left":10.0,"hours_to_reset":5.0,
+                "burn_1h":0.0,"burn_3h":0.0,"landing":50.0,"anchor_exact":True,
+                "anchor":"","sub_fable":0.0,"week":"2026-09-16","now":"x"}
+line_old, line_new = up.fmt(mk(b_old)), up.fmt(mk(b_new))
+up.pace = lambda *a, **k: mk(b_old)
 up.last_model = lambda t: "claude-fable-5"
-import argparse, contextlib, io
 out = io.StringIO()
 sys.stdin = io.StringIO(up.json.dumps({"session_id":"s1","transcript_path":"/x"}))
 with contextlib.redirect_stdout(out):
-    up.hook(argparse.Namespace(every=1, margin=0.15))
+    up.hook(argparse.Namespace(every=1))
 hook_out = out.getvalue()
 print("ONELINE" if up.STALE_CAP_NOTE in line_old else "oneline-silent",
       "HOOK" if up.STALE_CAP_NOTE in hook_out else "hook-silent",
-      "NEARCAP" if "NEAR CAP" in line_old else "no-verdict-flip",
-      "HONEST-86" if round(100*spend/2551.0) == 86 and round(100*spend/cap) == 91 else "fixture-off",
       "QUIET-WHEN-STAMPED" if up.STALE_CAP_NOTE not in line_new else "always-warns")')
-[ "$got" = "ONELINE HOOK NEARCAP HONEST-86 QUIET-WHEN-STAMPED" ] \
+[ "$got" = "ONELINE HOOK QUIET-WHEN-STAMPED" ] \
   && ok "the stale-cap warning reaches the one-liner AND the hook, and goes quiet when stamped" \
   || bad "the stale-cap warning reaches the one-liner and the hook" "got=$(flat "$got")"
 
