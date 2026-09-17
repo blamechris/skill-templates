@@ -561,7 +561,7 @@ def scan_detail(week, force=False):
             # applied=0, and the reason is order-independence rather than economy. Skipping
             # it leaves its key unclaimed, so an in-week partial met later in the same scan
             # looks like a first sighting and is billed at the stub -- exactly the defect
-            # #256 removed, resurrected by scan order alone. Measured on the section-18
+            # #256 removed, resurrected by scan order alone. Measured on the section-20
             # fixture: partial-first gave $0.0000 and complete-first gave the stub's
             # $0.2001 for the same two records. Max-wins is supposed to be the same answer
             # from any order; this is where it was not.
@@ -925,7 +925,7 @@ def _cum_events(unit="$"):
     VALUE, not the instant. Measured over 59,192 superseded pairs, the partial-to-complete
     gap is 2.1s at the median and 8.7s at p90, so the two records almost always land in
     the same minute and the series' x-axis barely moves; the widest pair on record is
-    661s, and the fixture in section 18 of the suite uses that tail deliberately rather
+    661s, and the fixture in section 20 of the suite uses that tail deliberately rather
     than as a typical case. What DID move is what the regression fitted and what the
     anchor localised the meter's zero against: a cumulative curve built from stub costs.
     """

@@ -2728,8 +2728,8 @@ printf '%s' "$got" | grep -q 'COUNTED' \
   && ok "a timestamp-less record does not swallow its key from the record that has one" \
   || bad "a timestamp-less record does not swallow its key" "$(flat "$got")"
 
-# ------------- 19. THE DISCLOSURE HAS TO REACH THE LINE PEOPLE READ (#256 fix round)
-# Section 18 pinned the supersession itself. This section pins the three places the FIRST
+# ------------- 21. THE DISCLOSURE HAS TO REACH THE LINE PEOPLE READ (#256 fix round)
+# Section 20 pinned the supersession itself. This section pins the three places the FIRST
 # cut of it did not reach: the one-liner and the hook (the disclosure lived in `--caps`
 # alone), the append-only readings table (rows carried no policy stamp, so a cap
 # differenced across the change reads HIGH -- the direction that silences the check), and
@@ -2996,7 +2996,7 @@ printf '%s' "$got" | grep -q 'DERIVED WIRED MAGNITUDE QUIET-WHEN-STAMPED' \
 #     week warns about a cap no unstamped row touched -- and every machine with history has
 #     a pre-#256 row in the current week, so that is the ordinary case, not a corner. Both
 #     branches discard rows: the differential one drops the pair that spans the counting
-#     change (19(d)), the absolute one drops anything under MIN_PCT. A warning that fires
+#     change (21(d)), the absolute one drops anything under MIN_PCT. A warning that fires
 #     when the number is fine is the one people learn to read past, so it must key on
 #     provenance -- and must still fire when the contributing rows ARE unstamped.
 got=$(pymod '
@@ -3009,7 +3009,7 @@ r = lambda h, pct, at, pol: dict(base, at="2026-09-16T%02d:00" % h, all_pct=pct,
                                  all_at=at, policy=pol)
 P = up.COST_POLICY
 # DIFFERENTIAL: the surviving pair is the two stamped rows 40 points apart; the unstamped
-# row pairs only with a stamped one, so 19(d) drops that pair and it contributes nothing.
+# row pairs only with a stamped one, so 21(d) drops that pair and it contributes nothing.
 mixed = up.resolve_cap("all", [r(0, 20.0, 500.0, None), r(1, 40.0, 1200.0, P),
                                r(2, 80.0, 2400.0, P)])[1]
 # ...and the same shape with the contributing pair unstamped must still warn.
