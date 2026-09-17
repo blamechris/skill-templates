@@ -542,9 +542,15 @@ def _plan_raw():
     return sorted(out)
 
 
-def plan_samples():
-    """Sorted (epoch_ms, weekly_pct) from the desktop app, or [] when unavailable."""
-    return [(t, sd) for t, sd, _ in _plan_raw()]
+def plan_samples(samples=None):
+    """Sorted (epoch_ms, weekly_pct) from the desktop app, or [] when unavailable.
+
+    `samples`, when given, is the raw 3-tuple snapshot a caller already read via
+    `_plan_raw()` -- pass it through to reuse that read instead of hitting the file
+    again for the 2-tuple view this function returns.
+    """
+    raw = _plan_raw() if samples is None else samples
+    return [(t, sd) for t, sd, _ in raw]
 
 
 def live_sample(now_ms=None, samples=None):
@@ -781,15 +787,18 @@ def _cum_events(unit="$"):
     return times, cum, cumf
 
 
-def sampled_caps(unit="$"):
+def sampled_caps(unit="$", samples=None):
     """Implied all-models cap per meter period, by regressing spend on the meter %.
 
     The slope is dollars per percentage point, so slope x 100 is the cap. Fitting a LINE
     rather than dividing means the intercept absorbs the zero point -- which is the same
     property that makes a two-reading difference immune to a reset, generalised over
     every sample in the period. Returns [(label, cap, r2, n), ...], newest last.
+
+    `samples` is the plan_samples() view a caller already holds -- pass it through
+    rather than reading the file again for a second look at the same snapshot.
     """
-    samples = plan_samples()
+    samples = plan_samples() if samples is None else samples
     if not samples:
         return []
     times, cum, _ = _cum_events(unit)
@@ -816,8 +825,13 @@ ANCHOR_MIN_SAMPLES = 6   # below this the intercept is noise, not a measurement
 ANCHOR_MIN_SPAN = 10     # percentage points the period must cover, as for MIN_DELTA_PCT
 
 
-def meter_offset(week, force=False):
+def meter_offset(week, force=False, samples=None):
     """Week-anchored spend the meter has ALREADY forgotten, in dollars.
+
+    `samples` is the plan_samples() view a caller already holds (see `pace`, which reads
+    the sample file once and hands the same snapshot to every reader of it here and in
+    `resolve_cap`). When omitted this reads the file itself, for callers with no snapshot
+    of their own.
 
     The pace numerator was week-anchored and the cap describes a METER PERIOD. Those are
     the same window only while the meter zeroed at the week open. Anthropic reset the
@@ -851,7 +865,8 @@ def meter_offset(week, force=False):
     Returns (offset_all, offset_fable, zero_ms, note, exact).
     """
     open_ms = week_bounds(week)[0].timestamp() * 1000
-    samples = [x for x in plan_samples() if x[0] >= open_ms]
+    pool = plan_samples() if samples is None else samples
+    samples = [x for x in pool if x[0] >= open_ms]
     if not samples:
         return 0.0, 0.0, None, "", True
     segs = _segments(samples)
@@ -1043,7 +1058,7 @@ def reset_between(t0, t1, samples=None):
     return False
 
 
-def differential_caps(rows, unit="$"):
+def differential_caps(rows, unit="$", samples=None):
     """cap = delta-measure / (delta-pct/100), between two readings in one meter week.
 
     THIS IS THE ONLY METHOD THAT SURVIVES AN OUT-OF-BAND QUOTA RESET, and it is the
@@ -1069,7 +1084,10 @@ def differential_caps(rows, unit="$"):
     """
     ak, fk = next((a, f) for u, a, f, _ in UNITS if u == unit)
     out, notes = {"all": [], "fable": []}, []
-    samples = plan_samples()          # loaded once; [] when the app's history is absent
+    # loaded once; [] when the app's history is absent. `samples`, when given, is a
+    # snapshot a caller already read (see `pace` and `resolve_cap`) -- reuse it rather
+    # than reading the file again for what is the same comparison every time.
+    samples = plan_samples() if samples is None else samples
     if not samples and len(rows) > 1:
         notes.append("no meter samples on this machine, so a pair that STRADDLES a reset "
                      "cannot be detected -- only a pair whose percentage went down. Treat "
@@ -1124,7 +1142,7 @@ def spread(vals):
     return max(vals) / min(vals)
 
 
-def resolve_cap(kind, rows, use_cached=True):
+def resolve_cap(kind, rows, use_cached=True, samples=None):
     """Best available cap, and how much to trust it. For --caps and the derived path only.
 
     Differential first: it is immune to where the meter's zero sits, and after the
@@ -1137,6 +1155,11 @@ def resolve_cap(kind, rows, use_cached=True):
     "96% of cap | NEAR CAP" while the live meter read 79. It is still the right answer for
     the question --caps asks (what has the cap been?) and the wrong one for the question
     pacing asks (what is it THIS week?), which the live rate answers directly.
+
+    `samples` is a plan_samples() snapshot a caller already holds; it is passed straight
+    through to `differential_caps` so a caller resolving both "all" and "fable" -- `pace`'s
+    derived path does exactly this, once each -- reads the sample file once between them
+    rather than once per call.
     """
     if kind == "all" and use_cached:
         c = cached_calibration()
@@ -1152,7 +1175,7 @@ def resolve_cap(kind, rows, use_cached=True):
             return (c["all"], f"regression over {c.get('periods', '?')} meter period(s) "
                               f"from the app's own 15-minute samples (R2 {c.get('r2', 0):.3f}"
                               f"{rng}{age}) -- zero-point independent", True)
-    dcaps, _ = differential_caps(rows)
+    dcaps, _ = differential_caps(rows, samples=samples)
     if dcaps[kind]:
         v = sorted(dcaps[kind])
         med = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
@@ -1384,7 +1407,15 @@ def pace(now=None, force=False, prefer="live"):
             p[k] = v
             p[k + "_hi"] = hi[k]
     else:
-        off_all, off_fbl, zero_ms, anchor, anchor_exact = meter_offset(wk, force=force)
+        # DERIVED path: one more view of the SAME snapshot `raw` already holds, not
+        # another read. `meter_offset` and both `resolve_cap` calls below each used to
+        # call plan_samples() (and so _plan_raw()) on their own -- four reads of the
+        # sample file for one derived readout (#257), reachable whenever the live sample
+        # is rejected as pre-period, which is precisely the window right after a reset
+        # while the app is actively writing new samples.
+        psamples = plan_samples(raw)
+        off_all, off_fbl, zero_ms, anchor, anchor_exact = meter_offset(
+            wk, force=force, samples=psamples)
         elapsed = max(0.0, min(1.0, (now_ms / 1000 - _u(open_).timestamp()) / span))
         if zero_ms:
             zero_dt = datetime.fromtimestamp(zero_ms / 1000, PT)
@@ -1394,8 +1425,10 @@ def pace(now=None, force=False, prefer="live"):
                                        / max(1.0, _u(close).timestamp() - z)))
         all_ = max(0.0, tot.get("all", 0.0) - off_all)
         fable = max(0.0, tot.get("fable", 0.0) - off_fbl)
-        cap, basis, calibrated = resolve_cap("all", rows, use_cached=False)
-        fcap, fbasis, fcalibrated = resolve_cap("fable", rows, use_cached=False)
+        cap, basis, calibrated = resolve_cap(
+            "all", rows, use_cached=False, samples=psamples)
+        fcap, fbasis, fcalibrated = resolve_cap(
+            "fable", rows, use_cached=False, samples=psamples)
         pct = 100.0 * all_ / cap if cap else 0.0
         # No sample, so there is no sampling gap and no anchor reading: one instant, and
         # `pct_now` comes back equal to `pct`.
@@ -2008,7 +2041,10 @@ def main():
                   f"{cap_cell(r['all_pct'], r['all_at']):>11}"
                   f"{r['fable_pct']:6.0f}%{r['fable_at']:9,.0f}"
                   f"{cap_cell(r['fable_pct'], r['fable_at']):>11}")
-        dcaps, dnotes = differential_caps(rows)
+        # One snapshot, shared with the resolve_cap calls below -- same fix as #257's
+        # pace() path, same file, same functions.
+        caps_samples = plan_samples()
+        dcaps, dnotes = differential_caps(rows, samples=caps_samples)
         print()
         print("DIFFERENTIAL — cancels the meter's zero point, so an out-of-band reset")
         print("BEFORE the pair does not affect it. Conditions, stated because the guards")
@@ -2028,7 +2064,7 @@ def main():
             print(f"  note: {n}")
         print()
         for k in ("all", "fable"):
-            cap, basis, cal = resolve_cap(k, rows)
+            cap, basis, cal = resolve_cap(k, rows, samples=caps_samples)
             print(f"  {k:6s} cap ${cap:,.0f}  ({basis})")
         return 0
 
