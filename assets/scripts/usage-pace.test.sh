@@ -2973,9 +2973,13 @@ t0=max(open_ms+1000, now.timestamp()*1000-300*60000)
 HDR=("| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok "
      "| all_ieq | fable_ieq | note | policy |\n"
      "|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+# The reading is dated inside the week, a few hours after the open. Dating it at the
+# week-CLOSE (which `wk` is) puts it in the future and the line then reports a negative
+# age -- true to the data it was given, and not a world worth asserting against.
+read_at=(up.week_bounds(wk)[0]+up.timedelta(hours=3)).isoformat(timespec="minutes")
 def run(pol):
-    up.READINGS.write_text(HDR + "| %s | %sT00:14-07:00 | 79%% | 5%% | 2317.93 | 237.42 "
-                                 "| 1 | 1 | 1 | 1 | x | %s |\n" % (wk, wk, pol))
+    up.READINGS.write_text(HDR + "| %s | %s | 79%% | 5%% | 2317.93 | 237.42 "
+                                 "| 1 | 1 | 1 | 1 | x | %s |\n" % (wk, read_at, pol))
     p=up.pace(now=now, prefer="derived", force=True)
     return p, up.fmt(p)
 p_old, line_old = run("")
