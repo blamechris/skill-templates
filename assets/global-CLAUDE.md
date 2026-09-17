@@ -347,15 +347,40 @@ twice within a day, once for each meter.
 **What replaces it is a pace check, and its job is to make you look — never to
 stop you.** The failure it exists to prevent is exhausting the meter on Tuesday
 and being blocked until the next Wednesday; that is a pacing failure, not a
-spending one. So: while a session is on Fable, compare consumption against the
-fraction of the meter week elapsed, and when consumption outruns elapsed time,
-**surface the number and require an explicit acknowledgment to continue.**
-Acknowledging is always available and is not a failure — a heavy week that paces
-to 100% is the system working. **Ask the script, never a guess or a fresh scan**
-(it buckets by the same boundary)**:**
+spending one.
+
+**The percentage is READ, never computed.** The desktop app persists the real meter
+to `plan-usage-history.json` every time its UI polls `/usage`, and that file is the
+ground truth: `sd` is the seven-day all-models meter, `fh` the five-hour one. The
+check reports it verbatim with the age of the sample beside it, because a sample can
+be forty minutes old and its age is part of the reading. What it does NOT do any more
+is compare spend against the fraction of the week elapsed and grade the result
+against a cached cap — that arithmetic read "96% of cap | NEAR CAP" while the live
+meter read 79, and `NEAR CAP` is gone from every path. Being at 90% of a cap was
+never a problem; being locked out on Monday is.
+
+**The cap is this week's own rate**, spend since the meter's observed zero over the
+points it has moved, self-calibrating on every call. It is not a constant: clean
+weekly endpoint caps measured $2,505 / $2,374 / $2,417 / $2,536, and dividing this
+week's spend by another week's median is what produced the 96/79 split.
+
+**Every dollar figure the script prints is roughly 9% LOW until skill-templates#256
+lands**, and the reason is not arithmetic. Claude Code writes some assistant messages
+to the transcript **twice under one `requestId`** — a partial record first, the
+complete one minutes later — and the script's dedup key is `(message id, requestId)`,
+so it keeps the FIRST and discards the completed record. Measured 2026-09-16:
+first-occurrence $2,499 against complete-record $2,746 over 20,088 requests since the
+reset, 9,936 of them duplicated. The ratios cancel — $/pt, the headroom in points,
+the landing and the time to the wall divide one understated total by another and are
+first-order right — so pacing decisions are sound. The printed dollars are not, and a
+figure from this readout should not be copied into a reading, a benchmark row or a
+cap calibration as if it were the week's spend.
+
+**Ask the script, never a guess or a fresh scan** (it buckets by the same
+boundary)**:**
 
 ```bash
-python3 ~/.claude/scripts/usage-pace.py --oneline    # fable $N, % of cap, % of week elapsed
+python3 ~/.claude/scripts/usage-pace.py --oneline   # the live meter, $/pt, headroom, burn
 ```
 
 It answers the pacing question in one line and costs ~0.1s warm (an incremental
@@ -364,13 +389,22 @@ budget excuse for not looking. `usage-trend.py --week --oneline` still works and
 the same arithmetic, but rescans every transcript on every call — prefer the former.
 
 **A `UserPromptSubmit` hook runs this automatically** (`~/.claude/settings.json`):
-while a session is on Fable, every 40 turns, it compares consumption to elapsed time
-and prints a `<usage-pace>` block only when consumption is more than 15 points ahead
-— or past 90% of cap. It speaks once per verdict, escalates if the situation worsens,
-and is silent for every non-Fable session. It cannot refuse anything.
+while a session is on Fable, every 40 turns, it prints a `<usage-pace>` block for
+**exactly two conditions**, both about the SHAPE of the week and neither about its
+size — ① at this burn the wall arrives before half the remaining week is gone, so the
+rest of the week would be lost; ② the week lands under 90% with less than a day to
+go, so quota the reset destroys will expire unspent. It says nothing about being
+ahead of pace, nothing about a cap, and nothing about what 100% does — lockout has
+never actually been observed on this account, so the warnings name the wall's
+arrival time and stop there. It speaks once per verdict, goes quiet on an
+acknowledgment, speaks again if the verdict changes, is silent for every non-Fable
+session, and cannot refuse anything. `--margin` is accepted and ignored.
 
-Until a real meter reading exists, it paces against computed spend and the
-measured fallback rather than an inferred floor, and says so in its own output. **A second thing is unverified and worth stating plainly: nobody
+The derived arithmetic survives for one machine: one with no desktop app and so no
+sample file, where the line says `derived — no live sample` and names the statistic
+it used instead. A sample from before the current meter period is refused in the same
+way rather than reported — after a Wednesday reset the newest one on file is still the
+old week's ~95%, and reading it as current put the wall minutes away. **A second thing is unverified and worth stating plainly: nobody
 has established what the meter counts.** Every cap figure in this system is quoted in
 dollars because that is what the first calibration assumed, not because it was tested.
 Three units fit the evidence — list-price dollars, raw tokens (cache reads are ~97% of

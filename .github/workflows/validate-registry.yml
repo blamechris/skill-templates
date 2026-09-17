@@ -453,6 +453,25 @@ jobs:
         # fast path that would make it silently blind to a writer spacing change;
         # --units reports a tie as a tie instead of naming a unit that merely tied;
         # and the reading parser still tolerates the pre-token schema.
+        #
+        # Since the live readout landed it also pins the thing the whole script is for:
+        # the percentage is READ from the desktop app's sample file and never computed.
+        # The fixture builds that file under a fake HOME — which works on this runner
+        # precisely because the path is resolved relative to HOME — then asserts the
+        # printed sd, $/pt and remaining dollars against arithmetic done outside the
+        # script, that halving the fixture's sd moves the line while the transcripts do
+        # not, that a 48-minute-old sample is flagged stale and a 5-minute-old one is
+        # not, that NEAR CAP appears nowhere, and that with no sample file at all the
+        # line says "derived" instead of presenting a computed number as the meter.
+        #
+        # "Outside the script" is literal: the fixture writes out the per-million prices
+        # and the minute-bucket rule itself rather than calling cost_usd and bucket_of, so
+        # a mispriced tier fails HERE and not only in the machine-only comparison against
+        # usage-trend.py, which this runner skips. It also pins a sample from before the
+        # meter period being refused rather than reported, an anchor the app saw late being
+        # differenced rather than divided, and every figure the readout prints -- the
+        # landing, the need-per-hour and the hours-to-wall that warning (a) is built from
+        # were each asserted by nothing while a doubling mutation kept the suite green.
         run: ./assets/scripts/usage-pace.test.sh
 
       - name: fleet-check regression tests
