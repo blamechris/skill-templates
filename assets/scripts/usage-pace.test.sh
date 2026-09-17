@@ -2936,5 +2936,123 @@ printf '%s' "$got" | grep -q 'BOUNDED APPLIED-0' \
   && ok "out-of-week keys are remembered only near the close, and contribute nothing" \
   || bad "out-of-week keys are remembered only near the close" "$(flat "$got")"
 
+# (g) ...AND THE PERCENTAGE'S OWN CALL PATH HAS TO CARRY IT. (a) proves `fmt` prints
+#     whatever `all_cap_basis` holds, but it hands `fmt` a dict built by hand -- so the one
+#     wire that actually DELIVERS the disclosure, `pace` putting `resolve_cap`'s basis into
+#     that key, was asserted by nothing. Measured: blanking `"all_cap_basis": basis` to `""`
+#     in `pace`'s derived branch left all 155 tests green while `--oneline` reverted to no
+#     disclosure at all. This drives ONE case the whole way -- a fixture transcript tree
+#     under ROOT, a readings table whose single in-week row is unstamped, no sample file so
+#     the derived branch runs -- and asserts the sentence in the string `fmt` returns.
+#
+#     Note which cap this exercises, because it is not the cached one: #255 made the pacing
+#     path pass `use_cached=False`, so the calibration median never reaches `--oneline` and
+#     its disclosure is a `--caps` disclosure only. On the line people actually read, the
+#     cap comes from a reading, a pair, or FALLBACK -- which is what this drives.
+got=$("$PY" - "$SUT" "$TMP" <<'PY_19G' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+d=pathlib.Path(sys.argv[2])/"s19g"; shutil.rmtree(d, ignore_errors=True)
+root=d/"proj"; root.mkdir(parents=True)
+up.ROOT=root; up.HIST=d; up.CACHE=d/"c.json"; up.CALIB=d/"k.json"
+up.READINGS=d/"r.md"; up.PLAN_SAMPLES=d/"absent.json"
+now=up.datetime.now().astimezone(); wk=up.week_close(now)
+open_ms=up.week_bounds(wk)[0].timestamp()*1000
+U={"input_tokens":4,"cache_read_input_tokens":400000,"output_tokens":80000}
+# Enough requests that the derived percentage is a real figure rather than 0%: the line
+# under test is the one a machine with no desktop app prints mid-week.
+t0=max(open_ms+1000, now.timestamp()*1000-300*60000)
+(root/"t.jsonl").write_text("\n".join(
+    up.json.dumps({"type":"assistant","timestamp":
+        up.datetime.fromtimestamp((t0+i*60000)/1000, up.timezone.utc)
+          .isoformat().replace("+00:00","Z"),
+        "requestId":"r%d"%i,
+        "message":{"id":"m%d"%i,"model":"claude-opus-5","usage":U}},
+        separators=(",",":")) for i in range(300))+"\n")
+HDR=("| week-close | read at | all% | fable% | all$ | fable$ | all_tok | fable_tok "
+     "| all_ieq | fable_ieq | note | policy |\n"
+     "|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+def run(pol):
+    up.READINGS.write_text(HDR + "| %s | %sT00:14-07:00 | 79%% | 5%% | 2317.93 | 237.42 "
+                                 "| 1 | 1 | 1 | 1 | x | %s |\n" % (wk, wk, pol))
+    p=up.pace(now=now, prefer="derived", force=True)
+    return p, up.fmt(p)
+p_old, line_old = run("")
+p_new, line_new = run(up.COST_POLICY)
+print("source=%s pct=%.0f cap=%.0f" % (p_old["source"], p_old["pct"], p_old["all_cap"]),
+      "DERIVED" if p_old["source"]=="derived" else "NOT-DERIVED",
+      "WIRED" if up.STALE_CAP_NOTE in line_old else "wire-silent",
+      "MAGNITUDE" if "3.5-14.4%" in line_old and "record a fresh reading" in line_old
+      else "bare-sentence",
+      "QUIET-WHEN-STAMPED" if up.STALE_CAP_NOTE not in line_new else "always-warns")
+PY_19G
+)
+printf '%s' "$got" | grep -q 'DERIVED WIRED MAGNITUDE QUIET-WHEN-STAMPED' \
+  && ok "pace() carries the stale-cap basis into the line fmt() returns, magnitude and remedy included" \
+  || bad "pace() carries the stale-cap basis all the way into fmt()'s line" "$(flat "$got")"
+
+
+# (k) THE PER-MINUTE INDEX HAS TO MOVE TOO, and it was the one half of "billed at the
+#     complete record's minute" that nothing asserted. `tot` is a week total, so a two-
+#     second shift inside it is invisible; `bk` is the minute-resolution index the LIVE
+#     readout is built from -- `window_spend` reads it for burn_1h, burn_3h and the
+#     spend-at-sample split -- so if a superseded partial's cost stays in the minute it
+#     first landed in, `bk` stops summing to `tot` and the readout keeps counting a stub
+#     the totals no longer do.
+#
+#     Found by re-measuring this PR's own mutation table at head: stamping the entry with
+#     the PREDECESSOR's instant left all 159 cases green. The reason it hid is the measured
+#     partial-to-complete gap -- 2.1s at the median -- which lands both records in the same
+#     minute for almost every real pair, so the fixture has to straddle a minute boundary
+#     deliberately. Both scan orders, and an INCREMENTAL pair (the halves met in separate
+#     passes) because that is the case where the cost is already sitting in the wrong
+#     bucket and has to be taken back out of it.
+got=$("$PY" - "$SUT" "$FIX" <<'PY_19K' 2>&1
+import importlib.util, pathlib, shutil, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
+base=fix/"k19"; shutil.rmtree(base, ignore_errors=True); base.mkdir(parents=True)
+# :59.000 and two seconds later -- one real-world gap, two different minutes.
+T=1788000000000
+t_p=(T//60000)*60000 + 59_000
+t_c=t_p + 2_000
+WK=up.week_close(up.datetime.fromtimestamp(t_p/1000, up.timezone.utc))
+m_p, m_c = up.bucket_of(t_p), up.bucket_of(t_c)
+def cell(bk, m):
+    return (bk.get(m) or [0.0, 0.0])[0]
+res={}
+for label in ("pf", "cf", "incr"):
+    root=base/label; root.mkdir(parents=True)
+    up.ROOT=root; up.HIST=base; up.CACHE=base/(label+".json")
+    f=root/"t.jsonl"
+    if label == "incr":
+        f.write_text(rec(t_p, PARTIAL)+"\n")
+        up.scan_detail(WK, force=True)              # the stub is billed to m_p here
+        f.write_text(rec(t_p, PARTIAL)+"\n"+rec(t_c, COMPLETE)+"\n")
+        tot, bk = up.scan_detail(WK)                # ...and must be moved out of it
+    else:
+        lines=[rec(t_p, PARTIAL), rec(t_c, COMPLETE)]
+        if label == "cf":
+            lines.reverse()
+        f.write_text("\n".join(lines)+"\n")
+        tot, bk = up.scan_detail(WK, force=True)
+    res[label]=(cell(bk, m_p), cell(bk, m_c), tot.get("all", 0.0), sum(
+        v[0] for v in bk.values()))
+print("m_p!=m_c=%s" % (m_p != m_c),
+      " ".join("%s=(%.6f,%.6f)" % (k, v[0], v[1]) for k, v in res.items()),
+      "A=%.6f C=%.6f" % (A, C),
+      "COMPLETE-MINUTE" if all(abs(v[0]) < 1e-12 and abs(v[1]-C) < 1e-12
+                               for v in res.values()) else "WRONG-MINUTE",
+      "BK-SUMS-TO-TOT" if all(abs(v[3]-v[2]) < 1e-12 for v in res.values())
+      else "BK-DIVERGED",
+      "ORDER-FREE" if res["pf"]==res["cf"]==res["incr"] else "ORDER-DEPENDENT")
+PY_19K
+)
+printf '%s' "$got" | grep -q 'COMPLETE-MINUTE BK-SUMS-TO-TOT ORDER-FREE' \
+  && ok "the per-minute index bills the complete record's minute and leaves the partial's empty" \
+  || bad "the per-minute index bills the complete record's minute" "$(flat "$got")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
