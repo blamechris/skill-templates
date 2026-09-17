@@ -650,11 +650,20 @@ UNITS = [("$", "all_at", "fable_at", "${:,.0f}"),
          ("input-eq tokens", "all_ieq", "fable_ieq", "{:,.0f}")]
 
 
-def implied_caps(rows, unit="$"):
+def implied_caps(rows, unit="$", policies=None):
     """cap = measure_at_reading / (meter% / 100), per meter, in one candidate unit.
 
     A reading below MIN_PCT is dropped: dividing a small measure by a small percentage
-    amplifies the percentage's own rounding into a wildly wrong cap."""
+    amplifies the percentage's own rounding into a wildly wrong cap.
+
+    `policies` is an optional caller-supplied dict this fills in with the `policy` value
+    of each row that actually CONTRIBUTED a cap, per meter. It exists so `resolve_cap` can
+    disclose staleness against the rows its answer came from instead of against every row
+    in the table -- see the note there. An out-param rather than a third return value
+    because every caller unpacks these two functions positionally, and rather than a
+    recomputed predicate in `resolve_cap` because a second copy of "which rows count" is
+    the drift this file keeps paying for.
+    """
     ak, fk = next((a, f) for u, a, f, _ in UNITS if u == unit)
     out = {"all": [], "fable": []}
     for r in rows:
@@ -662,6 +671,8 @@ def implied_caps(rows, unit="$"):
                                ("fable", r["fable_pct"], r.get(fk))):
             if at is not None and pct is not None and pct >= MIN_PCT and at > 0:
                 out[meter].append(100.0 * at / pct)
+                if policies is not None:
+                    policies.setdefault(meter, []).append(r.get("policy") or None)
     return out
 
 
@@ -1243,7 +1254,7 @@ def reset_between(t0, t1, samples=None):
     return False
 
 
-def differential_caps(rows, unit="$"):
+def differential_caps(rows, unit="$", policies=None):
     """cap = delta-measure / (delta-pct/100), between two readings in one meter week.
 
     THIS IS THE ONLY METHOD THAT SURVIVES AN OUT-OF-BAND QUOTA RESET, and it is the
@@ -1331,6 +1342,11 @@ def differential_caps(rows, unit="$"):
                                  f"where integer rounding dominates; dropped")
                     continue
                 out[meter].append(100.0 * dm / dp)
+                # Provenance for `resolve_cap`'s staleness disclosure. The policy guard
+                # above already dropped every pair whose two rows disagree, so a surviving
+                # pair has ONE policy and `a`'s is it.
+                if policies is not None:
+                    policies.setdefault(meter, []).append(a.get("policy") or None)
     return out, notes
 
 
@@ -1384,21 +1400,37 @@ def resolve_cap(kind, rows, use_cached=True):
     # kind == "fable" they are the ONLY branches -- the cached calibration is all-models
     # only, so without this the Fable cap, which is the number the hook gates on, could
     # never be reported as stale under any circumstances.
-    stale_rows = _stale_note(kind, "record a fresh reading") if any(
-        (r.get("policy") or None) != COST_POLICY for r in rows) else ""
-    dcaps, _ = differential_caps(rows)
+    #
+    # Scoped to the rows the ANSWER came from, not to `rows`. The two branches consume
+    # different subsets and each discards some of what it is given: the differential branch
+    # drops a pair that straddles a reset, a cap change, or the counting change itself,
+    # and the absolute branch drops every row under MIN_PCT or with no spend. Testing all
+    # of `rows` therefore warned about a cap that no unstamped row touched -- two stamped
+    # readings differencing cleanly still printed the warning because one pre-#256 row sat
+    # in the same week, which is the week every machine with history is in. Over-warning
+    # is the safe direction and is still the wrong answer: a disclosure that fires when
+    # the number is fine is the one people learn to read past.
+    #
+    # `policies` comes back FROM the two helpers rather than being recomputed here -- the
+    # predicates are theirs, and a second copy of them in the caller is this file's
+    # most-repeated defect.
+    stale = lambda pols: (_stale_note(kind, "record a fresh reading")
+                          if any(p != COST_POLICY for p in pols) else "")
+    dpol = {}
+    dcaps, _ = differential_caps(rows, policies=dpol)
     if dcaps[kind]:
         v = sorted(dcaps[kind])
         med = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
         return med, (f"differential of {len(v)} reading pair(s) -- zero-point "
-                     f"independent{stale_rows}"), True
-    caps = implied_caps(rows)[kind]
+                     f"independent{stale(dpol.get(kind, []))}"), True
+    ipol = {}
+    caps = implied_caps(rows, policies=ipol)[kind]
     if caps:
         caps = sorted(caps)
         med = caps[len(caps) // 2] if len(caps) % 2 else (caps[len(caps) // 2 - 1] + caps[len(caps) // 2]) / 2
         return med, (f"median of {len(caps)} single reading(s) -- ABSOLUTE, assumes the "
                      f"meter zeroed at the week open; wrong after an out-of-band "
-                     f"reset{stale_rows}"), True
+                     f"reset{stale(ipol.get(kind, []))}"), True
     # FALLBACK is the most common path of all -- it is what a freshly bootstrapped machine
     # uses -- and both of its figures were measured under the pre-#256 dedup, so it gets
     # the disclosure too rather than being the one branch with none.
@@ -1993,7 +2025,22 @@ def _ensure_policy_column():
     sep = hdr_at + 1
     if sep < len(lines) and lines[sep].startswith("|") and set(lines[sep].strip()) <= set("-:| "):
         lines[sep] = lines[sep].rstrip() + "---|"
-    READINGS.write_text("\n".join(lines) + "\n")
+    # tmp + replace, the pattern `_save_cache` already uses, and here for a stronger
+    # reason than a cache file has. This is the only full-file REWRITE in the script, and
+    # its target is an append-only record whose rows can never be recomputed: the
+    # transcripts each row's numerator was measured from get pruned, so a write
+    # interrupted halfway does not cost one number, it costs the whole calibration
+    # history. `replace` is atomic within the directory, so the file on disk is either
+    # the old table or the new one and never a truncated prefix of either.
+    #
+    # Unlike `_save_cache` the failure is NOT swallowed. A cache that fails to save costs
+    # a rescan; a header that fails to move means `record` appends a twelfth field under
+    # an eleven-column header, which `read_readings` resolves by name and therefore never
+    # reads -- a stamp that is written and silently lost is exactly what this column
+    # exists to prevent.
+    tmp = READINGS.with_suffix(READINGS.suffix + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    tmp.replace(READINGS)
 
 
 def record(all_pct, fable_pct, note):
@@ -2267,8 +2314,17 @@ def main():
         if not rows:
             print("no meter readings recorded — every cap below is derived from other "
                   "weeks' statistics, not measured here:")
-            for k, v in FALLBACK.items():
-                print(f"  {k:6s} ${v:,.0f}")
+            # Through `resolve_cap`, not straight out of FALLBACK. The numbers are the same
+            # ones (no rows means no reading branch can fire, so this is the FALLBACK
+            # branch either way), but printing the dict directly was the one disclosure
+            # surface in the file that carried NOTHING -- not the staleness sentence, not
+            # the per-meter magnitude, not the remedy -- on the only machine where FALLBACK
+            # is what gets used. A freshly bootstrapped machine running `--caps` is exactly
+            # the reader who needs to be told the figure was measured under a superseded
+            # counting policy and how to replace it.
+            for k in ("fable", "all"):
+                cap, basis, _ = resolve_cap(k, rows, use_cached=False)
+                print(f"  {k:6s} ${cap:,.0f}  ({basis})")
             return 0
         caps = implied_caps(rows)
         def cap_cell(pct, at_):

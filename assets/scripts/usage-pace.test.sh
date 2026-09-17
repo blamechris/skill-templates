@@ -2992,6 +2992,104 @@ printf '%s' "$got" | grep -q 'DERIVED WIRED MAGNITUDE QUIET-WHEN-STAMPED' \
   && ok "pace() carries the stale-cap basis into the line fmt() returns, magnitude and remedy included" \
   || bad "pace() carries the stale-cap basis all the way into fmt()'s line" "$(flat "$got")"
 
+# (h) THE DISCLOSURE IS SCOPED TO THE ROWS THE ANSWER CAME FROM. Testing every row in the
+#     week warns about a cap no unstamped row touched -- and every machine with history has
+#     a pre-#256 row in the current week, so that is the ordinary case, not a corner. Both
+#     branches discard rows: the differential one drops the pair that spans the counting
+#     change (19(d)), the absolute one drops anything under MIN_PCT. A warning that fires
+#     when the number is fine is the one people learn to read past, so it must key on
+#     provenance -- and must still fire when the contributing rows ARE unstamped.
+got=$(pymod '
+import tempfile
+d = pathlib.Path(tempfile.mkdtemp())
+up.CALIB = d/"absent.json"; up.READINGS = d/"absent.md"; up.PLAN_SAMPLES = d/"absent.json"
+base = {"week":"2026-09-16","note":"","all_raw":None,"fable_raw":None,
+        "all_ieq":None,"fable_ieq":None,"fable_pct":5.0,"fable_at":237.42}
+r = lambda h, pct, at, pol: dict(base, at="2026-09-16T%02d:00" % h, all_pct=pct,
+                                 all_at=at, policy=pol)
+P = up.COST_POLICY
+# DIFFERENTIAL: the surviving pair is the two stamped rows 40 points apart; the unstamped
+# row pairs only with a stamped one, so 19(d) drops that pair and it contributes nothing.
+mixed = up.resolve_cap("all", [r(0, 20.0, 500.0, None), r(1, 40.0, 1200.0, P),
+                               r(2, 80.0, 2400.0, P)])[1]
+# ...and the same shape with the contributing pair unstamped must still warn.
+dirty = up.resolve_cap("all", [r(0, 20.0, 500.0, None), r(1, 40.0, 1200.0, None),
+                               r(2, 80.0, 2400.0, None)])[1]
+# ABSOLUTE: no usable pair (the only pair spans the change), so the cap is the median of
+# the single readings -- and the unstamped one is under MIN_PCT, so it implies nothing.
+absol = up.resolve_cap("all", [r(0, 2.0, 40.0, None), r(1, 79.0, 2317.93, P)])[1]
+print("DIFF-QUIET" if up.STALE_CAP_NOTE not in mixed else "diff-overwarns",
+      "DIFF-FIRES" if up.STALE_CAP_NOTE in dirty else "diff-never-warns",
+      "ABS-QUIET" if up.STALE_CAP_NOTE not in absol else "abs-overwarns",
+      "differential" if "differential" in mixed else "not-differential",
+      "median" if "single reading" in absol else "not-median")')
+[ "$got" = "DIFF-QUIET DIFF-FIRES ABS-QUIET differential median" ] \
+  && ok "the stale-cap note keys on the rows the cap came from, not on every row in the week" \
+  || bad "the stale-cap note keys on the rows the cap came from" "got=$(flat "$got")"
+
+# (i) THE HEADER MIGRATION IS ATOMIC. `_ensure_policy_column` is the only full-file REWRITE
+#     in the script, and its target is an append-only record whose rows can never be
+#     recomputed -- the transcripts each numerator was measured from get pruned. A write
+#     interrupted halfway does not cost one number, it costs the whole calibration history.
+#     So: tmp + replace, the pattern `_save_cache` already uses. Asserted by breaking
+#     `replace`: the table on disk must still be the ORIGINAL one, the new content must be
+#     sitting in the sibling tmp file, and the failure must PROPAGATE -- swallowing it (what
+#     `_save_cache` does, correctly, for a cache) would let `record` append a twelfth field
+#     under an eleven-column header, which `read_readings` resolves by name and never reads.
+got=$(pymod '
+import tempfile
+d = pathlib.Path(tempfile.mkdtemp())
+up.READINGS = d/"meter-readings.md"
+ORIG = ("| week-close | read at | all% | fable% | all$ | fable$ | note |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| 2026-09-09 | 2026-09-09T00:14-07:00 | 79% | 5% | 2317.93 | 237.42 | keep |\n")
+up.READINGS.write_text(ORIG)
+real = pathlib.Path.replace
+def boom(self, target):
+    raise OSError("simulated crash between write and rename")
+pathlib.Path.replace = boom
+try:
+    up._ensure_policy_column()
+    raised = False
+except OSError:
+    raised = True
+finally:
+    pathlib.Path.replace = real
+tmps = sorted(p.name for p in d.iterdir() if p.name != "meter-readings.md")
+staged = [p for p in d.iterdir() if p.name.endswith(".tmp")]
+print("RAISED" if raised else "swallowed",
+      "ORIGINAL-INTACT" if up.READINGS.read_text() == ORIG else "TARGET-CLOBBERED",
+      "STAGED" if staged and "policy" in staged[0].read_text().splitlines()[0]
+      else "no-tmp(%s)" % tmps)')
+[ "$got" = "RAISED ORIGINAL-INTACT STAGED" ] \
+  && ok "the readings-table migration stages to a tmp file and never half-writes the record" \
+  || bad "the readings-table migration is atomic" "got=$(flat "$got")"
+
+# (j) THE ONE SURFACE THAT DISCLOSED NOTHING. `--caps` short-circuits when there are no
+#     readings at all -- the state of a freshly bootstrapped machine, which is the ONLY
+#     state in which FALLBACK is what gets used -- and it printed the two figures straight
+#     out of the dict: no sentence, no magnitude, no remedy. That reader is precisely the
+#     one who has to be told the number was measured under a superseded counting policy and
+#     how to replace it. The figures themselves must not move: with no rows, no reading
+#     branch can fire, so this is the FALLBACK branch either way.
+got=$(pymod '
+import contextlib, io, tempfile
+d = pathlib.Path(tempfile.mkdtemp())
+up.READINGS = d/"absent.md"; up.CALIB = d/"absent.json"; up.PLAN_SAMPLES = d/"absent.json"
+out = io.StringIO()
+sys.argv = ["usage-pace.py", "--caps"]
+with contextlib.redirect_stdout(out):
+    rc = up.main()
+o = out.getvalue()
+print("rc=%d" % rc,
+      "DISCLOSED" if up.STALE_CAP_NOTE in o else "silent",
+      "BOTH-MAGNITUDES" if "0-5%" in o and "3.5-14.4%" in o else "one-magnitude",
+      "REMEDY" if "record a reading pair here" in o else "no-remedy",
+      "FIGURES" if ("$%s" % format(up.FALLBACK["all"], ",.0f")) in o
+      and ("$%s" % format(up.FALLBACK["fable"], ",.0f")) in o else "figures-moved")')
+[ "$got" = "rc=0 DISCLOSED BOTH-MAGNITUDES REMEDY FIGURES" ] \
+  && ok "--caps with no readings discloses the FALLBACK policy instead of printing bare figures" \
+  || bad "--caps with no readings discloses the FALLBACK policy" "got=$(flat "$got")"
 
 # (k) THE PER-MINUTE INDEX HAS TO MOVE TOO, and it was the one half of "billed at the
 #     complete record's minute" that nothing asserted. `tot` is a week total, so a two-
