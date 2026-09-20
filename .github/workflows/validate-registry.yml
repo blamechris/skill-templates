@@ -564,17 +564,36 @@ jobs:
         # step like every other asset script.
         #
         # What this pins: all four grammar forms parse (`#NNN`, `#NNN (<url>)`,
-        # `session <id>`, `none`); a line that starts with the exact case-sensitive
-        # `Filed from:` prefix but fails the grammar is MALFORMED, while a line in
-        # the wrong case or not anchored at line-start matches neither regex and is
-        # MISSING instead — those are different findings with different fixes, and
-        # collapsing them would make `check`'s reason column lie; `check` flags a
-        # missing and a malformed body with the right reason, passes a clean set,
-        # and exits 0/1/2 (2 — a `gh` failure, or an unresolvable repo — is never
-        # silently read as "clean", the same discipline `usage-benchmark-row.py`'s
-        # `_gh_json` follows); `--all` genuinely drops `--label from-review` (the
-        # fake `gh` logs its own argv so the assertion is on what was ASKED, not
-        # just on what was printed); and `chain` walks a three-link fixture in both
-        # directions (parents by the line, children by a confirmed search), stops
-        # at a bounded depth, and terminates rather than hanging on a mutual cycle.
+        # `session <id>`, `none`), surviving CRLF line endings and ignoring a line
+        # quoted inside a fenced example; a line that starts with the exact
+        # case-sensitive `Filed from:` prefix but fails the grammar is MALFORMED,
+        # while a line in the wrong case or not anchored at line-start matches
+        # neither regex and is MISSING instead — those are different findings with
+        # different fixes, and collapsing them would make `check`'s reason column
+        # lie; `check` flags a missing and a malformed body with the right reason,
+        # passes a clean set, defaults to every open issue with `--label` narrowing
+        # it (repeatable, and genuinely passed through to gh -- the fake `gh` logs
+        # its own argv so the assertion is on what was ASKED, not just on what was
+        # printed), notes a truncated (>= 500-result) listing instead of silently
+        # under-reporting it, and exits 0/1/2 (2 — a `gh` failure, or an
+        # unresolvable repo — is never silently read as "clean", the same
+        # discipline `usage-benchmark-row.py`'s `_gh_json` follows).
+        #
+        # `chain` walks a three-link fixture in both directions (parents by the
+        # line, children by a confirmed search that itself asks gh for more than
+        # gh's own default of 30 results), stops at a bounded depth, terminates
+        # rather than hanging on a mutual cycle, still detects a PR from ITS
+        # PAYLOAD (a `gh issue view` on a PR number resolves in practice — the
+        # `gh pr view` fallback is exercised as the defensive path it actually is,
+        # not pinned as the primary one), and — the #274 review's C2 finding — a
+        # `gh` failure PARTWAY through a walk surfaces on stderr, renders as a `?`
+        # node rather than a silent gap, and exits 2: "the chain genuinely ends
+        # here" and "gh could not tell us" must never render identically.
+        #
+        # Group D extracts the actual heredoc out of each edited generic/*.md and
+        # runs it through bash for real — the #274 review's C1 finding was that
+        # four templates put the new line inside a QUOTED heredoc, so `${PR_NUM}`
+        # never expanded and the emitted body was malformed by this checker's own
+        # rule, and nothing in Groups A-C (which only ever exercise the checker)
+        # could have caught a bug in what the TEMPLATES emit.
         run: ./assets/scripts/filed-from.test.sh
