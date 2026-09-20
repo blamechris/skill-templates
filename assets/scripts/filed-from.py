@@ -23,9 +23,9 @@ always present):
 
 Two commands:
 
-    check   -- list issues (default: open, label `from-review`) whose body has
-               no valid `Filed from:` line, distinguishing a line that is
-               simply ABSENT from one that is PRESENT but malformed.
+    check   -- list issues (default: every open issue; --label narrows) whose
+               body has no valid `Filed from:` line, distinguishing a line
+               that is simply ABSENT from one that is PRESENT but malformed.
     chain   -- given a number, walk the chain both ways: parents by following
                each node's own `Filed from:` line, children by searching for
                issues that name this number and confirming the match (search
@@ -34,7 +34,11 @@ Two commands:
 stdlib + the `gh` CLI as a subprocess. Nothing here is trusted blindly: a `gh`
 failure is reported and treated as "unknown", never silently as "clean" --
 the same discipline `usage-benchmark-row.py`'s `_gh_json` follows, for the
-same reason (a corrupted "0" is worse than a visible "could not check").
+same reason (a corrupted "0" is worse than a visible "could not check"). This
+applies to `chain` too (#274 review, C2): a `gh` failure mid-walk is surfaced
+as a `?` node and a non-zero exit, never silently rendered as "no further
+ancestors/children" -- a chain that stops because it genuinely ended must not
+look like a chain that stopped because `gh` could not answer.
 """
 import argparse
 import json
@@ -43,6 +47,9 @@ import subprocess
 import sys
 
 GH_TIMEOUT = 30
+LIST_LIMIT = 500  # gh's own default is 30; every listing call asks for this
+                   # explicitly (S1/S2 of the #274 review) so a truncation is
+                   # a property of the DATA, not of an unstated gh default.
 
 # ---------------------------------------------------------------------------
 # Grammar
@@ -69,6 +76,30 @@ FILED_FROM_RE = re.compile(
     re.MULTILINE,
 )
 
+_FENCE_RE = re.compile(r'```.*?```', re.DOTALL)
+
+
+def _normalize_body(body):
+    """CRLF -> LF, and strip fenced code blocks, before either regex ever
+    sees the text (#274 review, S6/S5).
+
+    CRLF matters because `$` in MULTILINE mode matches only immediately
+    before a bare `\\n` (or at the very end of the string) -- an untouched
+    `\\r\\n` body leaves a trailing `\\r` after every line, so a perfectly
+    well-formed `Filed from: #12\\r` line at position "before \\n" never
+    reaches `$` and reads as malformed. That is a false positive on a body
+    nobody wrote wrong.
+
+    Fenced-block stripping matters the other way: a body that documents this
+    very grammar (e.g. an issue ABOUT `Filed from:`, or a copy-pasted example)
+    can contain a `Filed from:`-shaped line inside a ``` ``` block that is not
+    a real declaration. Stripping fences before parsing keeps a quoted
+    example from being read as the real thing.
+    """
+    body = body.replace('\r\n', '\n').replace('\r', '\n')
+    body = _FENCE_RE.sub('', body)
+    return body
+
 
 def parse_filed_from(body):
     """Parse the first valid `Filed from:` line in an issue/PR body.
@@ -82,10 +113,13 @@ def parse_filed_from(body):
     Filed from: line is present but malformed" -- callers that need to tell
     those apart (namely `check`, for its reason column) re-check with
     FILED_FROM_PREFIX_RE themselves rather than this function growing a second
-    return channel for a distinction only one caller needs.
+    return channel for a distinction only one caller needs. Both that re-check
+    and this function normalize with _normalize_body -- normalizing is
+    idempotent, so a caller may pass either raw or already-normalized text.
     """
     if not body:
         return None
+    body = _normalize_body(body)
     m = FILED_FROM_RE.search(body)
     if not m:
         return None
@@ -162,7 +196,7 @@ def _resolve_repo(explicit):
 
 def _flag(issue):
     """Classify one issue as clean, missing, or malformed."""
-    body = issue.get('body') or ''
+    body = _normalize_body(issue.get('body') or '')
     if parse_filed_from(body) is not None:
         return None
     m = FILED_FROM_PREFIX_RE.search(body)
@@ -189,10 +223,18 @@ def cmd_check(args):
         print(refuse, file=sys.stderr)
         return 2
 
+    # #274 review, S4: the default scope is now EVERY open issue, not just
+    # label:from-review -- a skill can file with `enhancement` (autonomous-dev-flow),
+    # `bug,from-bug-hunt` (bug-hunt), `from-audit` (project-audit), or no
+    # special label at all (decompose-issue's sub-issues), and a check that
+    # only ever looked at from-review would silently never see any of them.
+    # --label narrows (repeatable, ANDed the way `gh issue list --label` ANDs
+    # repeats); --all is now a no-op kept only so an old invocation does not
+    # break.
     list_args = ['issue', 'list', '--repo', repo]
-    if not args.all:
-        list_args += ['--label', 'from-review']
-    list_args += ['--state', args.state, '--limit', '500',
+    for label in args.label:
+        list_args += ['--label', label]
+    list_args += ['--state', args.state, '--limit', str(LIST_LIMIT),
                    '--json', 'number,title,body,labels,url']
 
     issues, err = _gh_json(list_args)
@@ -203,13 +245,17 @@ def cmd_check(args):
         print(f'REFUSE: gh issue list failed -- {err}', file=sys.stderr)
         return 2
 
+    truncated = len(issues) >= LIST_LIMIT
+
     flagged = [f for f in (_flag(i) for i in issues) if f is not None]
 
     if args.json:
-        print(json.dumps({'repo': repo, 'total': len(issues), 'flagged': flagged}, indent=2))
+        print(json.dumps({'repo': repo, 'total': len(issues), 'truncated': truncated,
+                           'flagged': flagged}, indent=2))
     else:
-        scope = 'all' if args.all else 'from-review'
-        print(f'{repo}: {len(issues)} issue(s) checked ({args.state}, label={scope}), '
+        scope = ','.join(args.label) if args.label else 'all'
+        trunc_note = f' -- TRUNCATED at {LIST_LIMIT}, more may exist' if truncated else ''
+        print(f'{repo}: {len(issues)} issue(s) checked ({args.state}, label={scope}){trunc_note}, '
               f'{len(flagged)} flagged')
         for f in flagged:
             if f['status'] == 'malformed':
@@ -226,26 +272,55 @@ def cmd_check(args):
 # ---------------------------------------------------------------------------
 
 def _fetch_node(number, repo):
-    """Fetch #number as an issue, falling back to a PR -- #N may be either,
-    and gh's issue/PR endpoints are separate. Returns a dict with an added
-    'kind' key ('issue' or 'pr'), or None if neither view succeeds."""
-    fields = 'number,title,state,body'
-    data, _ = _gh_json(['issue', 'view', str(number), '--repo', repo, '--json', fields])
+    """Fetch #number, returning (node, error).
+
+    #274 review, S3: `gh issue view` resolves PR numbers too (verified --
+    `gh issue view <a real PR>` returns it), so the issue/PR distinction is
+    read from the PAYLOAD (a `url` containing `/pull/`, or `state == MERGED`
+    -- a PR's state vocabulary is OPEN/CLOSED/MERGED, an issue's is
+    OPEN/CLOSED, and MERGED is unambiguous even if `url` is ever absent),
+    not from which gh subcommand happened to answer. `gh pr view` is kept as
+    a defensive fallback ONLY for a `gh issue view` failure -- covering a gh
+    version or edge case where it does not resolve a PR number -- and is not
+    the primary path, so a test must not pin "PR view is how PRs are found"
+    as the expected behaviour.
+
+    On total failure (neither view succeeds), returns (None, error) with the
+    issue-view error, which is the primary path's and the more informative
+    of the two.
+    """
+    fields = 'number,title,state,body,url'
+    data, err = _gh_json(['issue', 'view', str(number), '--repo', repo, '--json', fields])
     if data is not None:
-        data['kind'] = 'issue'
-        return data
-    data, _ = _gh_json(['pr', 'view', str(number), '--repo', repo, '--json', fields])
-    if data is not None:
-        data['kind'] = 'pr'
-        return data
-    return None
+        url = data.get('url') or ''
+        state = (data.get('state') or '').upper()
+        data['kind'] = 'pr' if ('/pull/' in url or state == 'MERGED') else 'issue'
+        return data, None
+    data2, _ = _gh_json(['pr', 'view', str(number), '--repo', repo, '--json', fields])
+    if data2 is not None:
+        data2['kind'] = 'pr'
+        return data2, None
+    return None, err
+
+
+def _error_node(label):
+    """A synthetic node marking a gh failure at this point in the walk,
+    rendered as `? <label>` and detected by _has_error -- structural, so the
+    caller does not need a parallel error-tracking channel: a `?` node IS
+    the error (#274 review, C2)."""
+    return {'number': None, 'kind': None, 'state': '?', 'title': label, 'children': []}
 
 
 def ancestors(root_node, repo, depth):
     """Walk PARENTS: follow root_node's own `Filed from:` line, then each
     ancestor's in turn, up to `depth` hops. Cycle-safe via a visited set seeded
     with the root -- a chain that loops back on itself stops the instant it
-    would revisit a number, rather than recursing forever."""
+    would revisit a number, rather than recursing forever.
+
+    A gh failure while fetching a parent stops the walk (as it always has),
+    but now leaves a synthetic `?` node at the far end of the returned chain
+    instead of silently returning early -- "the chain really ends here" and
+    "gh could not tell us" must not render identically."""
     visited = {root_node['number']}
     chain = []
     node = root_node
@@ -257,8 +332,9 @@ def ancestors(root_node, repo, depth):
         if parent_num in visited:
             break  # cycle
         visited.add(parent_num)
-        parent_node = _fetch_node(parent_num, repo)
+        parent_node, err = _fetch_node(parent_num, repo)
         if parent_node is None:
+            chain.append(_error_node(f'#{parent_num}: {err}'))
             break
         chain.append(parent_node)
         node = parent_node
@@ -266,24 +342,35 @@ def ancestors(root_node, repo, depth):
 
 
 def _search_children(number, repo):
-    """Candidates whose body MENTIONS `Filed from: #number` -- gh's search is
-    fuzzy (it can match the string anywhere, including inside a different
-    grammar form or a quote), so every candidate is re-confirmed with
-    parse_filed_from before being trusted."""
+    """Candidates whose body MENTIONS `Filed from: #number`, and (data, error).
+    gh's search is fuzzy (it can match the string anywhere, including inside a
+    different grammar form or a quote), so every candidate is re-confirmed
+    with parse_filed_from before being trusted."""
     query = f'"Filed from: #{number}" in:body'
-    data, _ = _gh_json(['issue', 'list', '--repo', repo, '--state', 'all',
-                         '--search', query, '--json', 'number,title,state,body'])
-    return data or []
+    data, err = _gh_json(['issue', 'list', '--repo', repo, '--state', 'all',
+                          '--search', query, '--limit', str(LIST_LIMIT),
+                          '--json', 'number,title,state,body'])
+    if data is None:
+        return [], err
+    return data, None
 
 
 def descendants(root_number, repo, depth, visited, current_depth=0):
     """Walk CHILDREN recursively into a tree, bounded by `depth` and made
     cycle-safe by the same shared `visited` set ancestors() seeded -- a loop
-    that runs parent-then-child (or purely through children) still terminates."""
+    that runs parent-then-child (or purely through children) still terminates.
+
+    A gh failure searching this node's children appends a synthetic `?` child
+    instead of returning `[]` -- an empty search result and a FAILED search
+    are different facts, and `[]` alone cannot tell them apart (#274 review,
+    C2)."""
     if current_depth >= depth:
         return []
+    candidates, err = _search_children(root_number, repo)
+    if err is not None:
+        return [_error_node(f'#{root_number} children: {err}')]
     children = []
-    for cand in _search_children(root_number, repo):
+    for cand in candidates:
         num = cand.get('number')
         if num is None or num in visited:
             continue
@@ -297,6 +384,18 @@ def descendants(root_number, repo, depth, visited, current_depth=0):
     return children
 
 
+def _has_error(nodes):
+    """True if a synthetic `?` node (a gh failure) appears anywhere in this
+    subtree -- the sole basis for chain's exit code and its "may be
+    incomplete" note, so an error can never silently print clean and exit 0."""
+    for n in nodes:
+        if n.get('number') is None:
+            return True
+        if _has_error(n.get('children', [])):
+            return True
+    return False
+
+
 def _strip(node):
     d = {'number': node.get('number'), 'title': node.get('title'),
          'state': node.get('state'), 'kind': node.get('kind')}
@@ -306,6 +405,8 @@ def _strip(node):
 
 
 def _line(node):
+    if node.get('number') is None:
+        return f'? {node.get("title", "gh failure")}'
     kind = ' (PR)' if node.get('kind') == 'pr' else ''
     return f'#{node.get("number")} [{node.get("state", "?")}]{kind} {node.get("title", "")}'
 
@@ -316,15 +417,21 @@ def cmd_chain(args):
         print(refuse, file=sys.stderr)
         return 2
 
-    root = _fetch_node(args.number, repo)
+    root, err = _fetch_node(args.number, repo)
     if root is None:
-        print(f'REFUSE: #{args.number} is not an issue or PR gh can read in {repo}',
+        detail = f' -- {err}' if err else ''
+        print(f'REFUSE: #{args.number} is not an issue or PR gh can read in {repo}{detail}',
               file=sys.stderr)
         return 2
 
     parents = ancestors(root, repo, args.depth)
-    visited = {root['number']} | {p['number'] for p in parents}
+    visited = {root['number']} | {p['number'] for p in parents if p.get('number') is not None}
     children = descendants(root['number'], repo, args.depth, visited)
+
+    had_error = _has_error(parents) or _has_error(children)
+    if had_error:
+        print('gh failure during chain walk -- the printed chain may be incomplete '
+              '(see the `?` node(s))', file=sys.stderr)
 
     if args.json:
         print(json.dumps({
@@ -332,7 +439,7 @@ def cmd_chain(args):
             'parents': [_strip(p) for p in parents],
             'children': [_strip(c) for c in children],
         }, indent=2))
-        return 0
+        return 2 if had_error else 0
 
     indent = 0
     for p in reversed(parents):
@@ -346,7 +453,7 @@ def cmd_chain(args):
             print_children(c.get('children', []), level + 1)
     print_children(children, 1)
 
-    return 0
+    return 2 if had_error else 0
 
 
 # ---------------------------------------------------------------------------
@@ -362,8 +469,11 @@ def build_parser():
 
     c = sub.add_parser('check', help='Flag issues missing a valid Filed from: line')
     c.add_argument('--repo', help='OWNER/NAME; defaults to `gh repo view`')
+    c.add_argument('--label', action='append', default=[],
+                    help='narrow to issues carrying this label (repeatable, ANDed); '
+                         'default: every open issue')
     c.add_argument('--all', action='store_true',
-                    help='check every issue in scope, not just label:from-review')
+                    help='deprecated no-op -- check already defaults to every issue')
     c.add_argument('--state', choices=['open', 'all'], default='open')
     c.add_argument('--json', action='store_true')
     c.set_defaults(func=cmd_check)
