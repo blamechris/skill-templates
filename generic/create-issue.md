@@ -29,6 +29,11 @@ REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 # Check if we're on a PR branch (auto-detect source PR)
 CURRENT_PR=$(gh pr view --json number -q .number 2>/dev/null || echo "")
 
+# Flag values from $ARGUMENTS, empty if the flag was not given:
+FROM_PR="${FROM_PR:-}"           # --from-pr N
+FROM_ISSUE="${FROM_ISSUE:-}"     # --from-issue N
+COMMENT_URL="${COMMENT_URL:-}"   # --comment-url URL
+
 # FILED_FROM per the resolution order above:
 if [ -n "$FROM_PR" ]; then
   FILED_FROM="#${FROM_PR}"
@@ -36,12 +41,14 @@ elif [ -n "$FROM_ISSUE" ]; then
   FILED_FROM="#${FROM_ISSUE}"
 elif [ -n "$CURRENT_PR" ]; then
   FILED_FROM="#${CURRENT_PR}"
-elif [ -n "$CLAUDE_CODE_SESSION_ID" ]; then
+elif [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
   FILED_FROM="session ${CLAUDE_CODE_SESSION_ID}"
 else
   FILED_FROM="none"
 fi
-[ -n "$COMMENT_URL" ] && [[ "$FILED_FROM" == \#* ]] && FILED_FROM="${FILED_FROM} (${COMMENT_URL})"
+if [ -n "$COMMENT_URL" ] && [[ "$FILED_FROM" == \#* ]]; then
+  FILED_FROM="${FILED_FROM} (${COMMENT_URL})"
+fi
 ```
 
 ### 2. Check for Duplicates
