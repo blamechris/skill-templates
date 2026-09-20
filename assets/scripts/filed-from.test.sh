@@ -690,6 +690,76 @@ got=$(pymod "p=ff.parse_filed_from(sys.argv[3]); print((p or {}).get('form'), (p
   && ok "C1: once the agent fills {SESSION_ID} in by hand, the line parses as session" \
   || bad "C1: once the agent fills {SESSION_ID} in by hand, the line parses as session" "$(flat "$got")"
 
+# ============================================== GROUP E — S7: create-issue.md
+echo; echo "E. S7 — create-issue.md's FILED_FROM resolution block, run for real"
+
+# create-issue.md:26-44's ```bash fence is not a heredoc (no "Filed from:"
+# line lives inside it directly, so Group D's extractor does not apply) --
+# it is the FILED_FROM resolution logic itself. The review flagged two real
+# bugs in it: FROM_PR/FROM_ISSUE/COMMENT_URL were read without ever being
+# assigned (unbound under `set -u`), and the COMMENT_URL append was a bare
+# `[ … ] && … && FILED_FROM=…` as the block's LAST statement, which exports
+# the first test's failure as the whole block's exit status under `set -e`.
+# This extracts the actual fenced block and runs it under `set -euo
+# pipefail` -- the strict-mode conditions that would have caught both --
+# with a fake `gh` (repo view succeeds, pr view fails, matching "not on a PR
+# branch") across all five resolution paths.
+extract_bash_fence_after() {  # file marker-regex -> prints the first ```bash fence after the first line matching marker-regex
+  "$PY" - "$1" "$2" <<'PYEOF'
+import re, sys
+text = open(sys.argv[1], encoding='utf-8').read()
+marker = re.search(sys.argv[2], text)
+if not marker:
+    sys.exit(1)
+rest = text[marker.end():]
+m = re.search(r"```bash\n(?P<body>.*?)\n```", rest, re.DOTALL)
+if not m:
+    sys.exit(1)
+sys.stdout.write(m.group('body'))
+PYEOF
+}
+
+CI_GHBIN="$TMP/ci_ghbin"; mkdir -p "$CI_GHBIN"
+cat > "$CI_GHBIN/gh" <<'SH'
+#!/usr/bin/env bash
+[ "$1" = "repo" ] && { echo "owner/repo"; exit 0; }
+exit 1
+SH
+chmod +x "$CI_GHBIN/gh"
+
+FENCE=$(extract_bash_fence_after "$GENERIC/create-issue.md" 'Resolve `FILED_FROM`')
+FENCE_SCRIPT="$TMP/create-issue-filed-from-block.sh"
+{ echo 'set -euo pipefail'; printf '%s\n' "$FENCE"; echo 'echo "FILED_FROM=$FILED_FROM"'; } > "$FENCE_SCRIPT"
+
+out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID \
+      PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=none" ] \
+  && ok "S7: nothing set (no PR, no session, no flags) -> none, under set -euo pipefail" \
+  || bad "S7: nothing set (no PR, no session, no flags) -> none, under set -euo pipefail" "rc=$rc $(flat "$out")"
+
+out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL CLAUDE_CODE_SESSION_ID=abc123ef \
+      PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=session abc123ef" ] \
+  && ok "S7: CLAUDE_CODE_SESSION_ID set -> session <id>, under set -euo pipefail" \
+  || bad "S7: CLAUDE_CODE_SESSION_ID set -> session <id>, under set -euo pipefail" "rc=$rc $(flat "$out")"
+
+out=$(env -u FROM_ISSUE -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID FROM_PR=99 \
+      PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=#99" ] \
+  && ok "S7: --from-pr (FROM_PR) resolves to #99, under set -euo pipefail" \
+  || bad "S7: --from-pr (FROM_PR) resolves to #99, under set -euo pipefail" "rc=$rc $(flat "$out")"
+
+out=$(env -u FROM_ISSUE -u CLAUDE_CODE_SESSION_ID FROM_PR=99 COMMENT_URL=https://example.com/x \
+      PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=#99 (https://example.com/x)" ] \
+  && ok "S7: --from-pr + --comment-url folds the url in, under set -euo pipefail" \
+  || bad "S7: --from-pr + --comment-url folds the url in, under set -euo pipefail" "rc=$rc $(flat "$out")"
+
+out=$(env -u FROM_PR -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID FROM_ISSUE=7 \
+      PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=#7" ] \
+  && ok "S7: --from-issue (FROM_ISSUE, decompose case) resolves to #7, under set -euo pipefail" \
+  || bad "S7: --from-issue (FROM_ISSUE, decompose case) resolves to #7, under set -euo pipefail" "rc=$rc $(flat "$out")"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
