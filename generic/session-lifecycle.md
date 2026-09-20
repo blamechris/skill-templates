@@ -165,13 +165,15 @@ The canonical rules live in `~/.claude/CLAUDE.md` under **"Follow-on protocol"**
 
 Installing `session-lifecycle` should be followed by installing any missing components in the same pass — the bundle head without its components is a checklist that can't execute.
 
-**Four machine-level scripts** back the End steps, and they are bootstrapped once per machine
-from the registry rather than installed per repo — both End step 1 and `/next` call the same copy,
-which is the point:
+**Three machine-level scripts back the End steps**, plus two more that other skills use
+independently — all five are bootstrapped once per machine from the registry rather than
+installed per repo, in one copy command, because both End step 1 and `/next` call the same
+copy of the first three:
 
 ```bash
 cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
-   assets/scripts/usage-pace.py assets/scripts/filed-from.py ~/.claude/scripts/
+   assets/scripts/usage-pace.py assets/scripts/filed-from.py \
+   assets/scripts/review-result.py ~/.claude/scripts/
 ```
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
@@ -183,7 +185,11 @@ exits non-zero; every other path is unaffected and the cap falls back to a recor
 `filed-from.py` (#268) owns the `Filed from:` linkage every skill-filed issue carries — `check`
 flags an issue whose body has no valid line, `chain` walks the source chain (issue -> PR -> issue
 filed from it -> ...) both ways — and is what makes "did this PR spawn work" and a rework chain
-computable without a human re-reading every issue body. Each ships with a sibling `<name>.test.sh` in
+computable without a human re-reading every issue body. `review-result.py` (#267) owns the
+structured review-result schema and the commands that produce, capture and read it
+(`schema`/`validate`/`record`/`harvest`/`list`) — the machine-readable verdict a review skill's
+final report carries, recorded beside the subagent sidecar rather than left as prose only. Each
+ships with a sibling `<name>.test.sh` in
 the registry, run by CI, and that is where their behaviour is pinned — this file states the
 doctrine, not the code. Bootstrap all or none: a machine with a stale
 `usage-benchmark-row.py` writes step 2's row on a different scale from every row above it, and
