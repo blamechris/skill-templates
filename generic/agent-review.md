@@ -122,7 +122,7 @@ ISSUE_URL=$(gh issue create \
   --title "Short descriptive title" \
   --label "enhancement" \
   --label "from-review" \
-  --body "$(cat <<'EOF'
+  --body "$(cat <<EOF
 ## Context
 
 Filed from: #${PR_NUM}

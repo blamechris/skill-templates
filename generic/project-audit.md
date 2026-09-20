@@ -368,7 +368,7 @@ gh issue create \
   --body "$(cat <<'EOF'
 ## Context
 
-Filed from: session ${CLAUDE_CODE_SESSION_ID}
+Filed from: session {SESSION_ID}
 
 Identified during project audit on {DATE}.
 **Source:** {OUTPUT_DIR}/00-master-assessment.md — Recommendation #{N}
