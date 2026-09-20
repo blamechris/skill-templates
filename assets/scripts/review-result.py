@@ -10,7 +10,7 @@ Usage:
   python3 ~/.claude/scripts/review-result.py record --agent ID --skill NAME
       [--pr N] [--session SID] [--force] [FILE]
   python3 ~/.claude/scripts/review-result.py harvest [--session SID] [--dry-run]
-  python3 ~/.claude/scripts/review-result.py list [--session SID] [--json]
+  python3 ~/.claude/scripts/review-result.py list [--session SID] [--json] [--near-misses]
 
 THE PROBLEM (#267): a review agent's verdict and findings exist only as prose
 in its final report. The subagent sidecar (`<session-dir>/subagents/agent-
@@ -23,6 +23,11 @@ that produce, validate and read documents shaped by it.
 THE SCHEMA (`schema` prints it; this is also the field-by-field reference the
 skill text points at):
 
+  kind                required, const: "review-result". The positive marker
+                      that tells a genuine review-result apart from any other
+                      dict that happens to carry a verdict/findings-shaped
+                      pair (a merge-decision object, a pre-#267 shape) — see
+                      `list --near-misses` below for what this keeps out.
   verdict            required, enum: approve | request_changes | comment.
                       The reviewer's overall disposition.
   body_matches_tree   required, bool or null. True ONLY after the reviewer
@@ -70,34 +75,51 @@ WHAT `record` REFUSES TO GUESS
   * The session id comes from --session or $CLAUDE_CODE_SESSION_ID, in that
     order, and from nothing else — same discipline as session-seed.py's
     session-id resolution, for the same reason: a result attributed to no
-    session, or to a scan's best guess, is worse than no result.
+    session, or to a scan's best guess, is worse than no result. Neither may
+    contain `/` or `..` — a session id is a directory NAME, not a path, and
+    globbing `~/.claude/projects/*/<sid>/` with an unvalidated one is a
+    traversal vector.
   * The session directory is resolved by globbing
     `~/.claude/projects/*/<sid>/`; anything other than exactly one match is a
     REFUSE, not a pick of the first (or newest) hit.
   * The agent must be real: neither `agent-<hex>.meta.json` nor
-    `agent-<hex>.jsonl` existing under `<session-dir>/subagents/` is a
+    `agent-<hex>.jsonl` existing under `<session-dir>/subagents/` OR one
+    level into `<session-dir>/subagents/workflows/<runId>/` (see below) is a
     REFUSE — a result must belong to an agent the harness actually spawned.
   * An existing `.result.json` is never silently overwritten; `--force` is
     required.
 No REFUSE case writes anything — every check that can fail runs before the
 file is opened for writing.
 
+SIDECARS AT TWO LEVELS: an agent the top-level session spawns directly gets
+its `.meta.json`/`.jsonl` pair directly under `<session-dir>/subagents/`. An
+agent a *Workflow run* spawns gets the same pair one level deeper, under
+`<session-dir>/subagents/workflows/<runId>/` — a real session inspected
+while building this (#267 review) carried 15 top-level pairs and 129 nested
+ones. `record`, `harvest` and `list` all check both levels; `record` writes
+the `.result.json` beside whichever level the sidecar was actually found at.
+
 `harvest` is the fallback for agents whose orchestrator never ran `record`:
-it scans `<session-dir>/subagents/agent-*.jsonl` transcripts that have no
+it scans every `agent-*.jsonl` transcript at both levels that has no
 `.result.json` yet, reads each one's LAST assistant message (transcript
 lines also include `user` and `attachment` entries — ignored), looks for the
 fenced block, and records what validates. It reports rather than crashes on
 an invalid block, and keeps going.
 
 `list` reads two sources IN PLACE and never copies either: every
-`subagents/*.result.json` (written by `record` or `harvest`), and every
-`workflows/wf_*.json` — the harness already persists a Workflow's `result`
-there, in whatever shape the workflow script returned, so `list` walks that
+`*.result.json` at both sidecar levels (written by `record` or `harvest`),
+and every `workflows/wf_*.json` — the harness already persists a Workflow
+script's OWN return value as `result` there, in whatever shape that script
+returned (with or without per-agent sidecars underneath it at all — the two
+levels above are about where an individual AGENT's transcript lives, this is
+about what the WORKFLOW SCRIPT itself handed back), so `list` walks that
 value recursively (through dicts and lists alike) and reports every nested
 dict that validates against the schema above, labelled `wf_<runId>` with a
-path like `result[0].delta`. A Workflow-spawned agent does not get a
-`subagents/` entry at all, which is why this recursive walk exists rather
-than only globbing `.result.json` files.
+path like `result[0].delta`. `--near-misses` additionally reports every
+dict in that walk that carries both a `verdict` and a `findings` key but
+fails validation (most commonly: no `kind`, or a `verdict` from a different
+vocabulary such as a merge-decision's `merge`/`fix-then-merge`) — real data
+had dozens of these, silently invisible before `kind` was required.
 
 Exit codes:
   schema            always 0.
@@ -128,8 +150,17 @@ SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "review-result",
     "type": "object",
-    "required": ["verdict", "body_matches_tree", "findings"],
+    "required": ["kind", "verdict", "body_matches_tree", "findings"],
     "properties": {
+        "kind": {
+            "type": "string",
+            "const": "review-result",
+            "description": (
+                "The positive marker: a dict without this, however "
+                "verdict/findings-shaped, is not a review-result — it is a "
+                "near-miss (see `list --near-misses`)."
+            ),
+        },
         "verdict": {
             "type": "string",
             "enum": list(VERDICTS),
@@ -182,12 +213,20 @@ SCHEMA = {
         },
         "pr": {"type": ["integer", "null"]},
         "repo": {"type": ["string", "null"]},
-        "skill": {"type": "string"},
+        "skill": {"type": ["string", "null"]},
         "round": {"type": ["integer", "null"]},
     },
 }
 
-FENCE_RE = re.compile(r"```json review-result[ \t]*\r?\n(.*?)\r?\n```", re.DOTALL)
+# Anchored per-line (MULTILINE) with optional leading/trailing whitespace on
+# both the opening and closing fence lines, so a block indented inside a
+# markdown list item — "  ```json review-result" ... "  ```" — still matches;
+# an unanchored search matched the opener fine (no line-start requirement)
+# but silently failed on an indented CLOSING fence, since "\n```" does not
+# match "\n  ```".
+FENCE_RE = re.compile(
+    r"^[ \t]*```json review-result[ \t]*\r?\n(.*?)\r?\n[ \t]*```[ \t]*\r?$",
+    re.DOTALL | re.MULTILINE)
 AGENT_HEX = re.compile(r"\A[0-9a-fA-F]+\Z")
 
 
@@ -277,11 +316,21 @@ def _err(errors, path, msg):
     errors.append("%s: %s" % (path, msg))
 
 
+def _type_phrase(t):
+    """'is a string' / 'is an array' / 'is null' — grammatical, not just a
+    %s slot: 'is a array' and 'is a null, not an object' both read as typos
+    for the thing they're trying to report precisely."""
+    if t == "null":
+        return "is null"
+    article = "an" if t[0] in "aeiou" else "a"
+    return "is %s %s" % (article, t)
+
+
 def _validate_finding(item, i):
     errors = []
     path = "findings[%d]" % i
     if not isinstance(item, dict):
-        _err(errors, path, "is a %s, not an object" % _type_name(item))
+        _err(errors, path, "%s, not an object" % _type_phrase(_type_name(item)))
         return errors
 
     if "severity" not in item:
@@ -324,7 +373,12 @@ def validate_document(doc):
     """Every violation of SCHEMA, named by path. Empty list == valid."""
     errors = []
     if not isinstance(doc, dict):
-        return ["$: document is a %s, not an object" % _type_name(doc)]
+        return ["$: document %s, not an object" % _type_phrase(_type_name(doc))]
+
+    if "kind" not in doc:
+        _err(errors, "kind", "is required")
+    elif doc["kind"] != "review-result":
+        _err(errors, "kind", "%r is not \"review-result\"" % (doc["kind"],))
 
     if "verdict" not in doc:
         _err(errors, "verdict", "is required")
@@ -387,7 +441,16 @@ def resolve_session_id(explicit):
             "harness sets $CLAUDE_CODE_SESSION_ID. Nothing is written: a "
             "result attributed to no session cannot be filed under a "
             "session directory.")
-    return sid.strip()
+    sid = sid.strip()
+    # A session id is a directory NAME under ~/.claude/projects/*/, glob-ed
+    # in verbatim (glob.escape only neutralises fnmatch metacharacters, not
+    # path separators). "/" reaches into or past that directory and ".."
+    # walks back out of it — both are a path-traversal vector, not a
+    # plausible session id, so they REFUSE rather than being escaped.
+    if "/" in sid or ".." in sid:
+        die("session id %r must not contain '/' or '..' — it names a "
+            "directory under ~/.claude/projects/*/, not a path" % sid)
+    return sid
 
 
 def resolve_session_dir(sid):
@@ -408,9 +471,41 @@ def normalize_agent(raw):
     return "agent-" + hexpart.lower()
 
 
-def agent_exists(session_dir, agent_name):
-    base = os.path.join(session_dir, "subagents", agent_name)
-    return os.path.exists(base + ".meta.json") or os.path.exists(base + ".jsonl")
+def sidecar_dirs(session_dir):
+    """Every directory that can hold an agent-<hex>.{meta.json,jsonl} pair:
+    <session-dir>/subagents/ itself (an agent the top-level session spawned
+    directly), and one level into subagents/workflows/<runId>/ for each
+    Workflow run (an agent that Workflow spawned — these do NOT appear
+    directly under subagents/ at all)."""
+    dirs = [os.path.join(session_dir, "subagents")]
+    dirs += sorted(glob.glob(os.path.join(session_dir, "subagents", "workflows", "*")))
+    return [d for d in dirs if os.path.isdir(d)]
+
+
+def find_sidecar_dir(session_dir, agent_name):
+    """The directory holding agent_name's sidecar, checked at both levels
+    (see sidecar_dirs), or None."""
+    for d in sidecar_dirs(session_dir):
+        base = os.path.join(d, agent_name)
+        if os.path.exists(base + ".meta.json") or os.path.exists(base + ".jsonl"):
+            return d
+    return None
+
+
+def iter_agent_jsonl(session_dir):
+    """(jsonl_path) for every agent-*.jsonl transcript at both sidecar
+    levels, sorted within each level."""
+    for d in sidecar_dirs(session_dir):
+        for jsonl_path in sorted(glob.glob(os.path.join(d, "agent-*.jsonl"))):
+            yield jsonl_path
+
+
+def iter_result_files(session_dir):
+    """Every *.result.json at both sidecar levels, sorted within each."""
+    paths = []
+    for d in sidecar_dirs(session_dir):
+        paths.extend(sorted(glob.glob(os.path.join(d, "*.result.json"))))
+    return paths
 
 
 def atomic_write(path, text):
@@ -481,17 +576,19 @@ def cmd_record(a):
     agent_name = normalize_agent(a.agent)
     sid = resolve_session_id(a.session)
     session_dir = resolve_session_dir(sid)
-    if not agent_exists(session_dir, agent_name):
-        die("no %s.meta.json or .jsonl under %s/subagents/ — a result must "
-            "belong to an agent the harness actually spawned"
-            % (agent_name, session_dir))
+    sidecar_dir = find_sidecar_dir(session_dir, agent_name)
+    if sidecar_dir is None:
+        die("no %s.meta.json or .jsonl under %s/subagents/ or "
+            "%s/subagents/workflows/*/ — a result must belong to an agent "
+            "the harness actually spawned"
+            % (agent_name, session_dir, session_dir))
 
     if a.pr is not None:
         doc["pr"] = a.pr
     if a.skill:
         doc["skill"] = a.skill
 
-    result_path = os.path.join(session_dir, "subagents", "%s.result.json" % agent_name)
+    result_path = os.path.join(sidecar_dir, "%s.result.json" % agent_name)
     if os.path.exists(result_path) and not a.force:
         die("%s already exists — pass --force to overwrite" % result_path)
 
@@ -536,7 +633,7 @@ def cmd_harvest(a):
     session_dir = resolve_session_dir(sid)
     recorded = skipped = noblock = invalid = 0
 
-    for jsonl_path in sorted(glob.glob(os.path.join(session_dir, "subagents", "agent-*.jsonl"))):
+    for jsonl_path in iter_agent_jsonl(session_dir):
         base = jsonl_path[:-len(".jsonl")]
         agent_name = os.path.basename(base)
         result_path = base + ".result.json"
@@ -596,6 +693,32 @@ def _walk_for_results(value, path, hits):
             _walk_for_results(v, "%s[%d]" % (path, i), hits)
 
 
+def _walk_near_misses(value, path, hits):
+    """Every dict reachable from VALUE that carries BOTH a `verdict` and a
+    `findings` key but fails validate_document — paired with its path and
+    the FIRST validation error. These are what `_walk_for_results` makes
+    invisible now that `kind` is required: a workflow script's own
+    merge-decision object (`verdict: "fix-then-merge"`) or a pre-#267 shape
+    reads as review-shaped without being one, and used to vanish from `list`
+    entirely rather than being reported as a near-miss.
+
+    A dict is a leaf for this walk the moment it has both keys, matched or
+    not — this is a coarse classifier by design, not a second validator: it
+    exists to surface candidates for a human to look at, not to itself
+    decide what counts."""
+    if isinstance(value, dict):
+        if "verdict" in value and "findings" in value:
+            errors = validate_document(value)
+            if errors:
+                hits.append((path, errors[0]))
+            return
+        for k, v in value.items():
+            _walk_near_misses(v, "%s.%s" % (path, k), hits)
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            _walk_near_misses(v, "%s[%d]" % (path, i), hits)
+
+
 def build_row(id_, skill, pr, result, source):
     findings = result.get("findings") or []
     counts = {"critical": 0, "suggestion": 0, "nitpick": 0}
@@ -652,8 +775,9 @@ def cmd_list(a):
     sid = resolve_session_id(a.session)
     session_dir = resolve_session_dir(sid)
     rows = []
+    near = []  # (run_id, path, first_error)
 
-    for path in sorted(glob.glob(os.path.join(session_dir, "subagents", "*.result.json"))):
+    for path in iter_result_files(session_dir):
         try:
             with open(path, encoding="utf-8") as f:
                 wrapper = json.load(f)
@@ -679,17 +803,38 @@ def cmd_list(a):
             continue
         run_id = wf.get("runId") if isinstance(wf, dict) else None
         run_id = run_id or os.path.splitext(os.path.basename(path))[0]
+        wf_result = wf.get("result") if isinstance(wf, dict) else None
         hits = []
-        _walk_for_results(wf.get("result") if isinstance(wf, dict) else None, "result", hits)
+        _walk_for_results(wf_result, "result", hits)
         for wpath, result in hits:
             rows.append(build_row(
                 "%s %s" % (run_id, wpath), result.get("skill"), result.get("pr"),
                 result, "workflow"))
 
+        if a.near_misses:
+            nm = []
+            _walk_near_misses(wf_result, "result", nm)
+            for wpath, first_error in nm:
+                near.append((run_id, wpath, first_error))
+
     if a.json:
-        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        if a.near_misses:
+            print(json.dumps({
+                "rows": rows,
+                "near_misses": [{"run": r, "path": p, "error": e} for r, p, e in near],
+            }, indent=2, ensure_ascii=False))
+        else:
+            print(json.dumps(rows, indent=2, ensure_ascii=False))
     else:
         print_table(rows)
+        if a.near_misses:
+            print()
+            if near:
+                print("NEAR MISSES (verdict+findings present, did not validate as review-result):")
+                for r, p, e in near:
+                    print("  %s %s — %s" % (r, p, e))
+            else:
+                print("NEAR MISSES: none")
     return 0
 
 
@@ -724,6 +869,8 @@ def main(argv=None):
     l = sub.add_parser("list", help="one row per recorded, harvested, or workflow-embedded result")
     l.add_argument("--session", help="this session's id (default: $CLAUDE_CODE_SESSION_ID)")
     l.add_argument("--json", action="store_true", help="emit the rows as JSON instead of a table")
+    l.add_argument("--near-misses", dest="near_misses", action="store_true",
+                    help="also report verdict+findings dicts in a workflow's result that failed validation")
     l.set_defaults(fn=cmd_list)
 
     a = p.parse_args(argv)
