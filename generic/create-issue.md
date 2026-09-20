@@ -10,7 +10,7 @@ Create a standardized GitHub issue with labels and traceability.
   - `--comment-url URL` — Link to specific review comment
   - `--complexity low|medium|high` — Set complexity label
   - `--label NAME` — Additional label (repeatable)
-  - `--standalone` — This issue genuinely has no source; skip auto-detection and use `Filed from: none`
+  - `--standalone` — This issue genuinely has no source; if nothing else resolves one, forces `Filed from: none` instead of the refusal below
 
 ## Instructions
 
@@ -21,7 +21,7 @@ Extract the title and any flags from `$ARGUMENTS`. **Resolve `FILED_FROM` — th
 1. `--from-pr N` or `--from-issue N` (explicit flag) → `#N`, plus `--comment-url` in parentheses if given
 2. Not explicit, but on a PR branch → the current PR, auto-detected
 3. Not explicit, not on a PR branch, but a session id is available → `session ${CLAUDE_CODE_SESSION_ID}`
-4. `--standalone`, or none of the above resolved anything → `none` (only after confirming with the user this is genuinely standalone, unless `--standalone` was passed explicitly)
+4. `--standalone` → `none`; nothing resolved (no flag, no PR, no session, no `--standalone`) → REFUSE and ask the user rather than silently defaulting to `none` — the whole point of Critical Rule 7 is that `none` is a deliberate choice, never a fallback for "didn't figure it out"
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
@@ -33,6 +33,7 @@ CURRENT_PR=$(gh pr view --json number -q .number 2>/dev/null || echo "")
 FROM_PR="${FROM_PR:-}"           # --from-pr N
 FROM_ISSUE="${FROM_ISSUE:-}"     # --from-issue N
 COMMENT_URL="${COMMENT_URL:-}"   # --comment-url URL
+STANDALONE="${STANDALONE:-}"     # --standalone
 
 # FILED_FROM per the resolution order above:
 if [ -n "$FROM_PR" ]; then
@@ -43,8 +44,11 @@ elif [ -n "$CURRENT_PR" ]; then
   FILED_FROM="#${CURRENT_PR}"
 elif [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
   FILED_FROM="session ${CLAUDE_CODE_SESSION_ID}"
-else
+elif [ -n "$STANDALONE" ]; then
   FILED_FROM="none"
+else
+  echo "REFUSE: no source resolved — pass --from-pr N, --from-issue N, or --standalone" >&2
+  exit 1
 fi
 if [ -n "$COMMENT_URL" ] && [[ "$FILED_FROM" == \#* ]]; then
   FILED_FROM="${FILED_FROM} (${COMMENT_URL})"
