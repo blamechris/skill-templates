@@ -1,12 +1,12 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "84fc889",
+  "generatedFromCommit": "cee4d5b",
   "skillCount": 41,
   "skills": [
     {
       "name": "agent-review",
-      "hash": "9defd4a",
-      "lines": 206,
+      "hash": "d925d50",
+      "lines": 273,
       "description": "Launch an expert code reviewer agent with full project context.",
       "guards": [
         {
@@ -38,6 +38,13 @@
             "reconcile",
             "cross-reference"
           ]
+        },
+        {
+          "label": "structured-review-result",
+          "anyOf": [
+            "review-result"
+          ],
+          "note": "#267 — the ```json review-result``` block is the machine-readable verdict a review skill's final report carries; a copy that drops it loses the leading signal (rounds, severity mix, mutation-proven vs asserted findings) that made agent-review's output queryable across runs instead of prose only. Binds on the literal token `review-result`, which appears only as the fence's own language/name marker and in review-result.py's own name — plain prose about a review's result (\"the result of the review\") does not contain the hyphenated form, so this is not vacuous the way a bare word like `result` would be."
         }
       ]
     },
@@ -109,8 +116,8 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "9defd4a",
-      "lines": 520,
+      "hash": "a0b98e6",
+      "lines": 516,
       "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
       "guards": [
         {
@@ -260,8 +267,8 @@
     },
     {
       "name": "bug-hunt",
-      "hash": "a4e30c1",
-      "lines": 337,
+      "hash": "a0b98e6",
+      "lines": 334,
       "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.",
       "guards": [
         {
@@ -464,7 +471,7 @@
     },
     {
       "name": "check-pr",
-      "hash": "9defd4a",
+      "hash": "cee4d5b",
       "lines": 477,
       "description": "Address all PR review comments systematically and respond inline.",
       "guards": [
@@ -522,8 +529,8 @@
     },
     {
       "name": "create-issue",
-      "hash": "84fc889",
-      "lines": 200,
+      "hash": "12b011f",
+      "lines": 158,
       "description": "Create a standardized GitHub issue with labels and traceability.",
       "guards": [
         {
@@ -549,13 +556,6 @@
             "PR number and comment",
             "[Ll]ink back to the source"
           ]
-        },
-        {
-          "label": "filed-from-line",
-          "anyOf": [
-            "Filed from:"
-          ],
-          "note": "#268 — the line is the machine-read source of every issue; a copy that drops it makes rework chains (issue -> PR -> issue filed from it -> PR ...) untraversable without a human re-reading every body. Bound loosely on purpose: `Filed from:` itself never appears as prose elsewhere in this template, only inside the two body examples and the Critical Rule that states the requirement, so there is no neighbouring-heading vacuity to guard against the way `issue-creation-code` had to. A customizing agent that keeps ANY of the three occurrences — either body template's `Filed from: ${FILED_FROM}` line, or Critical Rule 7's sentence — has kept the rule; losing all three is losing the field."
         }
       ]
     },
@@ -683,8 +683,8 @@
     },
     {
       "name": "decompose-issue",
-      "hash": "a4e30c1",
-      "lines": 241,
+      "hash": "b4268c2",
+      "lines": 237,
       "description": "Break a single GitHub issue that is too large into 2-5 independently implementable sub-issues. This is the **manual triage** counterpart to the auto-decomposition baked into `/autonomous-dev-flow` and `/parallel-dev` — use it when a human reads an issue and decides it needs splitting before any implementation runs.",
       "guards": [
         {
@@ -943,8 +943,8 @@
     },
     {
       "name": "full-review",
-      "hash": "a0b98e6",
-      "lines": 101,
+      "hash": "cee4d5b",
+      "lines": 103,
       "description": "Run a complete review pipeline: agent-review first, then check-pr. The agent-review pass naturally fills the ~4 minute Copilot review delay, so check-pr starts with comments already waiting.",
       "guards": [
         {
@@ -1591,8 +1591,8 @@
     },
     {
       "name": "project-audit",
-      "hash": "9defd4a",
-      "lines": 535,
+      "hash": "a0b98e6",
+      "lines": 533,
       "description": "Launch a comprehensive multi-agent audit of the entire project. Agents with diverse perspectives analyze the codebase in parallel, then findings are synthesized into a master assessment with actionable recommendations.",
       "guards": [
         {
@@ -1862,8 +1862,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "86843f6",
-      "lines": 214,
+      "hash": "d4f8718",
+      "lines": 215,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
