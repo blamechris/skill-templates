@@ -411,7 +411,21 @@ The derived arithmetic survives for one machine: one with no desktop app and so 
 sample file, where the line says `derived — no live sample` and names the statistic
 it used instead. A sample from before the current meter period is refused in the same
 way rather than reported — after a Wednesday reset the newest one on file is still the
-old week's ~95%, and reading it as current put the wall minutes away. **A second thing is unverified and worth stating plainly: nobody
+old week's ~95%, and reading it as current put the wall minutes away.
+
+**A FROZEN sample file is refused the same way, and it is not the same failure as a
+stale one** (#263). Every sample from 2026-09-18T06:34:58Z onward carried an identical
+`{"sd": 40, "fh": 0}` under normally-advancing timestamps while the live panel read
+week 4% / session 24%, and the age check passed throughout — **age is not liveness**, and
+a sampler republishing its last-known value on schedule is infinitely fresh and
+permanently wrong. Spend over the dead `40` implied a cap of $538 against $5,379 from the
+live `4`, and that reached the account holder as an "8x rate cut" confirmed by "two
+independent meters" that were one frozen file. The signal is *spend happened and the
+meter did not move* — never a count of identical samples, since a quiet week legitimately
+repeats one value — so the line now reads `meter FROZEN at sd N%` and `SAMPLE FILE DEAD`,
+falls back to the labelled estimate, and names its own remedy: **opening `/usage` does
+not fix this** (it did not during the incident; the panel was live while the file stayed
+frozen), so restart the desktop app. **A second thing is unverified and worth stating plainly: nobody
 has established what the meter counts.** Every cap figure in this system is quoted in
 dollars because that is what the first calibration assumed, not because it was tested.
 Three units fit the evidence — list-price dollars, raw tokens (cache reads are ~97% of
