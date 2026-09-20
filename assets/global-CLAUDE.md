@@ -364,17 +364,24 @@ points it has moved, self-calibrating on every call. It is not a constant: clean
 weekly endpoint caps measured $2,505 / $2,374 / $2,417 / $2,536, and dividing this
 week's spend by another week's median is what produced the 96/79 split.
 
-**Every dollar figure the script prints is roughly 9% LOW until skill-templates#256
-lands**, and the reason is not arithmetic. Claude Code writes some assistant messages
-to the transcript **twice under one `requestId`** — a partial record first, the
-complete one minutes later — and the script's dedup key is `(message id, requestId)`,
-so it keeps the FIRST and discards the completed record. Measured 2026-09-16:
-first-occurrence $2,499 against complete-record $2,746 over 20,088 requests since the
-reset, 9,936 of them duplicated. The ratios cancel — $/pt, the headroom in points,
-the landing and the time to the wall divide one understated total by another and are
-first-order right — so pacing decisions are sound. The printed dollars are not, and a
-figure from this readout should not be copied into a reading, a benchmark row or a
-cap calibration as if it were the week's spend.
+**The ~9% dollar undercount is FIXED as of skill-templates#259 (merged 2026-09-20),
+but every figure recorded BEFORE it still carries the error.** The cause was never
+arithmetic. Claude Code writes some assistant messages to the transcript **twice under
+one `requestId`** — a partial record first, the complete one minutes later — and the
+old dedup key `(message id, requestId)` kept the FIRST and discarded the completed
+record. Measured 2026-09-16: first-occurrence $2,499 against complete-record $2,746
+over 20,088 requests since the reset, 9,936 of them duplicated. The script now bills
+the complete record and supersedes the partial, in the per-minute index as well as the
+totals.
+
+**What that does not repair is the ledger.** Every reading in `meter-readings.md`,
+every benchmark row, and every cap calibrated before 2026-09-20 was measured with the
+old policy and reads roughly 9% LOW — a corrected figure and a historical one are not
+comparable, and a cap derived from the two together is wrong in a direction nothing
+announces. Note the policy a figure was measured under before differencing it against
+a newer one. Pacing decisions taken under the old script were nonetheless sound: the
+ratios cancelled, so $/pt, the headroom in points, the landing and the time to the
+wall divided one understated total by another and were first-order right.
 
 **Ask the script, never a guess or a fresh scan** (it buckets by the same
 boundary)**:**
