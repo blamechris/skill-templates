@@ -125,6 +125,8 @@ ISSUE_URL=$(gh issue create \
   --body "$(cat <<'EOF'
 ## Context
 
+Filed from: #${PR_NUM}
+
 Identified during review of PR #${PR_NUM}.
 
 ## Description

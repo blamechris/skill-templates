@@ -213,12 +213,17 @@ When a suggestion is valid but out of scope for this PR. You MUST create a GitHu
 ```bash
 # 1. ALWAYS create the issue — this is NOT optional
 # {{CUSTOMIZE: Add repo-specific labels below}}
+# COMMENT_URL — the specific review comment's permalink, for the Filed from: line:
+# https://github.com/${REPO}/pull/${PR_NUM}#discussion_r${COMMENT_ID}
+COMMENT_URL="https://github.com/${REPO}/pull/${PR_NUM}#discussion_r${COMMENT_ID}"
 ISSUE_URL=$(gh issue create \
   --title "Short descriptive title" \
   --label "enhancement" \
   --label "from-review" \
   --body "$(cat <<'EOF'
 ## Context
+
+Filed from: #${PR_NUM} (${COMMENT_URL})
 
 Identified during review of PR #${PR_NUM}.
 

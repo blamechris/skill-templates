@@ -76,6 +76,10 @@ SUB_URL=$(gh issue create \
   --title "type(scope): Sub-task description" \
   --label "enhancement" \
   --body "$(cat <<'EOF'
+## Context
+
+Filed from: #${ISSUE_NUM}
+
 ## Summary
 
 Specific sub-task description.
