@@ -608,19 +608,36 @@ jobs:
         #
         # What this pins: the hand-written validator names every violation by path
         # (`findings[2].severity: 'high' is not one of [...]`), not just pass/fail;
+        # a required `kind: "review-result"` const keeps a merge-decision dict or
+        # any other verdict/findings-shaped object from silently passing as one;
         # `mutation_ran` and `red_line` are validated as real booleans, not merely
         # present; the fenced ```json review-result``` block is extracted correctly
-        # out of a full agent report, and the LAST such block wins when more than
+        # out of a full agent report — CRLF line endings and indentation inside a
+        # markdown list item included — and the LAST such block wins when more than
         # one is present. `record` REFUSES — and writes nothing — on an unset
-        # session id, an unknown agent (no `.meta.json`/`.jsonl` sidecar), an
-        # ambiguous or missing session directory, and an existing `.result.json`
-        # without `--force`; every REFUSE case is asserted to have left the
-        # filesystem exactly as it found it. `harvest` recovers a block from a
-        # subagent transcript's LAST assistant message (ignoring earlier drafts and
-        # non-assistant lines), skips an agent that already has a `.result.json`,
-        # and reports rather than crashes on an invalid block. `list` walks a
-        # Workflow's `result` value recursively and surfaces every nested dict that
-        # validates against the schema — without copying it anywhere — while
-        # leaving a non-conforming sibling out, and its `--json` output round-trips
-        # exact severity counts and the `mutation_ran`/total ratio.
+        # session id, a path-traversal `--session` or `--agent` value, an unknown
+        # agent (no `.meta.json`/`.jsonl` sidecar at either sidecar level — see
+        # below), an ambiguous or missing session directory, and an existing
+        # `.result.json` without `--force`; every REFUSE case is asserted to have
+        # left the filesystem exactly as it found it (a whole-tree snapshot diff
+        # for the two REFUSE modes with no single directory to count files in).
+        # `--pr`/`--skill` genuinely OVERRIDE the document's own fields, asserted
+        # against a fixture that starts with different values, not merely fields
+        # that were absent. `harvest` recovers a block from a subagent transcript's
+        # LAST assistant message — even when later, non-assistant lines follow it —
+        # skips an agent that already has a `.result.json`, and reports rather than
+        # crashes on an invalid block. Both `record` and `harvest` check a SECOND
+        # sidecar location, one level into `subagents/workflows/<runId>/`: a real
+        # session inspected while building this carried 129 agents spawned by
+        # Workflow runs there against 15 at the top level, and neither command saw
+        # them before this was added. `list` walks a Workflow's `result` value
+        # recursively and surfaces every nested dict that validates against the
+        # schema — without copying it anywhere — while leaving a non-conforming
+        # sibling out; `--near-misses` separately surfaces a dict with both a
+        # `verdict` and a `findings` key that failed validation (typically no
+        # `kind`, or a `verdict` from a different vocabulary such as a merge
+        # decision's `fix-then-merge`) by path and first error — real data had
+        # dozens of these, invisible from `list` before this flag existed. Its
+        # `--json` output round-trips exact severity counts and the
+        # `mutation_ran`/total ratio, at both sidecar levels.
         run: ./assets/scripts/review-result.test.sh
