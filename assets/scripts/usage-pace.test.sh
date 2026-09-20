@@ -2583,6 +2583,21 @@ fix=pathlib.Path(sys.argv[2]); exec(open(fix/"fixture.py").read())
 root=fix/"f"; shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
 up.ROOT=root; up.HIST=fix; up.CACHE=fix/"f_c.json"; up.CALIB=fix/"f_k.json"
 up.READINGS=fix/"f_r.md"; up.PLAN_SAMPLES=fix/"f_absent.json"
+# The clock is FROZEN for the rest of this case. `record()` calls `datetime.now()` again
+# internally to pick the week it stamps the row with, so the fixture and the code under test
+# read the clock twice -- and a run that crosses the week close between those two reads
+# stamps the row with the NEXT week, leaving the `r["week"]==wk` filter below with an empty
+# list and the case failing on an IndexError for a reason that has nothing to do with
+# supersession. One instant, read once, and both agree. Pinning beats the file's other
+# convention for clock-dependent cases (skip near the boundary): nothing here actually
+# depends on WHICH instant it is, only on the two reads being the same one.
+_real_dt=up.datetime
+_frozen=_real_dt.now().astimezone()
+class _FrozenDT(_real_dt):
+    @classmethod
+    def now(cls, tz=None):
+        return _frozen.astimezone(tz) if tz is not None else _frozen
+up.datetime=_FrozenDT
 now=up.datetime.now().astimezone(); wk=up.week_close(now)
 open_ms=up.week_bounds(wk)[0].timestamp()*1000
 t=max(open_ms+1000, now.timestamp()*1000-60000)
