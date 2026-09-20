@@ -165,15 +165,15 @@ The canonical rules live in `~/.claude/CLAUDE.md` under **"Follow-on protocol"**
 
 Installing `session-lifecycle` should be followed by installing any missing components in the same pass — the bundle head without its components is a checklist that can't execute.
 
-**Three machine-level scripts back the End steps**, plus two more that other skills use
-independently — all five are bootstrapped once per machine from the registry rather than
+**Three machine-level scripts back the End steps**, plus three more that other skills use
+independently — all six are bootstrapped once per machine from the registry rather than
 installed per repo, in one copy command, because both End step 1 and `/next` call the same
 copy of the first three:
 
 ```bash
 cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
    assets/scripts/usage-pace.py assets/scripts/filed-from.py \
-   assets/scripts/review-result.py ~/.claude/scripts/
+   assets/scripts/review-result.py assets/scripts/rework-lag.py ~/.claude/scripts/
 ```
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
@@ -188,8 +188,13 @@ filed from it -> ...) both ways — and is what makes "did this PR spawn work" a
 computable without a human re-reading every issue body. `review-result.py` (#267) owns the
 structured review-result schema and the commands that produce, capture and read it
 (`schema`/`validate`/`record`/`harvest`/`list`) — the machine-readable verdict a review skill's
-final report carries, recorded beside the subagent sidecar rather than left as prose only. Each
-ships with a sibling `<name>.test.sh` in
+final report carries, recorded beside the subagent sidecar rather than left as prose only.
+`rework-lag.py` (#271) owns the LAGGING signal — did a merged PR get reworked later? — by
+content-matching a PR's added lines against a later PR's removed lines rather than flagging any
+later touch to the same file, which overcounts rework by roughly 10x; it reports a PR whose
+rework window has not yet elapsed as `immature`, never as falsely `clean`, and reuses
+`filed-from.py`'s `parse_filed_from` for its two issue-based measures instead of a second copy of
+that grammar. Each ships with a sibling `<name>.test.sh` in
 the registry, run by CI, and that is where their behaviour is pinned — this file states the
 doctrine, not the code. Bootstrap all or none: a machine with a stale
 `usage-benchmark-row.py` writes step 2's row on a different scale from every row above it, and
