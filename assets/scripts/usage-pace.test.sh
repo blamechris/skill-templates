@@ -114,15 +114,27 @@ age_min = float(cfg.get("age_min", 5))
 # so spend_at_sample and spend_since_sample are both non-zero in the ordinary case.
 reqs = cfg.get("reqs") or [[40, 1_000_000, FABLE], [3, 200_000, FABLE]]
 gap_n, gap_tok = int(cfg.get("gap_n", 0)), int(cfg.get("gap_tok", 400_000))
+# A FROZEN RUN: `frozen_n` samples all carrying the newest sample's (sd, fh), the oldest
+# of them `frozen_from` minutes ago. `frozen_n` counts the newest sample itself, so 1 (the
+# default) is the ordinary world this builder always made -- one sample, no run.
+#
+# This is the shape the desktop app's sampler produced on 2026-09-18: normally-advancing
+# timestamps, an identical payload under every one of them. The fixture exists because age
+# is the ONLY thing the script used to check, and a frozen file passes an age check by
+# construction.
+frozen_n = max(1, int(cfg.get("frozen_n", 1)))
+frozen_from = float(cfg.get("frozen_from", 0))
 now = datetime.now(timezone.utc)
 now_ms = now.timestamp() * 1000
 wk = up.week_close(now)
 open_ms = up.week_bounds(wk)[0].astimezone(timezone.utc).timestamp() * 1000
 anchor = max(now_ms - 120 * 60_000, open_ms + 60_000)
 samp_ms = now_ms - age_min * 60_000
-# Every request, the gap request and the sample must sit strictly after the anchor, and
-# the anchor's own two samples before it.
-oldest = max([r[0] for r in reqs] + [age_min]) + 2
+# Every request, the gap request, the sample and the OLDEST sample of the frozen run must
+# sit strictly after the anchor, and the anchor's own two samples before it. Omitting
+# frozen_from here let the run's first sample land before the anchor, where
+# observed_anchor stops looking -- the run then vanished and the test measured nothing.
+oldest = max([r[0] for r in reqs] + [age_min, frozen_from]) + 2
 usable = (now_ms - anchor) > oldest * 60_000 and samp_ms > anchor
 
 shutil.rmtree(home / ".claude" / "projects", ignore_errors=True)
@@ -152,9 +164,14 @@ lines = [json.dumps({"type": "assistant", "timestamp":
          for i, (t, tok, model) in enumerate(ev)]
 (home / ".claude" / "projects" / "p" / "t.jsonl").write_text("\n".join(lines) + "\n")
 
+# The frozen run, oldest first, ending AT the newest sample. With frozen_n == 1 this is
+# the single newest sample and `change_ms` is its own instant, which is the world every
+# other test in this suite builds.
+step = ((samp_ms - (now_ms - frozen_from * 60_000)) / (frozen_n - 1)) if frozen_n > 1 else 0
+change_ms = samp_ms - step * (frozen_n - 1)
+run = [{"t": int(change_ms + step * i), "u": {"sd": sd, "fh": fh}} for i in range(frozen_n)]
 samples = [{"t": int(anchor - 300_000), "u": {"sd": 100, "fh": 40}},
-           {"t": int(anchor), "u": {"sd": anchor_sd, "fh": 0}},
-           {"t": int(samp_ms), "u": {"sd": sd, "fh": fh}}]
+           {"t": int(anchor), "u": {"sd": anchor_sd, "fh": 0}}] + run
 (home / "Library" / "Application Support" / "Claude" / "plan-usage-history.json").write_text(
     json.dumps({"version": 2, "samples": samples}))
 
@@ -204,6 +221,28 @@ def figures(at, gate=True):
 lo_f = figures(at_s)
 hi_f = figures(at_s + gap)                    # the other end of the reset-gap range
 lo_u = figures(at_s, gate=False)              # ...and the same world without the gate
+
+# --- is this world's sample file DEAD? -----------------------------------------------
+# Reimplemented from the RULE, not from the script: spend the file had the chance to
+# observe -- inside the frozen run, ending at the newest sample and never at `now` -- set
+# against what one meter point costs this week. Spend AFTER the newest sample is staleness
+# and is deliberately excluded; measuring to `now` would call an ordinary 95-minute-old
+# sample dead and send the reader to restart a working app.
+#
+# One meter point costs this week's own $/pt -- but only once the meter has moved enough
+# for that rate to mean anything. Below MIN_MOVED the rate is `provisional` (at moved == 1
+# it is one ROUNDED point, uncertain by 3x) and the point value comes from the measured
+# all-models cap instead. FALLBACK_CAP is reimplemented here for the same reason PRICES is:
+# a fixture that asks the script what it expects cannot disagree with it.
+DEAD_PTS = 3.0
+FALLBACK_CAP = 2363.0        # up.FALLBACK["all"], stated independently
+watched = total(change_ms, samp_ms)
+_pt = (lo_f["rate"] if (lo_f["rate"] and (sd - anchor_sd) >= MIN_MOVED)
+       else FALLBACK_CAP / 100.0)
+dead_expected = bool(watched > DEAD_PTS * _pt)
+# How decisively. A world sitting at 1.05x of the threshold tests the float comparison and
+# nothing else, so both callers assert this is far from 1 before believing their verdict.
+dead_margin = watched / (DEAD_PTS * _pt)
 fwd = (" ≈ %.0f%% now" % lo_f["pct_now"]) if "%.0f" % lo_f["pct_now"] != "%.0f" % sd else ""
 print(json.dumps({
     "usable": usable, "sd": sd, "anchor_sd": anchor_sd,
@@ -241,6 +280,14 @@ print(json.dumps({
     "need_s": "need ${:,.0f}/h to reach the wall".format(lo_f["need"]),
     "sample_s": "sample %s" % datetime.fromtimestamp(
         samp_ms / 1000, timezone.utc).strftime("%H:%M") + "Z",
+    "frozen_n": frozen_n, "watched": watched,
+    "watched_s": "${:,.0f}".format(watched),
+    "dead_expected": dead_expected, "dead_margin": dead_margin, "dead_pt": _pt,
+    # Would the PROVISIONAL world have been caught by the rate instead of the cap? Only
+    # when this is False does the cap fallback carry the verdict on its own.
+    "dead_by_rate": bool(lo_f["rate"] and watched > DEAD_PTS * lo_f["rate"]),
+    "change_s": datetime.fromtimestamp(
+        change_ms / 1000, timezone.utc).strftime("%H:%M") + "Z",
 }))
 FIXEOF
 mkfix() { "$PY" "$FIXPY" "$SUT" "$1" "$2" "$TMP"; }
