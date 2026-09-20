@@ -480,6 +480,18 @@ jobs:
         # 3.5-14.4% low per week (the main-thread total did not move at all; the
         # duplication is sidechain-only). It is the one thing here no local run can
         # notice, because both numbers look perfectly plausible.
+        #
+        # Since #263 it also pins LIVENESS, which is a different property from the age the
+        # step above describes: a frozen sample file -- identical sd and fh under
+        # normally-advancing timestamps -- is refused rather than reported, and the line
+        # distinguishes DEAD from STALE because their remedies differ and opening /usage
+        # does not fix the frozen case. The false-positive half is pinned in the same
+        # section and is the reason the threshold is derived from spend: a quiet week
+        # repeats one value for many samples and must still report its meter, so a fixed
+        # sample count would break exactly the ordinary world. Both halves are mutation-
+        # proven, because a guard that cannot fail is the failure mode this repo keeps
+        # finding -- keying the check on a sample count, and measuring the window to `now`
+        # instead of to the newest sample, each turn one of them red.
         run: ./assets/scripts/usage-pace.test.sh
 
       - name: fleet-check regression tests

@@ -34,6 +34,10 @@ ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
 skipt(){ skip=$((skip+1)); printf '  SKIP %s — %s\n' "$1" "$2"; }
 flat() { printf '%s' "$1" | tr '\n' '|'; }
+# Substring tests as predicates, so an assertion with several of them reads as one
+# condition instead of as nested `case`. `$2` is a literal, never a glob.
+has()     { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
+has_not() { case "$1" in *"$2"*) return 1 ;; *) return 0 ;; esac; }
 
 echo "usage-pace.test.sh"
 
@@ -3217,6 +3221,156 @@ PY_19K
 printf '%s' "$got" | grep -q 'COMPLETE-MINUTE BK-SUMS-TO-TOT ORDER-FREE' \
   && ok "the per-minute index bills the complete record's minute and leaves the partial's empty" \
   || bad "the per-minute index bills the complete record's minute" "$(flat "$got")"
+
+# ------------------- 22. A FROZEN SAMPLE FILE IS NOT A FRESH ONE (#263)
+# On 2026-09-20 `--oneline` printed `sd 40% ... fh 0%` while the live /usage panel read
+# week 4% / session 24%. Every sample from 2026-09-18T06:34:58Z onward carried an identical
+# {"sd": 40, "fh": 0} under normally-advancing timestamps, and $63.69 of local spend in the
+# preceding three hours had moved neither meter in the file. The age guard passed cleanly
+# throughout, because AGE IS NOT LIVENESS: a sampler republishing its last-known value on
+# schedule is infinitely fresh and permanently wrong. Week-to-date spend over the dead 40
+# implied a cap of $538 against $5,379 from the live 4, and that reached the account holder.
+#
+# The signal is "spend happened and the meter did not move", never "N identical samples":
+# an idle account repeats one value for many samples and that is the file WORKING. Both
+# directions are asserted here, and the false-positive guard matters as much as the catch.
+FROZHOME=$TMP/frozenhome
+
+# (a) the catch. A four-sample run over the last hour with real spend inside it. sd 40 off
+# an anchor of 0 is 40 points moved, so this week's own $/pt carries the verdict.
+fx=$(mkfix "$FROZHOME" '{"sd":40,"fh":0,"age_min":5,"frozen_n":4,"frozen_from":65,"reqs":[[100,4000000,"claude-fable-5"],[30,10000000,"claude-fable-5"]]}')
+dead_line=$(HOME="$FROZHOME" "$PY" "$SUT" --oneline 2>&1)
+dead_json=$(HOME="$FROZHOME" "$PY" "$SUT" --json 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ] || [ "$(fixf "$fx" dead_expected)" != "True" ]; then
+  skipt "a frozen sample file with real spend is refused as the meter" \
+        "fixture not usable/dead on this clock"
+else
+  marg=$(fixf "$fx" dead_margin)
+  # The world must be decisively dead, or the assertion is about a float comparison.
+  case $(printf '%s' "$marg" | cut -d. -f1) in
+    ''|0|1|2) bad "the frozen fixture is decisively over the threshold" "margin=$marg" ;;
+    *) ok "the frozen fixture holds $(fixf "$fx" watched_s) of watched spend, ${marg}x the threshold" ;;
+  esac
+  # 1. the dead percentage is NOT printed as the meter.
+  sdead=$(fixf "$fx" sd_s)
+  case "$dead_line" in
+    *"$sdead (sample"*) bad "a frozen file's percentage is not reported as the meter" \
+        "still prints '$sdead (sample ...)': $(flat "$dead_line")" ;;
+    *) ok "a frozen file's percentage is not reported as the meter" ;;
+  esac
+  # 2. it says FROZEN, and falls back to the derived path labelled as an estimate.
+  case "$dead_line" in
+    *FROZEN*"derived"*|*"derived"*FROZEN*)
+      case "$dead_line" in
+        *"of cap"*) ok "a frozen file falls back to the derived path and names the freeze" ;;
+        *) bad "a frozen file falls back to the derived path" "no derived cap basis: $(flat "$dead_line")" ;;
+      esac ;;
+    *) bad "a frozen file falls back to the derived path and names the freeze" "$(flat "$dead_line")" ;;
+  esac
+  # 3. --json says so structurally, so the hook and any other consumer see it too.
+  got=$(printf '%s' "$dead_json" | "$PY" -c '
+import json, sys
+p = json.load(sys.stdin)
+d = p.get("live_dead") or {}
+print("source=%s sd=%s dead=%s samples=%s" % (
+    p.get("source"), p.get("sd"), bool(d), d.get("samples")))' 2>&1)
+  [ "$got" = "source=derived sd=None dead=True samples=4" ] \
+    && ok "--json reports source=derived, no sd, and the frozen run's sample count" \
+    || bad "--json reports the frozen verdict structurally" "got=$(flat "$got")"
+  # 4. DEAD is not STALE. The remedies differ and conflating them sends the reader to a
+  #    fix that cannot work: in this incident opening /usage did NOT refresh the file --
+  #    the panel showed live values while the file stayed frozen. The sampler is stuck.
+  case "$dead_line" in
+    *"SAMPLE STALE"*) bad "the dead path does not emit the stale wording" "$(flat "$dead_line")" ;;
+    *"open /usage to refresh"*) bad "the dead path does not emit the stale remedy" "$(flat "$dead_line")" ;;
+    *) case "$dead_line" in
+         *DEAD*restart*|*DEAD*Restart*)
+           ok "the dead path says DEAD and names restarting the app, never the stale remedy" ;;
+         *) bad "the dead path names its own remedy" "no DEAD/restart: $(flat "$dead_line")" ;;
+       esac ;;
+  esac
+fi
+
+# (b) the FALSE POSITIVE guard, and it matters as much as the catch. The same four-sample
+# run over the same hour -- a genuinely idle stretch, $1 of spend inside it. Nothing here
+# is evidence of anything, and the meter must still be reported verbatim. A fixed sample
+# count, or a threshold anchored to anything but spend, fails exactly here.
+fx=$(mkfix "$FROZHOME" '{"sd":40,"fh":0,"age_min":5,"frozen_n":4,"frozen_from":65,"reqs":[[100,4000000,"claude-fable-5"],[30,20000,"claude-fable-5"]]}')
+idle_line=$(HOME="$FROZHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ] || [ "$(fixf "$fx" dead_expected)" != "False" ]; then
+  skipt "an idle account's repeated samples are not called dead" \
+        "fixture not usable/idle on this clock"
+else
+  w1=$(fixf "$fx" sd_s); w2=$(fixf "$fx" fh_s); w3=$(fixf "$fx" rate_s)
+  case "$idle_line" in
+    *FROZEN*|*DEAD*) bad "an idle account's repeated samples are not called dead" \
+        "$(fixf "$fx" frozen_n) identical samples, only $(fixf "$fx" watched_s) spent: $(flat "$idle_line")" ;;
+    *"$w1 (sample"*)
+      case "$idle_line" in
+        *"$w2"*"$w3"*) ok "an idle account's repeated samples still report the meter and its \$/pt" ;;
+        *) bad "an idle account still reports the meter normally" "want $w2/$w3 || $(flat "$idle_line")" ;;
+      esac ;;
+    *) bad "an idle account's repeated samples still report the meter" "want $w1 || $(flat "$idle_line")" ;;
+  esac
+fi
+
+# (c) the run is keyed on BOTH meters. `fh` is the five-hour meter and turns over several
+# times a day, so a run in which only `sd` repeats is the ordinary shape of a quiet week
+# and proves nothing -- keying on `sd` alone would call every slow week dead.
+got=$(pymod '
+s_move = [(1000, 40.0, 0.0), (2000, 40.0, 0.0), (3000, 40.0, 3.0)]   # fh moved
+s_froz = [(1000, 40.0, 0.0), (2000, 40.0, 0.0), (3000, 40.0, 0.0)]   # neither moved
+s_new  = [(1000, 39.0, 0.0), (2000, 40.0, 0.0)]                      # newest IS a change
+print("move=%r froz=%r new=%r one=%r" % (
+    up.frozen_since(s_move), up.frozen_since(s_froz), up.frozen_since(s_new),
+    up.frozen_since([(1000, 40.0, 0.0)])))' 2>&1)
+[ "$got" = "move=None froz=(1000, 3) new=None one=None" ] \
+  && ok "frozen_since keys on sd AND fh, and reports the instant the meter last changed" \
+  || bad "frozen_since keys on both meters" "got=$(flat "$got")"
+
+# (d) the PROVISIONAL case: the meter has moved 2 points, so this week's $/pt is a rounded
+# rate uncertain by a factor of three and cannot set the threshold. The measured all-models
+# cap's own point value does instead -- and this world is chosen so that the provisional
+# rate would NOT have caught it ($275/pt puts the bar at $825 against $500 of watched
+# spend) while the cap's $23.63/pt puts it at $71. Skipping the check for want of a rate,
+# or trusting the provisional rate, both leave this file reported as live.
+fx=$(mkfix "$FROZHOME" '{"sd":2,"fh":0,"age_min":5,"frozen_n":4,"frozen_from":65,"reqs":[[100,1000000,"claude-fable-5"],[30,10000000,"claude-fable-5"]]}')
+prov_line=$(HOME="$FROZHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ] || [ "$(fixf "$fx" dead_expected)" != "True" ] \
+   || [ "$(fixf "$fx" dead_by_rate)" != "False" ]; then
+  skipt "a frozen file is caught before the meter has moved enough for a rate" \
+        "fixture not usable/discriminating on this clock"
+else
+  case "$prov_line" in
+    *FROZEN*) ok "a frozen file is caught on the cap's point value when no rate is trusted yet" ;;
+    *) bad "a frozen file is caught before the meter has moved enough for a rate" \
+           "$(fixf "$fx" watched_s) watched at \$$(fixf "$fx" dead_pt)/pt: $(flat "$prov_line")" ;;
+  esac
+fi
+
+# (e) the other side of the STALE/DEAD boundary, and the reason the watched window ends at
+# the NEWEST SAMPLE rather than at `now`. Here the frozen run is idle and the spend lands
+# AFTER the newest sample: a 40-minute-old sample with $500 burned since it was written.
+# That is staleness -- the file has not yet had the chance to see any of it -- and the
+# remedy really is to open /usage. Measured to `now` instead, this world reads as DEAD
+# ($501 against a $15 bar) and the reader is sent to restart an app that is working. The
+# newest sample on this machine is routinely 40 to 95 minutes old, so that is not an
+# edge case; it is most of the readings.
+fx=$(mkfix "$FROZHOME" '{"sd":40,"fh":0,"age_min":40,"frozen_n":4,"frozen_from":65,"reqs":[[100,4000000,"claude-fable-5"],[50,20000,"claude-fable-5"],[20,10000000,"claude-fable-5"]]}')
+late_line=$(HOME="$FROZHOME" "$PY" "$SUT" --oneline 2>&1)
+if [ "$(fixf "$fx" usable)" != "True" ] || [ "$(fixf "$fx" dead_expected)" != "False" ]; then
+  skipt "spend after the newest sample is staleness, not deadness" \
+        "fixture not usable/idle-in-window on this clock"
+else
+  w1=$(fixf "$fx" sd_s)
+  if has_not "$late_line" FROZEN && has_not "$late_line" DEAD \
+     && has "$late_line" "$w1 (sample" && has "$late_line" "SAMPLE STALE 40m"; then
+    ok "spend after the newest sample is STALE, not DEAD, and still names /usage"
+  else
+    bad "spend after the newest sample is staleness, not deadness" \
+        "$(fixf "$fx" watched_s) inside the window: $(flat "$late_line")"
+  fi
+fi
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

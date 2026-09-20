@@ -768,6 +768,48 @@ def live_sample(now_ms=None, samples=None):
 LIVE_DROP = 15.0        # a fall this large between two samples is a reset, not noise
 STALE_MIN = 30.0        # a sample older than this is called stale in the readout
 MIN_MOVED = 5.0         # points the meter must have moved before its $/pt may extrapolate
+# Points' worth of spend a frozen run may hold before the file is called DEAD. Integer
+# rounding accounts for one on its own -- a run reading 40 at both ends moved less than a
+# full point -- and the app's alignment is same-interval (R2 0.89 against 0.04 at lag 1),
+# so a second covers the final interval's lag and the third is slack, enough that an
+# ordinary rounding boundary cannot trip it.
+DEAD_PTS = 3.0
+
+
+def frozen_since(samples):
+    """(the instant the meter last CHANGED, how many samples have repeated it), or None.
+
+    Takes `_plan_raw()`'s (t, sd, fh). None means the newest sample differs from the one
+    before it: the file is moving and there is nothing here to suspect.
+
+    AGE IS NOT LIVENESS, and that is the whole of the difference from `STALE_MIN`.
+    `live_sample` reports how old the newest sample is and `pace` acts on it; that check
+    passed cleanly through the whole of 2026-09-18..20 while every sample from 06:34:58Z
+    onward carried an identical {"sd": 40, "fh": 0} under normally-advancing timestamps.
+    A sampler republishing its last-known value on schedule is infinitely fresh and
+    permanently wrong: the live /usage panel read week 4% / session 24% against the file's
+    40% / 0%, and week-to-date spend over the dead 40 implied a cap of $538 against $5,379
+    from the live 4 -- written up as an "8x rate cut" with "two independent meters
+    agreeing", both meters being the same frozen file.
+
+    The instant returned is the FIRST sample carrying the current value, not the last one
+    before it. That sample IS the change, so the window it opens is the one the file has
+    had every subsequent chance to move in, and the caller needs no fencepost of its own.
+
+    BOTH meters must repeat for the run to count. `fh` is the five-hour meter and turns
+    over several times a day, so a run in which only `sd` holds still is the ordinary shape
+    of a quiet stretch on a weekly meter; keying on `sd` alone would call every slow week
+    dead. This returns only the run -- whether it MEANS anything is a question about spend,
+    which `pace` answers, because a genuinely idle account repeats one value for many
+    samples and that is the file working.
+    """
+    if len(samples) < 2:
+        return None
+    cur = (samples[-1][1], samples[-1][2])
+    i = len(samples) - 1
+    while i > 0 and (samples[i - 1][1], samples[i - 1][2]) == cur:
+        i -= 1
+    return None if i == len(samples) - 1 else (samples[i][0], len(samples) - i)
 
 
 def observed_anchor(open_ms, samples=None):
@@ -1622,6 +1664,49 @@ def pace(now=None, force=False, prefer="live"):
         rejected = (f"newest sample predates this meter week "
                     f"(sd {samp['sd']:.0f}%, {samp['age_min']:,.0f}m old)")
         samp = None
+    # ...and a FROZEN file, which is a different failure from a stale one and needs a
+    # different answer. The signal is "spend happened and the meter did not move", never
+    # "N identical samples": a fixed count is a magic constant in a file whose sampling is
+    # not even on a clock, and a genuinely idle account repeats one value for many samples,
+    # which is the file WORKING. Both quantities the real signal needs are already here.
+    #
+    # The window ENDS AT THE NEWEST SAMPLE, never at `now`. Only spend the file had the
+    # chance to observe is evidence about the file; spend after the newest sample is
+    # STALENESS, whose remedy is different and whose window is routinely 40-95 minutes wide
+    # on this machine. Measured to `now`, an ordinary stale sample with real spend behind it
+    # reads as dead, and the reader is sent to restart an app that is working correctly.
+    dead = None
+    if samp:
+        fz = frozen_since(raw)
+        if fz:
+            change_ms, n_rep = fz
+            watched, _ = window_spend(bk, change_ms, samp["t"])
+            at0, _ = window_spend(bk, anchor_ms, samp["t"])
+            moved0 = samp["sd"] - anchor_sd
+            rate0 = at0 / moved0 if moved0 > 0 and at0 > 0 else None
+            # This week's own $/pt when there is one worth dividing by, and the measured
+            # cap's point value when there is not. The gate is `derive`'s: below MIN_MOVED
+            # the rate is one ROUNDED point, uncertain by a factor of three, and three
+            # times an uncertain number is not a threshold. Of the three things to do with
+            # a missing rate, skipping the check is the one that cannot be right -- the
+            # first hours of a week are when a freeze is cheapest to catch and most
+            # expensive to miss, and it is exactly when `moved` is small. The cap is a
+            # statistic rather than a measurement of this week, but the question here is
+            # only the ORDER OF MAGNITUDE of one point, which +/-20% does not change.
+            if rate0 is not None and moved0 >= MIN_MOVED:
+                pt_usd, basis = rate0, "this week's own $/pt"
+            else:
+                pt_usd = (resolve_cap("all", rows, use_cached=False)[0] or 0.0) / 100.0
+                basis = (f"the measured all-models cap's point value -- the meter has "
+                         f"moved {max(moved0, 0.0):.0f} pt, too few for a rate")
+            if pt_usd > 0 and watched > DEAD_PTS * pt_usd:
+                dead = {"since": datetime.fromtimestamp(change_ms / 1000, timezone.utc)
+                                 .isoformat(timespec="seconds"),
+                        "at": f"{datetime.fromtimestamp(change_ms / 1000, timezone.utc):%H:%M}Z",
+                        "samples": n_rep, "hours": (samp["t"] - change_ms) / 3600_000.0,
+                        "spend": watched, "pt_usd": pt_usd, "basis": basis,
+                        "sd": samp["sd"], "fh": samp["fh"]}
+                samp = None
     if samp:
         spend, fable = window_spend(bk, anchor_ms, now_ms)
         # Split at the sample, not at now: the rate belongs over the meter as it was READ.
@@ -1700,6 +1785,7 @@ def pace(now=None, force=False, prefer="live"):
             p[k] = v
             p[k + "_hi"] = v
     p["live_rejected"] = rejected
+    p["live_dead"] = dead
     w = p.get("hours_to_wall")
     p["wall_at"] = (f"{(now + timedelta(hours=w)).astimezone(PT):%a %H:%M} PT"
                     if w is not None and math.isfinite(w) else None)
@@ -1812,11 +1898,18 @@ def fmt(p, margin=None):
                  f"{p['sample_age_min']:,.0f}m old){fwd}",
                  f"fh {p['fh']:.0f}%" if p["fh"] is not None else "fh n/a"]
     else:
-        # Two reasons to be here, and they are not the same reason. No sample file at all
-        # is a machine without the desktop app; a sample that predates this meter period
-        # is the app having missed the reset, which is the more dangerous of the two
-        # because the number it would have supplied looks perfectly current.
-        parts = [f"derived — {p['live_rejected']}" if p.get("live_rejected")
+        # THREE reasons to be here, and no two of them are the same reason. No sample file
+        # at all is a machine without the desktop app; a sample that predates this meter
+        # period is the app having missed the reset; a FROZEN file is the sampler stuck on
+        # one value. The last two both look perfectly current, which is what makes them
+        # worth naming here rather than reporting as one "derived" fallback -- and the
+        # percentage that follows is an estimate in all three cases, which `~ ... of cap`
+        # says. An honest estimate beats a confident dead number; that is the whole trade.
+        d = p.get("live_dead")
+        parts = [(f"derived — meter FROZEN at sd {d['sd']:.0f}%/"
+                  + (f"fh {d['fh']:.0f}%" if d["fh"] is not None else "fh n/a")
+                  + f" since {d['at']}") if d
+                 else f"derived — {p['live_rejected']}" if p.get("live_rejected")
                  else "derived — no live sample",
                  f"all-models ~{p['pct']:.0f}% of cap ${p['all_cap']:,.0f} "
                  f"({p['all_cap_basis']})"]
@@ -1868,6 +1961,21 @@ def fmt(p, margin=None):
     line = " · ".join(parts)
     if p.get("stale"):
         line += (f"  [SAMPLE STALE {p['sample_age_min']:,.0f}m — open /usage to refresh]")
+    # DEAD is not STALE, and the two cannot share a remedy. A stale file is behind and a
+    # /usage poll makes the app write a fresh sample. A frozen one is not behind at all --
+    # in the 2026-09-18 incident opening /usage did NOT refresh it: the panel showed live
+    # values while the file stayed on {"sd": 40, "fh": 0} for 44 hours. Sending the reader
+    # to "open /usage" there sends them to a fix that cannot work, and they then read the
+    # unchanged file as confirmation that 40% is real. These two branches are mutually
+    # exclusive by construction (a dead sample is refused, so the derived path sets
+    # `stale` False), which is the point: one failure, one remedy, no ambiguity.
+    d = p.get("live_dead")
+    if d:
+        line += (f"  [SAMPLE FILE DEAD — {d['samples']} samples over {d['hours']:.1f}h all "
+                 f"read sd {d['sd']:.0f}% while ${d['spend']:,.0f} was spent, and "
+                 f"${DEAD_PTS * d['pt_usd']:,.0f} of it should have moved the meter "
+                 f"({d['basis']}). The sampler is stuck, not late: opening /usage does NOT "
+                 f"refresh it — restart the Claude desktop app, then re-run.]")
     if p.get("gap_spend"):
         line += (f"  [${p['gap_spend']:,.0f} of spend sits inside the reset gap, so every "
                  f"figure above is a range]")
