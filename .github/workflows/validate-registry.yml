@@ -553,3 +553,28 @@ jobs:
         # for one — plus an end-to-end lint of generic/create-pr.md stripped the
         # way `skill add` strips it.
         run: ./scripts/skill-lint.test.sh
+
+      - name: filed-from regression tests
+        # #268: session 13cee7be filed ~8 follow-on issues in one session; 3 cited
+        # their source PR. Without a machine-readable `Filed from:` line on EVERY
+        # issue a skill files, the lagging metric "did this PR spawn work" is
+        # uncomputable, and a rework chain (issue -> PR -> issue filed from it ->
+        # PR ...) cannot be walked without a human re-reading every body. There is
+        # no `*.test.sh` glob in this workflow, so filed-from.py gets its own named
+        # step like every other asset script.
+        #
+        # What this pins: all four grammar forms parse (`#NNN`, `#NNN (<url>)`,
+        # `session <id>`, `none`); a line that starts with the exact case-sensitive
+        # `Filed from:` prefix but fails the grammar is MALFORMED, while a line in
+        # the wrong case or not anchored at line-start matches neither regex and is
+        # MISSING instead — those are different findings with different fixes, and
+        # collapsing them would make `check`'s reason column lie; `check` flags a
+        # missing and a malformed body with the right reason, passes a clean set,
+        # and exits 0/1/2 (2 — a `gh` failure, or an unresolvable repo — is never
+        # silently read as "clean", the same discipline `usage-benchmark-row.py`'s
+        # `_gh_json` follows); `--all` genuinely drops `--label from-review` (the
+        # fake `gh` logs its own argv so the assertion is on what was ASKED, not
+        # just on what was printed); and `chain` walks a three-link fixture in both
+        # directions (parents by the line, children by a confirmed search), stops
+        # at a bounded depth, and terminates rather than hanging on a mutual cycle.
+        run: ./assets/scripts/filed-from.test.sh

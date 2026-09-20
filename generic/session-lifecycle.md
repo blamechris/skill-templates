@@ -165,13 +165,13 @@ The canonical rules live in `~/.claude/CLAUDE.md` under **"Follow-on protocol"**
 
 Installing `session-lifecycle` should be followed by installing any missing components in the same pass — the bundle head without its components is a checklist that can't execute.
 
-**Three machine-level scripts** back the End steps, and they are bootstrapped once per machine
+**Four machine-level scripts** back the End steps, and they are bootstrapped once per machine
 from the registry rather than installed per repo — both End step 1 and `/next` call the same copy,
 which is the point:
 
 ```bash
 cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
-   assets/scripts/usage-pace.py ~/.claude/scripts/
+   assets/scripts/usage-pace.py assets/scripts/filed-from.py ~/.claude/scripts/
 ```
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
@@ -179,7 +179,11 @@ cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
 week is spent", records meter readings, and — on macOS with the Claude desktop app — measures
 the cap outright with `--calibrate`, by regressing spend against the meter samples the app
 already writes every ~15 minutes. On a machine without that app the flag explains itself and
-exits non-zero; every other path is unaffected and the cap falls back to a recorded reading. Each ships with a sibling `<name>.test.sh` in
+exits non-zero; every other path is unaffected and the cap falls back to a recorded reading.
+`filed-from.py` (#268) owns the `Filed from:` linkage every skill-filed issue carries — `check`
+flags an issue whose body has no valid line, `chain` walks the source chain (issue -> PR -> issue
+filed from it -> ...) both ways — and is what makes "did this PR spawn work" and a rework chain
+computable without a human re-reading every issue body. Each ships with a sibling `<name>.test.sh` in
 the registry, run by CI, and that is where their behaviour is pinned — this file states the
 doctrine, not the code. Bootstrap all or none: a machine with a stale
 `usage-benchmark-row.py` writes step 2's row on a different scale from every row above it, and
