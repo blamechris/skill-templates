@@ -695,15 +695,20 @@ echo; echo "E. S7 — create-issue.md's FILED_FROM resolution block, run for rea
 
 # create-issue.md:26-44's ```bash fence is not a heredoc (no "Filed from:"
 # line lives inside it directly, so Group D's extractor does not apply) --
-# it is the FILED_FROM resolution logic itself. The review flagged two real
-# bugs in it: FROM_PR/FROM_ISSUE/COMMENT_URL were read without ever being
-# assigned (unbound under `set -u`), and the COMMENT_URL append was a bare
-# `[ … ] && … && FILED_FROM=…` as the block's LAST statement, which exports
-# the first test's failure as the whole block's exit status under `set -e`.
-# This extracts the actual fenced block and runs it under `set -euo
-# pipefail` -- the strict-mode conditions that would have caught both --
-# with a fake `gh` (repo view succeeds, pr view fails, matching "not on a PR
-# branch") across all five resolution paths.
+# it is the FILED_FROM resolution logic itself. The review flagged real bugs
+# in it across two rounds: FROM_PR/FROM_ISSUE/COMMENT_URL were read without
+# ever being assigned (unbound under `set -u`); the COMMENT_URL append was a
+# bare `[ … ] && … && FILED_FROM=…` as the block's LAST statement, which
+# exports the first test's failure as the whole block's exit status under
+# `set -e`; and `--standalone` was documented but never referenced in the
+# bash, with the terminal `else` silently emitting `none` for ANY unresolved
+# case -- which is exactly the "forgetting" Critical Rule 7 exists to make
+# distinguishable from a deliberate `none`. This extracts the actual fenced
+# block and runs it under `set -euo pipefail` -- the strict-mode conditions
+# that caught the first round of bugs -- with a fake `gh` (repo view
+# succeeds, pr view fails, matching "not on a PR branch") across every
+# resolution path, including the REFUSE path now that reaching the terminal
+# `else` is a hard failure rather than a silent `none`.
 extract_bash_fence_after() {  # file marker-regex -> prints the first ```bash fence after the first line matching marker-regex
   "$PY" - "$1" "$2" <<'PYEOF'
 import re, sys
@@ -731,31 +736,41 @@ FENCE=$(extract_bash_fence_after "$GENERIC/create-issue.md" 'Resolve `FILED_FROM
 FENCE_SCRIPT="$TMP/create-issue-filed-from-block.sh"
 { echo 'set -euo pipefail'; printf '%s\n' "$FENCE"; echo 'echo "FILED_FROM=$FILED_FROM"'; } > "$FENCE_SCRIPT"
 
-out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID \
+# "nothing resolved" is now a REFUSE + exit 1, never a silent none (Copilot
+# thread PRRT_kwDORLSfvs6kLM0m).
+out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID -u STANDALONE \
+      PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
+[ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q '^REFUSE: no source resolved' \
+  && ok "S7: nothing resolved (no PR, no session, no flags) -> REFUSE, exit 1, never a silent none" \
+  || bad "S7: nothing resolved (no PR, no session, no flags) -> REFUSE, exit 1, never a silent none" "rc=$rc $(flat "$out")"
+
+# --standalone is now an explicit, real resolution path -> none (not the
+# terminal else's old catch-all).
+out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID STANDALONE=1 \
       PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=none" ] \
-  && ok "S7: nothing set (no PR, no session, no flags) -> none, under set -euo pipefail" \
-  || bad "S7: nothing set (no PR, no session, no flags) -> none, under set -euo pipefail" "rc=$rc $(flat "$out")"
+  && ok "S7: --standalone -> none, under set -euo pipefail" \
+  || bad "S7: --standalone -> none, under set -euo pipefail" "rc=$rc $(flat "$out")"
 
-out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL CLAUDE_CODE_SESSION_ID=abc123ef \
+out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u STANDALONE CLAUDE_CODE_SESSION_ID=abc123ef \
       PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=session abc123ef" ] \
   && ok "S7: CLAUDE_CODE_SESSION_ID set -> session <id>, under set -euo pipefail" \
   || bad "S7: CLAUDE_CODE_SESSION_ID set -> session <id>, under set -euo pipefail" "rc=$rc $(flat "$out")"
 
-out=$(env -u FROM_ISSUE -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID FROM_PR=99 \
+out=$(env -u FROM_ISSUE -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID -u STANDALONE FROM_PR=99 \
       PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=#99" ] \
   && ok "S7: --from-pr (FROM_PR) resolves to #99, under set -euo pipefail" \
   || bad "S7: --from-pr (FROM_PR) resolves to #99, under set -euo pipefail" "rc=$rc $(flat "$out")"
 
-out=$(env -u FROM_ISSUE -u CLAUDE_CODE_SESSION_ID FROM_PR=99 COMMENT_URL=https://example.com/x \
+out=$(env -u FROM_ISSUE -u CLAUDE_CODE_SESSION_ID -u STANDALONE FROM_PR=99 COMMENT_URL=https://example.com/x \
       PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=#99 (https://example.com/x)" ] \
   && ok "S7: --from-pr + --comment-url folds the url in, under set -euo pipefail" \
   || bad "S7: --from-pr + --comment-url folds the url in, under set -euo pipefail" "rc=$rc $(flat "$out")"
 
-out=$(env -u FROM_PR -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID FROM_ISSUE=7 \
+out=$(env -u FROM_PR -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID -u STANDALONE FROM_ISSUE=7 \
       PATH="$CI_GHBIN:$PATH" bash "$FENCE_SCRIPT" 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$out" = "FILED_FROM=#7" ] \
   && ok "S7: --from-issue (FROM_ISSUE, decompose case) resolves to #7, under set -euo pipefail" \
