@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "14f5974",
+  "generatedFromCommit": "84fc889",
   "skillCount": 41,
   "skills": [
     {
@@ -522,8 +522,8 @@
     },
     {
       "name": "create-issue",
-      "hash": "14f5974",
-      "lines": 196,
+      "hash": "84fc889",
+      "lines": 200,
       "description": "Create a standardized GitHub issue with labels and traceability.",
       "guards": [
         {
