@@ -5,7 +5,7 @@
 # $HOME/.claude/projects tree — the same shape real subagent sidecars and
 # Workflow runs leave on disk (see the docstring's pointer to the real
 # session used to shape this: an Aeolus session with 15 top-level subagent
-# pairs, 129 more nested one level into subagents/workflows/<runId>/, and
+# pairs, 118 more nested one level into subagents/workflows/<runId>/, and
 # 11 workflow files). Nothing is asserted against prose; every case calls
 # the script and checks its exit code, its stdout/stderr, and the files it
 # did or did not write.
@@ -78,7 +78,7 @@ jfile(os.path.join(sdir, "subagents", "agent-aec00001.meta.json"), {"agentType":
 jsonl(os.path.join(sdir, "subagents", "agent-aec00001.jsonl"), [])
 # A Workflow-spawned agent: its sidecar lives one level into
 # subagents/workflows/<runId>/, NOT directly under subagents/ — real data
-# (an Aeolus session inspected while building this) carried 129 of these
+# (an Aeolus session inspected while building this) carried 118 of these
 # against 15 top-level pairs.
 jfile(os.path.join(sdir, "subagents", "workflows", "wf-nest1", "agent-aec00003.meta.json"),
       {"agentType": "general-purpose"})

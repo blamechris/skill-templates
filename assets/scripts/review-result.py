@@ -95,7 +95,7 @@ SIDECARS AT TWO LEVELS: an agent the top-level session spawns directly gets
 its `.meta.json`/`.jsonl` pair directly under `<session-dir>/subagents/`. An
 agent a *Workflow run* spawns gets the same pair one level deeper, under
 `<session-dir>/subagents/workflows/<runId>/` — a real session inspected
-while building this (#267 review) carried 15 top-level pairs and 129 nested
+while building this (#267 review) carried 15 top-level pairs and 118 nested
 ones. `record`, `harvest` and `list` all check both levels; `record` writes
 the `.result.json` beside whichever level the sidecar was actually found at.
 

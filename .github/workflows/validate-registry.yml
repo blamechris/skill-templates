@@ -628,7 +628,7 @@ jobs:
         # skips an agent that already has a `.result.json`, and reports rather than
         # crashes on an invalid block. Both `record` and `harvest` check a SECOND
         # sidecar location, one level into `subagents/workflows/<runId>/`: a real
-        # session inspected while building this carried 129 agents spawned by
+        # session inspected while building this carried 118 agents spawned by
         # Workflow runs there against 15 at the top level, and neither command saw
         # them before this was added. `list` walks a Workflow's `result` value
         # recursively and surfaces every nested dict that validates against the
