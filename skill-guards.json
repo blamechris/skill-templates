@@ -493,6 +493,13 @@
         "PR number and comment",
         "[Ll]ink back to the source"
       ]
+    },
+    {
+      "label": "filed-from-line",
+      "anyOf": [
+        "Filed from:"
+      ],
+      "note": "#268 — the line is the machine-read source of every issue; a copy that drops it makes rework chains (issue -> PR -> issue filed from it -> PR ...) untraversable without a human re-reading every body. Bound loosely on purpose: `Filed from:` itself never appears as prose elsewhere in this template, only inside the two body examples and the Critical Rule that states the requirement, so there is no neighbouring-heading vacuity to guard against the way `issue-creation-code` had to. A customizing agent that keeps ANY of the three occurrences — either body template's `Filed from: ${FILED_FROM}` line, or Critical Rule 7's sentence — has kept the rule; losing all three is losing the field."
     }
   ],
   "create-pr": [

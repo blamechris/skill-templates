@@ -75,7 +75,11 @@ For each high-complexity issue:
 SUB_URL=$(gh issue create \
   --title "type(scope): Sub-task description" \
   --label "enhancement" \
-  --body "$(cat <<'EOF'
+  --body "$(cat <<EOF
+## Context
+
+Filed from: #${ISSUE_NUM}
+
 ## Summary
 
 Specific sub-task description.
@@ -84,7 +88,7 @@ Part of #${ISSUE_NUM}
 
 ## Implementation Plan
 
-- Files to modify: `src/path/to/file`
+- Files to modify: \`src/path/to/file\`
 - Test strategy: Add tests for X behavior
 - Approach: [specific implementation details]
 

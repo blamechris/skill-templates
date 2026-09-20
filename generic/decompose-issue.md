@@ -118,6 +118,10 @@ for SUB in "${PROPOSED_SUBS[@]}"; do
     --title "${SUB_TITLE}" \
     --label "${SUB_LABELS}" \
     --body "$(cat <<EOF
+## Context
+
+Filed from: #${PARENT_NUM}
+
 ## Summary
 
 ${SUB_DESCRIPTION}
