@@ -1,12 +1,12 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "84fc889",
+  "generatedFromCommit": "c4e6a51",
   "skillCount": 41,
   "skills": [
     {
       "name": "agent-review",
-      "hash": "9defd4a",
-      "lines": 206,
+      "hash": "564fd55",
+      "lines": 280,
       "description": "Launch an expert code reviewer agent with full project context.",
       "guards": [
         {
@@ -38,6 +38,13 @@
             "reconcile",
             "cross-reference"
           ]
+        },
+        {
+          "label": "structured-review-result",
+          "anyOf": [
+            "MUST end with a fenced .{0,10}json review-result.{0,10} block"
+          ],
+          "note": "#267 — the ```json review-result``` block is the machine-readable verdict a review skill's final report carries; a copy that drops it loses the leading signal (rounds, severity mix, mutation-proven vs asserted findings) that made agent-review's output queryable across runs instead of prose only. REBOUND from a first cut that was vacuous: anyOf: [\"review-result\"] matched the bare token, which survives in the `record` command prose and in `review-result.py`'s own name even after the fenced block ITSELF is deleted — an adversarial reviewer proved this by deleting the whole block and watching skill-lint stay green (the guard's own job, per the issue-creation-code guard's note precedent: bind the sentence that states the rule, not a token the enactment also carries). Now binds the RULE SENTENCE — \"The reviewer's final report MUST end with a fenced ```json review-result``` block\" — via a pattern tolerant of the 4-backtick escaping the sentence itself needs to display 3 backticks inline. Verified both ways: deleting only that sentence (leaving the fence, the JSON example, the field docs, and the record-command prose intact, and `review-result` still appearing 6 of its original 8 times) turns the guard red; restoring it turns the guard green."
         }
       ]
     },
@@ -109,7 +116,7 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "9defd4a",
+      "hash": "600c374",
       "lines": 520,
       "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
       "guards": [
@@ -260,7 +267,7 @@
     },
     {
       "name": "bug-hunt",
-      "hash": "a4e30c1",
+      "hash": "600c374",
       "lines": 337,
       "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.",
       "guards": [
@@ -464,8 +471,8 @@
     },
     {
       "name": "check-pr",
-      "hash": "9defd4a",
-      "lines": 477,
+      "hash": "6584b27",
+      "lines": 484,
       "description": "Address all PR review comments systematically and respond inline.",
       "guards": [
         {
@@ -522,7 +529,7 @@
     },
     {
       "name": "create-issue",
-      "hash": "84fc889",
+      "hash": "600c374",
       "lines": 200,
       "description": "Create a standardized GitHub issue with labels and traceability.",
       "guards": [
@@ -683,7 +690,7 @@
     },
     {
       "name": "decompose-issue",
-      "hash": "a4e30c1",
+      "hash": "600c374",
       "lines": 241,
       "description": "Break a single GitHub issue that is too large into 2-5 independently implementable sub-issues. This is the **manual triage** counterpart to the auto-decomposition baked into `/autonomous-dev-flow` and `/parallel-dev` — use it when a human reads an issue and decides it needs splitting before any implementation runs.",
       "guards": [
@@ -943,8 +950,8 @@
     },
     {
       "name": "full-review",
-      "hash": "a0b98e6",
-      "lines": 101,
+      "hash": "6584b27",
+      "lines": 103,
       "description": "Run a complete review pipeline: agent-review first, then check-pr. The agent-review pass naturally fills the ~4 minute Copilot review delay, so check-pr starts with comments already waiting.",
       "guards": [
         {
@@ -1591,7 +1598,7 @@
     },
     {
       "name": "project-audit",
-      "hash": "9defd4a",
+      "hash": "600c374",
       "lines": 535,
       "description": "Launch a comprehensive multi-agent audit of the entire project. Agents with diverse perspectives analyze the codebase in parallel, then findings are synthesized into a master assessment with actionable recommendations.",
       "guards": [
@@ -1862,8 +1869,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "86843f6",
-      "lines": 214,
+      "hash": "523ea07",
+      "lines": 220,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {

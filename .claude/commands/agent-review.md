@@ -107,6 +107,69 @@ How this change fits within the project architecture.
 - [ ] Comment - Feedback only, author decides
 ```
 
+#### Structured result (machine-read)
+
+The reviewer's final report MUST end with a fenced ```` ```json review-result ```` block
+conforming to `review-result.py schema` (#267) — placed **immediately before** the mechanical
+`**Status:**` block, which stays the actual last thing in the message per the global
+end-of-message convention. This block is what makes the verdict and findings queryable across
+runs instead of existing only as prose:
+
+```json review-result
+{
+  "kind": "review-result",
+  "verdict": "approve",
+  "body_matches_tree": true,
+  "findings": [
+    {
+      "severity": "critical",
+      "title": "one line, matches the table row above",
+      "file": "path/to/file.ext",
+      "line": 42,
+      "evidence": "the command output or quoted lines that support this — not a restatement of the title",
+      "mutation_ran": true,
+      "red_line": false
+    }
+  ],
+  "pr": 123,
+  "repo": "owner/repo",
+  "skill": "agent-review",
+  "round": 1
+}
+```
+
+If more than one such block appears in the report (a draft superseded by a final revision),
+the LAST one is what gets recorded — always end with the one that should count.
+
+One line per field:
+- **kind** — always the literal string `"review-result"`; the positive marker that tells this
+  apart from any other verdict/findings-shaped dict (`review-result.py list --near-misses`
+  is what a missing `kind` shows up as).
+- **verdict** — `approve` / `request_changes` / `comment`; matches the checkbox ticked above.
+- **body_matches_tree** — bool or null; see the rule below. Never left `true` by default.
+- **findings** — every row from Critical/Suggestions/Nitpicks above, one object each.
+- **severity** — `critical` / `suggestion` / `nitpick`, matching which table the row came from.
+- **file** / **line** — where the finding lives, or `null` when it doesn't apply.
+- **evidence** — the command output or quoted lines that back the finding.
+- **mutation_ran** — see the rule below.
+- **red_line** — true only for a hard rule violation no severity downgrade can waive (a secret,
+  an attribution miss, a protected-branch bypass); independent of `severity`.
+- **pr** / **repo** / **round** — context; `round` increments on a re-review of the same PR.
+
+Two rules, non-negotiable:
+1. **`mutation_ran` is true only if the reviewer actually RE-RAN the cited check or mutation in
+   this review.** A finding asserted from reading the diff, however confident, is `false` — this
+   field is what lets `review-result.py list` count proven findings separately from asserted ones.
+2. **`body_matches_tree` is true only after comparing the PR body's claims against the diff.** A
+   review that never checked the body (or the PR carries none) reports `null`, never a
+   default-true.
+
+In this repo, `/agent-review` is typically invoked directly by the top-level session rather than
+spawned as a background subagent — there is no `agentType: general-purpose` sidecar to record
+beside for an inline run, so the block in step 3's report satisfies the guard on its own. When a
+review does run as a spawned subagent (a marathon session batching several PR reviews), the
+parent session records it right after the agent returns, per step 7.
+
 ### 4. Post Review on PR
 
 Post review as a PR comment using heredoc:
@@ -193,6 +256,19 @@ Then below the table, list:
 - URLs for all created/closed issues
 - Link to posted review comment
 
+**Capture the result.** When this review ran as a subagent (spawned via the Agent tool), the
+orchestrator records its structured result — the agent's full report, including the
+`review-result` block from step 3, fed on stdin — beside the subagent sidecar: `python3
+~/.claude/scripts/review-result.py record --agent <id> --skill agent-review --pr ${PR_NUM}
+<<'EOF' … EOF` (the agent's report between the markers, or `< report.md` if it was saved to a
+file first), where `<id>` is the agent id the Agent tool result reported.
+
+If the orchestrator never runs `record` (the agent's report was only read, not captured),
+`review-result.py harvest` recovers the block from the transcript afterward — see
+`/session-lifecycle`. When this review ran inline rather than as a subagent, there is no
+sidecar to record beside; the block in step 3 still satisfies the `structured-review-result`
+guard on this skill.
+
 ## Agent Persona
 
 You are a **Registry Reviewer** — expert in Claude Code skill design, bash 3.2 portability, dependency-free Node ESM, and the generated-index contract that keeps `registry.json`, `skill-guards.json`, and `generic/*.md` in agreement.
@@ -208,5 +284,5 @@ Your mindset: *"When an agent installs this template into a repo I've never seen
 3. **Pragmatic over perfect** - Working code first, polish later
 4. **Reliability first** - Always consider error recovery and edge cases
 5. **Keep it simple** - No over-engineering, no premature abstractions
-<!-- skill-templates: agent-review 5c35725 2026-08-01 -->
+<!-- skill-templates: agent-review f6a8527 2026-09-20 -->
 
