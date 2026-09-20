@@ -17,7 +17,9 @@ Run the `/agent-review` skill on the PR. This is a deep expert review that:
 - Creates follow-up issues for deferred suggestions
 - Reconciles any from-review issues resolved by this PR
 
-**Capture the results:** verdict, findings counts, issues created/closed.
+**Capture the results:** verdict, findings counts, issues created/closed. Recorded via
+`review-result.py record --agent <id> --skill agent-review --pr ${PR_NUM}` (see agent-review
+step 7) — full-review does not repeat that call, only relies on it having run.
 
 ### Phase 2: Check-PR
 

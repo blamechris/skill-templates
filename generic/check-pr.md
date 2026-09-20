@@ -427,6 +427,13 @@ Output a **summary table** followed by details. The table is the PRIMARY output 
 - **Changes:** Comma-separated brief descriptions of what changed (2-5 words each). Works for fixes, features, refactors — keep it generic.
 - **Issues:** `Created: #X, #Y` for new follow-up issues. `Closed: #Z` for resolved from-review issues. `—` if none.
 
+**Capture the results when this run is the review of record** — i.e. check-pr ran standalone
+rather than after `/agent-review` (which already records its own `review-result` per its step
+7). Map the summary table above onto the schema (`verdict: comment` unless every FIX/FOLLOW-UP
+row was resolved, in which case `approve`; one finding per FIX/FALSE POSITIVE/FOLLOW-UP row)
+and record it the same way: `python3 ~/.claude/scripts/review-result.py record --agent <id>
+--skill check-pr --pr ${PR_NUM}`.
+
 Then below the table, list:
 - Full commit hashes for each fix
 - Reasons for any false positives
