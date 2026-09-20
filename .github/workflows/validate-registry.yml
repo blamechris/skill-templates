@@ -597,3 +597,30 @@ jobs:
         # rule, and nothing in Groups A-C (which only ever exercise the checker)
         # could have caught a bug in what the TEMPLATES emit.
         run: ./assets/scripts/filed-from.test.sh
+
+      - name: review-result regression tests
+        # #267: the subagent sidecar carried no result — a review agent's verdict
+        # and findings existed only as prose in its final message, and a Workflow's
+        # `result` was persisted in workflows/wf_*.json in whatever shape the
+        # script happened to return, so neither was queryable across runs. There is
+        # no `*.test.sh` glob in this workflow (see the usage-pace step above), so
+        # this script needs its own named step too.
+        #
+        # What this pins: the hand-written validator names every violation by path
+        # (`findings[2].severity: 'high' is not one of [...]`), not just pass/fail;
+        # `mutation_ran` and `red_line` are validated as real booleans, not merely
+        # present; the fenced ```json review-result``` block is extracted correctly
+        # out of a full agent report, and the LAST such block wins when more than
+        # one is present. `record` REFUSES — and writes nothing — on an unset
+        # session id, an unknown agent (no `.meta.json`/`.jsonl` sidecar), an
+        # ambiguous or missing session directory, and an existing `.result.json`
+        # without `--force`; every REFUSE case is asserted to have left the
+        # filesystem exactly as it found it. `harvest` recovers a block from a
+        # subagent transcript's LAST assistant message (ignoring earlier drafts and
+        # non-assistant lines), skips an agent that already has a `.result.json`,
+        # and reports rather than crashes on an invalid block. `list` walks a
+        # Workflow's `result` value recursively and surfaces every nested dict that
+        # validates against the schema — without copying it anywhere — while
+        # leaving a non-conforming sibling out, and its `--json` output round-trips
+        # exact severity counts and the `mutation_ran`/total ratio.
+        run: ./assets/scripts/review-result.test.sh
