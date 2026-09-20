@@ -2,7 +2,7 @@
   "registry": "blamechris/skill-templates",
   "skills": {
     "agent-review": {
-      "hash": "d925d50",
+      "hash": "f6a8527",
       "installed": "2026-09-20",
       "targets": [
         "claude"
