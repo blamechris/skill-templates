@@ -30,6 +30,13 @@
         "reconcile",
         "cross-reference"
       ]
+    },
+    {
+      "label": "structured-review-result",
+      "anyOf": [
+        "review-result"
+      ],
+      "note": "#267 — the ```json review-result``` block is the machine-readable verdict a review skill's final report carries; a copy that drops it loses the leading signal (rounds, severity mix, mutation-proven vs asserted findings) that made agent-review's output queryable across runs instead of prose only. Binds on the literal token `review-result`, which appears only as the fence's own language/name marker and in review-result.py's own name — plain prose about a review's result (\"the result of the review\") does not contain the hyphenated form, so this is not vacuous the way a bare word like `result` would be."
     }
   ],
   "agentic-audit": [
