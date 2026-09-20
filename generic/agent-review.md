@@ -107,6 +107,7 @@ runs instead of existing only as prose:
 
 ```json review-result
 {
+  "kind": "review-result",
   "verdict": "approve",
   "body_matches_tree": true,
   "findings": [
@@ -127,7 +128,13 @@ runs instead of existing only as prose:
 }
 ```
 
+If more than one such block appears in the report (a draft superseded by a final revision),
+the LAST one is what gets recorded — always end with the one that should count.
+
 One line per field:
+- **kind** — always the literal string `"review-result"`; the positive marker that tells this
+  apart from any other verdict/findings-shaped dict (`review-result.py list --near-misses`
+  is what a missing `kind` shows up as).
 - **verdict** — `approve` / `request_changes` / `comment`; matches the checkbox ticked above.
 - **body_matches_tree** — bool or null; see the rule below. Never left `true` by default.
 - **findings** — every row from Critical/Suggestions/Nitpicks above, one object each.
@@ -237,13 +244,11 @@ Then below the table, list:
 - Link to posted review comment
 
 **Capture the result.** When this review ran as a subagent (spawned via the Agent tool), the
-orchestrator records its structured result — the `review-result` block from step 3, fed on
-stdin — beside the subagent sidecar:
-
-```bash
-python3 ~/.claude/scripts/review-result.py record \
-  --agent <agent id from the Agent tool result> --skill agent-review --pr ${PR_NUM}
-```
+orchestrator records its structured result — the agent's full report, including the
+`review-result` block from step 3, fed on stdin — beside the subagent sidecar: `python3
+~/.claude/scripts/review-result.py record --agent <id> --skill agent-review --pr ${PR_NUM}
+<<'EOF' … EOF` (the agent's report between the markers, or `< report.md` if it was saved to a
+file first), where `<id>` is the agent id the Agent tool result reported.
 
 If the orchestrator never runs `record` (the agent's report was only read, not captured),
 `review-result.py harvest` recovers the block from the transcript afterward — see
