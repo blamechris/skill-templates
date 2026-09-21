@@ -641,3 +641,65 @@ jobs:
         # `--json` output round-trips exact severity counts and the
         # `mutation_ran`/total ratio, at both sidecar levels.
         run: ./assets/scripts/review-result.test.sh
+
+      - name: rework-lag regression tests
+        # #271, epic #266, build item 5 of the session-evaluation plan: the
+        # LAGGING signal — did a merged PR get reworked later? "A later PR
+        # touched the same file" overcounts by roughly 10x (measured 2026-09-20
+        # on Aeolus: 10 of 16 PRs by that naive metric, 1 of 16 by content-
+        # matching added lines against later removed lines). There is no
+        # `*.test.sh` glob in this workflow, so this script gets its own named
+        # step like every other asset script.
+        #
+        # What this pins: line matching is per file, strips whitespace, and
+        # excludes trivial (<=12 char) lines and `//`/`///`/`*`/`#`-prefixed
+        # comment lines even when a later PR removes them verbatim — the
+        # exact overcounting shape a file-level metric cannot see. A PR that
+        # merely shares a touched FILE with a later PR, without any of its
+        # own added lines being removed, is never counted as reworked — the
+        # regression this script exists to reject. MATURITY is the load-
+        # bearing honesty rule: a PR whose W-day window has not elapsed by
+        # `--until` is `immature`, never `clean` — "clean" is earned only by
+        # a window that ran out with no rework, and collapsing "no rework
+        # yet" into "no rework" is exactly the dishonesty this script
+        # replaces. `--until` makes a result reproducible: re-running the
+        # same `--since`/`--until` after more PRs merge must not change the
+        # answer, which is what the acceptance figure in #271 depends on —
+        # pinned here by a PR excluded at one `--until` and included (and
+        # reworking an until-then-clean PR) once `--until` moves forward.
+        # Reverts are detected two ways — a `This reverts commit <sha>`
+        # trailer prefix-matching the earlier PR's merge commit, and a full
+        # line-level inversion with no revert wording — and a REVERT pair is
+        # additionally present in the ordinary reworked/pairs data (it is not
+        # double-counted, just visible from both), while a PARTIAL undo is
+        # rework but explicitly not an inversion. Both issue measures
+        # (reopened-issue detection, follow-on closure) import
+        # `filed-from.py`'s `parse_filed_from` by path rather than
+        # re-implementing the `Filed from:` grammar, and REFUSE (exit 2,
+        # naming the missing sibling) when an issue measure is requested and
+        # that sibling is absent — `--no-issues` skips both measures and
+        # needs no sibling at all. A `gh`/`git` failure on any one measure
+        # (a diff, a timeline call, an issue list) is reported as `unknown`
+        # and forces exit 2 without ever reading as "clean" or "zero"; only a
+        # failure of the PR list itself is fatal with no JSON emitted at all.
+        # `--attribute` credits PRs to session ids using the same two-filter
+        # discipline as `usage-benchmark-row.py`'s `scan_work` — nomination
+        # from a transcript's own raw text (the identical regexes, reused
+        # verbatim) intersected with the transcript's own `[t0, t1]` window —
+        # and never opens a session id whose glob matches more than one
+        # transcript. Four more regressions the review rounds found, each a
+        # silent-zero mode and each pinned by a mutation the suite now
+        # catches: diffs are read with `--diff-merges=first-parent`, because
+        # plain `git show` on a TRUE two-parent merge commit emits an empty
+        # diff (default `--cc`) with exit 0 — on a repo that does not squash-
+        # merge every PR then reads clean; the diff parser tracks the remove
+        # and add paths independently, so a deleted file (`+++ /dev/null`) or
+        # a rename keeps its removed lines on its own (old) path instead of
+        # dropping them or charging them to the previous file in the diff; a
+        # PR whose diff could not be read at all lands in a fourth disjoint
+        # bucket, `unreadable`, never in `clean`; and `--- `/`+++ ` are read
+        # as file headers only before a block's first `@@`, because a
+        # removed SQL/Lua comment line (`-- ...`) becomes `--- ...` once
+        # diffed and used to repath the rest of its hunk. Quoted non-ASCII
+        # paths are unescaped so a file's adds and removes share one key.
+        run: ./assets/scripts/rework-lag.test.sh
