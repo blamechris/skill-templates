@@ -112,16 +112,79 @@ scanning for the same artifact near a correction-cue word ("actually",
 this O(n) calls instead of O(n^2) -- see docs/session-distill-record-shape.md's
 "Three passes, one model boundary".
 
-THE RECORD (schema_version 2), one per run, appended to
+REPO-QUALIFIED `#N` RETRIEVAL (#287). A `#N` artifact is only a real
+match when it names the SAME repo on both sides -- two repos sharing an
+issue/PR number (measured on session 13cee7be: Aeolus and skill-templates
+both had a #264) turned an unrelated later mention into a false
+`later_wrong`. Retrieval computes, per run, a repo SET from four STRONG
+qualified forms found in its own brief/report/tool inputs -- `owner/
+repo#N`, the `github.com/owner/repo/(pull|issues)/N` URL, a `gh ...
+-R|--repo owner/repo` flag, `git -C <path>`/`cd <path>` under `.../
+Projects/<repo>` -- plus its own cwd(s) mapped to a repo, plus any bare
+mention of a repo NAME already in the SESSION-WIDE vocabulary (built from
+those same four strong forms across every run, before any per-run set is
+computed) -- never the reverse: a bare mention resolves against the
+vocabulary, it never seeds it, or "issue #250" would qualify "issue" as a
+repo. Each `#N` OCCURRENCE then resolves to a repo: an explicit qualifier
+attached to THAT occurrence wins; otherwise the run's own repo set if it
+names exactly one; otherwise unresolved (ambiguous). `find_chain_
+candidates` compares the claim side's resolution against each candidate
+occurrence's: both resolved and DIFFERENT -> not a candidate; both
+resolved and EQUAL -> an ordinary candidate, `repo_match: "same"`; either
+side unresolved -> kept but tagged `repo_match: "ambiguous"` (a non-`#N`
+artifact carries no repo concept and is tagged `"n/a"`). The chain prompt
+prints every candidate's tag and is told an `"ambiguous"` one cannot
+alone support a `later_wrong` or a label; `normalize_later_wrong` enforces
+that DETERMINISTICALLY on the way out regardless of what the model does
+with it -- a `later_wrong` entry whose `contradicted_by.run` is linked to
+this run's claims ONLY through `"ambiguous"`-tagged candidates is dropped
+(reason `"repo-ambiguous-only"`, surfaced the same way #278 C2's
+unresolvable-claim drop is), which is exactly the reused evidence-chain
+mechanism (#290) that also drops a `classified_as` entry whose sole
+`supports` pointer named that now-gone index.
+
+THE PROOF-LOCATABLE GUARD (#291). A schema-valid but content-free
+response -- the model returns `{asked: "test", ..., claims: [{"proof":
+"test proof", ...}]}` against a real report -- was recorded as a
+successful distill with no trace of anything being wrong. Deterministic,
+after the distill call and BEFORE the chain call (so a placeholder result
+never reaches it): `build_tool_trace` keeps, alongside the truncated
+`trace[]`, the FULL untruncated one-line form of every tool_use `input`
+(`tool_digest(input, head=10**9, tail=0)`, in-memory only as `tool_inputs_
+full` on the run stub -- never written into a record; `run_stub_public`
+does not carry it). A claim's `proof` is "located" when EVERY piece of
+it (proof_segments: `[N] `/`ToolName: ` prefixes stripped, output after
+` -> ` dropped, split at each `...`/`…`) occurs in order inside ONE entry
+of `tool_inputs_full`; pieces totalling under PROOF_MIN_FRAGMENT_CHARS
+locate only as a whole input.
+A result with >=1 non-null `proof` where EVERY one is unlocatable is a
+FAILURE (`phase: "distill"`, `error` prefixed `"proof-not-in-trace:"`),
+eligible for retry like any other distill-phase failure, and the chain
+call is never made for it. Otherwise every claim with a non-null `proof`
+gets `proof_located: true|false` (null for a null `proof`) on the written
+record, and `report` prints the unlocatable-proof count/rate. Measured on
+the 8 real re-run records at `~/Obsidian/no-it-all/records/session-
+distill-13cee7be-rerun-2026-09-21/`: 4 of 211 real non-null proofs are
+unlocatable, each a real misquote of the command that ran (a dropped
+`| tail -4` twice, `tail -2` for `tail -3`, `=="` for `==="`); the
+placeholder record's one proof is 1/1 unlocatable. A zero-claim or all-null-proof result is NOT a failure
+by this guard -- there is no non-null proof for it to fail on, and this
+script does not otherwise police that (left as-is; #269/#285's own model-
+side labels are the mechanism for an empty or thin claims list).
+
+THE RECORD (schema_version 3), one per run, appended to
 `session-distill.json`'s `records[]`:
 
   kind                  const "session-distill-record".
-  schema_version        int, currently 2 (bumped from 1 by #285 -- see
-                         REPORT EXTRACTION AND DETERMINISTIC VERIFICATIONS
-                         below for what changed. `--resume` against an
-                         existing document written under a different
-                         schema_version REFUSES rather than mixing record
-                         shapes in one records[] list).
+  schema_version        int, currently 3 (bumped from 2 by #291 -- each
+                         claim now carries `proof_located`, see THE
+                         PROOF-LOCATABLE GUARD below. schema_version 2 was
+                         bumped from 1 by #285 -- see REPORT EXTRACTION AND
+                         DETERMINISTIC VERIFICATIONS below for what that
+                         changed. `--resume` against an existing document
+                         written under a different schema_version REFUSES
+                         rather than mixing record shapes in one records[]
+                         list).
   session               the session id.
   run                   provenance + shape, NOT the full brief/report text
                          (that stays in the transcript the `transcript`
@@ -137,16 +200,22 @@ THE RECORD (schema_version 2), one per run, appended to
                          "none" -- see below.
   asked / understood /
   delivered             free-text, from the distill call.
-  claims[]              the join column: {id, text, kind, proof, quote}.
-                         `later_wrong` and `classified_as` both point at a
-                         claim id, which is what makes a `classified_as`
-                         label auditable rather than a bare string. `kind`
-                         is free text; the distill call is instructed to
-                         use "verification" for a claim resting on a
-                         VERIFICATION COMMANDS entry. It is told NOT to
-                         restate gates_run/gates_named_not_run as claims
-                         (#286: 3 of 8 re-run records did, each drawing a
-                         spurious absence label).
+  claims[]              the join column: {id, text, kind, proof, quote,
+                         proof_located}. `later_wrong` and `classified_as`
+                         both point at a claim id, which is what makes a
+                         `classified_as` label auditable rather than a
+                         bare string. `kind` is free text; the distill
+                         call is instructed to use "verification" for a
+                         claim resting on a VERIFICATION COMMANDS entry.
+                         It is told NOT to restate gates_run/
+                         gates_named_not_run as claims (#286: 3 of 8
+                         re-run records did, each drawing a spurious
+                         absence label). `proof_located` (#291) is
+                         True/False for a non-null `proof` (whether its
+                         elided pieces all occur, in order, in one of
+                         this run's own full tool inputs), or
+                         null for a null `proof` -- see THE PROOF-
+                         LOCATABLE GUARD below.
   verifications[]        DETERMINISTIC, never from the model -- one entry
                          per Bash tool_use, classified into zero or more of
                          test/lint/build/ci_read (see REPORT EXTRACTION AND
@@ -319,7 +388,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # The closed vocabulary -- exactly the checklist, 8 + "unclassified". Frozen
 # here and nowhere else: both enforcement points (the --json-schema enum
@@ -385,6 +454,56 @@ ARTIFACT_RE = re.compile(r"#\d+|`[^`\n]{2,80}`|(?:[\w.-]+/)+[\w.-]+\.\w+")
 
 REMINDER_OPEN = "<system-reminder>"
 REMINDER_CLOSE = "</system-reminder>"
+
+# #287: repo-qualification for `#N` artifacts in multi-repo sessions. Four
+# STRONG forms SEED the session-wide repo vocabulary (build_repo_vocabulary):
+# `owner/repo#N`, the `github.com/owner/repo/(pull|issues)/N` URL, a
+# `gh ... -R|--repo owner/repo` flag, and `git -C <path>`/`cd <path>` under
+# `.../Projects/<repo>`. A BARE name mention or a bare `repo#N`/`repo #N`
+# never seeds the vocabulary -- only ever resolves against a name already in
+# it (see compute_run_repo_set/resolve_hash_qualifier) -- or "issue #250"
+# would qualify "issue" as a repo.
+_REPO_QUALIFIED_HASH_RE = re.compile(r'\b([A-Za-z0-9][\w.-]*)/([A-Za-z0-9][\w.-]*)#(\d+)')
+_REPO_URL_HASH_RE = re.compile(
+    r'github\.com/([A-Za-z0-9][\w.-]*)/([A-Za-z0-9][\w.-]*)/(?:pull|issues)/(\d+)')
+# `-R`/`--repo` is `gh`'s own flag -- `\bgh\b` must appear up to 60 chars
+# before it, same line, or this also matches `grep -R <path>`, `cp -R`,
+# `rsync -R`, none of which name a GitHub repo at all (measured on
+# 13cee7be: `grep -R Sources/AeolusHelper` produced a false repo
+# "AeolusHelper" without this guard).
+_REPO_GH_FLAG_RE = re.compile(
+    r'\bgh\b[^\n]{0,60}?(?:-R|--repo)[=\s]+([A-Za-z0-9][\w.-]*)/([A-Za-z0-9][\w.-]*)')
+_REPO_GIT_C_CD_RE = re.compile(r'(?:git\s+-C\s+|cd\s+)\S*?/Projects/([A-Za-z0-9][\w.-]*)')
+# A captured repo name never legitimately ends in sentence/bracket
+# punctuation -- `--repo blamechris/skill-templates.` (end of a sentence)
+# would otherwise mint the repo "skill-templates." (measured on 13cee7be).
+_REPO_NAME_TRAILING_PUNCT = ".,;:)]}'\""
+
+
+def _clean_repo_name(name):
+    return name.rstrip(_REPO_NAME_TRAILING_PUNCT) if name else name
+
+# A `#N` occurrence's own attached qualifier: `owner/repo#N` or a bare
+# `repo#N`/`repo #N` immediately BEFORE it (`_TAIL_*`), or the markdown-link
+# shape `[#N](https://github.com/owner/repo/(pull|issues)/N)` immediately
+# AFTER it.
+_TAIL_OWNER_REPO_RE = re.compile(r'([A-Za-z0-9][\w.-]*)/([A-Za-z0-9][\w.-]*)$')
+_TAIL_BARE_NAME_RE = re.compile(r'([A-Za-z][\w.-]*)\s?$')
+
+# cwd -> repo (#287): the slash form of a worktree path (`.../Projects/
+# <repo>/...`) captures generically; the dash-joined form a session
+# directory basename uses (`-Users-...-Projects-Aeolus--claude-worktrees-
+# ...`) cannot be split unambiguously when a repo name itself contains a
+# dash (`skill-templates`), so it is matched against already-KNOWN names
+# instead of re-derived from the path alone.
+_CWD_SLASH_PROJECTS_RE = re.compile(r'/Projects/([^/]+)')
+_CWD_DASH_PROJECTS_RE = re.compile(r'-Projects-')
+
+# #291: prefixes stripped from a `proof` before it is split into pieces
+# (see proof_segments).
+_PROOF_INDEX_PREFIX_RE = re.compile(r'^\[\d+\] ')
+_PROOF_TOOL_PREFIX_RE = re.compile(r'^[A-Za-z_][\w-]*: ')
+PROOF_MIN_FRAGMENT_CHARS = 8
 
 # #285: known harness cutoff/error prefixes -- a report that opens with one
 # of these was never a real result, it is the harness cutting the run off
@@ -659,6 +778,113 @@ def tool_digest(input_obj, head=120, tail=60):
     return s
 
 
+def proof_segments(proof):
+    """The literal pieces of a claim's `proof` string, in order, used to
+    test it against the run's FULL (untruncated) tool inputs (#291's
+    proof-locatable guard). Strips an optional leading `[N] ` index tag,
+    then an optional leading `ToolName: ` tag -- the shape the model
+    copies straight out of the TOOL TRACE prompt section's numbered
+    `[i] Tool: digest` lines -- drops everything from the first
+    output-arrow (` -> `) on, unwraps a proof quoted whole (`"npm test"`),
+    then splits at every elision (`...`, `…`) and whitespace-collapses
+    each piece. Every piece is checked, not just the first: the model
+    elides MID-command (`cd .../skill-templates-frozen && git show ...`),
+    so the text before the first elision is often just `cd`, which
+    matches nearly any trace. [] when PROOF is falsy or reduces to
+    nothing -- the caller treats that as unlocatable."""
+    if not proof:
+        return []
+    s = proof
+    m = _PROOF_INDEX_PREFIX_RE.match(s)
+    if m:
+        s = s[m.end():]
+    m = _PROOF_TOOL_PREFIX_RE.match(s)
+    if m:
+        s = s[m.end():]
+    arrow = s.find(" -> ")
+    if arrow != -1:
+        s = s[:arrow]
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'`":
+        s = s[1:-1]
+    pieces = re.split(r"\.\.\.|…", s)
+    return [p for p in (" ".join(x.split()) for x in pieces) if p]
+
+
+def locate_proof_fragment(proof):
+    """The leading piece of PROOF (see proof_segments), or ""."""
+    segs = proof_segments(proof)
+    return segs[0] if segs else ""
+
+
+def _segments_in_order(segs, full):
+    pos = 0
+    for seg in segs:
+        i = full.find(seg, pos)
+        if i == -1:
+            return False
+        pos = i + len(seg)
+    return True
+
+
+def proof_located(proof, tool_inputs_full):
+    """True iff every piece of PROOF (proof_segments) occurs, in order,
+    within ONE entry of TOOL_INPUTS_FULL -- the run's own full, untruncated
+    tool_use inputs (#291). Never "located" against no pieces or an empty
+    TOOL_INPUTS_FULL (a run with no tool calls cannot locate anything).
+    Pieces totalling fewer than PROOF_MIN_FRAGMENT_CHARS locate only as a
+    WHOLE input: "git" is a substring of nearly any trace, so a fabricated
+    proof that short would otherwise always pass."""
+    segs = proof_segments(proof)
+    if not segs or not tool_inputs_full:
+        return False
+    if sum(len(x) for x in segs) < PROOF_MIN_FRAGMENT_CHARS:
+        return len(segs) == 1 and any(segs[0] == full for full in tool_inputs_full)
+    return any(_segments_in_order(segs, full) for full in tool_inputs_full)
+
+
+def compute_proof_located(claims, tool_inputs_full):
+    """Mutates each claim dict in CLAIMS (already normalize_claims'd) in
+    place, adding `proof_located`: True/False for a non-null `proof`, or
+    None when `proof` is null -- never a silently absent key (#291).
+    Returns (n_nonnull, n_unlocatable) so the caller can decide the
+    placeholder-response FAILURE (every non-null proof unlocatable, #291)
+    without re-deriving the same walk a second time."""
+    n_nonnull = 0
+    n_unlocatable = 0
+    for c in claims:
+        proof = c.get("proof")
+        # Only a NULL proof is "nothing to check". An empty string is a
+        # proof the model supplied and cannot be located, so counting it
+        # as null would let a placeholder of empty proofs past the guard.
+        if proof is None:
+            c["proof_located"] = None
+            continue
+        n_nonnull += 1
+        located = proof_located(proof, tool_inputs_full)
+        c["proof_located"] = located
+        if not located:
+            n_unlocatable += 1
+    return n_nonnull, n_unlocatable
+
+
+def claims_all_proofs_unlocatable(distilled_doc, tool_inputs_full):
+    """(is_failure, n_nonnull, n_unlocatable) for a fresh (not yet
+    persisted) DISTILLED_DOC -- #291's placeholder-response guard. A
+    result with >=1 non-null proof where EVERY one fails to locate in
+    TOOL_INPUTS_FULL is a FAILURE (a schema-valid but content-free
+    response, e.g. the literal placeholder doc {"claims": [{"proof": "test
+    proof", ...}]} against a real trace); a result with ZERO claims or
+    with every proof already null is NOT a failure by this guard -- there
+    is no non-null proof to fail on, and this script does not otherwise
+    police an empty claims list (#269/#285 already cover that ground:
+    absence-without-second-search etc. are the model's own job to flag,
+    not this deterministic guard's)."""
+    claims = normalize_claims((distilled_doc or {}).get("claims"))
+    n_nonnull, n_unlocatable = compute_proof_located(claims, tool_inputs_full)
+    return (n_nonnull > 0 and n_unlocatable == n_nonnull), n_nonnull, n_unlocatable
+
+
 def excerpt_head_tail(s, head, tail):
     """S truncated to its HEAD and TAIL (joined by an ellipsis) when longer
     than head+tail, otherwise S unchanged. Unlike `tool_digest`, this does
@@ -836,13 +1062,22 @@ def compute_gates(brief, verifications):
 
 
 def build_tool_trace(objs):
-    """(tool_calls_count, trace[], verifications[]) over a span of already-
-    parsed transcript lines -- one `trace` entry per tool_use block on an
-    assistant line, matched against a later tool_result (by tool_use_id)
-    for `errored`; one `verifications` entry per Bash tool_use whose
-    command matches at least one of test/lint/build/ci_read (#285). Built
-    in one pass over the same objs so a verification's `index` always
-    lines up with its position in `trace`."""
+    """(tool_calls_count, trace[], verifications[], tool_inputs_full[])
+    over a span of already- parsed transcript lines -- one `trace` entry
+    per tool_use block on an assistant line, matched against a later
+    tool_result (by tool_use_id) for `errored`; one `verifications` entry
+    per Bash tool_use whose command matches at least one of test/lint/
+    build/ci_read (#285); one `tool_inputs_full` entry per tool_use, in
+    the SAME order/index as `trace`, holding the FULL, untruncated,
+    whitespace-collapsed one-line form of its `input`
+    (`tool_digest(input, head=10**9, tail=0)`) -- #291's proof-locatable
+    guard needs the whole input, not `trace`'s head+tail-truncated
+    `digest`, to tell a real cited command from a placeholder response.
+    `tool_inputs_full` is kept on the in-memory run stub only, never
+    written into a persisted record (`run_stub_public` does not carry it)
+    -- it exists to be searched, not archived. Built in one pass over the
+    same objs so a verification's `index` always lines up with its
+    position in `trace`."""
     error_map = {}
     result_content = {}
     for o in objs:
@@ -860,6 +1095,7 @@ def build_tool_trace(objs):
 
     trace = []
     verifications = []
+    tool_inputs_full = []
     for o in objs:
         if not isinstance(o, dict) or o.get("type") != "assistant":
             continue
@@ -878,6 +1114,8 @@ def build_tool_trace(objs):
                 "digest": tool_digest(b.get("input")),
                 "errored": errored,
             })
+            # #291: the FULL input, never truncated -- see the docstring.
+            tool_inputs_full.append(tool_digest(b.get("input"), head=10**9, tail=0))
             if name != "Bash":
                 continue
             inp = b.get("input") if isinstance(b.get("input"), dict) else {}
@@ -908,7 +1146,16 @@ def build_tool_trace(objs):
                 "output_truncated": output_truncated,
                 "empty_ci_result": empty_ci,
             })
-    return len(trace), trace, verifications
+    return len(trace), trace, verifications, tool_inputs_full
+
+
+def collect_cwds(objs):
+    """The set of distinct `cwd` values carried by transcript lines in
+    OBJS (#287) -- present on every line in current-format transcripts.
+    More than one is legitimate (a run's cwd can change mid-span); an
+    absent/falsy `cwd` on a line is simply not counted, never treated as
+    a blank repo hint."""
+    return {o.get("cwd") for o in objs if isinstance(o, dict) and o.get("cwd")}
 
 
 # --------------------------------------------------------------- report extraction
@@ -1094,8 +1341,9 @@ def build_main_turn_stub(main_path, objs, start, end, idx, segmented_by):
     # harness-cutoff check (which reads only the LAST assistant text) does
     # not apply here either.
     report_source = "text" if report else "none"
-    tool_calls, tool_trace, verifications = build_tool_trace(span)
+    tool_calls, tool_trace, verifications, tool_inputs_full = build_tool_trace(span)
     gates_run, gates_named_not_run = compute_gates(brief, verifications)
+    cwds = collect_cwds(objs[start:end])
 
     started_at = user_obj.get("timestamp") if isinstance(user_obj, dict) else None
     ended_at = None
@@ -1122,10 +1370,12 @@ def build_main_turn_stub(main_path, objs, start, end, idx, segmented_by):
         "report_source": report_source,
         "tool_calls": tool_calls,
         "tool_trace": tool_trace,
+        "tool_inputs_full": tool_inputs_full,
         "verifications": verifications,
         "gates_run": gates_run,
         "gates_named_not_run": gates_named_not_run,
         "segmented_by": segmented_by,
+        "cwds": sorted(cwds),
     }
 
 
@@ -1168,8 +1418,9 @@ def build_subagent_stub(rr, jsonl_path, unreadable):
     # or ""` call here silently returned "" for 108 of 160 runs in the
     # diagnosing session).
     report, report_source = extract_report(objs)
-    tool_calls, tool_trace, verifications = build_tool_trace(objs)
+    tool_calls, tool_trace, verifications, tool_inputs_full = build_tool_trace(objs)
     gates_run, gates_named_not_run = compute_gates(brief, verifications)
+    cwds = collect_cwds(objs)
 
     started_at = None
     for o in objs:
@@ -1200,16 +1451,19 @@ def build_subagent_stub(rr, jsonl_path, unreadable):
         "report_source": report_source,
         "tool_calls": tool_calls,
         "tool_trace": tool_trace,
+        "tool_inputs_full": tool_inputs_full,
         "verifications": verifications,
         "gates_run": gates_run,
         "gates_named_not_run": gates_named_not_run,
+        "cwds": sorted(cwds),
     }
 
 
 def build_all_run_stubs(rr, session_dir):
-    """(segmented_by, [run_stub, ...], unreadable[]) -- every main-turn and
-    every subagent run in the session, sorted by started_at (runs with no
-    timestamp sort first, deterministically, by id).
+    """(segmented_by, [run_stub, ...], unreadable[], repo_vocabulary) --
+    every main-turn and every subagent run in the session, sorted by
+    started_at (runs with no timestamp sort first, deterministically, by
+    id).
 
     `segmented_by` is `None` unless `segment_main_turns` actually ran --
     never a rule name asserted on zero evidence (#278 C1). That happens in
@@ -1220,7 +1474,15 @@ def build_all_run_stubs(rr, session_dir):
     in `unreadable[]`, one entry per main or subagent transcript that could
     not be fully read; the caller (`cmd_runs`/`cmd_distill`) turns a
     non-empty `unreadable[]` into a stderr warning per entry and a forced
-    exit code, same discipline as rework-lag.py's `unknown[]`."""
+    exit code, same discipline as rework-lag.py's `unknown[]`.
+
+    `repo_vocabulary` (#287) is computed ONCE, session-wide, over every
+    stub's brief/report/tool_inputs_full, from the four STRONG qualified
+    forms only (see the module-level regex block) -- never from a bare
+    mention, which is what lets a bare mention resolve against it without
+    circularity. Each stub then gets its own `repos` set (`compute_run_
+    repo_set`), stored on the stub (never written into a persisted
+    record's `run` sub-object -- `run_stub_public` does not carry it)."""
     stubs = []
     segmented_by = None
     unreadable = []
@@ -1248,7 +1510,12 @@ def build_all_run_stubs(rr, session_dir):
         stubs.append(build_subagent_stub(rr, jsonl_path, unreadable))
 
     stubs.sort(key=lambda r: (r.get("started_at") or "", r["id"]))
-    return segmented_by, stubs, unreadable
+
+    repo_vocabulary = build_repo_vocabulary(stubs)
+    for stub in stubs:
+        stub["repos"] = sorted(compute_run_repo_set(stub, repo_vocabulary))
+
+    return segmented_by, stubs, unreadable, repo_vocabulary
 
 
 # --------------------------------------------------------------- claim/label handling
@@ -1278,16 +1545,34 @@ def normalize_claims(raw):
     return out
 
 
-def normalize_later_wrong(raw, claim_ids):
+def normalize_later_wrong(raw, claim_ids, candidates=None):
     """(later_wrong[], dropped[], index_map{}) -- a `later_wrong` entry whose `claim`
     does not name a real claim id is dropped, not silently kept as a
     dangling pointer (#278 C2): `enforce_classified_as` below treats a
     `later_wrong` INDEX as valid supporting evidence for a `classified_as`
     label, so an unvalidated `later_wrong[i]` naming a nonexistent claim
     would let a label ride in on evidence that itself points nowhere.
-    `dropped` carries the offending claim references so the caller can
-    record/warn about them -- unresolvable is reported, never silently
-    kept.
+    `dropped` carries the offending claim references (bare, as before) so
+    the caller can record/warn about them -- unresolvable is reported,
+    never silently kept.
+
+    #287: an entry whose `contradicted_by.run` is linked to this run's
+    claims ONLY through ambiguous-repo `#N` CANDIDATES -- every candidate
+    CANDIDATES carries for that run is a `#N` artifact tagged
+    `repo_match=="ambiguous"`, none `"same"`/`"n/a"` -- is likewise
+    dropped, deterministically, regardless of what the chain prompt told
+    the model: a shared issue/PR number across two repos is retrieval
+    noise, not evidence a contradiction exists. Reuses the SAME
+    drop/index_map mechanism as the unresolvable-claim case above (#290:
+    index pointers must survive a drop) -- `dropped` gets a dict entry
+    `{"claim", "run", "reason": "repo-ambiguous-only"}` for this case
+    (distinguishable from the bare claim-ref strings the older case
+    appends) so the caller's warning names the reason. A run with NO
+    candidates at all is left alone by this check -- it has nothing to do
+    with repo ambiguity, and is out of this guard's scope. CANDIDATES
+    defaults to None/empty, in which case this check simply never fires
+    (existing callers that have no candidates -- e.g. a budget-stop record
+    with only a distill pass -- see no change in behaviour).
 
     `index_map` maps each KEPT entry's position in the model's RAW array to
     its position in the returned list. The model writes `classified_as`
@@ -1295,7 +1580,16 @@ def normalize_later_wrong(raw, claim_ids):
     every later entry down one, and reading the pointers against the
     shrunk list put a label and its `why` on the wrong contradiction and
     marked a classified one "not classified by the model" (#290 review).
-    `enforce_classified_as` resolves index pointers through this map."""
+    `enforce_classified_as` resolves index pointers through this map --
+    which is exactly how a `classified_as` entry whose SOLE support was a
+    now-dropped index is handled too: it has no pointer left that resolves
+    to anything, so `enforce_classified_as` drops IT entirely (see that
+    function's docstring) -- the same treatment an unresolvable-claim drop
+    already got, unchanged by this addition."""
+    candidates_by_run = {}
+    for cand in candidates or []:
+        candidates_by_run.setdefault(cand.get("run"), []).append(cand)
+
     out = []
     dropped = []
     index_map = {}
@@ -1306,14 +1600,27 @@ def normalize_later_wrong(raw, claim_ids):
         if not isinstance(claim, str) or claim not in claim_ids:
             dropped.append(claim)
             continue
-        index_map[raw_i] = len(out)
         cb = lw.get("contradicted_by")
         cb = cb if isinstance(cb, dict) else {}
+        run = cb.get("run")
+        run_candidates = candidates_by_run.get(run) or []
+        # Keyed by CLAIM, not run: a run's "same" candidate for some other
+        # claim is no evidence for this one. Kept when a non-ambiguous
+        # candidate in RUN names this claim; withdrawn when RUN was reached
+        # through an ambiguous #N and nothing better ties it to this claim
+        # (13cee7be's c61 never mentions #264 at all).
+        backed = any(claim in (c.get("claims") or []) and c.get("repo_match") != "ambiguous"
+                     for c in run_candidates)
+        if not backed and any(c.get("repo_match") == "ambiguous" for c in run_candidates):
+            dropped.append({"claim": claim, "run": run, "index": raw_i,
+                            "reason": "repo-ambiguous-only"})
+            continue
+        index_map[raw_i] = len(out)
         out.append({
             "claim": claim,
             "how": lw.get("how") or "",
             "contradicted_by": {
-                "run": cb.get("run"),
+                "run": run,
                 "at": cb.get("at"),
                 "quote": cb.get("quote"),
             },
@@ -1321,7 +1628,7 @@ def normalize_later_wrong(raw, claim_ids):
     return out, dropped, index_map
 
 
-def enforce_classified_as(raw, claims, later_wrong, index_map=None):
+def enforce_classified_as(raw, claims, later_wrong, index_map=None, withdrawn=None):
     """(classified_as[], unclassified_reason) -- the CLOSED VOCABULARY's
     second enforcement point.
 
@@ -1349,6 +1656,12 @@ def enforce_classified_as(raw, claims, later_wrong, index_map=None):
     ids), so this only ever changes an int index into its digit-string."""
     claim_ids = {c["id"] for c in claims}
     n_later_wrong = len(later_wrong)
+    # WITHDRAWN (#287): raw later_wrong indices dropped as repo-ambiguous.
+    # A label that cited one rested on a contradiction that was never
+    # there; its surviving claim pointer does not make it evidenced, so
+    # the whole entry goes (on 13cee7be, an outcome-not-reason on c61
+    # outlived the false later_wrong it was built on).
+    withdrawn = {str(i) for i in (withdrawn or ())}
     # INDEX_MAP (from normalize_later_wrong) translates the model's raw
     # later_wrong positions to kept ones; None means the pointers already
     # address LATER_WRONG as given.
@@ -1373,6 +1686,8 @@ def enforce_classified_as(raw, claims, later_wrong, index_map=None):
         supports = entry.get("supports")
         if not isinstance(supports, list):
             continue
+        if any(str(s) in withdrawn for s in supports if not isinstance(s, bool)):
+            continue  # DROPPED -- it cited a withdrawn later_wrong
         resolved = [p for p in (resolve(s) for s in supports) if p is not None]
         if not resolved:
             continue  # DROPPED -- no pointer in `supports` resolves to anything
@@ -1404,6 +1719,141 @@ def enforce_classified_as(raw, claims, later_wrong, index_map=None):
 
 # ----------------------------------------------------------------- chain retrieval
 
+def extract_repo_qualifiers(text):
+    """The set of repo names TEXT explicitly qualifies (#287) via the four
+    STRONG forms only -- `owner/repo#N`, the `github.com/owner/repo/
+    (pull|issues)/N` URL, a `gh ... -R|--repo owner/repo` flag, and
+    `git -C <path>`/`cd <path>` under `.../Projects/<repo>`. This is the
+    ONLY function that SEEDS the session-wide repo vocabulary
+    (build_repo_vocabulary) -- a bare mention is resolved against that
+    vocabulary elsewhere, never added to it here."""
+    repos = set()
+    if not text:
+        return repos
+    for rx in (_REPO_QUALIFIED_HASH_RE, _REPO_URL_HASH_RE, _REPO_GH_FLAG_RE):
+        for m in rx.finditer(text):
+            repos.add(_clean_repo_name(m.group(2)))
+    for m in _REPO_GIT_C_CD_RE.finditer(text):
+        repos.add(_clean_repo_name(m.group(1)))
+    return repos
+
+
+def repo_from_cwd(cwd, known_names):
+    """The repo CWD names (#287), or None. The slash form of a worktree
+    path (`.../Projects/<repo>/...`) is captured generically. The
+    dash-joined form a session directory basename uses (`-Users-...-
+    Projects-Aeolus--claude-worktrees-...`) cannot be split unambiguously
+    when a repo name itself contains a dash (`skill-templates`), so it is
+    matched against KNOWN_NAMES (this run's own qualifiers union the
+    session vocabulary) instead of re-derived from the dashes alone --
+    longest name first, so `skill-templates` is not shadowed by a shorter
+    name that happens to be a prefix of it."""
+    if not cwd:
+        return None
+    m = _CWD_SLASH_PROJECTS_RE.search(cwd)
+    if m:
+        return m.group(1)
+    m2 = _CWD_DASH_PROJECTS_RE.search(cwd)
+    if m2:
+        tail = cwd[m2.end():]
+        for name in sorted(known_names, key=len, reverse=True):
+            if tail.startswith(name) and (len(tail) == len(name) or tail[len(name)] in "-/"):
+                return name
+    return None
+
+
+def _run_repo_text(stub):
+    return "\n".join([
+        stub.get("brief") or "", stub.get("report") or "",
+        "\n".join(stub.get("tool_inputs_full") or []),
+    ])
+
+
+def build_repo_vocabulary(stubs):
+    """The session-wide repo vocabulary (#287): the union, over every run
+    STUB's brief/report/tool_inputs_full, of every repo name the four
+    STRONG qualified forms establish (extract_repo_qualifiers). Computed
+    once, before any per-run repo set, so a bare mention in run A can
+    resolve against a name a DIFFERENT run B qualified explicitly."""
+    vocab = set()
+    for stub in stubs:
+        vocab |= extract_repo_qualifiers(_run_repo_text(stub))
+        # A cwd under Projects/<repo> names a repo as surely as a -R flag;
+        # without it a two-repo session that names only one repo in text
+        # looks single-repo and loses its ambiguity tagging.
+        for cwd in stub.get("cwds") or []:
+            m = _CWD_SLASH_PROJECTS_RE.search(cwd)
+            if m:
+                vocab.add(m.group(1))
+    return vocab
+
+
+def compute_run_repo_set(stub, vocabulary):
+    """The set of repo names this run's own text and tool inputs
+    establish (#287): the four STRONG qualified forms found in ITS OWN
+    brief/report/tool_inputs_full; its own cwd(s) mapped to a repo
+    (repo_from_cwd); and any bare mention of a repo NAME already in the
+    session-wide VOCABULARY, case-sensitive and word-bounded -- never the
+    reverse (a bare mention here never adds to VOCABULARY, only consumes
+    it), or "issue #250" would qualify "issue" as a repo."""
+    text = _run_repo_text(stub)
+    repos = extract_repo_qualifiers(text)
+    for cwd in stub.get("cwds") or []:
+        r = repo_from_cwd(cwd, repos | vocabulary)
+        if r:
+            repos.add(r)
+    for name in vocabulary:
+        if re.search(r'\b%s\b' % re.escape(name), text):
+            repos.add(name)
+    return repos
+
+
+def resolve_hash_qualifier(text, start, end, number, vocabulary):
+    """The explicit repo name attached to the `#<number>` occurrence at
+    text[start:end] (#287 design point 2) -- `owner/repo#N` or a bare
+    `repo#N`/`repo #N` immediately BEFORE it (the bare form counts only
+    when `repo`, case-sensitive, is already in VOCABULARY -- never a raw
+    word, or "issue #250" would qualify "issue"), or the markdown-link
+    shape `[#N](https://github.com/owner/repo/(pull|issues)/N)`
+    immediately AFTER it -- or None when this specific occurrence carries
+    no such qualifier."""
+    before = text[max(0, start - 100):start]
+    m = _TAIL_OWNER_REPO_RE.search(before)
+    if m:
+        return _clean_repo_name(m.group(2))
+    m = _TAIL_BARE_NAME_RE.search(before)
+    if m and m.group(1) in vocabulary:
+        return m.group(1)
+    after = text[end:end + 150]
+    m = re.search(
+        r'github\.com/([A-Za-z0-9][\w.-]*)/([A-Za-z0-9][\w.-]*)/(?:pull|issues)/%s\b'
+        % re.escape(number), after)
+    if m:
+        return _clean_repo_name(m.group(2))
+    return None
+
+
+def resolve_claim_hash_repo(claims, artifact, vocabulary, current_repos):
+    """The repo ARTIFACT (a `#N` string) resolves to for THIS run's claims
+    (#287 design point 2): the first explicit qualifier found at any
+    occurrence of ARTIFACT in a claim's `text`/`quote` wins; absent one,
+    CURRENT_REPOS (this run's own repo set) if it names EXACTLY one repo;
+    otherwise None (ambiguous)."""
+    number = artifact[1:]
+    for c in claims:
+        for field in ("text", "quote"):
+            s = c.get(field) or ""
+            if artifact not in s:
+                continue
+            for m in re.finditer(re.escape(artifact), s):
+                repo = resolve_hash_qualifier(s, m.start(), m.end(), number, vocabulary)
+                if repo:
+                    return repo
+    if len(current_repos) == 1:
+        return next(iter(current_repos))
+    return None
+
+
 def extract_artifacts(text):
     if not text:
         return set()
@@ -1415,18 +1865,41 @@ def extract_artifacts(text):
     return hits
 
 
-def find_chain_candidates(claims, current_started_at, other_runs):
+def find_chain_candidates(claims, current_started_at, current_repos, other_runs, vocabulary):
     """Deterministic retrieval, done before any model call: pull the
     artifacts named in each claim, then scan every OTHER run that started
     LATER for a mention of the same artifact within CUE_WINDOW_CHARS of a
     correction-cue word. Retrieval-before-model is what keeps `distill`
-    O(n) model calls instead of O(n^2)."""
+    O(n) model calls instead of O(n^2).
+
+    #287: for a `#N`-shaped artifact, each SIDE of a candidate match is
+    independently resolved to a repo -- the claim side via
+    resolve_claim_hash_repo (this run's claims + CURRENT_REPOS), the
+    occurrence side via resolve_hash_qualifier at that exact position,
+    falling back to the other run's OWN repo set when it names exactly
+    one. Both resolved and DIFFERENT -> this occurrence is skipped (not a
+    candidate; the scan continues to the artifact's next occurrence in
+    the same run, since a later occurrence may carry a different, matching
+    qualifier). Both resolved and EQUAL -> an ordinary candidate, tagged
+    `repo_match: "same"`. Either side unresolved -> kept, but tagged
+    `repo_match: "ambiguous"` -- retrieval noise the model is told (in
+    CHAIN_SYSTEM_PROMPT) cannot alone support a later_wrong or a label,
+    and `normalize_later_wrong` enforces that deterministically on the
+    way out regardless of what the model does with it. A non-`#N`
+    artifact (backtick span, path) carries no repo concept at all and is
+    tagged `repo_match: "n/a"` -- never silently absent, matching this
+    script's existing "never an absent key" discipline (`report_source`
+    etc.)."""
     artifacts = set()
     for c in claims:
         artifacts |= extract_artifacts(c.get("text", ""))
         artifacts |= extract_artifacts(c.get("quote") or "")
     if not artifacts or not current_started_at:
         return []
+
+    current_repos = current_repos or set()
+    vocabulary = vocabulary or set()
+    hash_re = re.compile(r'^#\d+$')
 
     candidates = []
     for r in other_runs:
@@ -1437,21 +1910,66 @@ def find_chain_candidates(claims, current_started_at, other_runs):
         if not haystack.strip():
             continue
         low = haystack.lower()
+        other_repos = set(r.get("repos") or [])
         for art in artifacts:
+            is_hash = bool(hash_re.match(art))
+            claim_repo = (resolve_claim_hash_repo(claims, art, vocabulary, current_repos)
+                          if is_hash else None)
+            best = None
             idx = haystack.find(art)
             while idx != -1:
                 lo = max(0, idx - CUE_WINDOW_CHARS)
                 hi = idx + len(art) + CUE_WINDOW_CHARS
                 window = low[lo:hi]
                 if any(cue in window for cue in CORRECTION_CUES):
-                    candidates.append({
+                    if is_hash:
+                        occ_repo = resolve_hash_qualifier(
+                            haystack, idx, idx + len(art), art[1:], vocabulary)
+                        if occ_repo is None and len(other_repos) == 1:
+                            occ_repo = next(iter(other_repos))
+                        if (claim_repo is not None and occ_repo is not None
+                                and claim_repo.lower() != occ_repo.lower()):
+                            # Different, resolved repos -- not a candidate
+                            # AT THIS OCCURRENCE. Keep scanning: a later
+                            # occurrence of the same artifact string may
+                            # carry a qualifier that does match.
+                            idx = haystack.find(art, idx + 1)
+                            continue
+                        # Ambiguity needs a second repo to be ambiguous
+                        # WITH: in a session whose vocabulary names at most
+                        # one repo, a bare #N cannot collide, and weakening
+                        # it would drop real later_wrong entries from any
+                        # run whose cwd lies outside ~/Projects.
+                        if (claim_repo is not None and occ_repo is not None) or len(vocabulary) <= 1:
+                            repo_match = "same"
+                        else:
+                            repo_match = "ambiguous"
+                    else:
+                        repo_match = "n/a"
+                    hit = {
                         "run": r["id"],
                         "started_at": started_at,
                         "artifact": art,
                         "excerpt": haystack[max(0, idx - 120): idx + len(art) + 120].replace("\n", " "),
-                    })
+                        "repo_match": repo_match,
+                        "claims": sorted(
+                            c["id"] for c in claims
+                            if art in (c.get("text") or "") or art in (c.get("quote") or "")),
+                    }
+                    # Keep scanning past an ambiguous hit: a LATER
+                    # occurrence in the same run may carry an explicit
+                    # qualifier and resolve to "same", which is stronger
+                    # evidence and must not be withdrawn as ambiguous-only.
+                    if repo_match == "ambiguous":
+                        if best is None:
+                            best = hit
+                        idx = haystack.find(art, idx + 1)
+                        continue
+                    best = hit
                     break
                 idx = haystack.find(art, idx + 1)
+            if best is not None:
+                candidates.append(best)
     return candidates
 
 
@@ -1532,8 +2050,18 @@ CHAIN_SYSTEM_PROMPT = (
     "entry with no such pointer is discarded downstream. A later_wrong "
     "entry names the claim id it contradicts, a one-sentence `how`, and "
     "`contradicted_by: {run, at, quote}` pointing at the run/timestamp/"
-    "quote that contradicts it. Return only the JSON object the schema "
-    "describes."
+    "quote that contradicts it. "
+    "Each CANDIDATE LATER MENTION is tagged repo_match: \"same\" (both "
+    "sides resolved to the same repo), \"ambiguous\" (a #N candidate "
+    "whose repo could not be resolved on at least one side), or \"n/a\" "
+    "(not a #N artifact -- no repo concept applies). An "
+    "repo_match=\"ambiguous\" candidate is retrieval NOISE, not evidence: "
+    "it CANNOT on its own support a later_wrong entry or a classified_as "
+    "label -- a shared issue/PR number across two different repos is not "
+    "a contradiction. Only cite one when something else about it (a "
+    "repo_match=\"same\" candidate, or a repo_match=\"n/a\" candidate "
+    "naming the same artifact/claim) also ties the same run to the same "
+    "claim. Return only the JSON object the schema describes."
 )
 
 DISTILL_SCHEMA = {
@@ -1603,7 +2131,7 @@ CHAIN_SCHEMA = {
 }
 
 
-def run_model(model_cmd_argv, system_prompt, schema, prompt_text):
+def run_model(model_cmd_argv, system_prompt, schema, prompt_text, timeout_secs=None):
     """Invoke the model boundary once. Returns (doc, cost_usd, error):
     exactly one of doc/error is not None. cost_usd is the envelope's
     total_cost_usd (0.0 when absent or when the call never produced an
@@ -1616,7 +2144,8 @@ def run_model(model_cmd_argv, system_prompt, schema, prompt_text):
     try:
         proc = subprocess.run(
             argv, input=prompt_text, capture_output=True,
-            encoding="utf-8", errors="replace", timeout=MODEL_TIMEOUT_SECS)
+            encoding="utf-8", errors="replace",
+            timeout=timeout_secs or MODEL_TIMEOUT_SECS)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, 0.0, "model invocation failed: %s" % e
 
@@ -1724,7 +2253,8 @@ def build_chain_prompt(r, claims, candidates):
     if not candidates:
         lines.append("(none found)")
     for cand in candidates:
-        lines.append("run=%s at=%s artifact=%r" % (cand["run"], cand.get("started_at"), cand["artifact"]))
+        lines.append("run=%s at=%s artifact=%r repo_match=%s" % (
+            cand["run"], cand.get("started_at"), cand["artifact"], cand.get("repo_match", "n/a")))
         lines.append("  %s" % cand["excerpt"])
     return "\n".join(lines)
 
@@ -1759,18 +2289,55 @@ def run_stub_public(r):
     return out
 
 
-def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_name, cost_usd, passes):
+def warn_dropped_later_wrong(run_id, dropped_lw):
+    """Print one stderr warning per entry `build_record` dropped from
+    `later_wrong` -- a bare claim reference (#278 C2's unresolvable-claim
+    case) or a dict `{"claim","run","reason":"repo-ambiguous-only"}`
+    (#287's repo-ambiguity case) -- never silent either way. The single
+    place both drop reasons get surfaced, so cmd_distill's three call
+    sites (the two budget-stop paths and the normal completion path)
+    cannot drift out of sync on wording."""
+    for dc in dropped_lw:
+        if isinstance(dc, dict) and dc.get("reason") == "repo-ambiguous-only":
+            print(
+                "warning: run %s: later_wrong entry for claim %r contradicted_by.run=%r "
+                "was linked ONLY through ambiguous-repo #N candidate(s) -- dropped "
+                "(repo-ambiguous-only)" % (run_id, dc.get("claim"), dc.get("run")),
+                file=sys.stderr)
+        else:
+            print("warning: run %s: later_wrong entry names an unresolvable claim %r -- dropped"
+                  % (run_id, dc), file=sys.stderr)
+
+
+def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_name, cost_usd,
+                  passes, candidates=None):
     """(record, dropped_later_wrong[]) -- dropped_later_wrong carries the
     claim references any `later_wrong` entry named that did not resolve to
-    a real claim id (#278 C2), so the caller can warn about them rather
-    than the drop happening with no trace anywhere."""
+    a real claim id (#278 C2), or (#287) a dict `{"claim","run","reason":
+    "repo-ambiguous-only"}` for an entry whose only link to its
+    contradicted_by.run was an ambiguous-repo #N candidate -- so the
+    caller can warn about either rather than the drop happening with no
+    trace anywhere. CANDIDATES is the list `find_chain_candidates`
+    produced for this run (#287); omitted (None) when the caller has none
+    (e.g. a budget-stop record with only a distill pass), in which case
+    the repo-ambiguity check simply never fires.
+
+    #291: every claim gets a `proof_located` flag (True/False for a
+    non-null `proof`, None for a null one) against RUN_STUB's own
+    `tool_inputs_full` -- computed here, once, on the SAME `claims` list
+    this record persists, so the written record and the live guard in
+    `cmd_distill` (which checks the SAME thing before this function is
+    even called, to decide the placeholder-response FAILURE) never see
+    two different derivations of the same fact."""
     claims = normalize_claims((distilled_doc or {}).get("claims"))
+    compute_proof_located(claims, run_stub.get("tool_inputs_full") or [])
     claim_ids = {c["id"] for c in claims}
     later_wrong, dropped_later_wrong, lw_index_map = normalize_later_wrong(
-        (chain_doc or {}).get("later_wrong") if chain_doc else None, claim_ids)
+        (chain_doc or {}).get("later_wrong") if chain_doc else None, claim_ids, candidates)
     classified_as, unclassified_reason = enforce_classified_as(
         (chain_doc or {}).get("classified_as") if chain_doc else None, claims, later_wrong,
-        lw_index_map)
+        lw_index_map,
+        withdrawn=[d["index"] for d in dropped_later_wrong if isinstance(d, dict)])
     record = {
         "kind": "session-distill-record",
         "schema_version": SCHEMA_VERSION,
@@ -1791,6 +2358,10 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
         "later_wrong": later_wrong,
         "classified_as": classified_as,
         "unclassified_reason": unclassified_reason,
+        # #287: repo-ambiguous drops persist on the record, not only on
+        # stderr, so a reader of the record can see what the chain pass
+        # proposed and why it was withdrawn.
+        "later_wrong_withdrawn": [d for d in dropped_later_wrong if isinstance(d, dict)],
         "distilled": {
             "at": distilled_at,
             "model": model_name,
@@ -1817,7 +2388,7 @@ def cmd_runs(a):
     rr = load_review_result()
     sid = rr.resolve_session_id(a.session)
     session_dir = rr.resolve_session_dir(sid)
-    segmented_by, runs, unreadable = build_all_run_stubs(rr, session_dir)
+    segmented_by, runs, unreadable, repo_vocabulary = build_all_run_stubs(rr, session_dir)
     main_turns = sum(1 for r in runs if r["kind"] == "main-turn")
     subagent_runs = sum(1 for r in runs if r["kind"] == "subagent")
 
@@ -1831,6 +2402,9 @@ def cmd_runs(a):
         "subagent_runs": subagent_runs,
         "runs": runs,
         "unreadable": unreadable,
+        # #287: the session-wide repo vocabulary every run's own `repos`
+        # set (also on each run stub above) was resolved against.
+        "repo_vocabulary": sorted(repo_vocabulary),
     }
 
     if a.json:
@@ -1870,7 +2444,7 @@ def cmd_distill(a):
     if not model_cmd:
         die("--model-cmd is empty")
 
-    segmented_by, all_runs, unreadable = build_all_run_stubs(rr, session_dir)
+    segmented_by, all_runs, unreadable, repo_vocabulary = build_all_run_stubs(rr, session_dir)
 
     if a.only:
         all_runs_for_run = [r for r in all_runs if r["id"] == a.only]
@@ -2009,7 +2583,8 @@ def cmd_distill(a):
             break
 
         distilled_doc, cost1, err1 = run_model(
-            model_cmd, DISTILL_SYSTEM_PROMPT, DISTILL_SCHEMA, build_distill_prompt(r))
+            model_cmd, DISTILL_SYSTEM_PROMPT, DISTILL_SCHEMA, build_distill_prompt(r),
+            a.timeout_secs)
         total_cost += cost1
         observed_costs.append(cost1)
         if err1:
@@ -2026,14 +2601,37 @@ def cmd_distill(a):
                 break
             continue
 
+        # #291: the placeholder-response guard -- a schema-valid distill
+        # response whose every non-null proof fails to locate in this
+        # run's own (untruncated) tool inputs is a FAILURE, never a
+        # record, and the chain call is NEVER made for it (nothing to
+        # spend on top of a result this hollow). cost1 -- already spent --
+        # is still folded into total_cost/observed_costs above, same
+        # discipline as the err1 path just above.
+        is_placeholder, n_nonnull, n_unlocatable = claims_all_proofs_unlocatable(
+            distilled_doc, r.get("tool_inputs_full") or [])
+        if is_placeholder:
+            failures.append({
+                "run": r["id"], "phase": "distill",
+                "error": (
+                    "proof-not-in-trace: every non-null proof (%d of %d claim(s)) failed "
+                    "to locate in this run's own tool inputs -- a schema-valid but "
+                    "content-free (placeholder) response" % (n_unlocatable, n_nonnull)),
+            })
+            if over_budget():
+                stopped = {
+                    "reason": "max-cost-usd exceeded by observed spend after this run's (failed) distill call",
+                    "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
+                }
+                break
+            continue
+
         if over_budget():
             record, dropped_lw = build_record(
                 sid, r, distilled_doc, None, now_iso(),
                 model_name_from_cmd(model_cmd), cost1, ["distill"])
             records.append(record)
-            for dc in dropped_lw:
-                print("warning: run %s: later_wrong entry names an unresolvable claim %r -- dropped"
-                      % (r["id"], dc), file=sys.stderr)
+            warn_dropped_later_wrong(r["id"], dropped_lw)
             stopped = {
                 "reason": "max-cost-usd exceeded by observed spend after this run's distill call",
                 "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
@@ -2044,9 +2642,7 @@ def cmd_distill(a):
                 sid, r, distilled_doc, None, now_iso(),
                 model_name_from_cmd(model_cmd), cost1, ["distill"])
             records.append(record)
-            for dc in dropped_lw:
-                print("warning: run %s: later_wrong entry names an unresolvable claim %r -- dropped"
-                      % (r["id"], dc), file=sys.stderr)
+            warn_dropped_later_wrong(r["id"], dropped_lw)
             stopped = {
                 "reason": "max-cost-usd projected to be exceeded before this run's chain call",
                 "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
@@ -2055,10 +2651,13 @@ def cmd_distill(a):
 
         claims = normalize_claims(distilled_doc.get("claims"))
         other_runs = [x for x in all_runs if x["id"] != r["id"]]
-        candidates = find_chain_candidates(claims, r.get("started_at"), other_runs)
+        current_repos = set(r.get("repos") or [])
+        candidates = find_chain_candidates(
+            claims, r.get("started_at"), current_repos, other_runs, repo_vocabulary)
 
         chain_doc, cost2, err2 = run_model(
-            model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA, build_chain_prompt(r, claims, candidates))
+            model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA, build_chain_prompt(r, claims, candidates),
+            a.timeout_secs)
         total_cost += cost2
         observed_costs.append(cost2)
         passes = ["distill"]
@@ -2075,11 +2674,9 @@ def cmd_distill(a):
         # on the record when err2, so sum(record costs) != total_cost_usd.
         record, dropped_lw = build_record(
             sid, r, distilled_doc, chain_doc, now_iso(),
-            model_name_from_cmd(model_cmd), cost1 + cost2, passes)
+            model_name_from_cmd(model_cmd), cost1 + cost2, passes, candidates)
         records.append(record)
-        for dc in dropped_lw:
-            print("warning: run %s: later_wrong entry names an unresolvable claim %r -- dropped"
-                  % (r["id"], dc), file=sys.stderr)
+        warn_dropped_later_wrong(r["id"], dropped_lw)
 
         if over_budget():
             stopped = {
@@ -2170,6 +2767,11 @@ def cmd_report(a):
     exit_masked_runs = 0
     empty_ci_runs = 0
     gates_named_not_run_runs = 0
+    # #291: the placeholder-response guard's own visibility -- how often a
+    # SURVIVING record (the all-unlocatable case is never a record at all;
+    # see `failures` above) still carries at least one unlocatable proof.
+    proofs_nonnull = 0
+    proofs_unlocatable = 0
     for rec in records:
         for ca in rec.get("classified_as") or []:
             label = ca.get("label")
@@ -2190,6 +2792,12 @@ def cmd_report(a):
             empty_ci_runs += 1
         if rec.get("gates_named_not_run"):
             gates_named_not_run_runs += 1
+        for c in rec.get("claims") or []:
+            pl = c.get("proof_located")
+            if pl is not None:
+                proofs_nonnull += 1
+                if pl is False:
+                    proofs_unlocatable += 1
 
     print("session: %s" % doc.get("session"))
     print("records: %d   failures: %d   cost_usd: $%.4f" % (
@@ -2216,6 +2824,12 @@ def cmd_report(a):
     print()
     print("verification flags: exit_masked_by_pipe=%d run(s)   empty_ci_result=%d run(s)   "
           "gates_named_not_run=%d run(s)" % (exit_masked_runs, empty_ci_runs, gates_named_not_run_runs))
+    # #291: printed unconditionally (0/0 included) -- proof_located is a
+    # per-claim FLOOR, and a silent absence of unlocatable proofs must be
+    # readable as "checked, none found" rather than "never printed".
+    proof_rate = (100.0 * proofs_unlocatable / proofs_nonnull) if proofs_nonnull else 0.0
+    print("proof_located: %d/%d non-null claim proof(s) unlocatable (%.1f%%)" % (
+        proofs_unlocatable, proofs_nonnull, proof_rate))
     print()
     # #286: a class hit reads against its BASE RATE -- the share of runs
     # carrying the label at all. On 13cee7be proxy-as-thing sat on 79% of
@@ -2267,6 +2881,9 @@ def build_parser():
                     help="the model invocation, as a shell command line (see module docstring)")
     d.add_argument("--max-cost-usd", type=float, default=None,
                     help="stop before exceeding this cumulative spend")
+    d.add_argument("--timeout-secs", type=int, default=MODEL_TIMEOUT_SECS,
+                    help="per model call timeout (default %d; a long trace on a "
+                         "busy CLI exceeds it)" % MODEL_TIMEOUT_SECS)
     d.set_defaults(fn=cmd_distill)
 
     rp = sub.add_parser("report", help="summarize a session-distill.json document")

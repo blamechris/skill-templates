@@ -342,6 +342,89 @@ w_jsonl(os.path.join(sdir_285, "subagents", "agent-jjjj0010.jsonl"), [
     assistant("Tests pass.", "2026-09-21T00:05:03Z"),
 ])
 
+# ============================================================ sess-291
+# #291: the proof-locatable guard. agent-291p0001 is the placeholder-
+# response repro (a schema-valid distill doc whose one claim's proof does
+# not exist anywhere in the run's own tool inputs -- and the run DOES have
+# a real, non-trivial tool call, so an "unlocatable" verdict here is not
+# the vacuous "tool_inputs_full was never populated" failure mode).
+# agent-291m0001 carries three claims: one proof copied in the prompt's
+# `[i] Tool: digest` form, one with a real command elided with `...` and
+# an ` -> output` suffix, and one invented -- only the invented one may
+# come back proof_located: false.
+sdir_291 = os.path.join(proj, "sess-291")
+os.makedirs(sdir_291, exist_ok=True)
+
+w_json(os.path.join(sdir_291, "subagents", "agent-291p0001.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "placeholder repro"})
+w_jsonl(os.path.join(sdir_291, "subagents", "agent-291p0001.jsonl"), [
+    user_blocks("Investigate the timeout", "2026-09-21T01:00:00Z"),
+    bash_use("q1", "grep -r TIMEOUT src", "2026-09-21T01:00:01Z"),
+    tool_result_content("q1", "2026-09-21T01:00:02Z", "3 matches"),
+    assistant("Timeout was hardcoded.", "2026-09-21T01:00:03Z"),
+])
+
+w_json(os.path.join(sdir_291, "subagents", "agent-291m0001.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "mixed proof forms"})
+w_jsonl(os.path.join(sdir_291, "subagents", "agent-291m0001.jsonl"), [
+    user_blocks("Fix the build and tests", "2026-09-21T01:01:00Z"),
+    bash_use("m0", "ls -la", "2026-09-21T01:01:01Z"),
+    tool_result_content("m0", "2026-09-21T01:01:02Z", "total 0"),
+    bash_use("m1", "grep -r TODO src --include=*.py | head -20; echo done", "2026-09-21T01:01:03Z"),
+    tool_result_content("m1", "2026-09-21T01:01:04Z", "done"),
+    bash_use("m2", "pytest -q", "2026-09-21T01:01:05Z"),
+    tool_result_content("m2", "2026-09-21T01:01:06Z", "5 passed"),
+    bash_use("m3", "swift build", "2026-09-21T01:01:07Z"),
+    tool_result_content("m3", "2026-09-21T01:01:08Z", "Build complete!"),
+    assistant("Fixed the build and reran tests.", "2026-09-21T01:01:09Z"),
+])
+
+# ============================================================ sess-287
+# #287: repo-qualified `#N` retrieval. agent-287cl0001 is the CLAIM run,
+# resolved to RepoAlpha (via an unrelated `blamechris/RepoAlpha#5` mention
+# in its own report -- its claim's own "#99" text carries no qualifier at
+# all, so claim-side resolution falls back to the run's own repo set).
+# Three LATER runs all mention the SAME "#99" near a correction cue:
+# agent-287same0001 (repo set {RepoAlpha} only -- same as the claim run),
+# agent-287diff0001 (repo set {RepoBeta} only -- a DIFFERENT resolved
+# repo, so #99 there must NOT become a candidate at all), and
+# agent-287amb0001 (repo set {RepoAlpha, RepoBeta} -- ambiguous, so #99
+# there is kept as a candidate but tagged repo_match: "ambiguous").
+sdir_287 = os.path.join(proj, "sess-287")
+os.makedirs(sdir_287, exist_ok=True)
+
+w_json(os.path.join(sdir_287, "subagents", "agent-287cl0001.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "claim run, RepoAlpha"})
+w_jsonl(os.path.join(sdir_287, "subagents", "agent-287cl0001.jsonl"), [
+    user_blocks("Investigate the regression", "2026-09-21T02:00:00Z"),
+    assistant("Root-caused via blamechris/RepoAlpha#5 precedent and filed the fix.",
+              "2026-09-21T02:00:05Z"),
+])
+
+w_json(os.path.join(sdir_287, "subagents", "agent-287same0001.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "later, same repo"})
+w_jsonl(os.path.join(sdir_287, "subagents", "agent-287same0001.jsonl"), [
+    user_blocks("keep going", "2026-09-21T02:01:00Z"),
+    assistant("Correction: turns out #99 was already fixed elsewhere. "
+              "Filed as blamechris/RepoAlpha#40 for tracking.", "2026-09-21T02:01:05Z"),
+])
+
+w_json(os.path.join(sdir_287, "subagents", "agent-287diff0001.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "later, different repo"})
+w_jsonl(os.path.join(sdir_287, "subagents", "agent-287diff0001.jsonl"), [
+    user_blocks("keep going", "2026-09-21T02:02:00Z"),
+    assistant("Correction: turns out #99 was already fixed elsewhere. "
+              "Filed as blamechris/RepoBeta#50 for tracking.", "2026-09-21T02:02:05Z"),
+])
+
+w_json(os.path.join(sdir_287, "subagents", "agent-287amb0001.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "later, ambiguous repo"})
+w_jsonl(os.path.join(sdir_287, "subagents", "agent-287amb0001.jsonl"), [
+    user_blocks("keep going", "2026-09-21T02:03:00Z"),
+    assistant("Correction: turns out #99 was already fixed elsewhere. Also touched "
+              "blamechris/RepoAlpha#12 and blamechris/RepoBeta#34 today.", "2026-09-21T02:03:05Z"),
+])
+
 print("fixtures OK")
 PYEOF
 
@@ -385,16 +468,60 @@ if pass_kind == "distill":
         # response can reference both a valid and an invalid claim id.
         doc = {"asked": "do Y", "understood": "do Y", "delivered": "did Y",
                "claims": [
+                   # proof left null throughout this fixture on purpose --
+                   # #278 C2 is about later_wrong/classified_as pointer
+                   # resolution, not #291's proof-locatable guard, and
+                   # this run's own transcript has no tool_use at all
+                   # (any non-null proof here would be unlocatable and
+                   # wrongly trip the #291 placeholder-response FAILURE).
                    {"id": "c1", "text": "claim one", "kind": "verification",
-                    "proof": "ran it", "quote": "q1"},
+                    "proof": None, "quote": "q1"},
                    {"id": "c2", "text": "claim two", "kind": "verification",
                     "proof": None, "quote": "q2"},
                ]}
         print(json.dumps(envelope(doc)))
+    elif run_id == "agent-291p0001":
+        # #291: the exact placeholder repro from the issue -- asked/
+        # understood/delivered all "test", one claim whose proof ("test
+        # proof") does not exist anywhere in this run's real tool inputs
+        # ("grep -r TIMEOUT src"). Must become a FAILURE, never a record,
+        # and must never reach the chain call.
+        doc = {"asked": "test", "understood": "test", "delivered": "test",
+               "claims": [{"id": "c1", "text": "test claim", "kind": "unspecified",
+                           "proof": "test proof", "quote": None}]}
+        print(json.dumps(envelope(doc)))
+    elif run_id == "agent-291m0001":
+        # #291: three claims -- one proof copied in the prompt's numbered
+        # `[i] Tool: digest` form (locatable), one with a real command
+        # elided by `...` and an ` -> output` suffix (locatable), one
+        # invented (must come back proof_located: false; the other two
+        # must not).
+        doc = {"asked": "a", "understood": "a", "delivered": "a", "claims": [
+            {"id": "c1", "text": "the build passes", "kind": "verification",
+             "proof": "[3] Bash: swift build", "quote": "Build complete!"},
+            {"id": "c2", "text": "no TODOs remain", "kind": "verification",
+             "proof": "grep -r TODO src --include=*.py ... -> done", "quote": "done"},
+            {"id": "c3", "text": "network reachable", "kind": "verification",
+             "proof": "curl https://example.com/nonexistent-thing-xyz", "quote": "n/a"},
+        ]}
+        print(json.dumps(envelope(doc)))
+    elif run_id == "agent-287cl0001":
+        # #287: the claim run. c1's own text carries "#99" with NO
+        # qualifier attached to that occurrence -- claim-side resolution
+        # must fall back to this run's own repo set (RepoAlpha, from its
+        # unrelated "blamechris/RepoAlpha#5" report mention).
+        doc = {"asked": "a", "understood": "a", "delivered": "a",
+               "claims": [{"id": "c1", "text": "#99 is caused by a stale cache entry",
+                           "kind": "reasoning", "proof": None,
+                           "quote": "the fix addresses #99 directly"}]}
+        print(json.dumps(envelope(doc)))
     else:
+        # proof null here too, for the same #291 reason -- most of these
+        # fixture runs have no (or unrelated) tool_use calls, so a
+        # non-null proof would be spuriously unlocatable.
         doc = {"asked": "do X", "understood": "do X", "delivered": "did X",
                "claims": [{"id": "c1", "text": "the thing works", "kind": "verification",
-                           "proof": "ran it", "quote": "it works"}]}
+                           "proof": None, "quote": "it works"}]}
         print(json.dumps(envelope(doc)))
 elif pass_kind == "chain":
     if run_id == "agent-dddd0004":
@@ -440,6 +567,31 @@ elif pass_kind == "chain":
     elif run_id == "main-turn-002":
         # is_error: true -> recorded failure, not a crash
         print(json.dumps(envelope(None, is_error=True)))
+    elif run_id == "agent-287cl0001":
+        # #287 enforcement, end-to-end: two later_wrong entries for the
+        # SAME claim, one contradicted_by run resolved-ambiguous
+        # (agent-287amb0001 -- must be DROPPED, reason
+        # "repo-ambiguous-only"), one contradicted_by run resolved-same
+        # (agent-287same0001 -- must SURVIVE). classified_as points one
+        # label at each later_wrong index: the one supporting the DROPPED
+        # index (0) must itself be dropped entirely (no pointer left that
+        # resolves to anything); the one supporting the SURVIVING index
+        # (1) must survive, remapped to its new position (0).
+        doc = {
+            "later_wrong": [
+                {"claim": "c1", "how": "ambiguous-repo mention",
+                 "contradicted_by": {"run": "agent-287amb0001", "at": "2026-09-21T02:03:05Z",
+                                      "quote": "turns out #99 was already fixed elsewhere"}},
+                {"claim": "c1", "how": "same-repo mention",
+                 "contradicted_by": {"run": "agent-287same0001", "at": "2026-09-21T02:01:05Z",
+                                      "quote": "turns out #99 was already fixed elsewhere"}},
+            ],
+            "classified_as": [
+                {"label": "recalled-not-reopened", "supports": ["0"], "why": "ambiguous-linked"},
+                {"label": "outcome-not-reason", "supports": ["1"], "why": "same-repo-linked"},
+            ],
+        }
+        print(json.dumps(envelope(doc)))
     else:
         doc = {"later_wrong": [], "classified_as": [
             {"label": "proxy-as-thing", "supports": ["c1"], "why": "fine"}]}
@@ -604,7 +756,7 @@ run sess-main distill --out "$OUT_D" --model-cmd "$MODEL_CMD"
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["kind"] == "session-distill-document"
-assert d["schema_version"] == 2
+assert d["schema_version"] == 3
 recs = {r["run"]["id"]: r for r in d["records"]}
 assert len(recs) == 5, recs.keys()
 
@@ -1346,9 +1498,9 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sd_285_schema", sys.argv[1])
 sd = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sd)
-assert sd.SCHEMA_VERSION == 2, sd.SCHEMA_VERSION
+assert sd.SCHEMA_VERSION == 3, sd.SCHEMA_VERSION
 PY
-[ $? -eq 0 ] && ok "#285: SCHEMA_VERSION is 2" || bad "#285: SCHEMA_VERSION is 2" "rc=nonzero"
+[ $? -eq 0 ] && ok "#287/#291: SCHEMA_VERSION is 3" || bad "#287/#291: SCHEMA_VERSION is 3" "rc=nonzero"
 
 OUT_V="$TMP/out-v.json"
 "$PY" - "$OUT_V" <<'PY'
@@ -1414,7 +1566,7 @@ def res(tid):
         {"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}}
 objs = [use("h1", "python3 - <<'PY'\nprint('swift test | tail -3; echo $?')\nPY"), res("h1"),
         use("h2", "swift test | tail -3; echo $?"), res("h2")]
-_, _, ver = sd.build_tool_trace(objs)
+_, _, ver, _ = sd.build_tool_trace(objs)
 assert all(not v["exit_masked_by_pipe"] for v in ver if "print(" in v["command"]), ver
 assert [v["exit_masked_by_pipe"] for v in ver if "print(" not in v["command"]] == [True], ver
 # unterminated: nothing after the opener is shell
@@ -1580,6 +1732,420 @@ case "$out" in
   *"proxy-as-thing"*"   2     1   25.0%"*) ok "#286: report prints each label's entries, runs and run share (base rate)" ;;
   *) bad "#286: report prints label base rates" "rc=$rc out=$out" ;;
 esac
+
+# ============================================================ GROUP W — #291: proof-locatable guard
+echo; echo "W. #291 — the proof-locatable guard (unit-level)"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_291_unit", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+# locate_proof_fragment: strip [N] / ToolName: prefixes, cut at first
+# elision/arrow, whitespace-collapse.
+assert sd.locate_proof_fragment("[3] Bash: swift build") == "swift build", sd.locate_proof_fragment("[3] Bash: swift build")
+assert sd.locate_proof_fragment("Bash: swift  test   --filter Foo") == "swift test --filter Foo", \
+    sd.locate_proof_fragment("Bash: swift  test   --filter Foo")
+assert sd.locate_proof_fragment("grep -r TODO src --include=*.py ... -> done") == "grep -r TODO src --include=*.py", \
+    sd.locate_proof_fragment("grep -r TODO src --include=*.py ... -> done")
+assert sd.locate_proof_fragment("swift format lint ...  ->  EXIT=0") == "swift format lint", \
+    sd.locate_proof_fragment("swift format lint ...  ->  EXIT=0")
+assert sd.locate_proof_fragment("") == ""
+assert sd.locate_proof_fragment(None) == ""
+# no prefix, no cut marker at all -- the whole (collapsed) string is the fragment
+assert sd.locate_proof_fragment("swift build") == "swift build"
+
+# proof_located: substring-of-some-full-input, never vacuously true
+assert sd.proof_located("[3] Bash: swift build", ["ls -la", "swift build"]) is True
+assert sd.proof_located("nonexistent-command-xyz", ["swift build"]) is False
+assert sd.proof_located("swift build", []) is False, "empty tool_inputs_full must never be vacuously located"
+assert sd.proof_located(None, ["swift build"]) is False
+assert sd.proof_located("", ["swift build"]) is False
+
+# compute_proof_located: True/False for non-null proof, None (never absent) for null
+claims = [{"id": "c1", "proof": "swift build"}, {"id": "c2", "proof": None},
+          {"id": "c3", "proof": "missing-cmd-xyz"}]
+n_nonnull, n_unlocatable = sd.compute_proof_located(claims, ["swift build"])
+assert (n_nonnull, n_unlocatable) == (2, 1), (n_nonnull, n_unlocatable)
+assert claims[0]["proof_located"] is True, claims[0]
+assert claims[1]["proof_located"] is None, claims[1]
+assert claims[2]["proof_located"] is False, claims[2]
+
+# claims_all_proofs_unlocatable: the FAILURE predicate itself
+is_fail, nn, nu = sd.claims_all_proofs_unlocatable(
+    {"claims": [{"id": "c1", "proof": "test proof"}]}, ["grep -r TIMEOUT src"])
+assert (is_fail, nn, nu) == (True, 1, 1), (is_fail, nn, nu)
+
+is_fail_mixed, nn2, nu2 = sd.claims_all_proofs_unlocatable(
+    {"claims": [{"id": "c1", "proof": "swift build"}, {"id": "c2", "proof": "missing-cmd-xyz"}]},
+    ["swift build"])
+assert (is_fail_mixed, nn2, nu2) == (False, 2, 1), (is_fail_mixed, nn2, nu2)
+
+# policy (left as-is, per the task's own instruction not to invent one):
+# zero claims, or every proof already null, is NOT a #291 failure -- there
+# is no non-null proof for this guard to fail on.
+is_fail3, nn3, nu3 = sd.claims_all_proofs_unlocatable({"claims": []}, ["swift build"])
+assert (is_fail3, nn3, nu3) == (False, 0, 0), (is_fail3, nn3, nu3)
+is_fail4, nn4, nu4 = sd.claims_all_proofs_unlocatable(
+    {"claims": [{"id": "c1", "proof": None}]}, ["swift build"])
+assert (is_fail4, nn4, nu4) == (False, 0, 0), (is_fail4, nn4, nu4)
+PY
+[ $? -eq 0 ] && ok "#291: locate_proof_fragment strips [N]/ToolName: prefixes and cuts at the first elision/arrow; proof_located never vacuously true on empty inputs; compute_proof_located sets True/False/None; claims_all_proofs_unlocatable is the FAILURE predicate, and a zero/all-null-proof result is NOT a failure by this guard" \
+  || bad "#291: proof-locatable guard unit tests" "rc=nonzero"
+
+echo; echo "W2. #291 — end to end: placeholder response is a FAILURE, chain never called; mixed doc flags only the invented proof"
+
+export MODEL_CALL_LOG="$TMP/calls-w.log"
+rm -f "$MODEL_CALL_LOG"
+OUT_W1="$TMP/out-w1.json"
+run sess-291 distill --out "$OUT_W1" --only agent-291p0001 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "distill sess-291 --only agent-291p0001 exits 0 (a recorded failure, not a REFUSE)" \
+  || bad "distill sess-291 --only agent-291p0001 exits 0" "rc=$rc out=$out"
+"$PY" - "$OUT_W1" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["records"] == [], d["records"]
+failures = {f["run"]: f for f in d["failures"]}
+assert "agent-291p0001" in failures, failures
+f = failures["agent-291p0001"]
+assert f["phase"] == "distill", f
+assert f["error"].startswith("proof-not-in-trace:"), f["error"]
+PY
+[ $? -eq 0 ] && ok "#291: the placeholder response (every non-null proof unlocatable) is a FAILURE (phase distill), records: 0, never a record" \
+  || bad "#291: placeholder response is a FAILURE" "$(cat "$OUT_W1")"
+case "$(cat "$MODEL_CALL_LOG" 2>/dev/null)" in
+  *"agent-291p0001 chain"*) bad "#291: the chain call is NOT made for a placeholder-failed run" "$(cat "$MODEL_CALL_LOG")" ;;
+  *) ok "#291: the chain call is NOT made for a placeholder-failed run" ;;
+esac
+grep -q "^agent-291p0001 distill$" "$MODEL_CALL_LOG" \
+  && ok "#291: the distill call WAS made (cost still accounted for)" \
+  || bad "#291: the distill call was made" "$(cat "$MODEL_CALL_LOG")"
+unset MODEL_CALL_LOG
+
+OUT_W2="$TMP/out-w2.json"
+run sess-291 distill --out "$OUT_W2" --only agent-291m0001 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "distill sess-291 --only agent-291m0001 exits 0" \
+  || bad "distill sess-291 --only agent-291m0001 exits 0" "rc=$rc out=$out"
+"$PY" - "$OUT_W2" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert len(d["records"]) == 1, d["records"]
+rec = d["records"][0]
+claims = {c["id"]: c for c in rec["claims"]}
+# the real proofs (one copied in "[N] Tool: digest" form, one elided with
+# "..." and an " -> output" suffix) both locate; only the invented one
+# (a curl to a URL never touched anywhere in this run) does not.
+assert claims["c1"]["proof_located"] is True, claims["c1"]
+assert claims["c2"]["proof_located"] is True, claims["c2"]
+assert claims["c3"]["proof_located"] is False, claims["c3"]
+PY
+[ $? -eq 0 ] && ok "#291: mixed doc -- record written, only the invented proof comes back proof_located:false, the two real ones (numbered-form and elided-with-arrow form) are True" \
+  || bad "#291: mixed doc proof_located flags" "$(cat "$OUT_W2")"
+
+run - report --in "$OUT_W2"
+case "$out" in
+  *"proof_located: 1/3"*) ok "#291: report prints the unlocatable-proof count/rate" ;;
+  *) bad "#291: report prints the unlocatable-proof count/rate" "rc=$rc out=$out" ;;
+esac
+
+# ============================================================ GROUP X — #287: repo-qualified retrieval
+echo; echo "X. #287 — repo-qualified #N retrieval (unit-level)"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_287_unit", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+# extract_repo_qualifiers: the four STRONG forms seed the vocabulary; a
+# bare mention (no slash, no flag, no path) seeds NOTHING -- "issue #250"
+# must not qualify "issue" as a repo.
+assert sd.extract_repo_qualifiers("owner/Foo#12 landed") == {"Foo"}
+assert sd.extract_repo_qualifiers("see https://github.com/blamechris/Aeolus/pull/264") == {"Aeolus"}
+assert sd.extract_repo_qualifiers("gh issue view 5 --repo blamechris/skill-templates") == {"skill-templates"}
+assert sd.extract_repo_qualifiers("cd /Users/x/Projects/skill-templates && ls") == {"skill-templates"}
+assert sd.extract_repo_qualifiers("git -C /Users/x/Projects/Aeolus fetch origin") == {"Aeolus"}
+assert sd.extract_repo_qualifiers("issue #250 needs a look") == set(), \
+    "a bare #N with no owner/repo must never seed the vocabulary"
+assert sd.extract_repo_qualifiers("") == set()
+
+# repo_from_cwd: slash form is generic; the dash-joined form (a session
+# directory basename) is matched against KNOWN names, longest first, so a
+# dash-containing repo name is not shadowed by a shorter prefix of itself.
+assert sd.repo_from_cwd("/Users/blamechris/Projects/Aeolus/.claude/worktrees/x", set()) == "Aeolus"
+dash_path = ("/private/tmp/claude-501/-Users-blamechris-Projects-Aeolus"
+             "--claude-worktrees-x/13cee7be/scratchpad")
+assert sd.repo_from_cwd(dash_path, {"Aeolus"}) == "Aeolus"
+dash_path2 = ("/private/tmp/claude-501/-Users-blamechris-Projects-skill-templates"
+              "--claude-worktrees-x/scratchpad")
+assert sd.repo_from_cwd(dash_path2, {"skill", "skill-templates"}) == "skill-templates", \
+    "longest matching known name must win over a shorter prefix of itself"
+assert sd.repo_from_cwd(None, {"Aeolus"}) is None
+assert sd.repo_from_cwd("/no/projects/here", {"Aeolus"}) is None
+
+# resolve_hash_qualifier: owner/repo#N and bare repo#N (vocabulary-gated)
+# immediately before; the markdown-link URL form immediately after.
+t1 = "see blamechris/Aeolus#264 today"
+i1 = t1.index("#264")
+assert sd.resolve_hash_qualifier(t1, i1, i1 + 4, "264", set()) == "Aeolus"
+t2 = "fixed in skill-templates#12 now"
+i2 = t2.index("#12")
+assert sd.resolve_hash_qualifier(t2, i2, i2 + 3, "12", {"skill-templates"}) == "skill-templates"
+assert sd.resolve_hash_qualifier(t2, i2, i2 + 3, "12", set()) is None, \
+    "a bare word before #N only qualifies when it is already in vocabulary"
+t3 = "See [#264](https://github.com/blamechris/Aeolus/pull/264) for detail"
+i3 = t3.index("#264")
+assert sd.resolve_hash_qualifier(t3, i3, i3 + 4, "264", set()) == "Aeolus"
+t4 = "plain #250 mention"
+i4 = t4.index("#250")
+assert sd.resolve_hash_qualifier(t4, i4, i4 + 4, "250", set()) is None
+
+# resolve_claim_hash_repo: an occurrence-level qualifier in the claim's
+# own text wins over the run-context fallback; absent one, falls back to
+# CURRENT_REPOS only when it names exactly one repo.
+claims_a = [{"id": "c1", "text": "#99 bad", "quote": None}]
+assert sd.resolve_claim_hash_repo(claims_a, "#99", set(), set()) is None
+assert sd.resolve_claim_hash_repo(claims_a, "#99", set(), {"RepoAlpha"}) == "RepoAlpha"
+assert sd.resolve_claim_hash_repo(claims_a, "#99", set(), {"RepoAlpha", "RepoBeta"}) is None
+claims_b = [{"id": "c1", "text": "blamechris/RepoAlpha#99 bad", "quote": None}]
+assert sd.resolve_claim_hash_repo(claims_b, "#99", set(), {"RepoBeta"}) == "RepoAlpha", \
+    "an explicit qualifier attached to the occurrence wins over the run-context fallback"
+PY
+[ $? -eq 0 ] && ok "#287: extract_repo_qualifiers seeds the vocabulary from the four strong forms only (never a bare #N); repo_from_cwd handles both path shapes; resolve_hash_qualifier/resolve_claim_hash_repo resolve per-occurrence qualifiers and the run-context fallback correctly" \
+  || bad "#287: repo-qualifier unit tests" "rc=nonzero"
+
+echo; echo "X2. #287 — find_chain_candidates: different repo is skipped, same repo tagged same, ambiguous kept and tagged"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_287_candidates", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+claims = [{"id": "c1", "text": "#99 is caused by a stale cache entry",
+           "quote": "the fix addresses #99 directly"}]
+current_repos = {"RepoAlpha"}
+vocabulary = {"RepoAlpha", "RepoBeta"}
+cue = "Correction: turns out #99 was already fixed elsewhere."
+
+run_same = {"id": "run-same", "started_at": "2026-01-01T00:01:00Z", "brief": "",
+            "report": cue + " Filed as blamechris/RepoAlpha#40 for tracking.",
+            "repos": ["RepoAlpha"]}
+run_diff = {"id": "run-diff", "started_at": "2026-01-01T00:02:00Z", "brief": "",
+            "report": cue + " Filed as blamechris/RepoBeta#50 for tracking.",
+            "repos": ["RepoBeta"]}
+run_amb = {"id": "run-amb", "started_at": "2026-01-01T00:03:00Z", "brief": "",
+           "report": cue + " Also touched blamechris/RepoAlpha#12 and blamechris/RepoBeta#34 today.",
+           "repos": ["RepoAlpha", "RepoBeta"]}
+
+cands = sd.find_chain_candidates(
+    claims, "2026-01-01T00:00:00Z", current_repos, [run_same, run_diff, run_amb], vocabulary)
+by_run = {c["run"]: c for c in cands}
+assert "run-diff" not in by_run, ("a #N resolved to a DIFFERENT repo must never become a candidate", cands)
+assert by_run["run-same"]["repo_match"] == "same", by_run.get("run-same")
+assert by_run["run-amb"]["repo_match"] == "ambiguous", by_run.get("run-amb")
+assert len(cands) == 2, cands
+
+# a non-#N artifact carries no repo concept -- tagged "n/a", never dropped
+# by repo logic regardless of the runs' resolved repo sets.
+claims_path = [{"id": "c1", "text": "see `foo.py` for details", "quote": None}]
+run_path = {"id": "run-path", "started_at": "2026-01-01T00:01:00Z", "repos": [],
+            "brief": "", "report": "actually `foo.py` was wrong all along"}
+cands2 = sd.find_chain_candidates(
+    claims_path, "2026-01-01T00:00:00Z", set(), [run_path], set())
+assert len(cands2) == 1 and cands2[0]["repo_match"] == "n/a", cands2
+PY
+[ $? -eq 0 ] && ok "#287: find_chain_candidates skips a different-repo #N occurrence, tags a same-repo one \"same\" and an ambiguous one \"ambiguous\"; a non-#N artifact is tagged \"n/a\"" \
+  || bad "#287: find_chain_candidates repo tagging" "rc=nonzero"
+
+echo; echo "X3. #287 — end to end: an ambiguous-repo-linked later_wrong is dropped (with its sole-support label); a same-repo one survives"
+
+export MODEL_CALL_LOG="$TMP/calls-x.log"
+rm -f "$MODEL_CALL_LOG"
+OUT_X="$TMP/out-x.json"
+run sess-287 distill --out "$OUT_X" --only agent-287cl0001 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "distill sess-287 --only agent-287cl0001 exits 0" \
+  || bad "distill sess-287 --only agent-287cl0001 exits 0" "rc=$rc out=$out"
+"$PY" - "$OUT_X" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert len(d["records"]) == 1, d["records"]
+rec = d["records"][0]
+
+# the ambiguous-repo-linked later_wrong (contradicted_by.run=agent-287amb0001)
+# is dropped; only the same-repo one (agent-287same0001) survives.
+lw = rec["later_wrong"]
+assert len(lw) == 1, lw
+assert lw[0]["contradicted_by"]["run"] == "agent-287same0001", lw
+
+# the classified_as entry whose SOLE support was the DROPPED later_wrong
+# index (raw index 0, "recalled-not-reopened") is itself dropped entirely
+# -- no pointer of its survives, same treatment #278 C2's unresolvable-
+# claim drop already gets. The one supporting the SURVIVING index (raw
+# index 1, "outcome-not-reason") survives, remapped to its new position.
+ca = rec["classified_as"]
+assert [c["label"] for c in ca] == ["outcome-not-reason"], ca
+assert ca[0]["supports"] == ["0"], ca
+assert rec["unclassified_reason"] is None, rec["unclassified_reason"]
+PY
+[ $? -eq 0 ] && ok "#287: an ambiguous-repo-only-linked later_wrong is dropped; a same-repo one survives; a classified_as entry whose sole support was the dropped index is itself dropped, the other survives remapped" \
+  || bad "#287: end-to-end repo-ambiguity enforcement" "$(cat "$OUT_X")"
+
+case "$out" in
+  *"agent-287amb0001"*"repo-ambiguous-only"*) ok "#287: the drop is recorded visibly (stderr warning names the run and the reason)" ;;
+  *) bad "#287: the drop is recorded visibly" "$out" ;;
+esac
+unset MODEL_CALL_LOG
+
+echo; echo "X4. #287 — the chain system prompt tells the model an ambiguous candidate proves nothing alone"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_287_prompt", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+assert "ambiguous" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
+assert "CANNOT on its own support" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
+chain = sd.build_chain_prompt({"id": "r"}, [{"id": "c1", "text": "#99 x", "quote": None}], [
+    {"run": "r2", "started_at": "t", "artifact": "#99", "excerpt": "e", "repo_match": "ambiguous"}])
+assert "repo_match=ambiguous" in chain, chain
+PY
+[ $? -eq 0 ] && ok "#287: CHAIN_SYSTEM_PROMPT states an ambiguous candidate cannot alone support a later_wrong/label; build_chain_prompt prints each candidate's repo_match tag" \
+  || bad "#287: chain prompt repo_match wording/printing" "rc=nonzero"
+
+echo; echo "X5. #287 — a single-repo session never tags a bare #N ambiguous"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_287_single", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+claims = [{"id": "c1", "text": "#42 is fixed", "quote": None}]
+later = [{"id": "r2", "started_at": "2026-01-02", "repos": [],
+          "brief": "", "report": "turns out #42 was wrong, reopened"}]
+# neither side resolves a repo (no cwd under ~/Projects, no qualifier)
+one = sd.find_chain_candidates(claims, "2026-01-01", set(), later, {"solo"})
+assert len(one) == 1 and one[0]["repo_match"] == "same", one
+two = sd.find_chain_candidates(claims, "2026-01-01", set(), later, {"solo", "other"})
+assert len(two) == 1 and two[0]["repo_match"] == "ambiguous", two
+PY
+[ $? -eq 0 ] && ok "#287: an unresolved #N is 'same' when the session names <=1 repo, 'ambiguous' only when it names two" \
+  || bad "#287: single-repo session ambiguity" "rc=nonzero"
+
+echo; echo "X6. #287 — a label citing a withdrawn later_wrong is dropped even when it also cites a claim; the withdrawal is on the record"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_287_withdrawn", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+stub = {"id": "r1", "kind": "subagent", "tool_inputs_full": ["gh pr view 7"]}
+distilled = {"asked": "a", "understood": "u", "delivered": "d", "claims": [
+    {"id": "c1", "text": "#7 is fixed", "kind": "k", "proof": "gh pr view 7", "quote": "q"},
+    {"id": "c2", "text": "#8 merged", "kind": "k", "proof": "gh pr view 7", "quote": "q"}]}
+chain = {
+    "later_wrong": [
+        {"claim": "c1", "how": "h", "contradicted_by": {"run": "amb", "at": "t", "quote": "q"}},
+        {"claim": "c2", "how": "h", "contradicted_by": {"run": "same", "at": "t", "quote": "q"}}],
+    "classified_as": [
+        {"label": "outcome-not-reason", "supports": ["c1", "0"], "why": "w"},
+        {"label": "green-as-done", "supports": ["c2", "1"], "why": "w"}]}
+cands = [{"run": "amb", "artifact": "#7", "repo_match": "ambiguous"},
+         {"run": "same", "artifact": "#8", "repo_match": "same"}]
+rec, dropped = sd.build_record("s", stub, distilled, chain, "t", "m", 0.0,
+                               ["distill", "chain"], candidates=cands)
+assert [lw["claim"] for lw in rec["later_wrong"]] == ["c2"], rec["later_wrong"]
+labels = [(e["label"], e["supports"]) for e in rec["classified_as"]]
+assert labels == [("green-as-done", ["c2", "0"])], labels
+w = rec["later_wrong_withdrawn"]
+assert len(w) == 1 and w[0]["claim"] == "c1" and w[0]["run"] == "amb" \
+    and w[0]["reason"] == "repo-ambiguous-only" and w[0]["index"] == 0, w
+PY
+[ $? -eq 0 ] && ok "#287: a label whose supports include a withdrawn later_wrong is dropped though it also names a claim; the surviving label is remapped; later_wrong_withdrawn records the drop" \
+  || bad "#287: withdrawn later_wrong label enforcement" "rc=nonzero"
+
+echo; echo "X7. #291/#287 review — locator reads every elided piece, rejects short fabrications; ambiguity drop is per claim; cwd seeds the vocabulary"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_review", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+full = ["cd /Users/x/scratch/wt/skill-templates-frozen && bash assets/t.sh 2>&1 | tail -3",
+        "git status", "npm test", "git commit -m 'wip'", "git push origin main"]
+loc = lambda p: sd.proof_located(p, full)
+# mid-command elision: the piece before the first "..." is only "cd"; every
+# piece must be found, in order, in ONE input
+assert loc("cd .../skill-templates-frozen && ... | tail -3")
+assert not loc("cd .../skill-templates-frozen && ... | tail -2")      # altered arg
+assert not loc("cd .../nowhere-else && ... | tail -3")                 # invented piece
+assert not loc("tail -3 ... cd /Users")                                # out of order
+# quoted whole, and a leading elision, still locate
+assert loc('"npm test" -> exit 0')
+assert loc("`git status`")
+assert loc("... npm test")
+# short fabrications locate only as a whole input
+assert not loc("git"), "a 3-char fragment must not locate as a piece"
+assert not loc("a")
+assert sd.proof_located("ls", ["ls"]) and not sd.proof_located("ls", ["ls -la"])
+
+# per-claim ambiguity: run-X has an ambiguous #264 candidate backing c1 and a
+# 'same' candidate backing only c2 -> c1's later_wrong is withdrawn, c2's kept
+cands = [{"run": "run-X", "artifact": "#264", "repo_match": "ambiguous", "claims": ["c1"]},
+         {"run": "run-X", "artifact": "auth.py", "repo_match": "n/a", "claims": ["c2"]}]
+raw = [{"claim": "c1", "how": "h", "contradicted_by": {"run": "run-X", "at": "t", "quote": "q"}},
+       {"claim": "c2", "how": "h", "contradicted_by": {"run": "run-X", "at": "t", "quote": "q"}}]
+out, dropped, imap = sd.normalize_later_wrong(raw, {"c1", "c2"}, cands)
+assert [x["claim"] for x in out] == ["c2"], out
+assert dropped == [{"claim": "c1", "run": "run-X", "index": 0, "reason": "repo-ambiguous-only"}], dropped
+# a claim reached only through an ambiguous candidate for ANOTHER claim is
+# withdrawn too (13cee7be's c61 never mentions #264)
+out, dropped, _ = sd.normalize_later_wrong(raw[:1], {"c1"}, cands[:1] and
+    [{"run": "run-X", "artifact": "#264", "repo_match": "ambiguous", "claims": ["c9"]}])
+assert out == [] and dropped[0]["reason"] == "repo-ambiguous-only", (out, dropped)
+
+# find_chain_candidates records which claims an artifact came from
+cl = [{"id": "c1", "text": "#42 fixed", "quote": None}, {"id": "c2", "text": "other", "quote": "#42"}]
+got = sd.find_chain_candidates(cl, "t0", {"solo"}, [{"id": "r2", "started_at": "t1", "repos": ["solo"],
+                               "brief": "", "report": "#42 was wrong"}], {"solo"})
+assert got and got[0]["claims"] == ["c1", "c2"], got
+
+# a cwd under Projects/<repo> seeds the vocabulary: two repos, one named only by cwd
+stubs = [{"brief": "see blamechris/alpha#1", "report": "", "tool_inputs_full": [], "cwds": []},
+         {"brief": "", "report": "", "tool_inputs_full": [], "cwds": ["/Users/x/Projects/beta"]}]
+assert sd.build_repo_vocabulary(stubs) == {"alpha", "beta"}, sd.build_repo_vocabulary(stubs)
+PY
+[ $? -eq 0 ] && ok "#291/#287 review: every elided piece located in order; short fabrications rejected; quoted/leading-elision proofs locate; ambiguity drop keyed per claim; candidates carry their claims; cwd seeds the vocabulary" \
+  || bad "#291/#287 review fixes" "rc=nonzero"
+
+echo; echo "X8. #291/#287 Copilot review — an empty-string proof is checked, not treated as null; a later qualified occurrence beats an earlier ambiguous one"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_copilot", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+# "" is a proof the model supplied: unlocatable, and it counts toward the
+# all-unlocatable FAILURE -- otherwise a placeholder of empty proofs passes
+claims = [{"id": "c1", "text": "t", "kind": "k", "proof": "", "quote": None},
+          {"id": "c2", "text": "t", "kind": "k", "proof": None, "quote": None}]
+n_nonnull, n_unloc = sd.compute_proof_located(claims, ["swift test"])
+assert (n_nonnull, n_unloc) == (1, 1), (n_nonnull, n_unloc)
+assert claims[0]["proof_located"] is False and claims[1]["proof_located"] is None, claims
+is_fail, n, u = sd.claims_all_proofs_unlocatable(
+    {"claims": [{"id": "c1", "text": "t", "kind": "k", "proof": "", "quote": None}]}, ["swift test"])
+assert is_fail and (n, u) == (1, 1), (is_fail, n, u)
+
+# an early ambiguous occurrence must not shadow a later explicitly-qualified
+# one in the SAME run: the candidate is "same", so nothing is withdrawn
+cl = [{"id": "c1", "text": "skill-templates#264 is merged", "quote": None}]
+later = [{"id": "r2", "started_at": "t1", "repos": ["Aeolus", "skill-templates"],
+          "brief": "",
+          "report": ("#264 turned out wrong, actually. " + "x" * 300
+                     + " and skill-templates#264 was in fact reverted, wrong all along")}]
+got = sd.find_chain_candidates(cl, "t0", {"skill-templates"}, later, {"Aeolus", "skill-templates"})
+assert len(got) == 1 and got[0]["repo_match"] == "same", got
+# with no qualified occurrence anywhere, it stays ambiguous
+later[0]["report"] = "#264 turned out wrong, actually."
+got = sd.find_chain_candidates(cl, "t0", {"skill-templates"}, later, {"Aeolus", "skill-templates"})
+assert len(got) == 1 and got[0]["repo_match"] == "ambiguous", got
+PY
+[ $? -eq 0 ] && ok "#291: an empty-string proof is unlocatable and counts toward the FAILURE (only null is 'nothing to check'); #287: a later qualified #N occurrence in the same run wins over an earlier ambiguous one" \
+  || bad "#291/#287 Copilot review fixes" "rc=nonzero"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
