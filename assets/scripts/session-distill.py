@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Distill one session into a chain of asked -> understood/delivered ->
 later-wrong records, one per RUN, classified against a closed vocabulary of
-evidence-quality failure modes (#269, epic #266, design at the issue's
-linked record-shape.md).
+evidence-quality failure modes (#269, epic #266, design at
+docs/session-distill-record-shape.md).
 
 # Canonical copy (skill-templates). Bootstrap: cp assets/scripts/session-distill.py ~/.claude/scripts/
 
@@ -109,8 +109,8 @@ scanning for the same artifact near a correction-cue word ("actually",
 "wrong", "retract", "never ran", "failed", "turns out", "correction",
 "misread", "regression"), then makes ONE more call over the candidates for
 `{later_wrong[], classified_as[]}`. Retrieval-before-model is what keeps
-this O(n) calls instead of O(n^2) -- see record-shape.md's "Three passes,
-one model boundary".
+this O(n) calls instead of O(n^2) -- see docs/session-distill-record-shape.md's
+"Three passes, one model boundary".
 
 THE RECORD (schema_version 1), one per run, appended to
 `session-distill.json`'s `records[]`:
@@ -739,7 +739,16 @@ def enforce_classified_as(raw, claims, later_wrong):
     with at least one valid pointer but carries an off-vocabulary label is
     kept with its label replaced by "unclassified", and the offending
     label text is folded into `unclassified_reason` -- never invented,
-    never passed through unexamined."""
+    never passed through unexamined.
+
+    Every surviving `supports` element is NORMALIZED TO A STRING on the
+    way out (#278 round 2 T1): a `later_wrong` index resolves whether it
+    arrives as the int `0` or the digit-string `"0"`, but the OLD code
+    wrote back whichever type the model sent, so `supports: [0]` and
+    `supports: ["0"]` both shipped and a consumer of the schema-documented
+    digit-string had to handle two types for the same value. The claim-id
+    case is already a string (`normalize_claims` only ever mints string
+    ids), so this only ever changes an int index into its digit-string."""
     claim_ids = {c["id"] for c in claims}
     n_later_wrong = len(later_wrong)
 
@@ -760,7 +769,10 @@ def enforce_classified_as(raw, claims, later_wrong):
         supports = entry.get("supports")
         if not isinstance(supports, list):
             continue
-        resolved = [s for s in supports if resolves(s)]
+        resolved = [
+            str(s) if isinstance(s, int) and not isinstance(s, bool) else s
+            for s in supports if resolves(s)
+        ]
         if not resolved:
             continue  # DROPPED -- no pointer in `supports` resolves to anything
         label = entry.get("label")

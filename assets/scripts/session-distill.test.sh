@@ -582,7 +582,7 @@ TOTAL_CALLS=$(wc -l < "$MODEL_CALL_LOG" | tr -d ' ')
   || bad "distill --resume: total calls is still 10, not 14 -- the first 2 runs were not re-called" "calls=$TOTAL_CALLS"
 # 2 runs x 2 calls (distill+chain) each = 4 log lines total for these two
 # runs; anything more would mean --resume re-called an already-done run.
-REPEATS=$(grep -c '^main-turn-001 \|^agent-aaaa0001 ' "$MODEL_CALL_LOG")
+REPEATS=$(grep -cE '^(main-turn-001|agent-aaaa0001) ' "$MODEL_CALL_LOG")
 [ "$REPEATS" = "4" ] && ok "distill --resume: the 2 already-done runs' calls appear exactly once each (4 log lines), never repeated" \
   || bad "distill --resume: the 2 already-done runs' calls appear exactly once each (4 log lines), never repeated" "repeats=$REPEATS"
 unset MODEL_CALL_LOG
@@ -967,6 +967,49 @@ assert abs(total_from_records - d["total_cost_usd"]) < 1e-6, (total_from_records
 PY
 [ $? -eq 0 ] && ok "N2: a failed chain call's real cost is folded into its record's cost_usd, so sum(records) reconciles with total_cost_usd" \
   || bad "N2: record cost_usd reconciles with total_cost_usd" "$(cat "$OUT_D")"
+
+# ============================================================ GROUP S — T1 (#278 round 2): supports normalized to strings
+echo; echo "S. T1 — enforce_classified_as writes every surviving supports pointer as a string"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_t1", sys.argv[1])
+sd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sd)
+
+claims = [{"id": "c1", "text": "x", "kind": "verification", "proof": None, "quote": None}]
+later_wrong = [{"claim": "c1", "how": "h", "contradicted_by": {}}]
+
+# One entry points via a RAW INT later_wrong index (what a model that
+# ignores the schema's digit-string convention might send), one via the
+# digit-string form, one via a claim id. All three must resolve, and
+# every surviving pointer -- whatever type it arrived as -- must come
+# back out as a str: a consumer (#272's gate ledger) should never have
+# to handle both `0` and `"0"` for the same evidence pointer.
+raw = [
+    {"label": "proxy-as-thing", "supports": [0], "why": "int index"},
+    {"label": "green-as-done", "supports": ["0"], "why": "digit-string index"},
+    {"label": "outcome-not-reason", "supports": ["c1"], "why": "claim id"},
+]
+out, reason = sd.enforce_classified_as(raw, claims, later_wrong)
+assert reason is None, reason
+by_label = {e["label"]: e for e in out}
+for label in ("proxy-as-thing", "green-as-done", "outcome-not-reason"):
+    supports = by_label[label]["supports"]
+    assert all(isinstance(s, str) for s in supports), (label, supports)
+assert by_label["proxy-as-thing"]["supports"] == ["0"], by_label["proxy-as-thing"]["supports"]
+assert by_label["green-as-done"]["supports"] == ["0"], by_label["green-as-done"]["supports"]
+assert by_label["outcome-not-reason"]["supports"] == ["c1"], by_label["outcome-not-reason"]["supports"]
+
+# A mixed entry (one int pointer, one string pointer) must come back
+# with BOTH normalized, not just the one that started as an int.
+raw_mixed = [{"label": "proxy-as-thing", "supports": [0, "c1"], "why": "mixed"}]
+out2, _ = sd.enforce_classified_as(raw_mixed, claims, later_wrong)
+assert out2[0]["supports"] == ["0", "c1"], out2[0]["supports"]
+assert all(isinstance(s, str) for s in out2[0]["supports"]), out2[0]["supports"]
+PY
+[ $? -eq 0 ] && ok "T1: enforce_classified_as normalizes every surviving supports pointer to a string, including int later_wrong indices, in single-type and mixed-type entries alike" \
+  || bad "T1: supports normalized to strings" "rc=nonzero"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
