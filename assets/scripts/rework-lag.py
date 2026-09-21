@@ -680,6 +680,8 @@ def _transcript_span_and_text(path):
                 rec = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(rec, dict):
+                continue  # a bare JSON array/number/string line has no .get -- skip it, don't crash
             ts = rec.get("timestamp")
             if not ts:
                 continue
