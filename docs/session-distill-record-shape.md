@@ -168,6 +168,28 @@ frozen tuple before it is written; an off-vocabulary label is replaced by
 prompt that asks for a closed set and a script that trusts the answer is the
 proxy-as-thing failure, written into the tool that detects it.
 
+**Defined in the prompt, every label, from one table** (#286). The table above
+is the checklist; the model reads `LABEL_DEFINITIONS` in `session-distill.py`,
+one line per label, rendered into the chain prompt's `LABELS` section. The
+first proof run taught the model only `proxy-as-thing`, and taught it as any
+`| tail` before an exit read, so the label landed on 127 of 160 runs (79%) and
+a class hit carried no information. `proxy-as-thing` is now a stand-in *signal*
+— an exit status that belongs to another program, which the deterministic
+`exit_masked_by_pipe` flag marks and the chain prompt lists, or a status field
+read as the work's state. `cmd | tail -30` used only to read output is named
+as *not* the label. A claim with no evidence defect gets no label at all.
+
+**Every `later_wrong` entry is classified, or says it is not.** A contradiction
+the chain found and never labelled was silent (row 4, `main-turn-005`
+`later_wrong[2]`/`[3]`). Enforcement now appends an `unclassified` entry for
+each uncovered index, with `why: "later_wrong[N] was not classified by the
+model"`, and names it in `unclassified_reason`. A label entry dropped for an
+unresolvable pointer covers nothing.
+
+**Read a class hit against its base rate.** `report` prints, per label, the
+entry count, the number of runs carrying it, and that share of all runs.
+"The right run carries the label" means little when 79% of runs do.
+
 ## Three passes, one model boundary
 
 1. **`runs`** — deterministic inventory. No model. Walks the session dir, emits

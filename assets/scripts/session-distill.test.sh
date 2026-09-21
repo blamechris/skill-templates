@@ -864,9 +864,12 @@ assert "PROOF IS A FLOOR" in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
 assert "verbatim" in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
 assert "TOOL TRACE" in sd.DISTILL_SYSTEM_PROMPT.upper(), sd.DISTILL_SYSTEM_PROMPT
 
-assert "proxy-as-thing" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
-assert "EXIT=$?" in sd.CHAIN_SYSTEM_PROMPT or "echo $?" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
-assert "head" in sd.CHAIN_SYSTEM_PROMPT and "tail" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
+# #286: the exit-code-proxy definition reaches the model through the
+# rendered chain prompt's LABELS section, not the system prompt
+chain = sd.build_chain_prompt({"id": "r"}, [], [])
+proxy_line = [l for l in chain.splitlines() if l.startswith("proxy-as-thing:")]
+assert len(proxy_line) == 1, chain
+assert "$?" in proxy_line[0] and "head" in proxy_line[0] and "tail" in proxy_line[0], proxy_line
 
 r = {
     "id": "agent-x", "kind": "subagent", "description": "d",
@@ -882,7 +885,7 @@ assert "TOOL TRACE" in prompt, prompt
 assert 'EXIT=$?' in prompt, prompt
 assert "swift test" in prompt, prompt
 PY
-[ $? -eq 0 ] && ok "M1: DISTILL_SYSTEM_PROMPT states proof as a floor sourced from the trace; CHAIN_SYSTEM_PROMPT names the exit-code-proxy pattern; build_distill_prompt carries the full trace" \
+[ $? -eq 0 ] && ok "M1: DISTILL_SYSTEM_PROMPT states proof as a floor sourced from the trace; the chain prompt defines the exit-code-proxy pattern; build_distill_prompt carries the full trace" \
   || bad "M1: prompt construction / trace-to-proof plumbing" "rc=nonzero"
 
 # ============================================================ GROUP L — M2: honest cost projection, budget binds on observed cost
@@ -1458,6 +1461,82 @@ run - report --in "$OUT_V1"
 case "$out" in
   *"(no report_source: pre-v2)"*1*) ok "#285: report counts a pre-v2 record under its own report_source bucket" ;;
   *) bad "#285: report counts a pre-v2 record under its own report_source bucket" "rc=$rc out=$out" ;;
+esac
+
+# ============================================================ #286 — label precision
+echo; echo "#286. label precision"
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_286", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+# one definition per label, no more, no fewer
+assert set(sd.LABEL_DEFINITIONS) == set(sd.LABELS), set(sd.LABEL_DEFINITIONS) ^ set(sd.LABELS)
+# proxy-as-thing carries its negative example: truncated READING is not it
+d = sd.LABEL_DEFINITIONS["proxy-as-thing"]
+assert "NOT this label" in d and "tail -30" in d, d
+# every label is defined in the prompt the model receives
+chain = sd.build_chain_prompt({"id": "r", "verifications": [
+    {"index": 4, "command": "swift test | tail; echo $?", "exit_masked_by_pipe": True},
+    {"index": 5, "command": "swift test | tail -3", "output_truncated": True},
+    {"index": 9, "command": "gh pr view 1 --json statusCheckRollup", "empty_ci_result": True}]}, [], [])
+for label in sd.LABELS:
+    assert ("%s: %s" % (label, sd.LABEL_DEFINITIONS[label])) in chain, label
+# flagged entries only: truncation alone is not listed as evidence
+assert "[4] exit_masked_by_pipe: swift test | tail; echo $?" in chain, chain
+assert "[9] empty_ci_result:" in chain, chain
+assert "[5]" not in chain, chain
+assert "VERIFICATION FLAGS (deterministic, 2)" in chain, chain
+empty = sd.build_chain_prompt({"id": "r"}, [], [])
+assert "VERIFICATION FLAGS (deterministic, 0)" in empty and "(none:" in empty, empty
+PY
+[ $? -eq 0 ] && ok "#286: every label defined once in the chain prompt; proxy-as-thing excludes truncated reading; only flagged verifications are listed" \
+  || bad "#286: label definitions / chain prompt flags"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_286b", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+claims = [{"id": "c1"}, {"id": "c2"}]
+lw = [{"claim": "c1"}, {"claim": "c1"}, {"claim": "c2"}]
+# model labelled only later_wrong[0]: [1] and [2] get explicit unclassified
+out, reason = sd.enforce_classified_as(
+    [{"label": "proxy-as-thing", "supports": ["0", "c2"], "why": "w"}], claims, lw)
+by_ptr = {tuple(e["supports"]): e for e in out}
+assert by_ptr[("0", "c2")]["label"] == "proxy-as-thing", out
+assert by_ptr[("1",)]["label"] == "unclassified" and "later_wrong[1]" in by_ptr[("1",)]["why"], out
+assert by_ptr[("2",)]["label"] == "unclassified", out
+assert len(out) == 3, out
+assert "later_wrong[1]" in reason and "later_wrong[2]" in reason and "later_wrong[0]" not in reason, reason
+# all covered (int and string pointers alike): nothing added, no reason
+out, reason = sd.enforce_classified_as(
+    [{"label": "green-as-done", "supports": [0, "1"], "why": "w"},
+     {"label": "letter-not-goal", "supports": ["2"], "why": "w"}], claims, lw)
+assert [e["label"] for e in out] == ["green-as-done", "letter-not-goal"], out
+assert reason is None, reason
+# a label whose only pointer does not resolve is dropped, and does not
+# count as covering anything
+out, reason = sd.enforce_classified_as(
+    [{"label": "green-as-done", "supports": ["7"], "why": "w"}], claims, lw[:1])
+assert out == [{"label": "unclassified", "supports": ["0"],
+                "why": "later_wrong[0] was not classified by the model"}], out
+PY
+[ $? -eq 0 ] && ok "#286: every later_wrong is covered by a label or carries an explicit unclassified entry and reason" \
+  || bad "#286: later_wrong coverage enforcement"
+
+OUT_COV="$TMP/coverage.json"
+"$PY" - "$OUT_COV" <<'PY'
+import json, sys
+rec = lambda labels: {"kind": "session-distill-record", "run": {"id": "r", "report_source": "text"},
+                      "claims": [], "later_wrong": [],
+                      "classified_as": [{"label": l, "supports": ["c1"], "why": ""} for l in labels]}
+json.dump({"kind": "session-distill", "schema_version": 2, "session": "s", "failures": [],
+           "records": [rec(["proxy-as-thing", "proxy-as-thing"]), rec(["green-as-done"]), rec([]), rec([])]},
+          open(sys.argv[1], "w"))
+PY
+run - report --in "$OUT_COV"
+case "$out" in
+  *"proxy-as-thing"*"   2     1   25.0%"*) ok "#286: report prints each label's entries, runs and run share (base rate)" ;;
+  *) bad "#286: report prints label base rates" "rc=$rc out=$out" ;;
 esac
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
