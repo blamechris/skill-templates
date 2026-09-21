@@ -400,7 +400,11 @@ _CI_READ_JSON_FIELD_RE = re.compile(r'statuscheckrollup|mergestatestatus', re.IG
 # instance: EXIT=0 is head's exit code, not swift-format's).
 _TRUNCATING_PIPE_RE = re.compile(
     r'\|\s*(?:head|tail|grep|sed|awk|cut|sort|uniq|wc)\b', re.IGNORECASE)
-_PIPEFAIL_PROTECTED_RE = re.compile(r'pipefail|PIPESTATUS', re.IGNORECASE)
+# Enabling pipefail (`set -o pipefail`, `set -euo pipefail`, `set -e -o
+# pipefail`) or reading PIPESTATUS -- not the bare word, which `echo
+# pipefail` or a grep pattern would carry without protecting anything.
+_PIPEFAIL_PROTECTED_RE = re.compile(
+    r'\bset\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*o\s+pipefail\b|\bPIPESTATUS\b')
 # List separators, never a lone `|`: `$?` is the status of the pipeline that
 # ran last, so the mask check needs pipelines, not the whole command. Quote-
 # unaware, and that cuts both ways: a separator inside a quoted string can

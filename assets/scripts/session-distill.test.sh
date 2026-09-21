@@ -1383,6 +1383,11 @@ assert f("swift test; git log -2 | grep -iE 'co-authored'; echo \"grep rc=$?\"")
 # pipefail set AFTER the masked read does not protect it
 assert f('npm test | tail; echo $?; set -o pipefail') == (True, True)
 # pipefail set before protects
+assert f('set -euo pipefail; npm test | tail; echo $?') == (False, True)
+assert f('set -e -o pipefail; npm test | tail; echo $?') == (False, True)
+assert f('npm test | tail; echo "${PIPESTATUS[0]} $?"') == (False, True)  # PIPESTATUS read in the same segment
+# the bare word protects nothing
+assert f('echo pipefail; npm test | tail; echo $?') == (True, True)
 assert f('set -o pipefail; npm test | tail; echo $?') == (False, True)
 # && chains read the pipeline too
 assert f('swift test | grep -c passed && echo ok=$?') == (True, True)
