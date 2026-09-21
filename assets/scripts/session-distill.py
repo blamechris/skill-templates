@@ -152,12 +152,11 @@ never reaches it): `build_tool_trace` keeps, alongside the truncated
 `trace[]`, the FULL untruncated one-line form of every tool_use `input`
 (`tool_digest(input, head=10**9, tail=0)`, in-memory only as `tool_inputs_
 full` on the run stub -- never written into a record; `run_stub_public`
-does not carry it). A claim's `proof` is "located" when its leading
-command fragment -- strip an optional `[N] ` index tag, then an optional
-`ToolName: ` tag (the shape the model copies straight out of the TOOL
-TRACE prompt's numbered `[i] Tool: digest` lines), then cut at the first
-elision (`...`/`…`) or output-arrow (` -> `) marker, whitespace-collapse
--- is non-empty AND a substring of some entry in `tool_inputs_full`.
+does not carry it). A claim's `proof` is "located" when EVERY piece of
+it (proof_segments: `[N] `/`ToolName: ` prefixes stripped, output after
+` -> ` dropped, split at each `...`/`…`) occurs in order inside ONE entry
+of `tool_inputs_full`; pieces totalling under PROOF_MIN_FRAGMENT_CHARS
+locate only as a whole input.
 A result with >=1 non-null `proof` where EVERY one is unlocatable is a
 FAILURE (`phase: "distill"`, `error` prefixed `"proof-not-in-trace:"`),
 eligible for retry like any other distill-phase failure, and the chain
@@ -165,10 +164,10 @@ call is never made for it. Otherwise every claim with a non-null `proof`
 gets `proof_located: true|false` (null for a null `proof`) on the written
 record, and `report` prints the unlocatable-proof count/rate. Measured on
 the 8 real re-run records at `~/Obsidian/no-it-all/records/session-
-distill-13cee7be-rerun-2026-09-21/`: 2 of 211 real non-null proofs are
-unlocatable, both true positives (the model's proof dropped a `| tail -4`
-segment the real command carried); the placeholder record's one proof is
-1/1 unlocatable. A zero-claim or all-null-proof result is NOT a failure
+distill-13cee7be-rerun-2026-09-21/`: 4 of 211 real non-null proofs are
+unlocatable, each a real misquote of the command that ran (a dropped
+`| tail -4` twice, `tail -2` for `tail -3`, `=="` for `==="`); the
+placeholder record's one proof is 1/1 unlocatable. A zero-claim or all-null-proof result is NOT a failure
 by this guard -- there is no non-null proof for it to fail on, and this
 script does not otherwise police that (left as-is; #269/#285's own model-
 side labels are the mechanism for an empty or thin claims list).
@@ -213,8 +212,8 @@ THE RECORD (schema_version 3), one per run, appended to
                          re-run records did, each drawing a spurious
                          absence label). `proof_located` (#291) is
                          True/False for a non-null `proof` (whether its
-                         leading command fragment is a substring of some
-                         entry in this run's own full tool inputs), or
+                         elided pieces all occur, in order, in one of
+                         this run's own full tool inputs), or
                          null for a null `proof` -- see THE PROOF-
                          LOCATABLE GUARD below.
   verifications[]        DETERMINISTIC, never from the model -- one entry
@@ -500,13 +499,11 @@ _TAIL_BARE_NAME_RE = re.compile(r'([A-Za-z][\w.-]*)\s?$')
 _CWD_SLASH_PROJECTS_RE = re.compile(r'/Projects/([^/]+)')
 _CWD_DASH_PROJECTS_RE = re.compile(r'-Projects-')
 
-# #291: a `proof`'s leading command fragment -- strip an optional `[N] `
-# index tag then an optional `ToolName: ` tag (the shape the model copies
-# straight out of the TOOL TRACE prompt's numbered `[i] Tool: digest`
-# lines), then cut at the first elision/output-arrow marker.
+# #291: prefixes stripped from a `proof` before it is split into pieces
+# (see proof_segments).
 _PROOF_INDEX_PREFIX_RE = re.compile(r'^\[\d+\] ')
 _PROOF_TOOL_PREFIX_RE = re.compile(r'^[A-Za-z_][\w-]*: ')
-_PROOF_CUT_MARKERS = ("...", "…", " -> ")
+PROOF_MIN_FRAGMENT_CHARS = 8
 
 # #285: known harness cutoff/error prefixes -- a report that opens with one
 # of these was never a real result, it is the harness cutting the run off
@@ -781,19 +778,22 @@ def tool_digest(input_obj, head=120, tail=60):
     return s
 
 
-def locate_proof_fragment(proof):
-    """The leading command fragment of a claim's `proof` string, used to
+def proof_segments(proof):
+    """The literal pieces of a claim's `proof` string, in order, used to
     test it against the run's FULL (untruncated) tool inputs (#291's
     proof-locatable guard). Strips an optional leading `[N] ` index tag,
     then an optional leading `ToolName: ` tag -- the shape the model
     copies straight out of the TOOL TRACE prompt section's numbered
-    `[i] Tool: digest` lines -- then cuts at the first elision (`...`,
-    `…`) or output-arrow (` -> `) marker, whichever comes first, and
-    whitespace-collapses what remains. "" (never None) when PROOF is
-    falsy or reduces to nothing after stripping -- the caller treats ""
-    as unlocatable, never as "nothing to check"."""
+    `[i] Tool: digest` lines -- drops everything from the first
+    output-arrow (` -> `) on, unwraps a proof quoted whole (`"npm test"`),
+    then splits at every elision (`...`, `…`) and whitespace-collapses
+    each piece. Every piece is checked, not just the first: the model
+    elides MID-command (`cd .../skill-templates-frozen && git show ...`),
+    so the text before the first elision is often just `cd`, which
+    matches nearly any trace. [] when PROOF is falsy or reduces to
+    nothing -- the caller treats that as unlocatable."""
     if not proof:
-        return ""
+        return []
     s = proof
     m = _PROOF_INDEX_PREFIX_RE.match(s)
     if m:
@@ -801,27 +801,46 @@ def locate_proof_fragment(proof):
     m = _PROOF_TOOL_PREFIX_RE.match(s)
     if m:
         s = s[m.end():]
-    cut_at = None
-    for marker in _PROOF_CUT_MARKERS:
-        idx = s.find(marker)
-        if idx != -1 and (cut_at is None or idx < cut_at):
-            cut_at = idx
-    if cut_at is not None:
-        s = s[:cut_at]
-    return " ".join(s.split())
+    arrow = s.find(" -> ")
+    if arrow != -1:
+        s = s[:arrow]
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'`":
+        s = s[1:-1]
+    pieces = re.split(r"\.\.\.|…", s)
+    return [p for p in (" ".join(x.split()) for x in pieces) if p]
+
+
+def locate_proof_fragment(proof):
+    """The leading piece of PROOF (see proof_segments), or ""."""
+    segs = proof_segments(proof)
+    return segs[0] if segs else ""
+
+
+def _segments_in_order(segs, full):
+    pos = 0
+    for seg in segs:
+        i = full.find(seg, pos)
+        if i == -1:
+            return False
+        pos = i + len(seg)
+    return True
 
 
 def proof_located(proof, tool_inputs_full):
-    """True iff PROOF's leading fragment (locate_proof_fragment) is
-    non-empty and a substring of some entry in TOOL_INPUTS_FULL -- the
-    run's own full, untruncated tool_use inputs (#291). Never asserts
-    "located" against an empty fragment or an empty TOOL_INPUTS_FULL list
-    (a run with no tool calls at all cannot locate anything, and that is
-    correctly "not located", not vacuously true)."""
-    frag = locate_proof_fragment(proof)
-    if not frag or not tool_inputs_full:
+    """True iff every piece of PROOF (proof_segments) occurs, in order,
+    within ONE entry of TOOL_INPUTS_FULL -- the run's own full, untruncated
+    tool_use inputs (#291). Never "located" against no pieces or an empty
+    TOOL_INPUTS_FULL (a run with no tool calls cannot locate anything).
+    Pieces totalling fewer than PROOF_MIN_FRAGMENT_CHARS locate only as a
+    WHOLE input: "git" is a substring of nearly any trace, so a fabricated
+    proof that short would otherwise always pass."""
+    segs = proof_segments(proof)
+    if not segs or not tool_inputs_full:
         return False
-    return any(frag in full for full in tool_inputs_full)
+    if sum(len(x) for x in segs) < PROOF_MIN_FRAGMENT_CHARS:
+        return len(segs) == 1 and any(segs[0] == full for full in tool_inputs_full)
+    return any(_segments_in_order(segs, full) for full in tool_inputs_full)
 
 
 def compute_proof_located(claims, tool_inputs_full):
@@ -1582,7 +1601,14 @@ def normalize_later_wrong(raw, claim_ids, candidates=None):
         cb = cb if isinstance(cb, dict) else {}
         run = cb.get("run")
         run_candidates = candidates_by_run.get(run) or []
-        if run_candidates and all(c.get("repo_match") == "ambiguous" for c in run_candidates):
+        # Keyed by CLAIM, not run: a run's "same" candidate for some other
+        # claim is no evidence for this one. Kept when a non-ambiguous
+        # candidate in RUN names this claim; withdrawn when RUN was reached
+        # through an ambiguous #N and nothing better ties it to this claim
+        # (13cee7be's c61 never mentions #264 at all).
+        backed = any(claim in (c.get("claims") or []) and c.get("repo_match") != "ambiguous"
+                     for c in run_candidates)
+        if not backed and any(c.get("repo_match") == "ambiguous" for c in run_candidates):
             dropped.append({"claim": claim, "run": run, "index": raw_i,
                             "reason": "repo-ambiguous-only"})
             continue
@@ -1749,6 +1775,13 @@ def build_repo_vocabulary(stubs):
     vocab = set()
     for stub in stubs:
         vocab |= extract_repo_qualifiers(_run_repo_text(stub))
+        # A cwd under Projects/<repo> names a repo as surely as a -R flag;
+        # without it a two-repo session that names only one repo in text
+        # looks single-repo and loses its ambiguity tagging.
+        for cwd in stub.get("cwds") or []:
+            m = _CWD_SLASH_PROJECTS_RE.search(cwd)
+            if m:
+                vocab.add(m.group(1))
     return vocab
 
 
@@ -1915,6 +1948,9 @@ def find_chain_candidates(claims, current_started_at, current_repos, other_runs,
                         "artifact": art,
                         "excerpt": haystack[max(0, idx - 120): idx + len(art) + 120].replace("\n", " "),
                         "repo_match": repo_match,
+                        "claims": sorted(
+                            c["id"] for c in claims
+                            if art in (c.get("text") or "") or art in (c.get("quote") or "")),
                     })
                     break
                 idx = haystack.find(art, idx + 1)

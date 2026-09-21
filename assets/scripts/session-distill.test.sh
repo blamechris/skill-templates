@@ -2059,5 +2059,58 @@ PY
 [ $? -eq 0 ] && ok "#287: a label whose supports include a withdrawn later_wrong is dropped though it also names a claim; the surviving label is remapped; later_wrong_withdrawn records the drop" \
   || bad "#287: withdrawn later_wrong label enforcement" "rc=nonzero"
 
+echo; echo "X7. #291/#287 review — locator reads every elided piece, rejects short fabrications; ambiguity drop is per claim; cwd seeds the vocabulary"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_review", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+full = ["cd /Users/x/scratch/wt/skill-templates-frozen && bash assets/t.sh 2>&1 | tail -3",
+        "git status", "npm test", "git commit -m 'wip'", "git push origin main"]
+loc = lambda p: sd.proof_located(p, full)
+# mid-command elision: the piece before the first "..." is only "cd"; every
+# piece must be found, in order, in ONE input
+assert loc("cd .../skill-templates-frozen && ... | tail -3")
+assert not loc("cd .../skill-templates-frozen && ... | tail -2")      # altered arg
+assert not loc("cd .../nowhere-else && ... | tail -3")                 # invented piece
+assert not loc("tail -3 ... cd /Users")                                # out of order
+# quoted whole, and a leading elision, still locate
+assert loc('"npm test" -> exit 0')
+assert loc("`git status`")
+assert loc("... npm test")
+# short fabrications locate only as a whole input
+assert not loc("git"), "a 3-char fragment must not locate as a piece"
+assert not loc("a")
+assert sd.proof_located("ls", ["ls"]) and not sd.proof_located("ls", ["ls -la"])
+
+# per-claim ambiguity: run-X has an ambiguous #264 candidate backing c1 and a
+# 'same' candidate backing only c2 -> c1's later_wrong is withdrawn, c2's kept
+cands = [{"run": "run-X", "artifact": "#264", "repo_match": "ambiguous", "claims": ["c1"]},
+         {"run": "run-X", "artifact": "auth.py", "repo_match": "n/a", "claims": ["c2"]}]
+raw = [{"claim": "c1", "how": "h", "contradicted_by": {"run": "run-X", "at": "t", "quote": "q"}},
+       {"claim": "c2", "how": "h", "contradicted_by": {"run": "run-X", "at": "t", "quote": "q"}}]
+out, dropped, imap = sd.normalize_later_wrong(raw, {"c1", "c2"}, cands)
+assert [x["claim"] for x in out] == ["c2"], out
+assert dropped == [{"claim": "c1", "run": "run-X", "index": 0, "reason": "repo-ambiguous-only"}], dropped
+# a claim reached only through an ambiguous candidate for ANOTHER claim is
+# withdrawn too (13cee7be's c61 never mentions #264)
+out, dropped, _ = sd.normalize_later_wrong(raw[:1], {"c1"}, cands[:1] and
+    [{"run": "run-X", "artifact": "#264", "repo_match": "ambiguous", "claims": ["c9"]}])
+assert out == [] and dropped[0]["reason"] == "repo-ambiguous-only", (out, dropped)
+
+# find_chain_candidates records which claims an artifact came from
+cl = [{"id": "c1", "text": "#42 fixed", "quote": None}, {"id": "c2", "text": "other", "quote": "#42"}]
+got = sd.find_chain_candidates(cl, "t0", {"solo"}, [{"id": "r2", "started_at": "t1", "repos": ["solo"],
+                               "brief": "", "report": "#42 was wrong"}], {"solo"})
+assert got and got[0]["claims"] == ["c1", "c2"], got
+
+# a cwd under Projects/<repo> seeds the vocabulary: two repos, one named only by cwd
+stubs = [{"brief": "see blamechris/alpha#1", "report": "", "tool_inputs_full": [], "cwds": []},
+         {"brief": "", "report": "", "tool_inputs_full": [], "cwds": ["/Users/x/Projects/beta"]}]
+assert sd.build_repo_vocabulary(stubs) == {"alpha", "beta"}, sd.build_repo_vocabulary(stubs)
+PY
+[ $? -eq 0 ] && ok "#291/#287 review: every elided piece located in order; short fabrications rejected; quoted/leading-elision proofs locate; ambiguity drop keyed per claim; candidates carry their claims; cwd seeds the vocabulary" \
+  || bad "#291/#287 review fixes" "rc=nonzero"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

@@ -145,11 +145,16 @@ also keeps, in memory only, `tool_inputs_full[]` — the FULL, untruncated,
 whitespace-collapsed form of every tool_use `input`
 (`tool_digest(input, head=10**9, tail=0)`) — never written into a record
 (`run_stub_public` does not carry it). A claim's `proof` is **located**
-when its leading command fragment (strip an optional `[N] ` index tag,
-then an optional `ToolName: ` tag — the shape the model copies out of the
-TOOL TRACE prompt's numbered `[i] Tool: digest` lines — then cut at the
-first `...`/`…`/` -> ` marker, whitespace-collapse) is non-empty and a
-substring of some `tool_inputs_full` entry. A result with `>=1` non-null
+when **every** piece of it occurs, in order, inside **one**
+`tool_inputs_full` entry. Pieces: strip an optional `[N] ` index tag, then
+an optional `ToolName: ` tag (the shape the model copies out of the TOOL
+TRACE prompt's numbered `[i] Tool: digest` lines), drop everything from
+the first ` -> ` on, unwrap a proof quoted whole, split at every
+`...`/`…`, whitespace-collapse. Every piece counts because the model
+elides mid-command (`cd .../skill-templates-frozen && ...`): the text
+before the first elision is often just `cd`, which is in nearly every
+trace. Pieces totalling under 8 characters locate only as a whole input,
+so a fabricated `git` never passes. A result with `>=1` non-null
 `proof` where **every** one is unlocatable is a FAILURE (`phase:
 "distill"`, `error` prefixed `"proof-not-in-trace:"`), retryable like any
 other distill-phase failure — **the chain call is never made for it**.
@@ -161,11 +166,13 @@ proof for it to fail on.
 
 Measured on the 8 real re-run records
 (`~/Obsidian/no-it-all/records/session-distill-13cee7be-rerun-2026-09-21/`):
-**2 of 211** real non-null proofs are unlocatable, and both are true
-positives — the model's proof dropped a `| tail -4` segment the real
-`gh pr checks 247 --watch --interval 25 2>&1 | tail -4; ...` command
-carried. The placeholder record's one proof is 1/1 unlocatable, as
-expected.
+**4 of 211** real non-null proofs are unlocatable, and each differs
+from the command that actually ran: two dropped a `| tail -4` (c29/c30
+on main-turn-005), one wrote `tail -2` for `tail -3` (a963d9f8 c18), one
+wrote `=="` for `==="` (main-turn-005 c2). None of the 8 records fails
+the all-unlocatable test; the placeholder record's one proof is 1/1
+unlocatable. A first-piece-only matcher reported 2 of 211, but only
+because a piece like `cd` matched vacuously.
 
 ### #287 — repo-qualified `#N` retrieval
 
