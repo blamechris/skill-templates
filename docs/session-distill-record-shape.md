@@ -70,6 +70,7 @@ is where its brief lives.
     {"label": "proxy-as-thing", "supports": ["c1"], "why": "..."}
   ],
   "unclassified_reason": null,
+  "later_wrong_withdrawn": [],
   "distilled": {"at": "...Z", "model": "sonnet", "cost_usd": 0.0074, "passes": ["distill","chain"]}
 }
 ```
@@ -195,11 +196,19 @@ tells the model an `"ambiguous"` one cannot alone support a `later_wrong`
 or a label — enforced deterministically in code regardless: a
 `later_wrong` entry whose `contradicted_by.run` is linked to this run's
 claims **only** through `"ambiguous"`-tagged candidates is dropped
-(`dropped` gets `{"claim", "run", "reason": "repo-ambiguous-only"}`,
-surfaced the same stderr-warning way #278 C2's unresolvable-claim drop
-is) — which, via the same evidence-chain machinery (#290), also drops any
-`classified_as` entry whose sole `supports` pointer named that now-gone
-index.
+and persisted on the record as `later_wrong_withdrawn[]`
+(`{"claim", "run", "index", "reason": "repo-ambiguous-only"}`, `index`
+being the model's raw `later_wrong` position), as well as warned on
+stderr. Any `classified_as` entry whose `supports` named a withdrawn
+index is dropped **whole**, even when it also names a claim: on
+`13cee7be` an `outcome-not-reason` on c61 cited both c61 and the false
+LW1, and its surviving claim pointer would otherwise have kept a label
+whose only reasoning was the withdrawn contradiction.
+
+Ambiguity needs a second repo: when the session-wide vocabulary names at
+most one repo, an unresolved `#N` is tagged `"same"`, not `"ambiguous"`,
+so a single-repo session loses no `later_wrong` to a run whose cwd lies
+outside `~/Projects`.
 
 Verified against session `13cee7be`'s real data: `agent-a125a8c132b05b56c`
 (the Aeolus run whose false `later_wrong` LW1 filed this issue) resolves

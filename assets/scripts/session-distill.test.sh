@@ -2010,5 +2010,54 @@ PY
 [ $? -eq 0 ] && ok "#287: CHAIN_SYSTEM_PROMPT states an ambiguous candidate cannot alone support a later_wrong/label; build_chain_prompt prints each candidate's repo_match tag" \
   || bad "#287: chain prompt repo_match wording/printing" "rc=nonzero"
 
+echo; echo "X5. #287 — a single-repo session never tags a bare #N ambiguous"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_287_single", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+claims = [{"id": "c1", "text": "#42 is fixed", "quote": None}]
+later = [{"id": "r2", "started_at": "2026-01-02", "repos": [],
+          "brief": "", "report": "turns out #42 was wrong, reopened"}]
+# neither side resolves a repo (no cwd under ~/Projects, no qualifier)
+one = sd.find_chain_candidates(claims, "2026-01-01", set(), later, {"solo"})
+assert len(one) == 1 and one[0]["repo_match"] == "same", one
+two = sd.find_chain_candidates(claims, "2026-01-01", set(), later, {"solo", "other"})
+assert len(two) == 1 and two[0]["repo_match"] == "ambiguous", two
+PY
+[ $? -eq 0 ] && ok "#287: an unresolved #N is 'same' when the session names <=1 repo, 'ambiguous' only when it names two" \
+  || bad "#287: single-repo session ambiguity" "rc=nonzero"
+
+echo; echo "X6. #287 — a label citing a withdrawn later_wrong is dropped even when it also cites a claim; the withdrawal is on the record"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_287_withdrawn", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+stub = {"id": "r1", "kind": "subagent", "tool_inputs_full": ["gh pr view 7"]}
+distilled = {"asked": "a", "understood": "u", "delivered": "d", "claims": [
+    {"id": "c1", "text": "#7 is fixed", "kind": "k", "proof": "gh pr view 7", "quote": "q"},
+    {"id": "c2", "text": "#8 merged", "kind": "k", "proof": "gh pr view 7", "quote": "q"}]}
+chain = {
+    "later_wrong": [
+        {"claim": "c1", "how": "h", "contradicted_by": {"run": "amb", "at": "t", "quote": "q"}},
+        {"claim": "c2", "how": "h", "contradicted_by": {"run": "same", "at": "t", "quote": "q"}}],
+    "classified_as": [
+        {"label": "outcome-not-reason", "supports": ["c1", "0"], "why": "w"},
+        {"label": "green-as-done", "supports": ["c2", "1"], "why": "w"}]}
+cands = [{"run": "amb", "artifact": "#7", "repo_match": "ambiguous"},
+         {"run": "same", "artifact": "#8", "repo_match": "same"}]
+rec, dropped = sd.build_record("s", stub, distilled, chain, "t", "m", 0.0,
+                               ["distill", "chain"], candidates=cands)
+assert [lw["claim"] for lw in rec["later_wrong"]] == ["c2"], rec["later_wrong"]
+labels = [(e["label"], e["supports"]) for e in rec["classified_as"]]
+assert labels == [("green-as-done", ["c2", "0"])], labels
+w = rec["later_wrong_withdrawn"]
+assert len(w) == 1 and w[0]["claim"] == "c1" and w[0]["run"] == "amb" \
+    and w[0]["reason"] == "repo-ambiguous-only" and w[0]["index"] == 0, w
+PY
+[ $? -eq 0 ] && ok "#287: a label whose supports include a withdrawn later_wrong is dropped though it also names a claim; the surviving label is remapped; later_wrong_withdrawn records the drop" \
+  || bad "#287: withdrawn later_wrong label enforcement" "rc=nonzero"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

@@ -1583,7 +1583,8 @@ def normalize_later_wrong(raw, claim_ids, candidates=None):
         run = cb.get("run")
         run_candidates = candidates_by_run.get(run) or []
         if run_candidates and all(c.get("repo_match") == "ambiguous" for c in run_candidates):
-            dropped.append({"claim": claim, "run": run, "reason": "repo-ambiguous-only"})
+            dropped.append({"claim": claim, "run": run, "index": raw_i,
+                            "reason": "repo-ambiguous-only"})
             continue
         index_map[raw_i] = len(out)
         out.append({
@@ -1598,7 +1599,7 @@ def normalize_later_wrong(raw, claim_ids, candidates=None):
     return out, dropped, index_map
 
 
-def enforce_classified_as(raw, claims, later_wrong, index_map=None):
+def enforce_classified_as(raw, claims, later_wrong, index_map=None, withdrawn=None):
     """(classified_as[], unclassified_reason) -- the CLOSED VOCABULARY's
     second enforcement point.
 
@@ -1626,6 +1627,12 @@ def enforce_classified_as(raw, claims, later_wrong, index_map=None):
     ids), so this only ever changes an int index into its digit-string."""
     claim_ids = {c["id"] for c in claims}
     n_later_wrong = len(later_wrong)
+    # WITHDRAWN (#287): raw later_wrong indices dropped as repo-ambiguous.
+    # A label that cited one rested on a contradiction that was never
+    # there; its surviving claim pointer does not make it evidenced, so
+    # the whole entry goes (on 13cee7be, an outcome-not-reason on c61
+    # outlived the false later_wrong it was built on).
+    withdrawn = {str(i) for i in (withdrawn or ())}
     # INDEX_MAP (from normalize_later_wrong) translates the model's raw
     # later_wrong positions to kept ones; None means the pointers already
     # address LATER_WRONG as given.
@@ -1650,6 +1657,8 @@ def enforce_classified_as(raw, claims, later_wrong, index_map=None):
         supports = entry.get("supports")
         if not isinstance(supports, list):
             continue
+        if any(str(s) in withdrawn for s in supports if not isinstance(s, bool)):
+            continue  # DROPPED -- it cited a withdrawn later_wrong
         resolved = [p for p in (resolve(s) for s in supports) if p is not None]
         if not resolved:
             continue  # DROPPED -- no pointer in `supports` resolves to anything
@@ -1889,8 +1898,15 @@ def find_chain_candidates(claims, current_started_at, current_repos, other_runs,
                             # carry a qualifier that does match.
                             idx = haystack.find(art, idx + 1)
                             continue
-                        repo_match = ("same" if (claim_repo is not None and occ_repo is not None)
-                                      else "ambiguous")
+                        # Ambiguity needs a second repo to be ambiguous
+                        # WITH: in a session whose vocabulary names at most
+                        # one repo, a bare #N cannot collide, and weakening
+                        # it would drop real later_wrong entries from any
+                        # run whose cwd lies outside ~/Projects.
+                        if (claim_repo is not None and occ_repo is not None) or len(vocabulary) <= 1:
+                            repo_match = "same"
+                        else:
+                            repo_match = "ambiguous"
                     else:
                         repo_match = "n/a"
                     candidates.append({
@@ -2267,7 +2283,8 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
         (chain_doc or {}).get("later_wrong") if chain_doc else None, claim_ids, candidates)
     classified_as, unclassified_reason = enforce_classified_as(
         (chain_doc or {}).get("classified_as") if chain_doc else None, claims, later_wrong,
-        lw_index_map)
+        lw_index_map,
+        withdrawn=[d["index"] for d in dropped_later_wrong if isinstance(d, dict)])
     record = {
         "kind": "session-distill-record",
         "schema_version": SCHEMA_VERSION,
@@ -2288,6 +2305,10 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
         "later_wrong": later_wrong,
         "classified_as": classified_as,
         "unclassified_reason": unclassified_reason,
+        # #287: repo-ambiguous drops persist on the record, not only on
+        # stderr, so a reader of the record can see what the chain pass
+        # proposed and why it was withdrawn.
+        "later_wrong_withdrawn": [d for d in dropped_later_wrong if isinstance(d, dict)],
         "distilled": {
             "at": distilled_at,
             "model": model_name,
