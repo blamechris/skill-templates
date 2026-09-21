@@ -81,8 +81,14 @@ calls a real model. `--model-cmd` defaults to the verified invocation
     claude -p --model sonnet --tools "" --safe-mode --strict-mcp-config
       --no-session-persistence --output-format json
 
-(measured 2026-09-20: $0.0075/call with these flags, $0.11/call without --
-`--safe-mode` drops the ~26K-token CLAUDE.md + hook preamble). This script
+(`--safe-mode` drops the ~26K-token CLAUDE.md + hook preamble; without it
+the same call was $0.11/call in the flag-overhead comparison). The
+$0.0075/call figure this docstring and DEFAULT_COST_PER_CALL_USD once
+carried alongside it was measured on a ONE-TOKEN prompt and does not
+survive a real run's payload -- measured on two REAL runs (#278 M2,
+2026-09-20): $0.3349 and $0.3564 for one run's two calls, ~$0.167/call.
+DEFAULT_COST_PER_CALL_USD is that corrected figure; see its own comment
+for what it is and is not used for. This script
 appends `--system-prompt <text>` and `--json-schema <json>` itself (the
 system prompt and schema differ between the distill call and the chain
 call, so they are not baked into the default string). The run's prompt goes
@@ -145,17 +151,45 @@ resolution and session-directory resolution are review-result.py's (see
 REUSE above) -- an unset session id, an ambiguous session directory, or a
 missing `review-result.py` sibling are all REFUSE, nothing is read.
 
+AN UNREADABLE OR UNPARSEABLE MAIN TRANSCRIPT IS NEVER A SILENT ZERO
+(#278 C1). A main transcript that cannot be opened (permissions, missing
+mid-read) or that yields zero parsed lines (empty, or every line fails
+JSON) previously produced the exact same output as a healthy session with
+no main-thread turns at all -- `segmented_by` even asserted a rule
+("shape") that never ran. Now: `segmented_by` is `null`, never a rule
+name, whenever no line was ever successfully read; the failure (or the
+count of unparseable lines dropped along the way, even from an otherwise
+readable file) is appended to an `unreadable[]` list carried on BOTH the
+`runs` and `distill` documents; a warning is printed to stderr per entry;
+and the command's exit code is forced to 2 (the JSON is still emitted in
+full, same discipline as rework-lag.py's `unknown[]`) -- see Exit codes
+below. A main transcript that is simply ABSENT (no `.jsonl` sibling at
+all -- a session with no main thread) is not an error: `segmented_by`
+stays `null` and nothing is added to `unreadable[]`, because no rule was
+supposed to run.
+
 `--dry-run` prints the run inventory, the projected call count (2 per run
-still to process), and a projected cost from a fixed per-call estimate, and
-calls nothing -- with ~170 runs in a real validation session, a blind
-`distill` is a multi-dollar surprise; `--dry-run` makes it an informed one.
+still to process), and a projected cost, and calls nothing -- with ~170
+runs in a real validation session, a blind `distill` is a multi-dollar
+surprise; `--dry-run` makes it an informed one. The projection's basis is
+printed alongside the number (#278 M2) rather than left as a bare figure:
+DEFAULT_COST_PER_CALL_USD until at least one real call has been made this
+invocation, after which the projection recalibrates to this run's own
+OBSERVED average cost per call -- a session's real payloads (long reports,
+long tool traces) are not the one-token prompt that constant was
+originally measured on, so a fixed guess converges toward truth only by
+being replaced with a measurement.
 `--resume` skips any run id already present in an existing output
 document's `records[]` (a previously FAILED run is retried, not skipped --
 resume is for cost, not for silently giving up on a transient failure).
 `--max-cost-usd N` checks the running total against N before every model
-call and stops -- recording `stopped: {reason, at_run, budget, spent}` in
-the document -- rather than either truncating the JSON silently or spending
-past the budget.
+call (using the OBSERVED running average once one exists, never a stale
+fixed estimate alone) AND immediately after every model call (using the
+OBSERVED total_cost_usd, not a projection) -- recording
+`stopped: {reason, at_run, budget, spent}` in the document -- rather than
+either truncating the JSON silently or spending past the budget on the
+strength of an estimate that was never checked against what the calls
+actually cost.
 
 OUTPUT: one session-level document, `<session-dir>/session-distill.json`
 (atomic write via review-result.py's `atomic_write`), `--force` required to
@@ -165,13 +199,19 @@ overwrite an existing file outside of `--resume`, `--out -` for stdout
 Exit codes:
   schema   always 0.
   runs     0, or review-result.py's own REFUSE code (1) for session-id/
-           session-dir resolution, or 2 naming a missing review-result.py.
+           session-dir resolution, or 2 naming a missing review-result.py,
+           or 2 (JSON still printed in full) when the main transcript
+           could not be read or yielded zero parsed lines -- named in the
+           document's `unreadable[]`, same discipline as rework-lag.py's
+           `unknown[]`.
   distill  0 on completion (an early `--max-cost-usd` stop is still 0: it is
            an intentional, recorded stop, not a failure); 2 for this
            script's own REFUSE cases (missing sibling, `--only` matching no
            run, an existing output file without `--force`/`--resume`), or
            review-result.py's own REFUSE code (1) for session-id/session-
-           dir resolution.
+           dir resolution, or 2 (JSON still written in full) when the main
+           transcript could not be read or yielded zero parsed lines --
+           named in the document's `unreadable[]`.
   report   0, or 2 if the input document cannot be read.
 """
 import argparse
@@ -219,11 +259,18 @@ DEFAULT_MODEL_CMD = (
     'claude -p --model sonnet --tools "" --safe-mode --strict-mcp-config '
     "--no-session-persistence --output-format json"
 )
-# Measured 2026-09-20 (record-shape.md): $0.0075/call with the flags above.
-# Used ONLY to project a cost before any call is made (--dry-run,
-# --max-cost-usd's pre-call check) -- the document's real total_cost_usd is
-# always the sum of actual `total_cost_usd` values the model reports.
-DEFAULT_COST_PER_CALL_USD = 0.0075
+# #278 M2: the original $0.0075/call here was measured on a ONE-TOKEN
+# prompt and does not survive a real run's payload (a real brief + report +
+# full tool trace). Measured 2026-09-20 on two REAL runs instead:
+# $0.3349 and $0.3564 total for one run's two calls each -- ~$0.167/call.
+# This is still a fixed constant, and the docstring says so rather than
+# implying otherwise: it is the INITIAL projection only, used before any
+# call in THIS invocation has actually been made. The moment a real call
+# returns a cost, `cmd_distill` recalibrates to THIS run's own observed
+# average instead of trusting this constant further -- a fixed number can
+# be corrected once, real payloads still vary, and the fix is to measure
+# again, not to hand-pick a second guess.
+DEFAULT_COST_PER_CALL_USD = 0.167
 MODEL_TIMEOUT_SECS = 180
 
 
@@ -270,10 +317,26 @@ def load_review_result():
 # --------------------------------------------------------------- transcript reading
 
 def read_jsonl_objs(path):
-    """Every line of PATH parsed as JSON, in order; a blank or unparseable
-    line is skipped rather than aborting the read -- the same tolerance
-    review-result.py's last_assistant_text uses."""
+    """Every line of PATH parsed as JSON, in order. Returns
+    (objs, error, dropped):
+      objs    the successfully parsed lines, in order. A blank line is
+              skipped without counting against `dropped` (that is normal
+              JSONL formatting, not a defect).
+      error   None on a normal read (even one that yields zero objs
+              because the file is genuinely empty), or a message string
+              when the file could not be opened/read at all (#278 C1) --
+              the OLD behaviour silently returned [] here, which made an
+              unreadable transcript indistinguishable from an empty one.
+              The caller records a non-None error in `unreadable[]`.
+      dropped the count of non-blank lines that failed json.loads. The OLD
+              behaviour discarded these with no counter at all -- a
+              transcript that is nothing but garbage lines produced the
+              same `objs == []` a chmod-000 file did, with no trace of
+              which failure mode occurred. The caller folds a nonzero
+              `dropped` into `unreadable[]` too, so unparseable content is
+              reported rather than silently skipped."""
     objs = []
+    dropped = 0
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -283,11 +346,12 @@ def read_jsonl_objs(path):
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
+                    dropped += 1
                     continue
                 objs.append(obj)
-    except OSError:
-        return []
-    return objs
+    except OSError as e:
+        return [], str(e), 0
+    return objs, None, dropped
 
 
 def get_user_text(obj):
@@ -351,10 +415,17 @@ def strip_system_reminders(text):
     return s.strip()
 
 
-def tool_digest(input_obj, limit=100):
+def tool_digest(input_obj, head=120, tail=60):
     """A one-line argument digest for a tool_use block -- the most
     recognizable string field if there is an obvious one, else a compact
-    JSON dump, collapsed to one line and truncated."""
+    JSON dump, collapsed to one line and truncated.
+
+    Truncation keeps the HEAD *and* the TAIL, not just the head (#278 M3):
+    a long shell pipeline's exit-code read -- `... | head -50; echo
+    "EXIT=$?"` -- lives at the END of the command, which is exactly where
+    the proxy-as-thing pattern this tool exists to catch shows up. A
+    head-only truncation silently drops that substring from every digest
+    long enough to need truncating at all."""
     s = None
     if isinstance(input_obj, dict):
         for key in ("command", "file_path", "path", "pattern", "query", "prompt", "url"):
@@ -367,8 +438,8 @@ def tool_digest(input_obj, limit=100):
     else:
         s = json.dumps(input_obj, ensure_ascii=False)
     s = " ".join(s.split())
-    if len(s) > limit:
-        s = s[:limit - 1] + "…"
+    if len(s) > head + tail:
+        s = s[:head] + "…" + (s[-tail:] if tail else "")
     return s
 
 
@@ -421,7 +492,13 @@ def segment_main_turns(objs):
         if not isinstance(o, dict) or o.get("type") != "user":
             return False
         if segmented_by == "origin":
-            origin = o.get("origin") or {}
+            # `origin` is a dict on every shape seen so far, but this file
+            # tolerates lines it has not seen yet the same way every other
+            # shape check here does (#278 N1) -- a line carrying a bare
+            # `"origin": "human"` string used to raise AttributeError on
+            # `.get("kind")` instead of simply not matching.
+            origin = o.get("origin")
+            origin = origin if isinstance(origin, dict) else {}
             return origin.get("kind") == "human"
         # shape fallback -- the "obvious" rule, deliberately used only when
         # `origin` is unavailable anywhere: string content, not isMeta, not
@@ -484,7 +561,7 @@ def build_main_turn_stub(main_path, objs, start, end, idx, segmented_by):
     }
 
 
-def build_subagent_stub(rr, jsonl_path):
+def build_subagent_stub(rr, jsonl_path, unreadable):
     base = jsonl_path[:-len(".jsonl")]
     agent_name = os.path.basename(base)
     meta_path = base + ".meta.json"
@@ -506,7 +583,12 @@ def build_subagent_stub(rr, jsonl_path):
     else:
         spawned_by = "session"
 
-    objs = read_jsonl_objs(jsonl_path)
+    objs, err, dropped = read_jsonl_objs(jsonl_path)
+    if err:
+        unreadable.append("subagent transcript %s (%s)" % (jsonl_path, err))
+    elif dropped:
+        unreadable.append(
+            "subagent transcript %s: %d unparseable line(s) skipped" % (jsonl_path, dropped))
     first_user = next((o for o in objs if isinstance(o, dict) and o.get("type") == "user"), None)
     brief = (get_user_text(first_user) or "") if first_user is not None else ""
     report = rr.last_assistant_text(jsonl_path) or ""
@@ -544,24 +626,48 @@ def build_subagent_stub(rr, jsonl_path):
 
 
 def build_all_run_stubs(rr, session_dir):
-    """(segmented_by, [run_stub, ...]) -- every main-turn and every
-    subagent run in the session, sorted by started_at (runs with no
-    timestamp sort first, deterministically, by id)."""
+    """(segmented_by, [run_stub, ...], unreadable[]) -- every main-turn and
+    every subagent run in the session, sorted by started_at (runs with no
+    timestamp sort first, deterministically, by id).
+
+    `segmented_by` is `None` unless `segment_main_turns` actually ran --
+    never a rule name asserted on zero evidence (#278 C1). That happens in
+    exactly two cases, both legitimate and neither an error: the main
+    transcript is absent entirely (no main thread for this session), or it
+    is present but empty. Anything else that prevents a read --
+    unreadable, or present-but-entirely-unparseable -- is instead recorded
+    in `unreadable[]`, one entry per main or subagent transcript that could
+    not be fully read; the caller (`cmd_runs`/`cmd_distill`) turns a
+    non-empty `unreadable[]` into a stderr warning per entry and a forced
+    exit code, same discipline as rework-lag.py's `unknown[]`."""
     stubs = []
-    segmented_by = "origin"
+    segmented_by = None
+    unreadable = []
 
     main_path = session_dir + ".jsonl"
     if os.path.exists(main_path):
-        objs = read_jsonl_objs(main_path)
-        segmented_by, spans = segment_main_turns(objs)
-        for k, (start, end) in enumerate(spans):
-            stubs.append(build_main_turn_stub(main_path, objs, start, end, k + 1, segmented_by))
+        objs, err, dropped = read_jsonl_objs(main_path)
+        if err:
+            unreadable.append("main transcript %s (%s)" % (main_path, err))
+        else:
+            if dropped and objs:
+                unreadable.append(
+                    "main transcript %s: %d unparseable line(s) skipped" % (main_path, dropped))
+            elif dropped and not objs:
+                unreadable.append(
+                    "main transcript %s: 0 of %d line(s) parsed" % (main_path, dropped))
+            if objs:
+                segmented_by, spans = segment_main_turns(objs)
+                for k, (start, end) in enumerate(spans):
+                    stubs.append(build_main_turn_stub(main_path, objs, start, end, k + 1, segmented_by))
+            # objs == [] and dropped == 0: a genuinely empty file. Not an
+            # error -- segmented_by stays None because no rule ran.
 
     for jsonl_path in rr.iter_agent_jsonl(session_dir):
-        stubs.append(build_subagent_stub(rr, jsonl_path))
+        stubs.append(build_subagent_stub(rr, jsonl_path, unreadable))
 
     stubs.sort(key=lambda r: (r.get("started_at") or "", r["id"]))
-    return segmented_by, stubs
+    return segmented_by, stubs, unreadable
 
 
 # --------------------------------------------------------------- claim/label handling
@@ -584,15 +690,29 @@ def normalize_claims(raw):
     return out
 
 
-def normalize_later_wrong(raw):
+def normalize_later_wrong(raw, claim_ids):
+    """(later_wrong[], dropped[]) -- a `later_wrong` entry whose `claim`
+    does not name a real claim id is dropped, not silently kept as a
+    dangling pointer (#278 C2): `enforce_classified_as` below treats a
+    `later_wrong` INDEX as valid supporting evidence for a `classified_as`
+    label, so an unvalidated `later_wrong[i]` naming a nonexistent claim
+    would let a label ride in on evidence that itself points nowhere.
+    `dropped` carries the offending claim references so the caller can
+    record/warn about them -- unresolvable is reported, never silently
+    kept."""
     out = []
+    dropped = []
     for lw in raw or []:
         if not isinstance(lw, dict):
+            continue
+        claim = lw.get("claim")
+        if not isinstance(claim, str) or claim not in claim_ids:
+            dropped.append(claim)
             continue
         cb = lw.get("contradicted_by")
         cb = cb if isinstance(cb, dict) else {}
         out.append({
-            "claim": lw.get("claim"),
+            "claim": claim,
             "how": lw.get("how") or "",
             "contradicted_by": {
                 "run": cb.get("run"),
@@ -600,32 +720,36 @@ def normalize_later_wrong(raw):
                 "quote": cb.get("quote"),
             },
         })
-    return out
+    return out, dropped
 
 
 def enforce_classified_as(raw, claims, later_wrong):
     """(classified_as[], unclassified_reason) -- the CLOSED VOCABULARY's
-    second enforcement point. An entry whose `supports` names neither an
-    existing claim id nor a valid `later_wrong` index is DROPPED (not
-    relabelled: it has no evidence pointer at all, so there is nothing
-    honest to keep). An entry that survives that check but carries an
-    off-vocabulary label is kept with its label replaced by
-    "unclassified", and the offending label text is folded into
-    `unclassified_reason` -- never invented, never passed through
-    unexamined."""
+    second enforcement point.
+
+    `supports` is filtered ELEMENT-WISE (#278 C2), not all-or-nothing: the
+    OLD behaviour dropped an entry only when EVERY pointer in `supports`
+    was bad, then wrote the RAW list back -- so `["0", "c99-bogus"]` with
+    a valid `"0"` kept `"c99-bogus"` in the persisted record as a dangling
+    pointer nobody had checked. Now only the pointers that actually
+    resolve (to an existing claim id, or to a valid `later_wrong` index)
+    survive into the written `supports`; the entry itself is DROPPED only
+    when NONE of its pointers resolve -- it then has no evidence pointer
+    at all, so there is nothing honest to keep. An entry that survives
+    with at least one valid pointer but carries an off-vocabulary label is
+    kept with its label replaced by "unclassified", and the offending
+    label text is folded into `unclassified_reason` -- never invented,
+    never passed through unexamined."""
     claim_ids = {c["id"] for c in claims}
     n_later_wrong = len(later_wrong)
 
-    def supported(supports):
-        if not isinstance(supports, list) or not supports:
-            return False
-        for s in supports:
-            if isinstance(s, str) and s in claim_ids:
-                return True
-            if isinstance(s, str) and s.isdigit() and int(s) < n_later_wrong:
-                return True
-            if isinstance(s, int) and not isinstance(s, bool) and 0 <= s < n_later_wrong:
-                return True
+    def resolves(s):
+        if isinstance(s, str) and s in claim_ids:
+            return True
+        if isinstance(s, str) and s.isdigit() and 0 <= int(s) < n_later_wrong:
+            return True
+        if isinstance(s, int) and not isinstance(s, bool) and 0 <= s < n_later_wrong:
+            return True
         return False
 
     out = []
@@ -634,15 +758,18 @@ def enforce_classified_as(raw, claims, later_wrong):
         if not isinstance(entry, dict):
             continue
         supports = entry.get("supports")
-        if not supported(supports):
-            continue  # DROPPED -- no claim/later_wrong evidence pointer
+        if not isinstance(supports, list):
+            continue
+        resolved = [s for s in supports if resolves(s)]
+        if not resolved:
+            continue  # DROPPED -- no pointer in `supports` resolves to anything
         label = entry.get("label")
         if label not in LABELS:
             reasons.append(str(label))
             label = "unclassified"
         out.append({
             "label": label,
-            "supports": supports,
+            "supports": resolved,
             "why": entry.get("why") or "",
         })
     unclassified_reason = "; ".join(reasons) if reasons else None
@@ -704,25 +831,54 @@ def find_chain_candidates(claims, current_started_at, other_runs):
 
 # ---------------------------------------------------------------------- model boundary
 
+# #278 M1: on a real run, `proof` came back non-null for only 4 of 14
+# claims on one 89-tool-call run, and 10 of 11 on a 35-tool-call run -- the
+# defect is VARIANCE, not absence (a first read that generalized "null on
+# 14/14" to "the model nulls everything" was itself one run's worth of
+# evidence, corrected before shipping this fix). The tool trace this
+# prompt is handed already carries the command that would justify most of
+# these -- on the 89-call run, the actual defect (`swift format lint ...
+# 2>&1 | head -50; echo "EXIT=$?"`) sat untruncated in the trace and
+# unused while the model cited an unrelated symbol instead. `proof` is
+# stated below as a FLOOR the model must clear, not a suggestion, and the
+# instruction is to search the WHOLE trace regardless of its length --
+# nothing in this prompt truncates the trace itself (`tool_digest` on the
+# per-line digests is head+tail, #278 M3), so a large trace degrading
+# compliance is a model-following problem this wording narrows, not a
+# missing-data problem this script has.
 DISTILL_SYSTEM_PROMPT = (
     "You are distilling one run of an agent session for skill-templates "
     "issue #269. `asked` is what was actually requested of this run, "
     "`understood` is what the run itself interpreted that as, `delivered` "
     "is what it actually did, and `claims` is every checkable assertion "
     "the report makes -- each with a stable id (c1, c2, ...), a short "
-    "`kind`, a `proof` naming the check that was actually re-run (null if "
-    "the report merely asserted it), and a verbatim `quote` from the "
-    "report. Return only the JSON object the schema describes."
+    "`kind`, a verbatim `quote` from the report, and a `proof`. "
+    "PROOF IS A FLOOR: read the TOOL TRACE section below the brief/report "
+    "in full, command by command, however many entries it has -- the last "
+    "entries matter as much as the first, and a longer trace is not an "
+    "excuse for a shorter search. If any trace entry's command or output "
+    "supports a claim, `proof` MUST be that trace entry's command, "
+    "verbatim, even when the report itself never restates it -- the trace "
+    "is evidence the report did not have to repeat for it to count. "
+    "`proof` is null ONLY after checking the whole trace and finding "
+    "nothing in it that supports the claim -- never null merely because "
+    "the report did not name a check. Return only the JSON object the "
+    "schema describes."
 )
 
 CHAIN_SYSTEM_PROMPT = (
     "You are checking one run's claims against candidate later mentions "
     "from the same session for contradictions, and classifying each "
     "claim's evidence quality against a CLOSED vocabulary of failure "
-    "modes. Use ONLY a label from the schema's enum -- never invent one; "
-    "unclear cases still get the closest listed label, and enforcement "
-    "happens in code on the way out, not in this prompt. Every "
-    "classified_as entry's `supports` array MUST name at least one "
+    "modes. Judge primarily from each claim's `proof` text, not only its "
+    "`quote`: a `proof` that is a shell pipeline ending in `echo $?` or "
+    "`echo \"EXIT=$?\"`, or that pipes through `| head`/`| tail`/`| grep` "
+    "before the exit code is read, or that reads a status field standing "
+    "in for the work itself, is `proxy-as-thing` -- quote the exact proof "
+    "command in `why`. Use ONLY a label from the schema's enum -- never "
+    "invent one; unclear cases still get the closest listed label, and "
+    "enforcement happens in code on the way out, not in this prompt. "
+    "Every classified_as entry's `supports` array MUST name at least one "
     "existing claim id or later_wrong index (as a digit string) -- an "
     "entry with no such pointer is discarded downstream. A later_wrong "
     "entry names the claim id it contradicts, a one-sentence `how`, and "
@@ -907,11 +1063,17 @@ def run_stub_public(r):
 
 
 def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_name, cost_usd, passes):
+    """(record, dropped_later_wrong[]) -- dropped_later_wrong carries the
+    claim references any `later_wrong` entry named that did not resolve to
+    a real claim id (#278 C2), so the caller can warn about them rather
+    than the drop happening with no trace anywhere."""
     claims = normalize_claims((distilled_doc or {}).get("claims"))
-    later_wrong = normalize_later_wrong((chain_doc or {}).get("later_wrong")) if chain_doc else []
+    claim_ids = {c["id"] for c in claims}
+    later_wrong, dropped_later_wrong = normalize_later_wrong(
+        (chain_doc or {}).get("later_wrong") if chain_doc else None, claim_ids)
     classified_as, unclassified_reason = enforce_classified_as(
         (chain_doc or {}).get("classified_as") if chain_doc else None, claims, later_wrong)
-    return {
+    record = {
         "kind": "session-distill-record",
         "schema_version": SCHEMA_VERSION,
         "session": sid,
@@ -930,6 +1092,7 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
             "passes": passes,
         },
     }
+    return record, dropped_later_wrong
 
 
 # -------------------------------------------------------------------------- commands
@@ -948,7 +1111,7 @@ def cmd_runs(a):
     rr = load_review_result()
     sid = rr.resolve_session_id(a.session)
     session_dir = rr.resolve_session_dir(sid)
-    segmented_by, runs = build_all_run_stubs(rr, session_dir)
+    segmented_by, runs, unreadable = build_all_run_stubs(rr, session_dir)
     main_turns = sum(1 for r in runs if r["kind"] == "main-turn")
     subagent_runs = sum(1 for r in runs if r["kind"] == "subagent")
 
@@ -961,6 +1124,7 @@ def cmd_runs(a):
         "main_turns": main_turns,
         "subagent_runs": subagent_runs,
         "runs": runs,
+        "unreadable": unreadable,
     }
 
     if a.json:
@@ -974,7 +1138,18 @@ def cmd_runs(a):
                 r["id"], r["kind"], r.get("spawned_by") or "-",
                 r["brief_chars"], r["report_chars"], r["tool_calls"],
                 (r.get("description") or "")[:40]))
-    return 0
+        if unreadable:
+            print("unreadable:")
+            for u in unreadable:
+                print("  %s" % u)
+
+    # #278 C1: an unreadable/unparseable transcript is never a silent
+    # zero -- same discipline as rework-lag.py's `unknown[]`. The JSON is
+    # still emitted in full; the exit code is what tells an automated
+    # caller the inventory may be incomplete.
+    for u in unreadable:
+        print("warning: could not fully read: %s" % u, file=sys.stderr)
+    return 2 if unreadable else 0
 
 
 def cmd_distill(a):
@@ -989,7 +1164,7 @@ def cmd_distill(a):
     if not model_cmd:
         die("--model-cmd is empty")
 
-    segmented_by, all_runs = build_all_run_stubs(rr, session_dir)
+    segmented_by, all_runs, unreadable = build_all_run_stubs(rr, session_dir)
 
     if a.only:
         all_runs_for_run = [r for r in all_runs if r["id"] == a.only]
@@ -1009,6 +1184,28 @@ def cmd_distill(a):
             die("--resume could not read existing %s (%s)" % (out_path, e))
     elif not a.resume and out_path != "-" and os.path.exists(out_path) and not a.force and not a.dry_run:
         die("%s already exists -- pass --force to overwrite, or --resume to continue it" % out_path)
+    elif (a.force and not a.resume and out_path != "-" and os.path.exists(out_path)
+          and not a.dry_run and (a.only or a.limit is not None)):
+        # #278 N3: --force alone (no --resume) always overwrites the WHOLE
+        # document -- `records` is only ever seeded from disk under
+        # --resume. Combined with --only/--limit that silently rewrites an
+        # existing multi-run document down to just the newly-processed
+        # run(s), discarding every other run's record with no trace. This
+        # cannot un-guess what the caller meant, so at minimum it warns
+        # loudly with the count of records about to be discarded, rather
+        # than truncating in silence.
+        try:
+            with open(out_path, encoding="utf-8") as f:
+                prior = json.load(f)
+            prior_n = len(prior.get("records") or [])
+        except (OSError, json.JSONDecodeError):
+            prior_n = None
+        if prior_n:
+            print(
+                "warning: --force without --resume replaces %s entirely -- "
+                "%d existing record(s) will be discarded because --only/--limit "
+                "narrows this run to a subset (pass --resume to keep them)"
+                % (out_path, prior_n), file=sys.stderr)
 
     records = []
     failures = []
@@ -1033,18 +1230,58 @@ def cmd_distill(a):
         print("session: %s" % sid)
         print("session_dir: %s" % session_dir)
         print("segmented_by: %s" % segmented_by)
-        print("runs total: %d   already done (resume): %d   to process: %d" % (
-            len(all_runs_for_run), len(done_ids), len(todo)))
+        print("runs in session: %d   selected (after --only): %d   already done (resume): %d   to process: %d" % (
+            len(all_runs), len(all_runs_for_run), len(done_ids), len(todo)))
         for r in todo:
             print("  %-18s %-10s %s" % (r["id"], r["kind"], (r.get("description") or "")[:50]))
-        print("calls (projected): %d   cost (projected): $%.4f" % (calls, projected))
-        return 0
+        # #278 M2: the projection states its basis instead of a bare
+        # number -- DEFAULT_COST_PER_CALL_USD is a fixed constant measured
+        # 2026-09-20 on real payloads (see its own comment), not a formula;
+        # --dry-run makes zero calls, so it is the only basis available.
+        print("calls (projected): %d   cost (projected): $%.4f  "
+              "(basis: $%.4f/call, DEFAULT_COST_PER_CALL_USD measured 2026-09-20 "
+              "on real payloads -- no live calls made yet to calibrate against)"
+              % (calls, projected, DEFAULT_COST_PER_CALL_USD))
+        if unreadable:
+            print("unreadable:")
+            for u in unreadable:
+                print("  %s" % u)
+        for u in unreadable:
+            print("warning: could not fully read: %s" % u, file=sys.stderr)
+        return 2 if unreadable else 0
+
+    # #278 M2: the running budget check uses the CALIBRATED average of
+    # this invocation's own observed call costs once at least one call has
+    # returned a cost, rather than trusting the fixed
+    # DEFAULT_COST_PER_CALL_USD estimate for the whole run -- a session's
+    # real payloads vary, and the old code compared every check against
+    # the same one-token-prompt-derived constant regardless of what the
+    # calls actually cost.
+    observed_costs = []
+
+    def calibrated_cost_per_call():
+        if observed_costs:
+            return sum(observed_costs) / len(observed_costs)
+        return DEFAULT_COST_PER_CALL_USD
+
+    def over_budget():
+        return a.max_cost_usd is not None and total_cost > a.max_cost_usd
+
+    def projected_over_budget():
+        return (a.max_cost_usd is not None
+                and (total_cost + calibrated_cost_per_call()) > a.max_cost_usd)
 
     stopped = None
     for r in todo:
-        if a.max_cost_usd is not None and (total_cost + DEFAULT_COST_PER_CALL_USD) > a.max_cost_usd:
+        if over_budget():
             stopped = {
-                "reason": "max-cost-usd reached before this run's distill call",
+                "reason": "max-cost-usd already exceeded by observed spend",
+                "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
+            }
+            break
+        if projected_over_budget():
+            stopped = {
+                "reason": "max-cost-usd projected to be exceeded before this run's distill call",
                 "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
             }
             break
@@ -1052,16 +1289,44 @@ def cmd_distill(a):
         distilled_doc, cost1, err1 = run_model(
             model_cmd, DISTILL_SYSTEM_PROMPT, DISTILL_SCHEMA, build_distill_prompt(r))
         total_cost += cost1
+        observed_costs.append(cost1)
         if err1:
             failures.append({"run": r["id"], "phase": "distill", "error": err1})
+            # #278 M2: checked AFTER the call too, using OBSERVED spend --
+            # a call that errors can still have spent money (run_model's
+            # own contract), and a budget that only ever checks BEFORE a
+            # call never notices that until the next run's pre-check.
+            if over_budget():
+                stopped = {
+                    "reason": "max-cost-usd exceeded by observed spend after this run's (failed) distill call",
+                    "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
+                }
+                break
             continue
 
-        if a.max_cost_usd is not None and (total_cost + DEFAULT_COST_PER_CALL_USD) > a.max_cost_usd:
-            records.append(build_record(
+        if over_budget():
+            record, dropped_lw = build_record(
                 sid, r, distilled_doc, None, now_iso(),
-                model_name_from_cmd(model_cmd), cost1, ["distill"]))
+                model_name_from_cmd(model_cmd), cost1, ["distill"])
+            records.append(record)
+            for dc in dropped_lw:
+                print("warning: run %s: later_wrong entry names an unresolvable claim %r -- dropped"
+                      % (r["id"], dc), file=sys.stderr)
             stopped = {
-                "reason": "max-cost-usd reached before this run's chain call",
+                "reason": "max-cost-usd exceeded by observed spend after this run's distill call",
+                "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
+            }
+            break
+        if projected_over_budget():
+            record, dropped_lw = build_record(
+                sid, r, distilled_doc, None, now_iso(),
+                model_name_from_cmd(model_cmd), cost1, ["distill"])
+            records.append(record)
+            for dc in dropped_lw:
+                print("warning: run %s: later_wrong entry names an unresolvable claim %r -- dropped"
+                      % (r["id"], dc), file=sys.stderr)
+            stopped = {
+                "reason": "max-cost-usd projected to be exceeded before this run's chain call",
                 "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
             }
             break
@@ -1073,6 +1338,7 @@ def cmd_distill(a):
         chain_doc, cost2, err2 = run_model(
             model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA, build_chain_prompt(r, claims, candidates))
         total_cost += cost2
+        observed_costs.append(cost2)
         passes = ["distill"]
         if err2:
             failures.append({"run": r["id"], "phase": "chain", "error": err2})
@@ -1080,9 +1346,25 @@ def cmd_distill(a):
         else:
             passes.append("chain")
 
-        records.append(build_record(
+        # #278 N2: the record's own cost_usd now always includes cost2,
+        # matching what was just added to total_cost unconditionally --
+        # the OLD code added cost2 to total_cost regardless of err2 (a
+        # failed call can still have spent money) but recorded only cost1
+        # on the record when err2, so sum(record costs) != total_cost_usd.
+        record, dropped_lw = build_record(
             sid, r, distilled_doc, chain_doc, now_iso(),
-            model_name_from_cmd(model_cmd), cost1 + (0.0 if err2 else cost2), passes))
+            model_name_from_cmd(model_cmd), cost1 + cost2, passes)
+        records.append(record)
+        for dc in dropped_lw:
+            print("warning: run %s: later_wrong entry names an unresolvable claim %r -- dropped"
+                  % (r["id"], dc), file=sys.stderr)
+
+        if over_budget():
+            stopped = {
+                "reason": "max-cost-usd exceeded by observed spend after this run's chain call",
+                "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
+            }
+            break
 
     doc = {
         "kind": "session-distill-document",
@@ -1093,9 +1375,17 @@ def cmd_distill(a):
         "segmented_by": segmented_by,
         "model_cmd": a.model_cmd,
         "total_cost_usd": round(total_cost, 6),
-        "runs_total": len(all_runs_for_run),
+        # #278 N3: the session's real total is distinct from how many runs
+        # THIS invocation selected (--only narrows to one; --limit narrows
+        # `todo` further but does not change selection) -- a document
+        # calling itself the session's own record should not report "1"
+        # for a session that has 160 runs just because this call used
+        # --only.
+        "runs_total": len(all_runs),
+        "runs_selected": len(all_runs_for_run),
         "records": records,
         "failures": failures,
+        "unreadable": unreadable,
         "stopped": stopped,
     }
     text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
@@ -1105,11 +1395,18 @@ def cmd_distill(a):
     else:
         rr.atomic_write(out_path, text)
         print("session-distill: %s" % os.path.abspath(out_path))
-        print("runs: %d  records: %d  failures: %d  cost_usd: $%.4f" % (
-            len(all_runs_for_run), len(records), len(failures), total_cost))
+        print("runs_total: %d  runs_selected: %d  records: %d  failures: %d  cost_usd: $%.4f" % (
+            len(all_runs), len(all_runs_for_run), len(records), len(failures), total_cost))
         if stopped:
             print("stopped: %s" % stopped["reason"])
-    return 0
+        if unreadable:
+            print("unreadable:")
+            for u in unreadable:
+                print("  %s" % u)
+
+    for u in unreadable:
+        print("warning: could not fully read: %s" % u, file=sys.stderr)
+    return 2 if unreadable else 0
 
 
 def cmd_report(a):
@@ -1155,6 +1452,8 @@ def cmd_report(a):
         len(records), len(doc.get("failures") or []), doc.get("total_cost_usd") or 0.0))
     if doc.get("stopped"):
         print("stopped: %s" % doc["stopped"].get("reason"))
+    if doc.get("unreadable"):
+        print("unreadable: %d (see doc's unreadable[] for detail)" % len(doc["unreadable"]))
     print()
     print("classified_as label distribution:")
     for label in LABELS:
