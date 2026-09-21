@@ -247,7 +247,8 @@ def _git_show_diff(sha, cwd):
 
 
 _OCTAL_ESCAPE_RE = re.compile(r"\\([0-7]{1,3})")
-_SIMPLE_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"'}
+_SIMPLE_ESCAPES = {"n": "\n", "t": "\t", "a": "\a", "b": "\b", "f": "\f",
+                   "r": "\r", "v": "\v", "\\": "\\", '"': '"'}
 
 
 def _unquote_diff_path(rest):
@@ -400,6 +401,8 @@ def load_parse_filed_from():
     sys.dont_write_bytecode = True
     try:
         spec = importlib.util.spec_from_file_location("rework_lag_filed_from", str(sib))
+        if spec is None or spec.loader is None:
+            die(f"sibling {sib} exists but importlib could not build a loader for it")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
     finally:
@@ -779,10 +782,10 @@ def format_human(result, window_labels, issues_requested=True):
     # A "repo resolution" failure also fires with --attribute alone (no issue
     # measure requested at all) -- `issues_requested` (false under
     # --no-issues) keeps that from printing "reopened issues: UNKNOWN" for a
-    # measure that was never asked for; --no-issues already prints "none"
-    # for both sections, which is correct (skipped, not merely empty), and
-    # must not flip to a misleading "UNKNOWN" just because some OTHER
-    # measure's repo lookup failed.
+    # measure that was never asked for; under --no-issues both sections
+    # print "(skipped, --no-issues)" -- a measure never run must not read
+    # like a measured zero -- and must not flip to a misleading "UNKNOWN"
+    # just because some OTHER measure's repo lookup failed.
     reopened_unknown = issues_requested and any(
         u.startswith("closingIssuesReferences") or u.startswith("timeline for issue")
         or u.startswith("repo resolution")
@@ -800,6 +803,8 @@ def format_human(result, window_labels, issues_requested=True):
         lines.append("reopened issues:")
         for r in result["reopened_issues"]:
             lines.append(f"  #{r['issue']} reopened {r['reopened_at']} (closed by #{r['closed_by_pr']})")
+    elif not issues_requested:
+        lines.append("reopened issues: (skipped, --no-issues)")
     else:
         lines.append("reopened issues: none")
 
@@ -810,6 +815,8 @@ def format_human(result, window_labels, issues_requested=True):
         lines.append("follow-ons:")
         for pr, buckets in result["follow_ons"].items():
             lines.append(f"  #{pr}: open={buckets['open']} closed={buckets['closed']}")
+    elif not issues_requested:
+        lines.append("follow-ons: (skipped, --no-issues)")
     else:
         lines.append("follow-ons: none")
 
@@ -896,6 +903,16 @@ def main(argv=None):
     if prs_raw is None:
         print(f"REFUSE: gh pr list failed -- {err}", file=sys.stderr)
         return 2
+    if len(prs_raw) >= args.limit:
+        # `gh pr list` truncates silently at --limit. A saturated list means
+        # older merged PRs inside [since, until] may never have been
+        # considered, which would read as clean/immature -- the silent-zero
+        # shape this script rejects everywhere else (same rule as the
+        # follow-on list). Recorded as unknown, so the exit code says so.
+        unknown.append(
+            f"PR list possibly truncated (gh pr list returned the full --limit "
+            f"of {args.limit}; raise --limit)"
+        )
 
     prs = []
     for p in prs_raw:

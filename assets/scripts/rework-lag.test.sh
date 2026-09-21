@@ -906,6 +906,28 @@ printf '%s' "$sout" | "$PY" -c 'import json,sys; d=json.loads(sys.stdin.read());
 cp "$TMP/issue_list.json.orig" "$FAKE_GH_DIR/issue_list.json"
 
 # =========================================================================
+# GROUP C4 -- PR-list truncation signal (Copilot review on #276). `gh pr list`
+# truncates silently at --limit, and a saturated list means older merged PRs
+# inside [since, until] were never considered -- which would read as clean or
+# immature, the silent-zero shape rejected everywhere else. Passing --limit
+# equal to the fixture's own row count makes the list saturated without
+# touching the fixture; the default limit must NOT trip it.
+# =========================================================================
+echo; echo "C4. PR-list truncation signal"
+
+NPRS=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$FAKE_GH_DIR/pr_list.json")
+run_split --since "$SINCE" --until "$UNTIL0" --json --no-issues --limit "$NPRS"
+[ "$rc" -eq 2 ] && ok "gh pr list returning exactly --limit -> exit 2" \
+  || bad "gh pr list returning exactly --limit -> exit 2" "rc=$rc"
+printf '%s' "$sout" | "$PY" -c 'import json,sys; d=json.loads(sys.stdin.read()); assert any("PR list possibly truncated" in u for u in d["unknown"]), d["unknown"]; assert d["prs"] > 0' \
+  && ok "C4: unknown[] carries a 'PR list possibly truncated' entry and the JSON is still emitted" \
+  || bad "C4: unknown[] carries a 'PR list possibly truncated' entry and the JSON is still emitted" "$(flat "$sout")"
+run_split --since "$SINCE" --until "$UNTIL0" --json --no-issues
+printf '%s' "$sout" | "$PY" -c 'import json,sys; d=json.loads(sys.stdin.read()); assert not any("PR list possibly truncated" in u for u in d["unknown"]), d["unknown"]' \
+  && ok "C4: default --limit does not trip the truncation signal" \
+  || bad "C4: default --limit does not trip the truncation signal" "$(flat "$sout")"
+
+# =========================================================================
 # GROUP C -- case 11: gh failures
 # =========================================================================
 echo; echo "C. gh failures"
@@ -1127,9 +1149,9 @@ if printf '%s' "$out2" | grep -q 'reopened issues: UNKNOWN'; then
 else
   ok "nitpick: --no-issues does not print 'reopened issues: UNKNOWN' for an unrequested measure"
 fi
-printf '%s' "$out2" | grep -q 'reopened issues: none' \
-  && ok "nitpick: --no-issues still prints 'reopened issues: none' (skipped, not failed)" \
-  || bad "nitpick: --no-issues still prints 'reopened issues: none' (skipped, not failed)" "$(flat "$out2")"
+printf '%s' "$out2" | grep -q 'reopened issues: (skipped, --no-issues)' \
+  && ok "nitpick: --no-issues prints 'reopened issues: (skipped, --no-issues)', never a measured-looking 'none'" \
+  || bad "nitpick: --no-issues prints 'reopened issues: (skipped, --no-issues)', never a measured-looking 'none'" "$(flat "$out2")"
 
 rm -f "$FAKE_GH_DIR/fail_repo_view"
 
