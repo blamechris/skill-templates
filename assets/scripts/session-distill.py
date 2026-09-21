@@ -132,7 +132,8 @@ THE RECORD (schema_version 2), one per run, appended to
                          transcript (abs path), brief_chars, report_chars,
                          report_source, tool_calls, and (main-turn only)
                          segmented_by. `report_source` is one of
-                         "structured_output" | "harness_error" | "text" |
+                         "structured_output" | "structured_output_rejected" |
+                         "harness_error" | "text" |
                          "none" -- see below.
   asked / understood /
   delivered             free-text, from the distill call.
@@ -647,7 +648,9 @@ def extract_tool_result_text(raw_content):
     if isinstance(raw_content, list):
         parts = [b.get("text", "") for b in raw_content
                  if isinstance(b, dict) and b.get("type") == "text"]
-        return "\n".join(parts)
+        # No text block at all (an image-only result) is "yielded no text",
+        # not "printed nothing" -- None, never "".
+        return "\n".join(parts) if parts else None
     return None
 
 
@@ -890,8 +893,25 @@ def last_structured_output(objs):
     silently empty report. "Last" is over the WHOLE file, not just the
     last assistant line -- a later assistant line with only trailing text
     (a sign-off) after the StructuredOutput call is common and must not
-    hide the structured result."""
-    found = None
+    hide the structured result.
+
+    Returns (block, rejected). A StructuredOutput whose own tool_result is
+    `is_error` was REJECTED by the harness (schema validation) and is not
+    the run's report; the last ACCEPTED one wins. Only when every
+    submission was rejected is the last rejected one returned, with
+    rejected=True, so the caller can say so instead of trusting it."""
+    errored = set()
+    for o in objs:
+        if not isinstance(o, dict) or o.get("type") != "user":
+            continue
+        content = (o.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if (isinstance(b, dict) and b.get("type") == "tool_result"
+                    and b.get("is_error") and b.get("tool_use_id")):
+                errored.add(b["tool_use_id"])
+    accepted = rejected = None
     for o in objs:
         if not isinstance(o, dict) or o.get("type") != "assistant":
             continue
@@ -901,8 +921,15 @@ def last_structured_output(objs):
         for b in content:
             if (isinstance(b, dict) and b.get("type") == "tool_use"
                     and b.get("name") == "StructuredOutput"):
-                found = b
-    return found
+                if b.get("id") in errored:
+                    rejected = b
+                else:
+                    accepted = b
+    if accepted is not None:
+        return accepted, False
+    if rejected is not None:
+        return rejected, True
+    return None, False
 
 
 def last_assistant_text_from_objs(objs):
@@ -936,6 +963,10 @@ def extract_report(objs):
                           exists -- report is its `input`, pretty-printed
                           JSON, with any final assistant TEXT prepended
                           (text first) when there also is some.
+      structured_output_rejected  every StructuredOutput submission's
+                          tool_result was `is_error` -- the report is the
+                          last rejected input, labelled so it is never
+                          counted as a healthy result.
       harness_error       no StructuredOutput, and the last assistant text
                           matches a known harness cutoff/error prefix --
                           kept, not discarded, but flagged so it is never
@@ -947,11 +978,11 @@ def extract_report(objs):
     Never "" pretending to be a real (if terse) report: "" only occurs
     together with report_source "none"."""
     last_text = last_assistant_text_from_objs(objs)
-    so = last_structured_output(objs)
+    so, so_rejected = last_structured_output(objs)
     if so is not None:
         input_json = json.dumps(so.get("input"), indent=2, ensure_ascii=False)
         report = (last_text + "\n\n" + input_json) if last_text else input_json
-        return report, "structured_output"
+        return report, ("structured_output_rejected" if so_rejected else "structured_output")
     if last_text:
         if classify_harness_error(last_text):
             return last_text, "harness_error"
@@ -1386,6 +1417,9 @@ DISTILL_SYSTEM_PROMPT = (
     "`harness_error` means the run was cut off by the harness (e.g. a "
     "session-limit message) -- the REPORT text is not a real result, do "
     "not treat it as evidence for any claim beyond the cutoff itself. "
+    "`structured_output_rejected` means the harness rejected every result "
+    "the run submitted -- treat the REPORT as an unaccepted draft, not the "
+    "run's result. "
     "`none` means there is no report at all -- base claims only on the "
     "brief and the trace/VERIFICATION COMMANDS. "
     "VERIFICATION COMMANDS is a deterministic list (not your judgment) of "
@@ -1553,8 +1587,10 @@ def build_distill_prompt(r):
         "",
         "--- TOOL TRACE (%d calls) ---" % r.get("tool_calls", 0),
     ]
-    for t in r.get("tool_trace") or []:
-        lines.append("%s: %s%s" % (t["tool"], t["digest"], " [ERRORED]" if t["errored"] else ""))
+    # Numbered with the same 0-based index VERIFICATION COMMANDS' `[N]`
+    # tags carry, so the model can tie an entry back to its trace position.
+    for i, t in enumerate(r.get("tool_trace") or []):
+        lines.append("[%d] %s: %s%s" % (i, t["tool"], t["digest"], " [ERRORED]" if t["errored"] else ""))
 
     # #285: a deterministic, model-free section -- every category/flag/
     # output below was computed in build_tool_trace/compute_gates, not by
@@ -2030,7 +2066,8 @@ def cmd_report(a):
     # report (report_source != "text") or a masked/omitted gate must be
     # VISIBLE in every plain `report` run, never only discoverable by
     # reading the raw JSON.
-    report_source_counts = {"text": 0, "structured_output": 0, "harness_error": 0, "none": 0}
+    report_source_counts = {"text": 0, "structured_output": 0, "structured_output_rejected": 0,
+                            "harness_error": 0, "none": 0}
     exit_masked_runs = 0
     empty_ci_runs = 0
     gates_named_not_run_runs = 0
@@ -2065,8 +2102,16 @@ def cmd_report(a):
     # "structured_output" are the healthy sources, "harness_error" and
     # "none" must never be silent regardless of how many runs hit them.
     print("report_source distribution:")
-    for src in ("text", "structured_output", "harness_error", "none"):
-        print("  %-20s %d" % (src, report_source_counts.get(src, 0)))
+    for src in ("text", "structured_output", "structured_output_rejected", "harness_error", "none"):
+        print("  %-28s %d" % (src, report_source_counts.get(src, 0)))
+    # A record with no report_source was written before schema 2 (or by
+    # something else); it is counted in `records:` above, so it must be
+    # counted here too rather than vanish from the distribution.
+    unrecorded = sum(n for k, n in report_source_counts.items()
+                     if k not in ("text", "structured_output", "structured_output_rejected",
+                                  "harness_error", "none"))
+    if unrecorded:
+        print("  %-28s %d" % ("(no report_source: pre-v2)", unrecorded))
     print()
     print("verification flags: exit_masked_by_pipe=%d run(s)   empty_ci_result=%d run(s)   "
           "gates_named_not_run=%d run(s)" % (exit_masked_runs, empty_ci_runs, gates_named_not_run_runs))

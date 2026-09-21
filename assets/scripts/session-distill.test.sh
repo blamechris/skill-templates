@@ -1408,13 +1408,52 @@ assert all(not v["exit_masked_by_pipe"] for v in ver if "print(" in v["command"]
 assert [v["exit_masked_by_pipe"] for v in ver if "print(" not in v["command"]] == [True], ver
 # unterminated: nothing after the opener is shell
 assert s("cat <<EOF\nswift test | tail; echo $?") == "cat <<EOF"
+# a StructuredOutput the harness rejected is not the report; the last
+# accepted one is, and all-rejected is labelled rather than trusted
+def so(tid, payload):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": tid, "name": "StructuredOutput", "input": payload}]}}
+def so_res(tid, err):
+    return {"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": tid, "is_error": err, "content": "x"}]}}
+rep, src = sd.extract_report([so("s1", {"v": "GOOD"}), so_res("s1", False),
+                              so("s2", {"v": "BAD"}), so_res("s2", True)])
+assert src == "structured_output" and "GOOD" in rep and "BAD" not in rep, (src, rep)
+rep, src = sd.extract_report([so("s1", {"v": "BAD"}), so_res("s1", True)])
+assert src == "structured_output_rejected" and "BAD" in rep, (src, rep)
+# image-only tool_result content yields no text: None, never ""
+assert sd.extract_tool_result_text([{"type": "image", "source": "x"}]) is None
+assert sd.extract_tool_result_text([]) is None
+# trace lines carry the same index verification entries use
+prompt = sd.build_distill_prompt({"id": "r", "kind": "subagent", "tool_calls": 2,
+    "tool_trace": [{"tool": "Read", "digest": "a", "errored": False},
+                   {"tool": "Bash", "digest": "swift test", "errored": False}],
+    "verifications": [{"index": 1, "categories": ["test"], "command": "swift test",
+                       "output_present": True, "output": "ok"}]})
+assert "[1] Bash: swift test" in prompt and "[1] categories=test" in prompt, prompt
 h = sd.classify_harness_error
 assert h("You've hit your weekly limit · resets 4pm (America/Los_Angeles)")
 assert h("You've hit your session limit · resets 2:40am (America/Los_Angeles)")
 assert not h("The report notes: You've hit your session limit earlier, retried.")
 PY
-[ $? -eq 0 ] && ok "#285: exit masking is per-pipeline (a later piped command does not mask an earlier \$? read); weekly-limit cutoff is harness_error; heredoc bodies are not classified" \
-  || bad "#285: segment-aware exit masking / weekly-limit harness_error"
+[ $? -eq 0 ] && ok "#285: exit masking is per-pipeline (a later piped command does not mask an earlier \$? read); weekly-limit cutoff is harness_error; heredoc bodies are not classified; rejected StructuredOutput is not the report; no-text result is None; trace lines are indexed" \
+  || bad "#285: exit masking, harness_error, heredocs, rejected StructuredOutput, no-text results, trace indexing"
+
+# a pre-v2 record (no report_source) is counted in the distribution, not
+# dropped from it while still counted in `records:`
+OUT_V1="$TMP/v1-report.json"
+"$PY" - "$OUT_V1" <<'PY'
+import json, sys
+json.dump({"kind": "session-distill", "schema_version": 1, "session": "s",
+           "records": [{"kind": "session-distill-record", "run": {"id": "r1"},
+                        "claims": [], "classified_as": [], "later_wrong": []}],
+           "failures": []}, open(sys.argv[1], "w"))
+PY
+run - report --in "$OUT_V1"
+case "$out" in
+  *"(no report_source: pre-v2)"*1*) ok "#285: report counts a pre-v2 record under its own report_source bucket" ;;
+  *) bad "#285: report counts a pre-v2 record under its own report_source bucket" "rc=$rc out=$out" ;;
+esac
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

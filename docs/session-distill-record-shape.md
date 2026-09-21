@@ -85,10 +85,13 @@ line, so it silently returned `""`. Two more runs' "report" was the harness's
 own session-limit cutoff message — a verdict from incomplete data if
 distilled as if it were real.
 
-- **`run.report_source`** — `"structured_output"` | `"harness_error"` |
+- **`run.report_source`** — `"structured_output"` | `"structured_output_rejected"` | `"harness_error"` |
   `"text"` | `"none"`, on EVERY run stub, both kinds. `structured_output`
   prefers the transcript's final `StructuredOutput` tool_use (report =
   its `input`, pretty-printed, with any final assistant text prepended).
+  A submission whose own tool_result is `is_error` was rejected by the
+  harness; the last ACCEPTED one is the report, and a run whose every
+  submission was rejected is `structured_output_rejected`.
   `harness_error` is a report matching a known harness cutoff/error prefix
   — kept, not discarded, but never silently treated as a real result. A
   main-turn's `report_source` is only ever `"text"`/`"none"` — main turns
