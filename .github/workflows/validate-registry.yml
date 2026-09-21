@@ -703,3 +703,64 @@ jobs:
         # diffed and used to repath the rest of its hunk. Quoted non-ASCII
         # paths are unescaped so a file's adds and removes share one key.
         run: ./assets/scripts/rework-lag.test.sh
+
+      - name: session-distill regression tests
+        # #269, epic #266: distill one session into asked -> understood/
+        # delivered -> later-wrong records, one per RUN, classified against a
+        # CLOSED vocabulary of evidence-quality failure modes. There is no
+        # `*.test.sh` glob in this workflow, so this script gets its own named
+        # step like every other asset script. The suite's `--model-cmd` points
+        # at a fixture python script that reads the RUN_ID/SESSION_DISTILL_PASS
+        # markers off stdin and echoes a canned envelope -- no real model is
+        # ever invoked, so this step spends nothing and needs no network or
+        # API key.
+        #
+        # What this pins: the unit of analysis is a RUN, both kinds -- a
+        # subagent sidecar transcript (checked at BOTH levels review-
+        # result.py's sidecar_dirs walks, top-level and one level into
+        # subagents/workflows/<runId>/) and a MAIN-TRANSCRIPT user-turn span,
+        # because a distiller that reads only subagents/** cannot see
+        # anything that happened on the main thread. MAIN-TURN SEGMENTATION
+        # uses `origin.kind == "human"` whenever any line in the transcript
+        # carries an `origin` key at all, and falls back to a shape filter
+        # (string content, not isMeta, not isSidechain, not opening with
+        # `<task-notification>`/`<system-reminder>`/`<local-command`) only
+        # when no line does -- pinned by two fixture sessions whose turn
+        # counts differ (2 under `origin` vs 3 under `shape`, the extra one
+        # being harness-adjacent text the shape rule cannot tell from a real
+        # ask), with `segmented_by` asserted on both the document and every
+        # main-turn run stub. A leading/trailing `<system-reminder>` block on
+        # a human prompt is stripped from `asked`, never dropped -- the turn
+        # stays real. A subagent with NO `.meta.json` is still emitted, with
+        # null provenance, never silently skipped.
+        #
+        # The CLOSED VOCABULARY (exactly nine labels) is enforced twice: the
+        # `--json-schema` handed to the chain-call carries the label set as
+        # a JSON Schema enum (asserted against `schema`'s own output), AND
+        # the returned document is re-checked against the same frozen tuple
+        # before it is written -- an off-vocabulary label a stub model
+        # returns becomes `"unclassified"` with the offending string
+        # recorded in that record's `unclassified_reason`, never invented,
+        # never passed through. Separately, a `classified_as` entry whose
+        # `supports` names neither an existing claim id nor a valid
+        # `later_wrong` index is DROPPED entirely, not merely relabelled --
+        # pinned by a stub response that does exactly that. A model
+        # `result` that is not valid JSON, and an envelope with
+        # `is_error: true`, are each recorded in the document's `failures[]`
+        # for that run/phase and skipped -- never a crash, never a silently
+        # empty record; the run's already-successful distill pass survives a
+        # failed chain pass. Finally: `--dry-run` prints a call-count/cost
+        # projection and both calls and writes nothing (asserted by an empty
+        # call log and a missing output file); `--resume` completes only the
+        # runs missing from an existing output document, asserted by an
+        # exact call-count budget across two `distill` invocations so a
+        # regression that re-calls an already-done run is caught, not just
+        # one that undercounts; `--max-cost-usd` stops before exceeding the
+        # budget and records why in the document rather than truncating
+        # silently or overspending; and an existing `--out` file REFUSES
+        # (exit 2, naming `--force`) outside of `--resume`, while a missing
+        # `assets/scripts/review-result.py` sibling REFUSES (exit 2, naming
+        # it) before any of the above runs at all -- this script reuses
+        # review-result.py's session-directory resolution rather than
+        # re-deriving it a second time.
+        run: ./assets/scripts/session-distill.test.sh

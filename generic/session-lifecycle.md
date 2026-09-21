@@ -165,15 +165,16 @@ The canonical rules live in `~/.claude/CLAUDE.md` under **"Follow-on protocol"**
 
 Installing `session-lifecycle` should be followed by installing any missing components in the same pass — the bundle head without its components is a checklist that can't execute.
 
-**Three machine-level scripts back the End steps**, plus three more that other skills use
-independently — all six are bootstrapped once per machine from the registry rather than
+**Three machine-level scripts back the End steps**, plus four more that other skills use
+independently — all seven are bootstrapped once per machine from the registry rather than
 installed per repo, in one copy command, because both End step 1 and `/next` call the same
 copy of the first three:
 
 ```bash
 cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
    assets/scripts/usage-pace.py assets/scripts/filed-from.py \
-   assets/scripts/review-result.py assets/scripts/rework-lag.py ~/.claude/scripts/
+   assets/scripts/review-result.py assets/scripts/rework-lag.py \
+   assets/scripts/session-distill.py ~/.claude/scripts/
 ```
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
@@ -194,7 +195,16 @@ content-matching a PR's added lines against a later PR's removed lines rather th
 later touch to the same file, which overcounts rework by roughly 10x; it reports a PR whose
 rework window has not yet elapsed as `immature`, never as falsely `clean`, and reuses
 `filed-from.py`'s `parse_filed_from` for its two issue-based measures instead of a second copy of
-that grammar. Each ships with a sibling `<name>.test.sh` in
+that grammar. `session-distill.py` (#269, epic #266) owns the asked -> understood/delivered ->
+later-wrong chain per RUN — a run being one brief-to-final-report span, either a subagent
+sidecar transcript (at either of review-result.py's two sidecar levels) or one human-turn span of
+the MAIN transcript, because a distiller that reads only `subagents/**` cannot see anything a
+session did on its own thread. Each run's evidence quality is classified against a CLOSED,
+nine-label vocabulary — enforced in CODE, not trusted from the model's prompt-following: the
+`--json-schema` handed to the model carries the label set as an enum, and the returned document
+is re-checked against the same frozen label tuple before it is written, so an invented label
+becomes `"unclassified"` with the offending string recorded rather than passed through. Each
+ships with a sibling `<name>.test.sh` in
 the registry, run by CI, and that is where their behaviour is pinned — this file states the
 doctrine, not the code. Bootstrap all or none: a machine with a stale
 `usage-benchmark-row.py` writes step 2's row on a different scale from every row above it, and
