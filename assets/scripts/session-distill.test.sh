@@ -1522,8 +1522,47 @@ out, reason = sd.enforce_classified_as(
     [{"label": "green-as-done", "supports": ["7"], "why": "w"}], claims, lw[:1])
 assert out == [{"label": "unclassified", "supports": ["0"],
                 "why": "later_wrong[0] was not classified by the model"}], out
+# #290 review: pointers address the model's RAW later_wrong array. Dropping
+# raw[0] must not slide raw[1]'s label onto raw[2], nor mark raw[1] as
+# unclassified. Through build_record, the real call path.
+stub = {"id": "r", "kind": "subagent", "brief_chars": 0, "report_chars": 0, "tool_calls": 0}
+rec, dropped = sd.build_record(
+    "s", stub,
+    {"asked": "a", "understood": "u", "delivered": "d",
+     "claims": [{"id": "cB", "text": "B"}, {"id": "cC", "text": "C"}]},
+    {"later_wrong": [
+        {"claim": "c_hallucinated", "how": "x", "contradicted_by": {}},
+        {"claim": "cB", "how": "B wrong", "contradicted_by": {}},
+        {"claim": "cC", "how": "C wrong", "contradicted_by": {}}],
+     "classified_as": [
+        {"label": "proxy-as-thing", "supports": ["1"], "why": "about B"},
+        {"label": "green-as-done", "supports": [2], "why": "about C"}]},
+    "t", "m", 0.0, 2)
+lw = rec["later_wrong"]
+assert [e["claim"] for e in lw] == ["cB", "cC"], lw
+lab = {e["label"]: e["supports"] for e in rec["classified_as"]}
+assert lab == {"proxy-as-thing": ["0"], "green-as-done": ["1"]}, rec["classified_as"]
+assert rec["unclassified_reason"] is None, rec["unclassified_reason"]
+assert dropped == ["c_hallucinated"], dropped
+# a pointer at the dropped raw entry resolves to nothing
+_, _, imap = sd.normalize_later_wrong(
+    [{"claim": "nope"}, {"claim": "cB"}], {"cB"})
+assert imap == {1: 0}, imap
+out, _ = sd.enforce_classified_as(
+    [{"label": "green-as-done", "supports": ["0"], "why": "w"}],
+    [{"id": "cB"}], [{"claim": "cB"}], imap)
+assert out == [{"label": "unclassified", "supports": ["0"],
+                "why": "later_wrong[0] was not classified by the model"}], out
+# a digit-only claim id is prefixed, so it cannot pose as a later_wrong index
+claims = sd.normalize_claims([{"id": "0", "text": "t"}, {"id": "c2", "text": "t"}])
+assert [c["id"] for c in claims] == ["c0", "c2"], claims
+out, reason = sd.enforce_classified_as(
+    [{"label": "green-as-done", "supports": ["0"], "why": "about claim 0"}],
+    claims, [{"claim": "c2"}, {"claim": "c2"}])
+assert [(e["label"], e["supports"]) for e in out] == [
+    ("green-as-done", ["0"]), ("unclassified", ["1"])], out
 PY
-[ $? -eq 0 ] && ok "#286: every later_wrong is covered by a label or carries an explicit unclassified entry and reason" \
+[ $? -eq 0 ] && ok "#286: every later_wrong is covered by a label or carries an explicit unclassified entry and reason; index pointers follow the raw array through drops" \
   || bad "#286: later_wrong coverage enforcement"
 
 OUT_COV="$TMP/coverage.json"

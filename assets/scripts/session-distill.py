@@ -1261,6 +1261,13 @@ def normalize_claims(raw):
         cid = c.get("id")
         if not isinstance(cid, str) or not cid:
             cid = "c%d" % (i + 1)
+        elif cid.isdigit():
+            # A digit-only id would share one namespace with the digit-string
+            # later_wrong index pointers in `supports` (#290 review): claim
+            # "0" and later_wrong[0] would be the same pointer. Claims are
+            # normalized before the chain call, so the model only ever sees
+            # the prefixed id and never references the bare one.
+            cid = "c" + cid
         out.append({
             "id": cid,
             "text": c.get("text") or "",
@@ -1272,7 +1279,7 @@ def normalize_claims(raw):
 
 
 def normalize_later_wrong(raw, claim_ids):
-    """(later_wrong[], dropped[]) -- a `later_wrong` entry whose `claim`
+    """(later_wrong[], dropped[], index_map{}) -- a `later_wrong` entry whose `claim`
     does not name a real claim id is dropped, not silently kept as a
     dangling pointer (#278 C2): `enforce_classified_as` below treats a
     `later_wrong` INDEX as valid supporting evidence for a `classified_as`
@@ -1280,16 +1287,26 @@ def normalize_later_wrong(raw, claim_ids):
     would let a label ride in on evidence that itself points nowhere.
     `dropped` carries the offending claim references so the caller can
     record/warn about them -- unresolvable is reported, never silently
-    kept."""
+    kept.
+
+    `index_map` maps each KEPT entry's position in the model's RAW array to
+    its position in the returned list. The model writes `classified_as`
+    index pointers against the array it emitted; dropping raw[0] shifts
+    every later entry down one, and reading the pointers against the
+    shrunk list put a label and its `why` on the wrong contradiction and
+    marked a classified one "not classified by the model" (#290 review).
+    `enforce_classified_as` resolves index pointers through this map."""
     out = []
     dropped = []
-    for lw in raw or []:
+    index_map = {}
+    for raw_i, lw in enumerate(raw or []):
         if not isinstance(lw, dict):
             continue
         claim = lw.get("claim")
         if not isinstance(claim, str) or claim not in claim_ids:
             dropped.append(claim)
             continue
+        index_map[raw_i] = len(out)
         cb = lw.get("contradicted_by")
         cb = cb if isinstance(cb, dict) else {}
         out.append({
@@ -1301,10 +1318,10 @@ def normalize_later_wrong(raw, claim_ids):
                 "quote": cb.get("quote"),
             },
         })
-    return out, dropped
+    return out, dropped, index_map
 
 
-def enforce_classified_as(raw, claims, later_wrong):
+def enforce_classified_as(raw, claims, later_wrong, index_map=None):
     """(classified_as[], unclassified_reason) -- the CLOSED VOCABULARY's
     second enforcement point.
 
@@ -1332,15 +1349,21 @@ def enforce_classified_as(raw, claims, later_wrong):
     ids), so this only ever changes an int index into its digit-string."""
     claim_ids = {c["id"] for c in claims}
     n_later_wrong = len(later_wrong)
+    # INDEX_MAP (from normalize_later_wrong) translates the model's raw
+    # later_wrong positions to kept ones; None means the pointers already
+    # address LATER_WRONG as given.
+    if index_map is None:
+        index_map = {i: i for i in range(n_later_wrong)}
 
-    def resolves(s):
+    def resolve(s):
+        """The written pointer for S, or None when it resolves to nothing."""
         if isinstance(s, str) and s in claim_ids:
-            return True
-        if isinstance(s, str) and s.isdigit() and 0 <= int(s) < n_later_wrong:
-            return True
-        if isinstance(s, int) and not isinstance(s, bool) and 0 <= s < n_later_wrong:
-            return True
-        return False
+            return s
+        if isinstance(s, str) and s.isdigit():
+            s = int(s)
+        if isinstance(s, int) and not isinstance(s, bool) and s in index_map:
+            return str(index_map[s])
+        return None
 
     out = []
     reasons = []
@@ -1350,10 +1373,7 @@ def enforce_classified_as(raw, claims, later_wrong):
         supports = entry.get("supports")
         if not isinstance(supports, list):
             continue
-        resolved = [
-            str(s) if isinstance(s, int) and not isinstance(s, bool) else s
-            for s in supports if resolves(s)
-        ]
+        resolved = [p for p in (resolve(s) for s in supports) if p is not None]
         if not resolved:
             continue  # DROPPED -- no pointer in `supports` resolves to anything
         label = entry.get("label")
@@ -1746,10 +1766,11 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
     than the drop happening with no trace anywhere."""
     claims = normalize_claims((distilled_doc or {}).get("claims"))
     claim_ids = {c["id"] for c in claims}
-    later_wrong, dropped_later_wrong = normalize_later_wrong(
+    later_wrong, dropped_later_wrong, lw_index_map = normalize_later_wrong(
         (chain_doc or {}).get("later_wrong") if chain_doc else None, claim_ids)
     classified_as, unclassified_reason = enforce_classified_as(
-        (chain_doc or {}).get("classified_as") if chain_doc else None, claims, later_wrong)
+        (chain_doc or {}).get("classified_as") if chain_doc else None, claims, later_wrong,
+        lw_index_map)
     record = {
         "kind": "session-distill-record",
         "schema_version": SCHEMA_VERSION,
