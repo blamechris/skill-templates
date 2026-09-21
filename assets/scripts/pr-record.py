@@ -529,14 +529,14 @@ _THREADS_QUERY = (
     "query($owner: String!, $name: String!, $number: Int!) {"
     " repository(owner: $owner, name: $name) {"
     "  pullRequest(number: $number) {"
-    "   reviewThreads(first: 100) {"
+    "   reviewThreads(first: %d) {"
     "    totalCount"
     "    nodes { isResolved comments(first: 1) { nodes { author { login } } } }"
     "   }"
     "  }"
     " }"
     "}"
-)
+) % THREADS_PAGE
 
 
 def review_threads_for(repo, pr, unknown):
@@ -1176,14 +1176,18 @@ def write_ledger(ledger_path, repo, pr, record, replace):
 
     lock_fd = _acquire_lock(lock_path)
     try:
-        dup_index, dup_kind = None, None
+        # Every matching line, not just the first: a ledger that already
+        # holds two lines for one (repo, pr) -- from a hand edit or a pre-lock
+        # race -- must come out of --replace with exactly one, never with the
+        # earlier duplicate silently left behind.
+        dups = []
         if os.path.exists(real_path):
             with open(real_path, encoding="utf-8") as f:
                 for i, raw in enumerate(f):
                     kind = _classify_ledger_line(raw.rstrip("\n"), repo, pr)
                     if kind is not None:
-                        dup_index, dup_kind = i, kind
-                        break
+                        dups.append((i, kind))
+        dup_index, dup_kind = dups[0] if dups else (None, None)
 
         if dup_index is not None and not replace:
             where = f"line {dup_index + 1}"
@@ -1223,6 +1227,12 @@ def write_ledger(ledger_path, repo, pr, record, replace):
         if lines and lines[-1] == "":
             lines.pop()
         lines[dup_index] = new_line
+        extra = {i for i, _ in dups[1:]}
+        if extra:
+            print(f"warning: {ledger_path} held {len(dups)} lines for {repo}#{pr}; "
+                  f"--replace kept one and removed lines "
+                  f"{', '.join(str(i + 1) for i in sorted(extra))}", file=sys.stderr)
+            lines = [ln for i, ln in enumerate(lines) if i not in extra]
 
         original_mode = None
         if os.path.exists(real_path):

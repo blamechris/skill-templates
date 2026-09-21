@@ -1248,6 +1248,18 @@ py_check_ledger "C5: --replace genuinely changed PR514's content (agents: [] now
 lines5=$(wc -l < "$LEDGER" | tr -d ' ')
 [ "$lines5" = "2" ] && ok "that --replace still did not change the line count" || bad "line count after content-changing replace" "got $lines5"
 
+# ----- Copilot thread: --replace must collapse EVERY duplicate, not just one --
+# A ledger already holding two lines for (repo, 514) -- a hand edit, or a race
+# from before the lock existed -- must come out of --replace with exactly one.
+grep "\"pr\": 514" "$LEDGER" | head -1 >> "$LEDGER"
+dupcount=$(grep -c "\"pr\": 514" "$LEDGER" | tr -d ' ')
+[ "$dupcount" = "2" ] && ok "fixture: ledger now holds two lines for PR514" || bad "dup fixture" "got $dupcount"
+run --repo "$REPO" --ledger "$LEDGER" --session sess-514 --replace 514
+[ "$rc" -eq 0 ] && ok "--replace over two duplicates succeeds" || bad "--replace over dups" "rc=$rc out=$out"
+dupcount=$(grep -c "\"pr\": 514" "$LEDGER" | tr -d ' ')
+[ "$dupcount" = "1" ] && ok "--replace collapsed both duplicates into one line" || bad "--replace left duplicates" "got $dupcount"
+grep -q '"marker":"keep-me"' "$LEDGER" && ok "--replace over dups left the unrelated line" || bad "--replace over dups touched unrelated line"
+
 # ----- C5: the duplicate key is (repo, pr), never pr alone -------------
 run --repo "other/repo" --ledger "$LEDGER" 514
 [ "$rc" -eq 0 ] && ok "C5: the SAME pr number (514) in a DIFFERENT repo is accepted, not treated as a duplicate" \
