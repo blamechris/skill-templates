@@ -143,8 +143,10 @@ THE RECORD (schema_version 2), one per run, appended to
                          label auditable rather than a bare string. `kind`
                          is free text; the distill call is instructed to
                          use "verification" for a claim resting on a
-                         VERIFICATION COMMANDS entry and "omitted-gate" for
-                         a brief-named gate that never ran (proof null).
+                         VERIFICATION COMMANDS entry. It is told NOT to
+                         restate gates_run/gates_named_not_run as claims
+                         (#286: 3 of 8 re-run records did, each drawing a
+                         spurious absence label).
   verifications[]        DETERMINISTIC, never from the model -- one entry
                          per Bash tool_use, classified into zero or more of
                          test/lint/build/ci_read (see REPORT EXTRACTION AND
@@ -231,9 +233,8 @@ OLD stub silently stored "". Two things follow:
     on every record verbatim -- the distill model call is handed them as a
     `--- VERIFICATION COMMANDS ---` prompt section and instructed (in
     DISTILL_SYSTEM_PROMPT) to turn every verification whose result shaped
-    the report or an intermediate decision into its own claim, and every
-    `gates_named_not_run` category into an "omitted-gate" claim with
-    `proof` null -- but the persisted verifications[]/gates_run/
+    the report or an intermediate decision into its own claim, and never
+    to restate the gates fields as claims of its own -- the persisted verifications[]/gates_run/
     gates_named_not_run fields never depend on what the model returns.
 
 WHAT `runs` REFUSES TO GUESS, and what it does not guess at all: session id
@@ -335,6 +336,44 @@ LABELS = (
     "letter-not-goal",
     "unclassified",
 )
+
+# One line per label, rendered into the chain prompt (#286). Before this the
+# prompt DEFINED only proxy-as-thing -- the other seven reached the model as
+# bare enum strings -- and it defined it as any `| tail` before an exit
+# read, so every truncated read got it: 127 of 160 runs (79%) on 13cee7be.
+# A label the model is taught and seven it is not is a base-rate, not a
+# finding. Keyed by LABELS; the test suite checks the two agree exactly.
+LABEL_DEFINITIONS = {
+    "absence-without-second-search":
+        "stated that something is absent, not happening, or not there "
+        "(no checks, no callers, frozen, nothing changed) from ONE look, "
+        "without a second, differently-shaped search.",
+    "plural-from-one-check":
+        "wrote a plural (all, every, both, none) when one instance was checked.",
+    "proxy-as-thing":
+        "reported a STAND-IN signal as the thing itself: an exit status that "
+        "belongs to a different program (a gate piped into head/tail/grep "
+        "and then `$?` read -- the VERIFICATION FLAGS section marks these as "
+        "exit_masked_by_pipe), or a status field read as the work's state "
+        "(an empty statusCheckRollup read as 'CI is fine'). NOT this label: "
+        "`cmd | tail -30` used only to READ output, with the conclusion "
+        "drawn from the lines shown -- truncated reading is not a proxy.",
+    "green-as-done":
+        "treated a passing check as the task being done, or left what was "
+        "not verified less prominent than what passed.",
+    "outcome-not-reason":
+        "checked the outcome, not the reason -- a right result for a wrong "
+        "reason survives into the record.",
+    "recalled-not-reopened":
+        "asserted the state of an artefact (issue, PR, file, earlier fix) "
+        "from memory or an earlier read instead of re-opening it.",
+    "consumers-unfound":
+        "changed a field, API, or behaviour without finding every consumer.",
+    "letter-not-goal":
+        "satisfied the literal wording of the ask while missing its goal.",
+    "unclassified":
+        "none of the above fits. Say why in `why`. Never invent a label.",
+}
 
 CORRECTION_CUES = (
     "actually", "in fact", "wrong", "retract", "never ran", "failed",
@@ -1222,6 +1261,13 @@ def normalize_claims(raw):
         cid = c.get("id")
         if not isinstance(cid, str) or not cid:
             cid = "c%d" % (i + 1)
+        elif cid.isdigit():
+            # A digit-only id would share one namespace with the digit-string
+            # later_wrong index pointers in `supports` (#290 review): claim
+            # "0" and later_wrong[0] would be the same pointer. Claims are
+            # normalized before the chain call, so the model only ever sees
+            # the prefixed id and never references the bare one.
+            cid = "c" + cid
         out.append({
             "id": cid,
             "text": c.get("text") or "",
@@ -1233,7 +1279,7 @@ def normalize_claims(raw):
 
 
 def normalize_later_wrong(raw, claim_ids):
-    """(later_wrong[], dropped[]) -- a `later_wrong` entry whose `claim`
+    """(later_wrong[], dropped[], index_map{}) -- a `later_wrong` entry whose `claim`
     does not name a real claim id is dropped, not silently kept as a
     dangling pointer (#278 C2): `enforce_classified_as` below treats a
     `later_wrong` INDEX as valid supporting evidence for a `classified_as`
@@ -1241,16 +1287,26 @@ def normalize_later_wrong(raw, claim_ids):
     would let a label ride in on evidence that itself points nowhere.
     `dropped` carries the offending claim references so the caller can
     record/warn about them -- unresolvable is reported, never silently
-    kept."""
+    kept.
+
+    `index_map` maps each KEPT entry's position in the model's RAW array to
+    its position in the returned list. The model writes `classified_as`
+    index pointers against the array it emitted; dropping raw[0] shifts
+    every later entry down one, and reading the pointers against the
+    shrunk list put a label and its `why` on the wrong contradiction and
+    marked a classified one "not classified by the model" (#290 review).
+    `enforce_classified_as` resolves index pointers through this map."""
     out = []
     dropped = []
-    for lw in raw or []:
+    index_map = {}
+    for raw_i, lw in enumerate(raw or []):
         if not isinstance(lw, dict):
             continue
         claim = lw.get("claim")
         if not isinstance(claim, str) or claim not in claim_ids:
             dropped.append(claim)
             continue
+        index_map[raw_i] = len(out)
         cb = lw.get("contradicted_by")
         cb = cb if isinstance(cb, dict) else {}
         out.append({
@@ -1262,10 +1318,10 @@ def normalize_later_wrong(raw, claim_ids):
                 "quote": cb.get("quote"),
             },
         })
-    return out, dropped
+    return out, dropped, index_map
 
 
-def enforce_classified_as(raw, claims, later_wrong):
+def enforce_classified_as(raw, claims, later_wrong, index_map=None):
     """(classified_as[], unclassified_reason) -- the CLOSED VOCABULARY's
     second enforcement point.
 
@@ -1293,15 +1349,21 @@ def enforce_classified_as(raw, claims, later_wrong):
     ids), so this only ever changes an int index into its digit-string."""
     claim_ids = {c["id"] for c in claims}
     n_later_wrong = len(later_wrong)
+    # INDEX_MAP (from normalize_later_wrong) translates the model's raw
+    # later_wrong positions to kept ones; None means the pointers already
+    # address LATER_WRONG as given.
+    if index_map is None:
+        index_map = {i: i for i in range(n_later_wrong)}
 
-    def resolves(s):
+    def resolve(s):
+        """The written pointer for S, or None when it resolves to nothing."""
         if isinstance(s, str) and s in claim_ids:
-            return True
-        if isinstance(s, str) and s.isdigit() and 0 <= int(s) < n_later_wrong:
-            return True
-        if isinstance(s, int) and not isinstance(s, bool) and 0 <= s < n_later_wrong:
-            return True
-        return False
+            return s
+        if isinstance(s, str) and s.isdigit():
+            s = int(s)
+        if isinstance(s, int) and not isinstance(s, bool) and s in index_map:
+            return str(index_map[s])
+        return None
 
     out = []
     reasons = []
@@ -1311,10 +1373,7 @@ def enforce_classified_as(raw, claims, later_wrong):
         supports = entry.get("supports")
         if not isinstance(supports, list):
             continue
-        resolved = [
-            str(s) if isinstance(s, int) and not isinstance(s, bool) else s
-            for s in supports if resolves(s)
-        ]
+        resolved = [p for p in (resolve(s) for s in supports) if p is not None]
         if not resolved:
             continue  # DROPPED -- no pointer in `supports` resolves to anything
         label = entry.get("label")
@@ -1326,6 +1385,19 @@ def enforce_classified_as(raw, claims, later_wrong):
             "supports": resolved,
             "why": entry.get("why") or "",
         })
+    # #286: every later_wrong entry is covered by some label, or says in the
+    # record that it is not. On 13cee7be main-turn-005's later_wrong[2]/[3]
+    # found the real cause of a misattributed bug and carried no label at
+    # all -- a contradiction found and never classified, in silence.
+    covered = {s for e in out for s in e["supports"]}
+    for i in range(n_later_wrong):
+        if str(i) not in covered:
+            out.append({
+                "label": "unclassified",
+                "supports": [str(i)],
+                "why": "later_wrong[%d] was not classified by the model" % i,
+            })
+            reasons.append("later_wrong[%d] unlabelled by the model" % i)
     unclassified_reason = "; ".join(reasons) if reasons else None
     return out, unclassified_reason
 
@@ -1433,21 +1505,26 @@ DISTILL_SYSTEM_PROMPT = (
     "(kind \"verification\"), even when the report never restates it and "
     "even when a LATER entry re-checked the same thing -- a defective "
     "earlier check that a later one superseded is still a claim, not "
-    "discarded in favor of the one best proof. Each category named in "
-    "`gates_named_not_run` becomes a claim of kind \"omitted-gate\" with "
-    "`proof` null. Return only the JSON object the schema describes."
+    "discarded in favor of the one best proof. Claims are about the RUN, "
+    "never about this prompt: do not claim that a gate was or was not run, "
+    "or that a section is empty, on the strength of VERIFICATION COMMANDS "
+    "or gates_named_not_run -- those are recorded deterministically "
+    "already, and a claim restating them has no proof in the run. "
+    "Return only the JSON object the schema describes."
 )
 
 CHAIN_SYSTEM_PROMPT = (
     "You are checking one run's claims against candidate later mentions "
     "from the same session for contradictions, and classifying each "
     "claim's evidence quality against a CLOSED vocabulary of failure "
-    "modes. Judge primarily from each claim's `proof` text, not only its "
-    "`quote`: a `proof` that is a shell pipeline ending in `echo $?` or "
-    "`echo \"EXIT=$?\"`, or that pipes through `| head`/`| tail`/`| grep` "
-    "before the exit code is read, or that reads a status field standing "
-    "in for the work itself, is `proxy-as-thing` -- quote the exact proof "
-    "command in `why`. Use ONLY a label from the schema's enum -- never "
+    "modes, defined in the LABELS section of the prompt. Judge primarily "
+    "from each claim's `proof` text, not only its `quote`, and quote the "
+    "exact command or text a label rests on in `why`. Choose the label "
+    "that names the specific defect; a claim with no evidence-quality "
+    "defect gets NO label -- labelling is not required per claim. "
+    "Classify EVERY later_wrong entry you emit: a contradiction exists "
+    "because some claim's evidence failed, and naming how is the point. "
+    "Use ONLY a label from the schema's enum -- never "
     "invent one; unclear cases still get the closest listed label, and "
     "enforcement happens in code on the way out, not in this prompt. "
     "Every classified_as entry's `supports` array MUST name at least one "
@@ -1623,7 +1700,23 @@ def build_distill_prompt(r):
 
 
 def build_chain_prompt(r, claims, candidates):
-    lines = ["SESSION_DISTILL_PASS: chain", "RUN_ID: %s" % r["id"], "", "--- CLAIMS ---"]
+    lines = ["SESSION_DISTILL_PASS: chain", "RUN_ID: %s" % r["id"], "", "--- LABELS ---"]
+    for label in LABELS:
+        lines.append("%s: %s" % (label, LABEL_DEFINITIONS[label]))
+    # #286: the deterministic flags, so proxy-as-thing on an exit read rests
+    # on the per-pipeline check rather than on the model spotting a pipe.
+    flagged = [v for v in (r.get("verifications") or [])
+               if v.get("exit_masked_by_pipe") or v.get("empty_ci_result")]
+    lines.append("")
+    lines.append("--- VERIFICATION FLAGS (deterministic, %d) ---" % len(flagged))
+    if not flagged:
+        lines.append("(none: no gate's exit status was read through a pipe, "
+                     "and no CI read returned an empty rollup)")
+    for v in flagged:
+        flags = [n for n in ("exit_masked_by_pipe", "empty_ci_result") if v.get(n)]
+        lines.append("[%d] %s: %s" % (v.get("index"), ",".join(flags), v.get("command")))
+    lines.append("")
+    lines.append("--- CLAIMS ---")
     for c in claims:
         lines.append(json.dumps(c, ensure_ascii=False))
     lines.append("")
@@ -1673,10 +1766,11 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
     than the drop happening with no trace anywhere."""
     claims = normalize_claims((distilled_doc or {}).get("claims"))
     claim_ids = {c["id"] for c in claims}
-    later_wrong, dropped_later_wrong = normalize_later_wrong(
+    later_wrong, dropped_later_wrong, lw_index_map = normalize_later_wrong(
         (chain_doc or {}).get("later_wrong") if chain_doc else None, claim_ids)
     classified_as, unclassified_reason = enforce_classified_as(
-        (chain_doc or {}).get("classified_as") if chain_doc else None, claims, later_wrong)
+        (chain_doc or {}).get("classified_as") if chain_doc else None, claims, later_wrong,
+        lw_index_map)
     record = {
         "kind": "session-distill-record",
         "schema_version": SCHEMA_VERSION,
@@ -2064,6 +2158,7 @@ def cmd_report(a):
 
     records = doc.get("records") or []
     label_counts = {}
+    label_runs = {}
     later_wrong_total = 0
     unclassified = []
     # #285: report_source and verification-flag counts -- a silent empty
@@ -2079,6 +2174,8 @@ def cmd_report(a):
         for ca in rec.get("classified_as") or []:
             label = ca.get("label")
             label_counts[label] = label_counts.get(label, 0) + 1
+        for label in {ca.get("label") for ca in rec.get("classified_as") or []}:
+            label_runs[label] = label_runs.get(label, 0) + 1
         later_wrong_total += len(rec.get("later_wrong") or [])
         if rec.get("unclassified_reason"):
             run = rec.get("run") or {}
@@ -2120,10 +2217,16 @@ def cmd_report(a):
     print("verification flags: exit_masked_by_pipe=%d run(s)   empty_ci_result=%d run(s)   "
           "gates_named_not_run=%d run(s)" % (exit_masked_runs, empty_ci_runs, gates_named_not_run_runs))
     print()
-    print("classified_as label distribution:")
+    # #286: a class hit reads against its BASE RATE -- the share of runs
+    # carrying the label at all. On 13cee7be proxy-as-thing sat on 79% of
+    # runs, so "the right run carries it" was near-certain by chance.
+    print("classified_as label distribution (entries, runs carrying it, share of %d runs):"
+          % len(records))
     for label in LABELS:
         if label_counts.get(label):
-            print("  %-32s %d" % (label, label_counts[label]))
+            runs = label_runs.get(label, 0)
+            share = (100.0 * runs / len(records)) if records else 0.0
+            print("  %-32s %4d  %4d  %5.1f%%" % (label, label_counts[label], runs, share))
     print()
     print("later_wrong entries: %d" % later_wrong_total)
     if unclassified:
