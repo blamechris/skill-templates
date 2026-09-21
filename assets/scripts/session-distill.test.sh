@@ -2112,5 +2112,40 @@ PY
 [ $? -eq 0 ] && ok "#291/#287 review: every elided piece located in order; short fabrications rejected; quoted/leading-elision proofs locate; ambiguity drop keyed per claim; candidates carry their claims; cwd seeds the vocabulary" \
   || bad "#291/#287 review fixes" "rc=nonzero"
 
+echo; echo "X8. #291/#287 Copilot review — an empty-string proof is checked, not treated as null; a later qualified occurrence beats an earlier ambiguous one"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_copilot", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+# "" is a proof the model supplied: unlocatable, and it counts toward the
+# all-unlocatable FAILURE -- otherwise a placeholder of empty proofs passes
+claims = [{"id": "c1", "text": "t", "kind": "k", "proof": "", "quote": None},
+          {"id": "c2", "text": "t", "kind": "k", "proof": None, "quote": None}]
+n_nonnull, n_unloc = sd.compute_proof_located(claims, ["swift test"])
+assert (n_nonnull, n_unloc) == (1, 1), (n_nonnull, n_unloc)
+assert claims[0]["proof_located"] is False and claims[1]["proof_located"] is None, claims
+is_fail, n, u = sd.claims_all_proofs_unlocatable(
+    {"claims": [{"id": "c1", "text": "t", "kind": "k", "proof": "", "quote": None}]}, ["swift test"])
+assert is_fail and (n, u) == (1, 1), (is_fail, n, u)
+
+# an early ambiguous occurrence must not shadow a later explicitly-qualified
+# one in the SAME run: the candidate is "same", so nothing is withdrawn
+cl = [{"id": "c1", "text": "skill-templates#264 is merged", "quote": None}]
+later = [{"id": "r2", "started_at": "t1", "repos": ["Aeolus", "skill-templates"],
+          "brief": "",
+          "report": ("#264 turned out wrong, actually. " + "x" * 300
+                     + " and skill-templates#264 was in fact reverted, wrong all along")}]
+got = sd.find_chain_candidates(cl, "t0", {"skill-templates"}, later, {"Aeolus", "skill-templates"})
+assert len(got) == 1 and got[0]["repo_match"] == "same", got
+# with no qualified occurrence anywhere, it stays ambiguous
+later[0]["report"] = "#264 turned out wrong, actually."
+got = sd.find_chain_candidates(cl, "t0", {"skill-templates"}, later, {"Aeolus", "skill-templates"})
+assert len(got) == 1 and got[0]["repo_match"] == "ambiguous", got
+PY
+[ $? -eq 0 ] && ok "#291: an empty-string proof is unlocatable and counts toward the FAILURE (only null is 'nothing to check'); #287: a later qualified #N occurrence in the same run wins over an earlier ambiguous one" \
+  || bad "#291/#287 Copilot review fixes" "rc=nonzero"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

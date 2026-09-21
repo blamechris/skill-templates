@@ -854,7 +854,10 @@ def compute_proof_located(claims, tool_inputs_full):
     n_unlocatable = 0
     for c in claims:
         proof = c.get("proof")
-        if not proof:
+        # Only a NULL proof is "nothing to check". An empty string is a
+        # proof the model supplied and cannot be located, so counting it
+        # as null would let a placeholder of empty proofs past the guard.
+        if proof is None:
             c["proof_located"] = None
             continue
         n_nonnull += 1
@@ -1912,6 +1915,7 @@ def find_chain_candidates(claims, current_started_at, current_repos, other_runs,
             is_hash = bool(hash_re.match(art))
             claim_repo = (resolve_claim_hash_repo(claims, art, vocabulary, current_repos)
                           if is_hash else None)
+            best = None
             idx = haystack.find(art)
             while idx != -1:
                 lo = max(0, idx - CUE_WINDOW_CHARS)
@@ -1942,7 +1946,7 @@ def find_chain_candidates(claims, current_started_at, current_repos, other_runs,
                             repo_match = "ambiguous"
                     else:
                         repo_match = "n/a"
-                    candidates.append({
+                    hit = {
                         "run": r["id"],
                         "started_at": started_at,
                         "artifact": art,
@@ -1951,9 +1955,21 @@ def find_chain_candidates(claims, current_started_at, current_repos, other_runs,
                         "claims": sorted(
                             c["id"] for c in claims
                             if art in (c.get("text") or "") or art in (c.get("quote") or "")),
-                    })
+                    }
+                    # Keep scanning past an ambiguous hit: a LATER
+                    # occurrence in the same run may carry an explicit
+                    # qualifier and resolve to "same", which is stronger
+                    # evidence and must not be withdrawn as ambiguous-only.
+                    if repo_match == "ambiguous":
+                        if best is None:
+                            best = hit
+                        idx = haystack.find(art, idx + 1)
+                        continue
+                    best = hit
                     break
                 idx = haystack.find(art, idx + 1)
+            if best is not None:
+                candidates.append(best)
     return candidates
 
 
