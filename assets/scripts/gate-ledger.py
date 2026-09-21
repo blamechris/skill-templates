@@ -542,7 +542,7 @@ def cmd_list(a):
     for e in all_entries:
         raw = e["raw"] if e.get("raw_is_dict", True) else {}
         targets = raw.get("targets") if isinstance(raw.get("targets"), list) else []
-        labels = ",".join(sorted({t.get("label") for t in targets if isinstance(t, dict) and t.get("label")}))
+        labels = ",".join(sorted({str(t.get("label")) for t in targets if isinstance(t, dict) and t.get("label")}))
         added = raw.get("added") if isinstance(raw.get("added"), dict) else {}
         added_disp = "%s#%s" % (added.get("repo"), added.get("pr")) if added.get("repo") is not None else "-"
         print("  %-40s %-12s targets=%-30s added=%s" % (e["id"] or "?", e["kind"], labels or "-", added_disp))
@@ -844,7 +844,7 @@ def cmd_report(a):
             "id": e["id"],
             "kind": e["kind"],
             "source": e["source"],
-            "targets": sorted({t.get("label") for t in gate["targets"] if t.get("label")}),
+            "targets": sorted({str(t.get("label")) for t in gate["targets"] if isinstance(t, dict) and t.get("label")}),
             "added": added,
             "verdict": verdict,
             "trace_unverified": has_trace,

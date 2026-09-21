@@ -1010,6 +1010,20 @@ worked_line=$(echo "$out" | grep 'agent-review/structured-review-result' || true
 assert_contains "real registry: worked example reads untraced" "$worked_line" "untraced"
 
 # =========================================================================
+# Y. a malformed record with a non-string label must not crash list/report
+# =========================================================================
+echo; echo "Y. non-string label does not crash list/report"
+mkdir -p "$TMP/reg_intlabel"
+echo '{"agent-review":[]}' > "$TMP/reg_intlabel/skill-guards.json"
+printf '%s\n' '{"schema_version":1,"id":"h/a","kind":"hook","where":"x","targets":[{"label":5,"mode":"m"},{"label":"green-as-done","mode":"m"}],"added":{"repo":"a/b","pr":1,"at":"2026-01-01T00:00:00Z"},"evidence":[{"kind":"issue","repo":"a/b","number":1}]}' > "$TMP/reg_intlabel/gates.jsonl"
+rc=$(run list --registry "$TMP/reg_intlabel")
+assert_eq "list with int label: exit 0" "$rc" "0"
+assert_not_contains "list with int label: no traceback" "$(cat "$TMP/err")" "Traceback"
+rc=$(CLAUDE_PR_LEDGER="$TMP/no-such-ledger.jsonl" run report --registry "$TMP/reg_intlabel")
+assert_not_contains "report with int label: no traceback" "$(cat "$TMP/err")" "Traceback"
+assert_contains "report with int label: scored invalid" "$(cat "$TMP/out")" "invalid"
+
+# =========================================================================
 # no __pycache__ left behind anywhere in assets/scripts/
 # =========================================================================
 echo; echo "Z. no __pycache__"
