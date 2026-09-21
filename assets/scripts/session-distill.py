@@ -353,8 +353,12 @@ REMINDER_CLOSE = "</system-reminder>"
 # `extract_report` records it as `report_source: "harness_error"` (the text
 # is KEPT, never discarded -- the distill call is told what it is via
 # REPORT_SOURCE in the prompt and can still note the cutoff itself).
+# "You've hit your" rather than "...session limit": the same cutoff arrives
+# worded "weekly limit" too, and on 13cee7be four of eight cutoffs used that
+# wording -- a prefix list keyed on one meter's name silently passed them
+# through as source "text".
 HARNESS_ERROR_PREFIXES = (
-    "You've hit your session limit",
+    "You've hit your",
     "API Error",
 )
 
@@ -396,6 +400,13 @@ _CI_READ_JSON_FIELD_RE = re.compile(r'statuscheckrollup|mergestatestatus', re.IG
 _TRUNCATING_PIPE_RE = re.compile(
     r'\|\s*(?:head|tail|grep|sed|awk|cut|sort|uniq|wc)\b', re.IGNORECASE)
 _PIPEFAIL_PROTECTED_RE = re.compile(r'pipefail|PIPESTATUS', re.IGNORECASE)
+# List separators, never a lone `|`: `$?` is the status of the pipeline that
+# ran last, so the mask check needs pipelines, not the whole command. Quote-
+# unaware, and that cuts both ways: a separator inside a quoted string can
+# split a real pipeline away from its `$?` (a miss), and a quoted "| tail"
+# right before an `echo $?` reads as a pipe (a false hit). Both need quoting
+# shapes that did not occur on 13cee7be; a shell parser is not worth it yet.
+_SEGMENT_SPLIT_RE = re.compile(r'&&|\|\||;|\n')
 _EMPTY_CI_RESULT_RE = re.compile(
     r'"statusCheckRollup"\s*:\s*\[\]|no checks reported', re.IGNORECASE)
 
@@ -668,6 +679,34 @@ def is_ci_read(command):
     return False
 
 
+# `(?<!<)`/`(?!<)`: a `<<<` here-string is not a heredoc and has no body.
+_HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def strip_heredoc_bodies(command):
+    """COMMAND with every heredoc body removed -- the lines after a
+    `<<WORD` / `<<'WORD'` / `<<-WORD` opener up to and including the line
+    that is exactly WORD (leading tabs allowed, for `<<-`). The opener line
+    itself is kept, so `python3 - <<'PY'` still reads as a python call.
+    An unterminated heredoc drops everything after its opener: the body
+    never ended, so nothing after it is shell."""
+    if not command or "<<" not in command:
+        return command or ""
+    out = []
+    lines = command.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        words = [m.group(2) for m in _HEREDOC_OPEN_RE.finditer(line)]
+        i += 1
+        for word in words:
+            while i < len(lines) and lines[i].lstrip("\t") != word:
+                i += 1
+            i += 1  # the terminator line
+    return "\n".join(out)
+
+
 def classify_pipe_flags(command):
     """(exit_masked_by_pipe, output_truncated) for one Bash COMMAND (#285).
 
@@ -678,10 +717,15 @@ def classify_pipe_flags(command):
                             filtering utility (head/tail/grep/sed/awk/cut/
                             sort/uniq/wc) ANYWHERE in it -- regardless of
                             whether an exit code is ever read.
-      exit_masked_by_pipe  ALL of: such a pipe exists, the command also
-                            reads `$?` (a literal `$?` substitution), and
-                            neither `pipefail` nor PIPESTATUS appears
-                            anywhere in the command to protect that read.
+      exit_masked_by_pipe  a `$?` read whose IMMEDIATELY PRECEDING
+                            pipeline (the segment before it, splitting on
+                            `;` `&&` `||` and newlines) pipes through such a
+                            utility, with neither `pipefail` nor PIPESTATUS
+                            appearing earlier in the command. Segment-aware
+                            on purpose: `lint; echo "exit=$?"; swiftlint |
+                            tail -3` reads lint's real status, and a
+                            whole-command check flagged it anyway -- 3 of
+                            4 hits on a real run were that false positive.
                             `cmd; echo "exit=$?"` with NO pipe is neither.
                             `cmd | tail -3` with no `$?` read is
                             output_truncated ONLY. `set -o pipefail; cmd |
@@ -694,9 +738,22 @@ def classify_pipe_flags(command):
     output_truncated = bool(_TRUNCATING_PIPE_RE.search(command))
     if not output_truncated:
         return False, False
-    reads_exit = "$?" in command
-    protected = bool(_PIPEFAIL_PROTECTED_RE.search(command))
-    exit_masked = reads_exit and not protected
+    segments = _SEGMENT_SPLIT_RE.split(command)
+    exit_masked = False
+    for i, seg in enumerate(segments):
+        if "$?" not in seg:
+            continue
+        before = segments[i - 1] if i > 0 else ""
+        if not _TRUNCATING_PIPE_RE.search(before):
+            continue
+        # The masked status must be a GATE's: `git log | grep -c x; echo
+        # rc=$?` reads grep's status on purpose and masks nothing.
+        if not classify_verification_command(before):
+            continue
+        if _PIPEFAIL_PROTECTED_RE.search(" ".join(segments[:i + 1])):
+            continue
+        exit_masked = True
+        break
     return exit_masked, output_truncated
 
 
@@ -779,13 +836,19 @@ def build_tool_trace(objs):
                 continue
             inp = b.get("input") if isinstance(b.get("input"), dict) else {}
             command = inp.get("command") if isinstance(inp.get("command"), str) else ""
-            categories = classify_verification_command(command)
+            # Classified on the command with heredoc BODIES removed: a
+            # heredoc is data handed to a program (a python script, a memory
+            # note, a commit message), and on 13cee7be the only remaining
+            # false exit-mask hits were heredoc text that merely DESCRIBED
+            # `cmd | head; echo $?`. The stored `command` stays verbatim.
+            shell_only = strip_heredoc_bodies(command)
+            categories = classify_verification_command(shell_only)
             if not categories:
                 continue
             output_present = tid in result_content
             output_text = (extract_tool_result_text(result_content.get(tid))
                             if output_present else None)
-            exit_masked, output_truncated = classify_pipe_flags(command)
+            exit_masked, output_truncated = classify_pipe_flags(shell_only)
             empty_ci = "ci_read" in categories and detect_empty_ci_result(output_text)
             verifications.append({
                 "index": idx,

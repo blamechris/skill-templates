@@ -95,12 +95,18 @@ distilled as if it were real.
   do not end in a `StructuredOutput` tool_use.
 - **`verifications[]`** — DETERMINISTIC, never from the model. One entry per
   Bash tool_use whose command matches `test`/`lint`/`build`/`ci_read`
-  (keyword/regex against the FULL command, not the digest). Each entry
+  (keyword/regex against the full command with heredoc BODIES removed —
+  a heredoc is data, and a script whose text merely describes `cmd | head;
+  echo $?` is not that defect; the stored command stays verbatim). Each entry
   carries its own command (capped ~600 chars head+tail), the output of its
   OWN matching tool_result (matched by `tool_use_id`; `output_present: false`
   and `output: null` — never `""` — when no tool_result exists at all), and
-  two independent flags: `exit_masked_by_pipe` (pipes through a truncating
-  utility AND reads `$?` AND is unprotected by `pipefail`/PIPESTATUS) and
+  two independent flags: `exit_masked_by_pipe` (a `$?` read whose
+  IMMEDIATELY PRECEDING pipeline — splitting on `;` `&&` `||` newline —
+  invokes a gate and pipes it through a truncating utility, with no
+  `pipefail`/PIPESTATUS earlier in the command; per pipeline, because a
+  whole-command check flagged `lint; echo "exit=$?"; swiftlint | tail -3`,
+  which reads lint's real status) and
   `output_truncated` (pipes through a truncating utility at all, regardless
   of whether `$?` is read). These are NOT the same condition: `cmd; echo
   "exit=$?"` (no pipe) is neither; `cmd | tail -3` (no `$?` read) is

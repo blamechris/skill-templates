@@ -1363,5 +1363,58 @@ case "$out" in
   *) bad "#285: the REFUSE names schema_version" "$out" ;;
 esac
 
+# ---- segment-aware exit masking + harness-error wording, from real commands
+# on 13cee7be's agent-a353ff10: entries 53/66/72 read lint's own `$?` and
+# only pipe a LATER command, and were flagged by a whole-command check.
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_seg", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+f = sd.classify_pipe_flags
+# the named defect: head's status, not lint's
+assert f('swift format lint --strict Sources 2>&1 | head -50; echo "EXIT=$?"') == (True, True)
+# lint's real status is read; the pipe belongs to the next command
+assert f('echo "=== fmt ===" && swift format lint --strict Sources; echo "exit=$?"; '
+         'echo "=== swiftlint ===" && swiftlint lint 2>&1 | tail -3') == (False, True)
+assert f('swift format lint --strict Sources 2>&1; echo "lint-exit=$?"\nswift build --build-tests | tail -5') == (False, True)
+# a pipe whose own status IS the point (grep's rc) masks no gate, even in
+# a command that runs a gate elsewhere
+assert f("swift test; git log -2 | grep -iE 'co-authored'; echo \"grep rc=$?\"") == (False, True)
+# pipefail set AFTER the masked read does not protect it
+assert f('npm test | tail; echo $?; set -o pipefail') == (True, True)
+# pipefail set before protects
+assert f('set -o pipefail; npm test | tail; echo $?') == (False, True)
+# && chains read the pipeline too
+assert f('swift test | grep -c passed && echo ok=$?') == (True, True)
+# heredoc bodies are data: a script whose TEXT describes the defect is not it
+s = sd.strip_heredoc_bodies
+assert f(s("python3 - <<'PY'\nnote = 'lint | head -50; echo $?'\nPY\necho done")) == (False, False)
+assert f(s("cat > m.md <<EOF\nswift test | tail\necho $?\nEOF")) == (False, False)
+# the shell around a heredoc is still read
+assert f(s("swift test | tail -5; echo rc=$?; cat <<EOF\nx\nEOF")) == (True, True)
+# a <<< here-string has no body to strip
+assert s('grep -c x <<< "word"\nswift test | tail; echo $?') == 'grep -c x <<< "word"\nswift test | tail; echo $?'
+# through the trace builder, not just the helper: the call site must strip
+def use(tid, cmd):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": cmd}}]}}
+def res(tid):
+    return {"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}}
+objs = [use("h1", "python3 - <<'PY'\nprint('swift test | tail -3; echo $?')\nPY"), res("h1"),
+        use("h2", "swift test | tail -3; echo $?"), res("h2")]
+_, _, ver = sd.build_tool_trace(objs)
+assert all(not v["exit_masked_by_pipe"] for v in ver if "print(" in v["command"]), ver
+assert [v["exit_masked_by_pipe"] for v in ver if "print(" not in v["command"]] == [True], ver
+# unterminated: nothing after the opener is shell
+assert s("cat <<EOF\nswift test | tail; echo $?") == "cat <<EOF"
+h = sd.classify_harness_error
+assert h("You've hit your weekly limit · resets 4pm (America/Los_Angeles)")
+assert h("You've hit your session limit · resets 2:40am (America/Los_Angeles)")
+assert not h("The report notes: You've hit your session limit earlier, retried.")
+PY
+[ $? -eq 0 ] && ok "#285: exit masking is per-pipeline (a later piped command does not mask an earlier \$? read); weekly-limit cutoff is harness_error; heredoc bodies are not classified" \
+  || bad "#285: segment-aware exit masking / weekly-limit harness_error"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
