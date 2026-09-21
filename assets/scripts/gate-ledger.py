@@ -42,21 +42,14 @@ THE RECORD (schema_version 1) -- see docs/gate-ledger-shape.md for the full
 shape and the illustrative JSON. In brief: `targets[]` ({label, mode}),
 `added` ({repo, pr, at}), `evidence[]` (kind `distill`/`trace`/`issue`/`pr`,
 each with its own required fields), optional `note`. A `gate` field embedded
-on a skill-guards.json guard carries everything except `id` and `kind`,
-which are derived from the guard (`<skill>/<label>` and `skill-guard`).
-
-DEVIATION FROM THE LETTER OF THE SHAPE DOC (recorded here, not pointed at
-from elsewhere): docs/gate-ledger-shape.md says an embedded gate "carries
-everything except `id` and `kind`," which read literally would make `where`
-and `schema_version` required there too. But the shape doc's OWN worked
-example (docs/gate-ledger-shape.md, "The worked example") and the concrete
-JSON #272's acceptance criteria specify both omit `where` and
-`schema_version`. This script follows the worked example: `where` and
-`schema_version` are ALLOWED but not REQUIRED on a `skill-guard`-kind gate.
-A `gates.jsonl` line still requires `id` and `kind` explicitly (nothing
-there is derivable), and `schema_version`, when present anywhere, must be
-`1` -- there is only ever one schema version, so a stray `2` is a typo or a
-version this script cannot read, never a silent pass.
+on a skill-guards.json guard carries `targets`, `added`, `evidence` and an
+optional `note`; its `id` and `kind` are derived from the guard
+(`<skill>/<label>` and `skill-guard`), `where` is the guard's own location,
+and `schema_version` defaults to `1` -- all four are optional there. A
+`gates.jsonl` line still requires `id` and `kind` explicitly (nothing there
+is derivable), and `schema_version`, when present anywhere, must be `1` --
+there is only ever one schema version, so a stray `2` is a typo or a version
+this script cannot read, never a silent pass.
 
 VERDICTS (`report`, first match wins -- see the table in
 docs/gate-ledger-shape.md): `invalid` (the record itself fails the same
@@ -176,7 +169,7 @@ EVIDENCE_KINDS = ("distill", "trace", "issue", "pr")
 
 # The embedded gate on a skill-guards.json guard omits id/kind (derived from
 # the guard); `where`/`schema_version` are allowed but not required there --
-# see the module docstring's DEVIATION note.
+# see the module docstring's THE RECORD section.
 ALLOWED_KEYS_GUARD = {"schema_version", "where", "targets", "added", "evidence", "note"}
 ALLOWED_KEYS_JSONL = {"schema_version", "id", "kind", "where", "targets", "added", "evidence", "note"}
 
@@ -399,9 +392,7 @@ def _validate_entry(e, sd_mod, pr_mod):
     rejection list; a handful of structural requirements not spelled out as
     their own bullet there (non-empty `targets`, a present/pattern-valid
     `id` on a gates.jsonl record) are enforced too, since a record missing
-    them has nothing a verdict could be computed from -- see the module
-    docstring's DEVIATION note for the one place this reading differs from
-    the shape doc's literal text."""
+    them has nothing a verdict could be computed from."""
     reasons = []
     raw = e["raw"]
     allowed = ALLOWED_KEYS_GUARD if e["is_guard"] else ALLOWED_KEYS_JSONL
