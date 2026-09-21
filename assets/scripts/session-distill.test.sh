@@ -160,6 +160,77 @@ w_jsonl(sdir3 + ".jsonl", [
     assistant("Only reply.", "2026-09-20T02:00:01Z"),
 ])
 
+# ============================================================ sess-truly-empty
+# main transcript exists, opens fine, and is genuinely 0 bytes -- the
+# LEGITIMATE empty case #278 C1 must not turn into a false "unreadable".
+sdir_te = os.path.join(proj, "sess-truly-empty")
+os.makedirs(sdir_te, exist_ok=True)
+open(sdir_te + ".jsonl", "w").close()
+
+# ============================================================ sess-unreadable
+# main transcript exists but cannot be opened at all (#278 C1 repro #1).
+# Before the fix this produced the exact same output as a healthy empty
+# session, at exit 0.
+sdir_u = os.path.join(proj, "sess-unreadable")
+os.makedirs(sdir_u, exist_ok=True)
+w_jsonl(sdir_u + ".jsonl", [user("will be chmod 000'd", "t1", origin="human")])
+os.chmod(sdir_u + ".jsonl", 0)
+
+# ============================================================ sess-garbage
+# main transcript exists, opens fine, and contains ONLY lines that fail
+# json.loads (#278 C1 repro #2) -- readable but unparseable, a genuinely
+# different failure mode from sess-unreadable, and previously
+# indistinguishable from BOTH sess-unreadable and a healthy empty session.
+sdir_g = os.path.join(proj, "sess-garbage")
+os.makedirs(sdir_g, exist_ok=True)
+with open(sdir_g + ".jsonl", "w", encoding="utf-8") as f:
+    f.write("not json at all\n")
+    f.write("{also not valid json\n")
+
+# ============================================================ sess-origin-string
+# One line carries a bare `"origin": "human"` STRING rather than the
+# `{"kind": "human"}` dict shape every other fixture uses (#278 N1) -- the
+# old `origin.get("kind")` raised AttributeError on this shape instead of
+# simply not matching it.
+sdir_os = os.path.join(proj, "sess-origin-string")
+os.makedirs(sdir_os, exist_ok=True)
+w_jsonl(sdir_os + ".jsonl", [
+    {"type": "user", "timestamp": "t1", "message": {"content": "Weird origin shape"},
+     "origin": "human"},
+    assistant("reply1", "t2"),
+    user("Real ask, normal origin dict", "t3", origin="human"),
+    assistant("reply2", "t4"),
+])
+
+# ============================================================ sess-origin-second
+# `origin` is present on the SECOND user line, not the first (#278 S1) --
+# pins that `has_origin` is computed over the WHOLE transcript, not just
+# line 0. The first line must NOT start a turn under the origin rule (it
+# carries no origin key at all), even though it is otherwise
+# indistinguishable in shape from a real human prompt.
+sdir_o2 = os.path.join(proj, "sess-origin-second")
+os.makedirs(sdir_o2, exist_ok=True)
+w_jsonl(sdir_o2 + ".jsonl", [
+    user("First line, no origin key at all", "t1"),
+    assistant("reply1", "t2"),
+    user("Second line IS the real human turn", "t3", origin="human"),
+    assistant("reply2", "t4"),
+])
+
+# ============================================================ sess-c2
+# Isolated fixture for the later_wrong/classified_as evidence-chain
+# enforcement (#278 C2): one subagent run whose canned `chain` response
+# carries a dangling `supports` pointer alongside a valid one, and a
+# `later_wrong` entry naming a claim id that does not exist.
+sdir_c2 = os.path.join(proj, "sess-c2")
+os.makedirs(sdir_c2, exist_ok=True)
+w_json(os.path.join(sdir_c2, "subagents", "agent-dddd0004.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "c2 fixture"})
+w_jsonl(os.path.join(sdir_c2, "subagents", "agent-dddd0004.jsonl"), [
+    user_blocks("brief4", "2026-09-20T01:04:00Z"),
+    assistant("report4", "2026-09-20T01:04:05Z"),
+])
+
 print("fixtures OK")
 PYEOF
 
@@ -187,17 +258,62 @@ if log:
     with open(log, "a", encoding="utf-8") as f:
         f.write("%s %s\n" % (run_id, pass_kind))
 
-def envelope(result, is_error=False, cost=0.0075):
+def envelope(result, is_error=False, cost=None):
+    # STUB_CALL_COST lets a test dictate the OBSERVED per-call cost the
+    # model "reports" (#278 M2), independent of DEFAULT_COST_PER_CALL_USD
+    # in the script under test -- so a test can prove the budget check
+    # binds against what calls actually cost, not a hard-coded guess.
+    if cost is None:
+        cost = float(os.environ.get("STUB_CALL_COST", "0.0075"))
     r = result if isinstance(result, str) else json.dumps(result)
     return {"is_error": is_error, "result": r, "total_cost_usd": cost}
 
 if pass_kind == "distill":
-    doc = {"asked": "do X", "understood": "do X", "delivered": "did X",
-           "claims": [{"id": "c1", "text": "the thing works", "kind": "verification",
-                       "proof": "ran it", "quote": "it works"}]}
-    print(json.dumps(envelope(doc)))
+    if run_id == "agent-dddd0004":
+        # #278 C2 fixture: two claims, so a later_wrong/classified_as
+        # response can reference both a valid and an invalid claim id.
+        doc = {"asked": "do Y", "understood": "do Y", "delivered": "did Y",
+               "claims": [
+                   {"id": "c1", "text": "claim one", "kind": "verification",
+                    "proof": "ran it", "quote": "q1"},
+                   {"id": "c2", "text": "claim two", "kind": "verification",
+                    "proof": None, "quote": "q2"},
+               ]}
+        print(json.dumps(envelope(doc)))
+    else:
+        doc = {"asked": "do X", "understood": "do X", "delivered": "did X",
+               "claims": [{"id": "c1", "text": "the thing works", "kind": "verification",
+                           "proof": "ran it", "quote": "it works"}]}
+        print(json.dumps(envelope(doc)))
 elif pass_kind == "chain":
-    if run_id == "agent-aaaa0001":
+    if run_id == "agent-dddd0004":
+        # #278 C2: later_wrong[1] names a claim id ("c99-nonexistent")
+        # that does not exist -> must be DROPPED, leaving only
+        # later_wrong[0] ("c1") in the record, so any `supports` pointer
+        # at index 1 becomes dangling too. classified_as then exercises
+        # ELEMENT-WISE supports filtering: entry 1 has one good pointer
+        # ("c1") and one bad one ("c99-bogus") and must survive with only
+        # the good one kept; entry 2 points at the now-nonexistent
+        # later_wrong index 1 and must be dropped entirely; entry 3 points
+        # at the surviving later_wrong index 0 and must survive untouched.
+        doc = {
+            "later_wrong": [
+                {"claim": "c1", "how": "h1",
+                 "contradicted_by": {"run": "x", "at": "t1", "quote": "q1"}},
+                {"claim": "c99-nonexistent", "how": "h2",
+                 "contradicted_by": {"run": "y", "at": "t2", "quote": "q2"}},
+            ],
+            "classified_as": [
+                {"label": "proxy-as-thing", "supports": ["c1", "c99-bogus"],
+                 "why": "partial-valid"},
+                {"label": "green-as-done", "supports": ["1"],
+                 "why": "dangling index after later_wrong[1] is dropped"},
+                {"label": "outcome-not-reason", "supports": ["0"],
+                 "why": "valid surviving later_wrong index"},
+            ],
+        }
+        print(json.dumps(envelope(doc)))
+    elif run_id == "agent-aaaa0001":
         # off-vocabulary label -> must become "unclassified" + reason recorded
         doc = {"later_wrong": [], "classified_as": [
             {"label": "made-up-label-nobody-asked-for", "supports": ["c1"], "why": "bogus"}]}
@@ -510,6 +626,347 @@ run sess-main distill --out "$OUT_H" --only main-turn-001 --force --model-cmd "$
 run sess-main distill --out "$OUT_H" --only nope-does-not-exist --model-cmd "$MODEL_CMD"
 [ "$rc" -eq 2 ] && ok "--only naming a run that does not exist REFUSES (exit 2)" \
   || bad "--only naming a run that does not exist REFUSES (exit 2)" "rc=$rc out=$out"
+
+# ============================================================ GROUP I — C1: unreadable/unparseable transcript
+echo; echo "I. C1 — an unreadable or unparseable main transcript is never a silent zero"
+
+run_stdout sess-truly-empty runs --json
+[ "$rc" -eq 0 ] && ok "runs sess-truly-empty (0-byte main transcript) exits 0 -- legitimate emptiness is not an error" \
+  || bad "runs sess-truly-empty (0-byte main transcript) exits 0" "rc=$rc"
+echo "$out" > "$TMP/runs-truly-empty.json"
+"$PY" - "$TMP/runs-truly-empty.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["segmented_by"] is None, d["segmented_by"]
+assert d["main_turns"] == 0, d["main_turns"]
+assert d["unreadable"] == [], d["unreadable"]
+PY
+[ $? -eq 0 ] && ok "runs sess-truly-empty: segmented_by null, unreadable[] empty, exit 0" \
+  || bad "runs sess-truly-empty: segmented_by null, unreadable[] empty, exit 0" "$(cat "$TMP/runs-truly-empty.json")"
+
+run_stdout sess-unreadable runs --json
+[ "$rc" -eq 2 ] && ok "runs sess-unreadable (chmod 000 main transcript) exits 2" \
+  || bad "runs sess-unreadable (chmod 000 main transcript) exits 2" "rc=$rc"
+echo "$out" > "$TMP/runs-unreadable.json"
+"$PY" - "$TMP/runs-unreadable.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["segmented_by"] is None, d["segmented_by"]
+assert d["main_turns"] == 0, d["main_turns"]
+assert d["unreadable"], d["unreadable"]
+assert any("main transcript" in u for u in d["unreadable"]), d["unreadable"]
+PY
+[ $? -eq 0 ] && ok "runs sess-unreadable: segmented_by null (never a rule name), unreadable[] names the main transcript, distinguishable from sess-truly-empty" \
+  || bad "runs sess-unreadable: segmented_by null, unreadable[] names the main transcript" "$(cat "$TMP/runs-unreadable.json")"
+
+run sess-unreadable runs
+case "$out" in
+  *"warning: could not fully read"*"main transcript"*) ok "runs sess-unreadable: stderr warns about the unreadable transcript" ;;
+  *) bad "runs sess-unreadable: stderr warns about the unreadable transcript" "$out" ;;
+esac
+
+run_stdout sess-garbage runs --json
+[ "$rc" -eq 2 ] && ok "runs sess-garbage (main transcript is only unparseable lines) exits 2" \
+  || bad "runs sess-garbage (main transcript is only unparseable lines) exits 2" "rc=$rc"
+echo "$out" > "$TMP/runs-garbage.json"
+"$PY" - "$TMP/runs-garbage.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["segmented_by"] is None, d["segmented_by"]
+assert d["main_turns"] == 0, d["main_turns"]
+assert d["unreadable"], d["unreadable"]
+assert any("parsed" in u for u in d["unreadable"]), d["unreadable"]
+PY
+[ $? -eq 0 ] && ok "runs sess-garbage: segmented_by null, unreadable[] reports the unparseable-line count, distinguishable from both sess-truly-empty and sess-unreadable" \
+  || bad "runs sess-garbage: segmented_by null, unreadable[] reports unparseable lines" "$(cat "$TMP/runs-garbage.json")"
+
+OUT_I="$TMP/out-i.json"
+run sess-unreadable distill --out "$OUT_I" --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 2 ] && ok "distill sess-unreadable exits 2" || bad "distill sess-unreadable exits 2" "rc=$rc out=$out"
+"$PY" - "$OUT_I" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["unreadable"], d["unreadable"]
+assert d["segmented_by"] is None, d["segmented_by"]
+assert d["records"] == [], d["records"]
+PY
+[ $? -eq 0 ] && ok "distill sess-unreadable: document still written in full (JSON emitted), unreadable[] populated, segmented_by null" \
+  || bad "distill sess-unreadable: document still written in full" "$(cat "$OUT_I")"
+
+# ============================================================ GROUP J — C2: evidence-chain enforcement
+echo; echo "J. C2 — element-wise supports filtering; later_wrong claim ids validated"
+
+export MODEL_CALL_LOG="$TMP/calls-j.log"
+rm -f "$MODEL_CALL_LOG"
+OUT_J="$TMP/out-j.json"
+run sess-c2 distill --out "$OUT_J" --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "distill sess-c2 exits 0" || bad "distill sess-c2 exits 0" "rc=$rc out=$out"
+"$PY" - "$OUT_J" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+recs = {r["run"]["id"]: r for r in d["records"]}
+assert "agent-dddd0004" in recs, recs.keys()
+rec = recs["agent-dddd0004"]
+
+# later_wrong[1] named a nonexistent claim id ("c99-nonexistent") -> DROPPED,
+# only the "c1" entry survives.
+lw = rec["later_wrong"]
+assert len(lw) == 1, lw
+assert lw[0]["claim"] == "c1", lw
+
+ca = {c["label"]: c for c in rec["classified_as"]}
+# entry 1: one good pointer ("c1") + one dangling one ("c99-bogus") ->
+# entry SURVIVES, `supports` keeps only the pointer that resolves.
+assert "proxy-as-thing" in ca, rec["classified_as"]
+assert ca["proxy-as-thing"]["supports"] == ["c1"], ca["proxy-as-thing"]["supports"]
+
+# entry 2: pointed at later_wrong index "1", which no longer exists once
+# later_wrong[1] was dropped -> entry DROPPED entirely.
+assert "green-as-done" not in ca, rec["classified_as"]
+
+# entry 3: pointed at later_wrong index "0", which DOES survive -> kept
+# with `supports` unchanged.
+assert "outcome-not-reason" in ca, rec["classified_as"]
+assert ca["outcome-not-reason"]["supports"] == ["0"], ca["outcome-not-reason"]["supports"]
+
+assert rec["unclassified_reason"] is None, rec["unclassified_reason"]
+PY
+[ $? -eq 0 ] && ok "C2: supports filtered element-wise (dangling pointer dropped, valid one kept); a later_wrong entry naming a nonexistent claim is dropped, not silently kept" \
+  || bad "C2: element-wise supports filtering / later_wrong claim validation" "$(cat "$OUT_J")"
+
+case "$out" in
+  *"warning:"*"c99-nonexistent"*"dropped"*) ok "C2: dropping the unresolvable later_wrong claim is warned to stderr, not silent" ;;
+  *) bad "C2: dropping the unresolvable later_wrong claim is warned to stderr" "$out" ;;
+esac
+unset MODEL_CALL_LOG
+
+# ============================================================ GROUP K — M1: prompt construction / trace-to-proof plumbing
+echo; echo "K. M1 — the distill prompt carries the full tool trace and a floor proof instruction"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_m1", sys.argv[1])
+sd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sd)
+
+assert "PROOF IS A FLOOR" in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
+assert "verbatim" in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
+assert "TOOL TRACE" in sd.DISTILL_SYSTEM_PROMPT.upper(), sd.DISTILL_SYSTEM_PROMPT
+
+assert "proxy-as-thing" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
+assert "EXIT=$?" in sd.CHAIN_SYSTEM_PROMPT or "echo $?" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
+assert "head" in sd.CHAIN_SYSTEM_PROMPT and "tail" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
+
+r = {
+    "id": "agent-x", "kind": "subagent", "description": "d",
+    "brief": "b", "report": "r",
+    "tool_calls": 2,
+    "tool_trace": [
+        {"tool": "Bash", "digest": 'swift format lint ... | head -50; echo "EXIT=$?"', "errored": False},
+        {"tool": "Bash", "digest": "swift test", "errored": False},
+    ],
+}
+prompt = sd.build_distill_prompt(r)
+assert "TOOL TRACE" in prompt, prompt
+assert 'EXIT=$?' in prompt, prompt
+assert "swift test" in prompt, prompt
+PY
+[ $? -eq 0 ] && ok "M1: DISTILL_SYSTEM_PROMPT states proof as a floor sourced from the trace; CHAIN_SYSTEM_PROMPT names the exit-code-proxy pattern; build_distill_prompt carries the full trace" \
+  || bad "M1: prompt construction / trace-to-proof plumbing" "rc=nonzero"
+
+# ============================================================ GROUP L — M2: honest cost projection, budget binds on observed cost
+echo; echo "L. M2 — cost projection states its basis; budget genuinely binds on OBSERVED cost"
+
+OUT_L1="$TMP/out-l1.json"
+run sess-main distill --out "$OUT_L1" --only main-turn-001 --dry-run --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "dry-run --only main-turn-001 exits 0" || bad "dry-run --only main-turn-001 exits 0" "rc=$rc out=$out"
+case "$out" in
+  *'$0.3340'*) ok 'M2: dry-run cost projection uses the corrected ~$0.167/call default (2 calls = $0.3340), not the old $0.0075' ;;
+  *) bad 'M2: dry-run cost projection uses the corrected ~$0.167/call default' "$out" ;;
+esac
+case "$out" in
+  *"basis:"*) ok "M2: dry-run states the projection's basis rather than a bare number" ;;
+  *) bad "M2: dry-run states the projection's basis rather than a bare number" "$out" ;;
+esac
+
+# The stub is told to report a REAL per-call cost of $0.30 (STUB_CALL_COST),
+# above DEFAULT_COST_PER_CALL_USD (~$0.167). With a $0.35 budget, the OLD
+# code's checks used the hard-coded $0.0075 estimate throughout and would
+# let BOTH the distill ($0.30) and chain ($0.30) calls for this run go
+# through -- landing at $0.60, 71% over budget, before ever noticing (no
+# post-call check existed at all). The fix must stop before the chain
+# call once the OBSERVED $0.30 distill cost makes it unaffordable.
+export MODEL_CALL_LOG="$TMP/calls-l.log"
+rm -f "$MODEL_CALL_LOG"
+OUT_L2="$TMP/out-l2.json"
+STUB_CALL_COST=0.30 run sess-main distill --out "$OUT_L2" --only main-turn-001 --max-cost-usd 0.35 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "M2: --max-cost-usd 0.35 with \$0.30/call observed cost exits 0 (an intentional stop, not a failure)" \
+  || bad "M2: --max-cost-usd 0.35 with \$0.30/call observed cost exits 0" "rc=$rc out=$out"
+"$PY" - "$OUT_L2" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["total_cost_usd"] <= 0.35 + 1e-9, d["total_cost_usd"]
+assert d["stopped"] is not None, d["stopped"]
+assert "chain call" in d["stopped"]["reason"], d["stopped"]
+assert len(d["records"]) == 1, len(d["records"])
+assert d["records"][0]["distilled"]["passes"] == ["distill"], d["records"][0]["distilled"]["passes"]
+PY
+[ $? -eq 0 ] && ok "M2: budget binds on OBSERVED \$0.30/call spend -- stops before the chain call, total_cost_usd stays <= budget" \
+  || bad "M2: budget binds on OBSERVED spend, not a stale estimate" "$(cat "$OUT_L2")"
+CALLS_L=$(wc -l < "$MODEL_CALL_LOG" | tr -d ' ')
+[ "$CALLS_L" = "1" ] && ok "M2: exactly 1 model call was made (the chain call never fired, so it never spent the second \$0.30)" \
+  || bad "M2: exactly 1 model call was made" "calls=$CALLS_L"
+unset MODEL_CALL_LOG
+
+# ============================================================ GROUP M — M3: tool_digest head+tail truncation
+echo; echo "M. M3 — tool_digest keeps the TAIL as well as the head when truncating"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_m3", sys.argv[1])
+sd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sd)
+
+long_cmd = ("x" * 150) + ' swift format lint --recursive --strict Sources Tests Tools 2>&1 | head -50; echo "EXIT=$?"'
+assert len(long_cmd) > 180, len(long_cmd)
+digest = sd.tool_digest({"command": long_cmd})
+assert "…" in digest, digest
+assert digest.startswith(long_cmd[:120]), digest
+assert digest.endswith(long_cmd[-60:]), digest
+assert 'EXIT=$?' in digest, digest  # the tail-end proxy pattern survives truncation
+PY
+[ $? -eq 0 ] && ok "M3: tool_digest truncation keeps the tail -- an exit-code read at the end of a long pipeline survives the digest" \
+  || bad "M3: tool_digest truncation keeps the tail" "rc=nonzero"
+
+# ============================================================ GROUP N — N1: non-dict origin value does not crash
+echo; echo "N. N1 — a non-dict origin value (bare string) does not crash segmentation"
+
+run_stdout sess-origin-string runs --json
+[ "$rc" -eq 0 ] && ok "runs sess-origin-string exits 0 (no AttributeError crash)" \
+  || bad "runs sess-origin-string exits 0 (no AttributeError crash)" "rc=$rc"
+echo "$out" > "$TMP/runs-origin-string.json"
+"$PY" - "$TMP/runs-origin-string.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["segmented_by"] == "origin", d["segmented_by"]
+assert d["main_turns"] == 1, d["main_turns"]
+briefs = [r["brief"] for r in d["runs"]]
+assert briefs == ["Real ask, normal origin dict"], briefs
+PY
+[ $? -eq 0 ] && ok "N1: a bare-string origin value is treated as no-match (isinstance guard), never a crash" \
+  || bad "N1: a bare-string origin value is treated as no-match, never a crash" "$(cat "$TMP/runs-origin-string.json")"
+
+# ============================================================ GROUP O — S1: origin on the second line, not the first
+echo; echo "O. S1 — origin present only on the SECOND line still triggers the origin rule"
+
+run_stdout sess-origin-second runs --json
+[ "$rc" -eq 0 ] && ok "runs sess-origin-second exits 0" || bad "runs sess-origin-second exits 0" "rc=$rc"
+echo "$out" > "$TMP/runs-origin-second.json"
+"$PY" - "$TMP/runs-origin-second.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["segmented_by"] == "origin", d["segmented_by"]
+assert d["main_turns"] == 1, d["main_turns"]
+briefs = [r["brief"] for r in d["runs"]]
+assert briefs == ["Second line IS the real human turn"], briefs
+PY
+[ $? -eq 0 ] && ok "S1: has_origin is computed over the WHOLE transcript -- origin on line 2 still selects the origin rule, line 1 (no origin key) is correctly excluded" \
+  || bad "S1: has_origin is computed over the whole transcript" "$(cat "$TMP/runs-origin-second.json")"
+
+# ============================================================ GROUP P — S3: cmd_report coverage, default output path, --out -
+echo; echo "P. S3 — cmd_report coverage, default output path, --out -"
+
+DEFAULT_OUT="$PROJ/sess-main/session-distill.json"
+rm -f "$DEFAULT_OUT"
+
+run sess-main distill --only main-turn-001 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "distill with NO --out (default path) exits 0" \
+  || bad "distill with NO --out (default path) exits 0" "rc=$rc out=$out"
+[ -f "$DEFAULT_OUT" ] && ok "distill with no --out writes to <session-dir>/session-distill.json" \
+  || bad "distill with no --out writes to <session-dir>/session-distill.json" "expected $DEFAULT_OUT"
+case "$out" in
+  *"session-distill.json"*) ok "distill's own stdout names session-distill.json (the default path)" ;;
+  *) bad "distill's own stdout names session-distill.json (the default path)" "$out" ;;
+esac
+
+run sess-main report
+[ "$rc" -eq 0 ] && ok "report (default path, no --in, human output) exits 0" \
+  || bad "report (default path, no --in, human output) exits 0" "rc=$rc out=$out"
+case "$out" in
+  *"classified_as label distribution"*) ok "report human output has the expected section" ;;
+  *) bad "report human output has the expected section" "$out" ;;
+esac
+
+run sess-main report --json
+[ "$rc" -eq 0 ] && ok "report --json (default path) exits 0" || bad "report --json (default path) exits 0" "rc=$rc out=$out"
+echo "$out" > "$TMP/report-json.json"
+"$PY" - "$TMP/report-json.json" "$DEFAULT_OUT" <<'PY'
+import json, sys
+a = json.load(open(sys.argv[1]))
+b = json.load(open(sys.argv[2]))
+assert a == b, "report --json did not round-trip the on-disk document"
+PY
+[ $? -eq 0 ] && ok "report --json round-trips the on-disk session-distill.json exactly" \
+  || bad "report --json round-trips the on-disk session-distill.json exactly" "mismatch"
+
+run - report --in "$OUT_D" --json
+[ "$rc" -eq 0 ] && ok "report --in PATH --json exits 0 (bypasses --session entirely)" \
+  || bad "report --in PATH --json exits 0" "rc=$rc out=$out"
+
+run sess-main distill --only main-turn-002 --out - --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "distill --out - exits 0" || bad "distill --out - exits 0" "rc=$rc out=$out"
+echo "$out" > "$TMP/out-stdout.json"
+"$PY" - "$TMP/out-stdout.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["kind"] == "session-distill-document"
+recs = {r["run"]["id"] for r in d["records"]}
+assert recs == {"main-turn-002"}, recs
+PY
+[ $? -eq 0 ] && ok "distill --out - prints the full document to stdout" \
+  || bad "distill --out - prints the full document to stdout" "$(cat "$TMP/out-stdout.json")"
+
+# ============================================================ GROUP Q — N3: runs_total vs runs_selected; --force+--only warns
+echo; echo "Q. N3 — runs_total is the SESSION total, distinct from a --only-narrowed selection"
+
+"$PY" - "$OUT_H" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["runs_total"] == 5, d["runs_total"]        # the whole sess-main session
+assert d["runs_selected"] == 1, d["runs_selected"]  # narrowed by --only main-turn-001
+assert len(d["records"]) == 1, len(d["records"])
+PY
+[ $? -eq 0 ] && ok "N3: runs_total reports the session's real total; runs_selected reports the --only-narrowed count, separately" \
+  || bad "N3: runs_total vs runs_selected" "$(cat "$OUT_H")"
+
+OUT_Q="$TMP/out-q.json"
+run sess-main distill --out "$OUT_Q" --only main-turn-001 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "N3 setup: first --only write exits 0" || bad "N3 setup: first --only write exits 0" "rc=$rc out=$out"
+run sess-main distill --out "$OUT_Q" --only main-turn-002 --force --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "--force --only (second run) still exits 0" || bad "--force --only (second run) still exits 0" "rc=$rc out=$out"
+case "$out" in
+  *"warning:"*"--force"*"discard"*) ok "N3: --force without --resume combined with --only warns before discarding the prior run's record" ;;
+  *) bad "N3: --force without --resume combined with --only warns before discarding" "$out" ;;
+esac
+
+# ============================================================ GROUP R — N2: record cost_usd reconciles with total_cost_usd
+echo; echo "R. N2 — a record's own cost_usd reconciles with total_cost_usd, even after a failed chain call"
+
+"$PY" - "$OUT_D" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+recs = {r["run"]["id"]: r for r in d["records"]}
+cccc = recs["agent-cccc0003"]
+# distill succeeded (cost 0.0075); chain FAILED (invalid JSON in 'result')
+# but the model still reported a real total_cost_usd for that failed call
+# (0.0075, from the stub) -- the record's own cost must include it.
+assert cccc["distilled"]["passes"] == ["distill"], cccc["distilled"]["passes"]
+assert abs(cccc["distilled"]["cost_usd"] - 0.015) < 1e-9, cccc["distilled"]["cost_usd"]
+total_from_records = sum(r["distilled"]["cost_usd"] for r in d["records"])
+assert abs(total_from_records - d["total_cost_usd"]) < 1e-6, (total_from_records, d["total_cost_usd"])
+PY
+[ $? -eq 0 ] && ok "N2: a failed chain call's real cost is folded into its record's cost_usd, so sum(records) reconciles with total_cost_usd" \
+  || bad "N2: record cost_usd reconciles with total_cost_usd" "$(cat "$OUT_D")"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
