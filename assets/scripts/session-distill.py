@@ -2115,7 +2115,7 @@ CHAIN_SCHEMA = {
 }
 
 
-def run_model(model_cmd_argv, system_prompt, schema, prompt_text):
+def run_model(model_cmd_argv, system_prompt, schema, prompt_text, timeout_secs=None):
     """Invoke the model boundary once. Returns (doc, cost_usd, error):
     exactly one of doc/error is not None. cost_usd is the envelope's
     total_cost_usd (0.0 when absent or when the call never produced an
@@ -2128,7 +2128,8 @@ def run_model(model_cmd_argv, system_prompt, schema, prompt_text):
     try:
         proc = subprocess.run(
             argv, input=prompt_text, capture_output=True,
-            encoding="utf-8", errors="replace", timeout=MODEL_TIMEOUT_SECS)
+            encoding="utf-8", errors="replace",
+            timeout=timeout_secs or MODEL_TIMEOUT_SECS)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, 0.0, "model invocation failed: %s" % e
 
@@ -2566,7 +2567,8 @@ def cmd_distill(a):
             break
 
         distilled_doc, cost1, err1 = run_model(
-            model_cmd, DISTILL_SYSTEM_PROMPT, DISTILL_SCHEMA, build_distill_prompt(r))
+            model_cmd, DISTILL_SYSTEM_PROMPT, DISTILL_SCHEMA, build_distill_prompt(r),
+            a.timeout_secs)
         total_cost += cost1
         observed_costs.append(cost1)
         if err1:
@@ -2638,7 +2640,8 @@ def cmd_distill(a):
             claims, r.get("started_at"), current_repos, other_runs, repo_vocabulary)
 
         chain_doc, cost2, err2 = run_model(
-            model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA, build_chain_prompt(r, claims, candidates))
+            model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA, build_chain_prompt(r, claims, candidates),
+            a.timeout_secs)
         total_cost += cost2
         observed_costs.append(cost2)
         passes = ["distill"]
@@ -2862,6 +2865,9 @@ def build_parser():
                     help="the model invocation, as a shell command line (see module docstring)")
     d.add_argument("--max-cost-usd", type=float, default=None,
                     help="stop before exceeding this cumulative spend")
+    d.add_argument("--timeout-secs", type=int, default=MODEL_TIMEOUT_SECS,
+                    help="per model call timeout (default %d; a long trace on a "
+                         "busy CLI exceeds it)" % MODEL_TIMEOUT_SECS)
     d.set_defaults(fn=cmd_distill)
 
     rp = sub.add_parser("report", help="summarize a session-distill.json document")
