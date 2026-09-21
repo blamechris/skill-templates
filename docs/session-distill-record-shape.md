@@ -22,12 +22,12 @@ distiller that reads only `subagents/**` cannot see it and fails its own
 acceptance. The main session is a run; it is segmented by user turn because that
 is where its brief lives.
 
-## The record (schema_version 2)
+## The record (schema_version 3)
 
 ```json
 {
   "kind": "session-distill-record",
-  "schema_version": 2,
+  "schema_version": 3,
   "session": "13cee7be-edd8-4dfc-afe3-093e899db85b",
   "run": {
     "id": "agent-a1794d4c28be50f83",
@@ -51,7 +51,8 @@ is where its brief lives.
   "claims": [
     {"id": "c1", "text": "...", "kind": "verification",
      "proof": "...or null when the report asserts without naming a check...",
-     "quote": "...verbatim from the report..."}
+     "quote": "...verbatim from the report...",
+     "proof_located": true}
   ],
   "verifications": [
     {"index": 12, "tool_use_id": "toolu_...", "categories": ["lint"],
@@ -134,6 +135,84 @@ distilled as if it were real.
   `schema_version`** rather than mixing old-shape and new-shape records in
   one `records[]` list.
 
+### #291 — the proof-locatable guard (schema_version 3)
+
+A schema-valid but content-free response (`{asked: "test", ..., claims:
+[{"proof": "test proof", ...}]}` against a real report) was recorded as a
+successful distill with no trace anything was wrong. `build_tool_trace` now
+also keeps, in memory only, `tool_inputs_full[]` — the FULL, untruncated,
+whitespace-collapsed form of every tool_use `input`
+(`tool_digest(input, head=10**9, tail=0)`) — never written into a record
+(`run_stub_public` does not carry it). A claim's `proof` is **located**
+when its leading command fragment (strip an optional `[N] ` index tag,
+then an optional `ToolName: ` tag — the shape the model copies out of the
+TOOL TRACE prompt's numbered `[i] Tool: digest` lines — then cut at the
+first `...`/`…`/` -> ` marker, whitespace-collapse) is non-empty and a
+substring of some `tool_inputs_full` entry. A result with `>=1` non-null
+`proof` where **every** one is unlocatable is a FAILURE (`phase:
+"distill"`, `error` prefixed `"proof-not-in-trace:"`), retryable like any
+other distill-phase failure — **the chain call is never made for it**.
+Otherwise every claim with a non-null `proof` gets `proof_located:
+true|false` (`null` for a null `proof`) and `report` prints the
+unlocatable-proof count/rate. A zero-claim or all-null-proof result is
+**not** a failure by this guard — left as-is, since there is no non-null
+proof for it to fail on.
+
+Measured on the 8 real re-run records
+(`~/Obsidian/no-it-all/records/session-distill-13cee7be-rerun-2026-09-21/`):
+**2 of 211** real non-null proofs are unlocatable, and both are true
+positives — the model's proof dropped a `| tail -4` segment the real
+`gh pr checks 247 --watch --interval 25 2>&1 | tail -4; ...` command
+carried. The placeholder record's one proof is 1/1 unlocatable, as
+expected.
+
+### #287 — repo-qualified `#N` retrieval
+
+Two repos sharing an issue/PR number turned an unrelated later mention
+into a false `later_wrong` (measured on session `13cee7be`: Aeolus and
+skill-templates both had a `#264`). Retrieval now computes, per run, a
+repo **set** from four STRONG qualified forms in its own brief/report/
+tool inputs — `owner/repo#N`, the `github.com/owner/repo/(pull|issues)/N`
+URL, a `gh ... -R|--repo owner/repo` flag, `git -C <path>`/`cd <path>`
+under `.../Projects/<repo>` — plus its own cwd(s) mapped to a repo, plus
+any bare mention of a repo NAME already in the **session-wide vocabulary**
+(built from those same four strong forms across every run, before any
+per-run set is computed). A bare mention never seeds the vocabulary,
+only ever resolves against it — otherwise "issue #250" would qualify
+"issue" as a repo. Each `#N` occurrence then resolves to a repo: an
+explicit qualifier attached to *that* occurrence wins (`owner/repo#N`,
+a bare `repo#N`/`repo #N` when `repo` is already in vocabulary, or the
+markdown-link `[#N](.../pull/N)` form); otherwise the run's own repo set
+if it names exactly one; otherwise unresolved (ambiguous).
+
+`find_chain_candidates` compares the claim side's resolution against each
+candidate occurrence's: both resolved and **different** → not a
+candidate; both resolved and **equal** → an ordinary candidate tagged
+`repo_match: "same"`; **either side unresolved** → kept but tagged
+`repo_match: "ambiguous"` (a non-`#N` artifact carries no repo concept
+and is tagged `"n/a"`). The chain prompt prints every candidate's tag and
+tells the model an `"ambiguous"` one cannot alone support a `later_wrong`
+or a label — enforced deterministically in code regardless: a
+`later_wrong` entry whose `contradicted_by.run` is linked to this run's
+claims **only** through `"ambiguous"`-tagged candidates is dropped
+(`dropped` gets `{"claim", "run", "reason": "repo-ambiguous-only"}`,
+surfaced the same stderr-warning way #278 C2's unresolvable-claim drop
+is) — which, via the same evidence-chain machinery (#290), also drops any
+`classified_as` entry whose sole `supports` pointer named that now-gone
+index.
+
+Verified against session `13cee7be`'s real data: `agent-a125a8c132b05b56c`
+(the Aeolus run whose false `later_wrong` LW1 filed this issue) resolves
+to repo set `{Aeolus}`; `main-turn-024` resolves to `{Aeolus,
+skill-templates}` (ambiguous — it discusses both repos); `main-turn-020`'s
+set includes `skill-templates` (named only in an Agent tool_use prompt,
+never in its own brief/report text); `main-turn-023` resolves cleanly to
+`{Aeolus}`. Running real retrieval, `main-turn-024` still appears as a
+candidate for `agent-a125a8c132b05b56c`'s claims (its own `#264`/`#262`
+mentions are genuinely near a correction cue), but every one of its
+candidates is tagged `"ambiguous"` — so a `later_wrong` citing it alone,
+like the original LW1, is now dropped rather than recorded.
+
 ### The five fields the issue names, and the two it does not
 
 `asked` / `understood` / `delivered` / `later_wrong[]` / `classified_as[]` are the
@@ -199,12 +278,15 @@ entry count, the number of runs carrying it, and that share of all runs.
    one run stub per run with provenance, the brief, the report, and a compact
    work trace (per tool call: tool name, a one-line argument digest, whether it
    errored). Fully offline, so this is what the fixture test exercises.
-2. **`distill`** — one model call per run: stub -> `{asked, understood, delivered, claims[]}`.
+2. **`distill`** — one model call per run: stub -> `{asked, understood, delivered, claims[]}`,
+   guarded by #291's proof-locatable check before any chain call is made (see
+   above).
 3. **`chain`** — per run, deterministic retrieval first: pull the artifacts named
    in each claim (`#\d+`, paths, commands, symbols), scan every run that STARTED
    LATER for a mention of the same artifact within a correction cue window
    (`actually`, `in fact`, `wrong`, `retract`, `never ran`, `failed`, `turns
-   out`, `correction`, `misread`, `regression`), then ONE model call per run over
+   out`, `correction`, `misread`, `regression`), repo-qualifying every `#N`
+   match along the way (#287, see above), then ONE model call per run over
    the candidates -> `later_wrong[]` + `classified_as[]`. Retrieval-before-model
    is what keeps this O(n) calls instead of O(n^2).
 
