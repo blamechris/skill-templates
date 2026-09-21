@@ -88,6 +88,19 @@ def tool_result(tool_use_id, ts, is_error=False):
             "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id,
                                       "content": "ok", "is_error": is_error}]}}
 
+def tool_result_content(tool_use_id, ts, content, is_error=False):
+    # Like tool_result() but with caller-supplied CONTENT instead of the
+    # fixed "ok" -- #285's verification-linking tests need two commands'
+    # tool_results to carry DIFFERENT text so a test can assert each
+    # verification entry picked up its OWN output, not a neighbor's.
+    return {"type": "user", "timestamp": ts,
+            "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id,
+                                      "content": content, "is_error": is_error}]}}
+
+def bash_use(tool_use_id, command, ts):
+    return assistant(None, ts, tool_use={"id": tool_use_id, "name": "Bash",
+                                          "input": {"command": command}})
+
 # ============================================================ sess-main
 # The primary fixture: origin-based segmentation (2 human turns, one
 # harness task-notification line that must NOT become a turn), a
@@ -233,6 +246,100 @@ w_json(os.path.join(sdir_c2, "subagents", "agent-dddd0004.meta.json"),
 w_jsonl(os.path.join(sdir_c2, "subagents", "agent-dddd0004.jsonl"), [
     user_blocks("brief4", "2026-09-20T01:04:00Z"),
     assistant("report4", "2026-09-20T01:04:05Z"),
+])
+
+# ============================================================ sess-285
+# #285: report extraction (StructuredOutput / harness_error) and
+# deterministic verifications[] (linking by tool_use_id, missing
+# tool_result, exit_masked_by_pipe vs output_truncated, gates_named_not_run).
+sdir_285 = os.path.join(proj, "sess-285")
+os.makedirs(sdir_285, exist_ok=True)
+
+# agent-eeee0005 -- ends in a StructuredOutput tool_use with NO trailing
+# text block at all. review-result.py's last_assistant_text (text-blocks-
+# only) would return None here -> "" silently. extract_report must instead
+# report_source "structured_output" with the tool_use's `input` as the
+# report.
+w_json(os.path.join(sdir_285, "subagents", "agent-eeee0005.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "structured-output-only run"})
+w_jsonl(os.path.join(sdir_285, "subagents", "agent-eeee0005.jsonl"), [
+    user_blocks("Fix the thing", "2026-09-21T00:00:00Z"),
+    assistant(None, "2026-09-21T00:00:05Z",
+              tool_use={"id": "su1", "name": "StructuredOutput",
+                        "input": {"summary": "Fixed the thing", "verified": True}}),
+])
+
+# agent-ffff0006 -- the run was cut off by the harness; the last (only)
+# assistant text IS the harness's own session-limit message, not a report.
+w_json(os.path.join(sdir_285, "subagents", "agent-ffff0006.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "cut off by harness"})
+w_jsonl(os.path.join(sdir_285, "subagents", "agent-ffff0006.jsonl"), [
+    user_blocks("Investigate CI", "2026-09-21T00:01:00Z"),
+    assistant("You've hit your session limit · resets 2:40am (America/Los_Angeles)",
+              "2026-09-21T00:01:05Z"),
+])
+
+# agent-gggg0007 -- two Bash verification commands with DIFFERENT outputs;
+# each verifications[] entry must carry its OWN tool_result's output, never
+# a neighbor's (LINKING WITHOUT EVIDENCE is one of the four defect classes
+# this suite exists to catch).
+w_json(os.path.join(sdir_285, "subagents", "agent-gggg0007.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "run tests and build"})
+w_jsonl(os.path.join(sdir_285, "subagents", "agent-gggg0007.jsonl"), [
+    user_blocks("Run tests and build", "2026-09-21T00:02:00Z"),
+    bash_use("b1", "swift test", "2026-09-21T00:02:01Z"),
+    tool_result_content("b1", "2026-09-21T00:02:02Z", "Test Suite All tests passed: 42 tests, 0 failures"),
+    bash_use("b2", "swift build", "2026-09-21T00:02:03Z"),
+    tool_result_content("b2", "2026-09-21T00:02:04Z", "Build complete! (1.23s)"),
+    assistant("Ran tests and build, both green.", "2026-09-21T00:02:05Z"),
+])
+
+# agent-hhhh0008 -- a ci_read Bash tool_use with NO matching tool_result at
+# all (the run was truncated mid-tool-call). output must be null with
+# output_present False, and empty_ci_result must NOT fire on missing
+# output (VERDICTS FROM INCOMPLETE DATA is one of the four defect classes).
+w_json(os.path.join(sdir_285, "subagents", "agent-hhhh0008.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "check ci status"})
+w_jsonl(os.path.join(sdir_285, "subagents", "agent-hhhh0008.jsonl"), [
+    user_blocks("Check CI status", "2026-09-21T00:03:00Z"),
+    bash_use("c1", "gh pr checks 123", "2026-09-21T00:03:01Z"),
+    # NO tool_result for c1 -- the transcript ends mid-call.
+])
+
+# agent-iiii0009 -- exit_masked_by_pipe vs output_truncated, one positive
+# and three negative cases in a single trace (#285, and the #286
+# conflation this docstring calls out by name).
+w_json(os.path.join(sdir_285, "subagents", "agent-iiii0009.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "lint/test/build with pipes"})
+w_jsonl(os.path.join(sdir_285, "subagents", "agent-iiii0009.jsonl"), [
+    user_blocks("Verify lint, test, and build", "2026-09-21T00:04:00Z"),
+    # 1. MASKED: pipes to head, then reads $? -- EXIT=0 is head's exit
+    #    status, not swift-format's.
+    bash_use("p1", 'swift format lint --recursive --strict Sources Tests Tools 2>&1 | head -50; echo "EXIT=$?"',
+              "2026-09-21T00:04:01Z"),
+    tool_result_content("p1", "2026-09-21T00:04:02Z", "EXIT=0"),
+    # 2. NOT masked: no pipe at all.
+    bash_use("p2", 'swift test; echo "exit=$?"', "2026-09-21T00:04:03Z"),
+    tool_result_content("p2", "2026-09-21T00:04:04Z", "exit=0"),
+    # 3. output_truncated ONLY: pipes to tail, but never reads $?.
+    bash_use("p3", "swift build | tail -3", "2026-09-21T00:04:05Z"),
+    tool_result_content("p3", "2026-09-21T00:04:06Z", "Build complete! (1.23s)"),
+    # 4. output_truncated but NOT masked: pipefail protects the $? read.
+    bash_use("p4", "set -o pipefail; npm run lint | tail; echo $?", "2026-09-21T00:04:07Z"),
+    tool_result_content("p4", "2026-09-21T00:04:08Z", "0"),
+    assistant("Lint, test, and build all verified.", "2026-09-21T00:04:09Z"),
+])
+
+# agent-jjjj0010 -- gates_named_not_run: the BRIEF names "lint" but the
+# trace never runs one (only a test command runs) -- "lint" must appear in
+# gates_named_not_run, "test" must NOT (it did run).
+w_json(os.path.join(sdir_285, "subagents", "agent-jjjj0010.meta.json"),
+       {"agentType": "general-purpose", "model": "sonnet", "description": "omitted lint gate"})
+w_jsonl(os.path.join(sdir_285, "subagents", "agent-jjjj0010.jsonl"), [
+    user_blocks("Run the tests and fix the lint issues", "2026-09-21T00:05:00Z"),
+    bash_use("g1", "swift test", "2026-09-21T00:05:01Z"),
+    tool_result_content("g1", "2026-09-21T00:05:02Z", "42 tests, 0 failures"),
+    assistant("Tests pass.", "2026-09-21T00:05:03Z"),
 ])
 
 print("fixtures OK")
@@ -497,7 +604,7 @@ run sess-main distill --out "$OUT_D" --model-cmd "$MODEL_CMD"
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["kind"] == "session-distill-document"
-assert d["schema_version"] == 1
+assert d["schema_version"] == 2
 recs = {r["run"]["id"]: r for r in d["records"]}
 assert len(recs) == 5, recs.keys()
 
@@ -1014,6 +1121,247 @@ assert all(isinstance(s, str) for s in out2[0]["supports"]), out2[0]["supports"]
 PY
 [ $? -eq 0 ] && ok "T1: enforce_classified_as normalizes every surviving supports pointer to a string, including int later_wrong indices, in single-type and mixed-type entries alike" \
   || bad "T1: supports normalized to strings" "rc=nonzero"
+
+# ============================================================ GROUP T — #285: report extraction
+echo; echo "T. #285 — report extraction: StructuredOutput, harness_error, plain text, none"
+
+run_stdout sess-285 runs --json
+[ "$rc" -eq 0 ] && ok "runs sess-285 exits 0" || bad "runs sess-285 exits 0" "rc=$rc"
+echo "$out" > "$TMP/runs-285.json"
+"$PY" - "$TMP/runs-285.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+runs = {r["id"]: r for r in d["runs"]}
+
+# StructuredOutput-only line -> report_source "structured_output", and the
+# report is NOT empty (the old last_assistant_text-only extraction would
+# have silently produced report_chars == 0, report_source absent entirely).
+eeee = runs["agent-eeee0005"]
+assert eeee["report_source"] == "structured_output", eeee["report_source"]
+assert eeee["report_chars"] > 0, eeee["report_chars"]
+assert "Fixed the thing" in eeee["report"], eeee["report"]
+parsed = json.loads(eeee["report"])
+assert parsed["verified"] is True, parsed
+
+# harness cutoff text -> report_source "harness_error", text KEPT verbatim
+# (never discarded), never reported as source "text" (which would let it
+# be distilled as if it were a real result).
+ffff = runs["agent-ffff0006"]
+assert ffff["report_source"] == "harness_error", ffff["report_source"]
+assert ffff["report"].startswith("You've hit your session limit"), ffff["report"]
+PY
+[ $? -eq 0 ] && ok "#285: StructuredOutput -> non-empty report + source structured_output; harness cutoff text -> source harness_error, kept verbatim" \
+  || bad "#285: report extraction sources" "$(cat "$TMP/runs-285.json")"
+
+run_stdout sess-main runs --json
+echo "$out" > "$TMP/runs-main-285.json"
+"$PY" - "$TMP/runs-main-285.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+runs = {r["id"]: r for r in d["runs"]}
+# the ordinary case (plain text report, no tool_use in the final line) is
+# still report_source "text" -- both kinds.
+assert runs["agent-aaaa0001"]["report_source"] == "text", runs["agent-aaaa0001"]["report_source"]
+assert runs["main-turn-001"]["report_source"] == "text", runs["main-turn-001"]["report_source"]
+# a main-turn's report_source is only ever "text"/"none" -- never
+# structured_output/harness_error (main turns do not end in a
+# StructuredOutput tool_use).
+for r in runs.values():
+    if r["kind"] == "main-turn":
+        assert r["report_source"] in ("text", "none"), (r["id"], r["report_source"])
+PY
+[ $? -eq 0 ] && ok "#285: ordinary text reports (both kinds) still report_source text; main-turn report_source is only ever text/none" \
+  || bad "#285: report_source on ordinary runs" "$(cat "$TMP/runs-main-285.json")"
+
+# a Bash tool_use with NO trailing text at all and no StructuredOutput ->
+# report_source "none", report "" -- neither is silently "text".
+"$PY" - "$TMP/runs-285.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+runs = {r["id"]: r for r in d["runs"]}
+hhhh = runs["agent-hhhh0008"]
+assert hhhh["report_source"] == "none", hhhh["report_source"]
+assert hhhh["report"] == "", repr(hhhh["report"])
+PY
+[ $? -eq 0 ] && ok "#285: a run ending mid-tool-call with no text and no StructuredOutput is report_source none, report \"\"" \
+  || bad "#285: report_source none case" "$(cat "$TMP/runs-285.json")"
+
+# ============================================================ GROUP U — #285: deterministic verifications[]
+echo; echo "U. #285 — deterministic verifications[]: linking, missing tool_result, pipe flags, gates"
+
+"$PY" - "$TMP/runs-285.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+runs = {r["id"]: r for r in d["runs"]}
+
+# ---- LINKING WITHOUT EVIDENCE: each verification carries its OWN
+# tool_result's output, matched by tool_use_id, never a neighbor's.
+gggg = runs["agent-gggg0007"]
+v = gggg["verifications"]
+assert len(v) == 2, v
+by_id = {e["tool_use_id"]: e for e in v}
+assert by_id["b1"]["categories"] == ["test"], by_id["b1"]
+assert by_id["b1"]["output"] == "Test Suite All tests passed: 42 tests, 0 failures", by_id["b1"]["output"]
+assert by_id["b2"]["categories"] == ["build"], by_id["b2"]
+assert by_id["b2"]["output"] == "Build complete! (1.23s)", by_id["b2"]["output"]
+assert by_id["b1"]["output"] != by_id["b2"]["output"]
+assert by_id["b1"]["output_present"] is True
+assert by_id["b2"]["output_present"] is True
+# index lines up with the entry's position in tool_trace (2 Bash calls only).
+assert by_id["b1"]["index"] == 0, by_id["b1"]["index"]
+assert by_id["b2"]["index"] == 1, by_id["b2"]["index"]
+assert gggg["gates_run"] == {"test": 1, "lint": 0, "build": 1, "ci_read": 0}, gggg["gates_run"]
+
+# ---- VERDICTS FROM INCOMPLETE DATA: no tool_result at all -> output is
+# null (never ""), output_present False, and empty_ci_result must NOT fire
+# even though the command is a ci_read.
+hhhh = runs["agent-hhhh0008"]
+v = hhhh["verifications"]
+assert len(v) == 1, v
+assert v[0]["categories"] == ["ci_read"], v[0]
+assert v[0]["output"] is None, v[0]["output"]
+assert v[0]["output_present"] is False, v[0]
+assert v[0]["empty_ci_result"] is False, v[0]
+
+# ---- exit_masked_by_pipe vs output_truncated: NOT the same condition.
+iiii = runs["agent-iiii0009"]
+v = {e["tool_use_id"]: e for e in iiii["verifications"]}
+assert len(v) == 4, v
+# p1: MASKED -- pipes to head, reads $?, no pipefail protection.
+assert v["p1"]["exit_masked_by_pipe"] is True, v["p1"]
+assert v["p1"]["output_truncated"] is True, v["p1"]
+assert v["p1"]["categories"] == ["lint"], v["p1"]
+# p2: no pipe at all -- NEITHER flag.
+assert v["p2"]["exit_masked_by_pipe"] is False, v["p2"]
+assert v["p2"]["output_truncated"] is False, v["p2"]
+assert v["p2"]["categories"] == ["test"], v["p2"]
+# p3: pipes to tail but never reads $? -- output_truncated ONLY.
+assert v["p3"]["exit_masked_by_pipe"] is False, v["p3"]
+assert v["p3"]["output_truncated"] is True, v["p3"]
+assert v["p3"]["categories"] == ["build"], v["p3"]
+# p4: pipes to tail AND reads $?, but `pipefail` protects it -- truncated,
+# NOT masked.
+assert v["p4"]["exit_masked_by_pipe"] is False, v["p4"]
+assert v["p4"]["output_truncated"] is True, v["p4"]
+assert v["p4"]["categories"] == ["lint"], v["p4"]
+assert iiii["gates_run"] == {"test": 1, "lint": 2, "build": 1, "ci_read": 0}, iiii["gates_run"]
+
+# ---- gates_named_not_run: the brief names "lint" but no lint command ran
+# ("test" is named too, but it DID run, so it must not appear).
+jjjj = runs["agent-jjjj0010"]
+assert jjjj["gates_run"] == {"test": 1, "lint": 0, "build": 0, "ci_read": 0}, jjjj["gates_run"]
+assert jjjj["gates_named_not_run"] == ["lint"], jjjj["gates_named_not_run"]
+PY
+[ $? -eq 0 ] && ok "#285: verifications[] linked by tool_use_id, missing tool_result -> output null (never empty-string), exit_masked_by_pipe vs output_truncated kept separate, gates_named_not_run" \
+  || bad "#285: deterministic verifications[]" "$(cat "$TMP/runs-285.json")"
+
+# ---- build_distill_prompt carries the VERIFICATION COMMANDS section
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_285_prompt", sys.argv[1])
+sd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sd)
+
+assert "VERIFICATION COMMANDS" in sd.DISTILL_SYSTEM_PROMPT.upper() \
+    or "verification" in sd.DISTILL_SYSTEM_PROMPT.lower(), sd.DISTILL_SYSTEM_PROMPT
+assert "omitted-gate" in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
+assert "harness_error" in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
+
+r = {
+    "id": "agent-x", "kind": "subagent", "description": "d",
+    "brief": "b", "report": "r", "report_source": "text",
+    "tool_calls": 1,
+    "tool_trace": [{"tool": "Bash", "digest": "swift format lint ... | head -50", "errored": False}],
+    "verifications": [{
+        "index": 0, "tool_use_id": "p1", "categories": ["lint"],
+        "command": 'swift format lint --recursive --strict 2>&1 | head -50; echo "EXIT=$?"',
+        "errored": False, "output": "EXIT=0", "output_present": True,
+        "exit_masked_by_pipe": True, "output_truncated": True, "empty_ci_result": False,
+    }],
+    "gates_run": {"test": 0, "lint": 1, "build": 0, "ci_read": 0},
+    "gates_named_not_run": ["build"],
+}
+prompt = sd.build_distill_prompt(r)
+assert "VERIFICATION COMMANDS" in prompt, prompt
+assert "exit_masked_by_pipe" in prompt, prompt
+assert "EXIT=0" in prompt, prompt
+assert "gates_named_not_run" in prompt, prompt
+assert '"build"' in prompt, prompt
+assert "REPORT_SOURCE: text" in prompt, prompt
+
+# a run with no verifications/gates keys at all (as an older caller might
+# construct) must not crash build_distill_prompt.
+r2 = {"id": "agent-y", "kind": "subagent", "description": "d", "brief": "b", "report": "r",
+      "tool_calls": 0, "tool_trace": []}
+sd.build_distill_prompt(r2)
+PY
+[ $? -eq 0 ] && ok "#285: DISTILL_SYSTEM_PROMPT mentions omitted-gate/harness_error; build_distill_prompt renders VERIFICATION COMMANDS + gates, and tolerates a stub missing those keys" \
+  || bad "#285: build_distill_prompt VERIFICATION COMMANDS section" "rc=nonzero"
+
+# ---- verifications/gates_run/gates_named_not_run persist on the RECORD
+# regardless of what the model returns (the stub model never emits them).
+export MODEL_CALL_LOG="$TMP/calls-u.log"
+rm -f "$MODEL_CALL_LOG"
+OUT_U="$TMP/out-u.json"
+run sess-285 distill --out "$OUT_U" --only agent-gggg0007 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "distill sess-285 --only agent-gggg0007 exits 0" \
+  || bad "distill sess-285 --only agent-gggg0007 exits 0" "rc=$rc out=$out"
+"$PY" - "$OUT_U" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+rec = d["records"][0]
+assert rec["run"]["id"] == "agent-gggg0007", rec["run"]["id"]
+assert rec["run"]["report_source"] == "text", rec["run"]["report_source"]
+assert len(rec["verifications"]) == 2, rec["verifications"]
+assert rec["gates_run"] == {"test": 1, "lint": 0, "build": 1, "ci_read": 0}, rec["gates_run"]
+assert rec["gates_named_not_run"] == [], rec["gates_named_not_run"]
+PY
+[ $? -eq 0 ] && ok "#285: verifications/gates_run/gates_named_not_run/report_source persist on the written record" \
+  || bad "#285: verifications persist on the record" "$(cat "$OUT_U")"
+unset MODEL_CALL_LOG
+
+# ---- `report` surfaces report_source and verification-flag counts, never silently
+run sess-285 distill --only agent-iiii0009 --force --out "$TMP/out-u2.json" --model-cmd "$MODEL_CMD"
+run - report --in "$TMP/out-u2.json"
+case "$out" in
+  *"report_source distribution"*) ok "#285: report prints a report_source distribution section" ;;
+  *) bad "#285: report prints a report_source distribution section" "$out" ;;
+esac
+case "$out" in
+  *"exit_masked_by_pipe="*) ok "#285: report surfaces exit_masked_by_pipe run counts" ;;
+  *) bad "#285: report surfaces exit_masked_by_pipe run counts" "$out" ;;
+esac
+
+# ============================================================ GROUP V — #285: schema_version bump + --resume refusal
+echo; echo "V. #285 — SCHEMA_VERSION bumped to 2; --resume refuses a document from a different schema"
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_285_schema", sys.argv[1])
+sd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sd)
+assert sd.SCHEMA_VERSION == 2, sd.SCHEMA_VERSION
+PY
+[ $? -eq 0 ] && ok "#285: SCHEMA_VERSION is 2" || bad "#285: SCHEMA_VERSION is 2" "rc=nonzero"
+
+OUT_V="$TMP/out-v.json"
+"$PY" - "$OUT_V" <<'PY'
+import json, sys
+doc = {
+    "kind": "session-distill-document", "schema_version": 1, "session": "sess-285",
+    "session_dir": "/nonexistent", "generated_at": "t", "segmented_by": None,
+    "model_cmd": "x", "total_cost_usd": 0.0, "runs_total": 0, "runs_selected": 0,
+    "records": [], "failures": [], "unreadable": [], "stopped": None,
+}
+json.dump(doc, open(sys.argv[1], "w"))
+PY
+run sess-285 distill --out "$OUT_V" --resume --only agent-eeee0005 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 2 ] && ok "#285: --resume against a schema_version 1 document REFUSES (exit 2)" \
+  || bad "#285: --resume against an old-schema document REFUSES" "rc=$rc out=$out"
+case "$out" in
+  REFUSE:*"schema_version"*) ok "#285: the REFUSE names schema_version as the reason" ;;
+  *) bad "#285: the REFUSE names schema_version" "$out" ;;
+esac
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

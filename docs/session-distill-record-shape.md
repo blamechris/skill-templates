@@ -7,8 +7,11 @@ A run is a (brief -> final report) pair. Two kinds, one shape:
 - `subagent` — one `agent-<hex>.jsonl`, at EITHER sidecar level
   (`<session-dir>/subagents/` and `<session-dir>/subagents/workflows/<runId>/`,
   the two levels review-result.py already walks). Brief = the FIRST `type:"user"`
-  line's text. Report = the LAST `type:"assistant"` line's text blocks
-  (review-result.py's `last_assistant_text`).
+  line's text. Report = the transcript's FINAL `StructuredOutput` tool_use's
+  `input` when one exists (a workflow subagent's real result), else the LAST
+  `type:"assistant"` line's text blocks (the same extraction review-result.py's
+  `last_assistant_text` applies) — see `run.report_source` (#285) below for why
+  the plain text-blocks-only read is not enough on its own.
 - `main-turn` — one user-prompt -> end-of-turn-assistant-text span of the MAIN
   transcript.
 
@@ -19,12 +22,12 @@ distiller that reads only `subagents/**` cannot see it and fails its own
 acceptance. The main session is a run; it is segmented by user turn because that
 is where its brief lives.
 
-## The record (schema_version 1)
+## The record (schema_version 2)
 
 ```json
 {
   "kind": "session-distill-record",
-  "schema_version": 1,
+  "schema_version": 2,
   "session": "13cee7be-edd8-4dfc-afe3-093e899db85b",
   "run": {
     "id": "agent-a1794d4c28be50f83",
@@ -39,6 +42,7 @@ is where its brief lives.
     "transcript": "<abs path>",
     "brief_chars": 2851,
     "report_chars": 1904,
+    "report_source": "structured_output",
     "tool_calls": 37
   },
   "asked":      "...",
@@ -49,6 +53,14 @@ is where its brief lives.
      "proof": "...or null when the report asserts without naming a check...",
      "quote": "...verbatim from the report..."}
   ],
+  "verifications": [
+    {"index": 12, "tool_use_id": "toolu_...", "categories": ["lint"],
+     "command": "swift format lint --recursive --strict Sources Tests Tools 2>&1 | head -50; echo \"EXIT=$?\"",
+     "errored": false, "output": "EXIT=0", "output_present": true,
+     "exit_masked_by_pipe": true, "output_truncated": true, "empty_ci_result": false}
+  ],
+  "gates_run": {"test": 1, "lint": 1, "build": 0, "ci_read": 1},
+  "gates_named_not_run": ["build"],
   "later_wrong": [
     {"claim": "c1", "how": "...one sentence...",
      "contradicted_by": {"run": "agent-a353ff...", "at": "...Z", "quote": "..."}}
@@ -60,6 +72,55 @@ is where its brief lives.
   "distilled": {"at": "...Z", "model": "sonnet", "cost_usd": 0.0074, "passes": ["distill","chain"]}
 }
 ```
+
+### #285 — report extraction and deterministic verifications (schema_version 2)
+
+Hand-reading a real session's distilled payloads (issue #285's diagnosis comment)
+found 108 of 160 runs distilled with a silently EMPTY report: a workflow
+subagent's real result lands in a final `StructuredOutput` tool_use's `input`,
+not a text block, and review-result.py's `last_assistant_text` (unchanged by
+this fix — `review-result.py harvest` also depends on its exact
+text-blocks-only semantics) reads only text blocks of the last assistant
+line, so it silently returned `""`. Two more runs' "report" was the harness's
+own session-limit cutoff message — a verdict from incomplete data if
+distilled as if it were real.
+
+- **`run.report_source`** — `"structured_output"` | `"harness_error"` |
+  `"text"` | `"none"`, on EVERY run stub, both kinds. `structured_output`
+  prefers the transcript's final `StructuredOutput` tool_use (report =
+  its `input`, pretty-printed, with any final assistant text prepended).
+  `harness_error` is a report matching a known harness cutoff/error prefix
+  — kept, not discarded, but never silently treated as a real result. A
+  main-turn's `report_source` is only ever `"text"`/`"none"` — main turns
+  do not end in a `StructuredOutput` tool_use.
+- **`verifications[]`** — DETERMINISTIC, never from the model. One entry per
+  Bash tool_use whose command matches `test`/`lint`/`build`/`ci_read`
+  (keyword/regex against the FULL command, not the digest). Each entry
+  carries its own command (capped ~600 chars head+tail), the output of its
+  OWN matching tool_result (matched by `tool_use_id`; `output_present: false`
+  and `output: null` — never `""` — when no tool_result exists at all), and
+  two independent flags: `exit_masked_by_pipe` (pipes through a truncating
+  utility AND reads `$?` AND is unprotected by `pipefail`/PIPESTATUS) and
+  `output_truncated` (pipes through a truncating utility at all, regardless
+  of whether `$?` is read). These are NOT the same condition: `cmd; echo
+  "exit=$?"` (no pipe) is neither; `cmd | tail -3` (no `$?` read) is
+  `output_truncated` only; `set -o pipefail; cmd | tail; echo $?` is
+  `output_truncated` but not `exit_masked_by_pipe`. `empty_ci_result` fires
+  only for a `ci_read` entry whose OWN output shows an empty
+  `statusCheckRollup` or "no checks reported" — never on missing output.
+- **`gates_run`** / **`gates_named_not_run`** — per-category counts from
+  `verifications[]`, and the categories the BRIEF names (trigger words) that
+  have zero entries. Both deterministic.
+- The distill call is handed all of this as a `--- VERIFICATION COMMANDS
+  ---` prompt section and instructed to turn every entry whose result
+  shaped the report or an intermediate decision into its own claim (kind
+  `"verification"`, even when a later entry re-checked the same thing), and
+  every `gates_named_not_run` category into a `"omitted-gate"` claim with
+  `proof` null — but `verifications`/`gates_run`/`gates_named_not_run` are
+  persisted on the record regardless of what the model actually returns.
+- **`--resume` refuses a document written under a different
+  `schema_version`** rather than mixing old-shape and new-shape records in
+  one `records[]` list.
 
 ### The five fields the issue names, and the two it does not
 
