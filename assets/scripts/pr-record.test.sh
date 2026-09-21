@@ -1304,7 +1304,9 @@ grep -qx '{"kind":"pr-record","repo":"x/y","pr":1}' "$REALLEDGER" && ok "S3: unr
 grep -qx '{"kind":"pr-record","repo":"z/z","pr":2}' "$REALLEDGER" && ok "S3: unrelated z/z#2 line still intact" || bad "S3: z/z#2 lost"
 grep -qx '' "$REALLEDGER" && ok "S3: the blank line survived --replace too" || bad "S3: blank line lost on --replace"
 grep -qx '   ' "$REALLEDGER" && ok "S3: the whitespace-only line survived --replace too" || bad "S3: whitespace line lost on --replace"
-mode_after=$(stat -f '%Lp' "$REALLEDGER" 2>/dev/null || stat -c '%a' "$REALLEDGER" 2>/dev/null)
+# stat's flags differ between BSD and GNU (GNU `stat -f` is a FILESYSTEM query that
+# succeeds with unrelated output), so ask python for the mode and inode instead.
+mode_after=$("$PY" -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$REALLEDGER")
 [ "$mode_after" = "640" ] && ok "S3: the ledger's file mode (640) survived --replace" || bad "S3: file mode not preserved" "got $mode_after"
 
 # ----- symlink write-through -----
@@ -1326,9 +1328,9 @@ echo; echo "G3. C4 -- ledger locking and concurrent writers"
 
 APPENDLEDGER="$TMP/ledgers/append-only.jsonl"
 run --repo "$REPO" --ledger "$APPENDLEDGER" 501
-before_mtime_inode=$(stat -f '%i' "$APPENDLEDGER" 2>/dev/null || stat -c '%i' "$APPENDLEDGER" 2>/dev/null)
+before_mtime_inode=$("$PY" -c 'import os,sys; print(os.stat(sys.argv[1]).st_ino)' "$APPENDLEDGER")
 run --repo "$REPO" --ledger "$APPENDLEDGER" 505
-after_inode=$(stat -f '%i' "$APPENDLEDGER" 2>/dev/null || stat -c '%i' "$APPENDLEDGER" 2>/dev/null)
+after_inode=$("$PY" -c 'import os,sys; print(os.stat(sys.argv[1]).st_ino)' "$APPENDLEDGER")
 [ "$before_mtime_inode" = "$after_inode" ] && ok "C4: a brand-new (repo, pr) is APPENDED in place (same inode), never rewritten" \
   || bad "C4: append should not replace the file's inode" "before=$before_mtime_inode after=$after_inode"
 [ -f "${APPENDLEDGER}.lock" ] && ok "C4: a sidecar <ledger>.lock file exists" || bad "C4: no lock file created"

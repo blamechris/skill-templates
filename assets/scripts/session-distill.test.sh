@@ -18,6 +18,10 @@
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+# This suite IMPORTS the SUT, which would otherwise drop __pycache__/ into the
+# tracked source tree -- and pr-record.test.sh, running later in the same CI job,
+# asserts that directory is absent. Same fix usage-pace.test.sh carries.
+export PYTHONDONTWRITEBYTECODE=1
 SUT="$HERE/session-distill.py"
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/session-distill-test.XXXXXX")
