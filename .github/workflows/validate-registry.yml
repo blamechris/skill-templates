@@ -763,4 +763,51 @@ jobs:
         # it) before any of the above runs at all -- this script reuses
         # review-result.py's session-directory resolution rather than
         # re-deriving it a second time.
+        #
+        # PR #278 round 1 fixed and pinned ten more regressions: an
+        # unreadable (chmod 000) main transcript and one that is nothing
+        # but unparseable lines each used to produce the exact same output
+        # as a healthy empty session at exit 0, `segmented_by` asserting a
+        # rule ("shape") that never ran -- now both REFUSE-adjacent (exit
+        # 2, JSON still emitted in full) with the failure named in a new
+        # `unreadable[]` on both the `runs` and `distill` documents,
+        # `segmented_by` is `null` rather than a fictitious rule name, and
+        # a genuinely empty (0-byte) transcript still exits 0 with an empty
+        # `unreadable[]` so legitimate emptiness is not misreported as a
+        # failure. A `classified_as` entry's `supports` list is now
+        # filtered ELEMENT-WISE (a dangling pointer alongside a valid one
+        # used to survive into the written record verbatim) and a
+        # `later_wrong` entry naming a claim id that does not exist is
+        # dropped with a stderr warning instead of silently validating a
+        # `classified_as` label against it. The distill system prompt now
+        # states `proof` as a floor sourced from the full tool trace rather
+        # than merely a preference, and the chain system prompt names the
+        # exit-code-proxy pattern (`| head`/`| tail`/`| grep` before an
+        # `echo $?`) explicitly, both pinned by inspecting the constructed
+        # prompt text against a stub rather than a live model. The
+        # `--dry-run`/`--max-cost-usd` cost projection now states its
+        # basis instead of a bare number and is derived from a constant
+        # measured on real payloads (~$0.167/call) rather than a one-token
+        # prompt (~$0.0075/call, a 22x undercount); the budget is checked
+        # against OBSERVED spend after every call, not only a stale
+        # estimate before it, pinned by a stub reporting a real per-call
+        # cost the old pre-call-only check would have blown through by
+        # 70%+. `tool_digest` truncation now keeps the tail as well as the
+        # head, because a long pipeline's `; echo "EXIT=$?"` -- exactly the
+        # proxy pattern this tool exists to catch -- lives at the end. A
+        # transcript line carrying `"origin": "human"` as a bare string
+        # rather than `{"kind": "human"}` no longer raises AttributeError.
+        # The session-level document now reports `runs_total` (the whole
+        # session) and `runs_selected` (after `--only`) separately, rather
+        # than calling a one-run `--only` document's `runs_total` "1"; and
+        # `--force` without `--resume` combined with `--only`/`--limit`
+        # now warns before silently discarding every other run's record on
+        # an existing multi-run document. A record's own `cost_usd` now
+        # always folds in a failed chain call's real spend, reconciling
+        # `sum(records)` with the document's `total_cost_usd`. Two
+        # coverage-only additions ride along: a fixture with `origin` on
+        # its second line (not the first) pins that `has_origin` scans the
+        # whole transcript, and `report` (both output forms), the default
+        # `<session-dir>/session-distill.json` output path, and
+        # `distill --out -` are now all exercised at least once each.
         run: ./assets/scripts/session-distill.test.sh
