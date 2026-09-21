@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "da70104",
+  "generatedFromCommit": "e84239a",
   "skillCount": 41,
   "skills": [
     {
@@ -44,7 +44,32 @@
           "anyOf": [
             "MUST end with a fenced .{0,10}json review-result.{0,10} block"
           ],
-          "note": "#267 — the ```json review-result``` block is the machine-readable verdict a review skill's final report carries; a copy that drops it loses the leading signal (rounds, severity mix, mutation-proven vs asserted findings) that made agent-review's output queryable across runs instead of prose only. REBOUND from a first cut that was vacuous: anyOf: [\"review-result\"] matched the bare token, which survives in the `record` command prose and in `review-result.py`'s own name even after the fenced block ITSELF is deleted — an adversarial reviewer proved this by deleting the whole block and watching skill-lint stay green (the guard's own job, per the issue-creation-code guard's note precedent: bind the sentence that states the rule, not a token the enactment also carries). Now binds the RULE SENTENCE — \"The reviewer's final report MUST end with a fenced ```json review-result``` block\" — via a pattern tolerant of the 4-backtick escaping the sentence itself needs to display 3 backticks inline. Verified both ways: deleting only that sentence (leaving the fence, the JSON example, the field docs, and the record-command prose intact, and `review-result` still appearing 6 of its original 8 times) turns the guard red; restoring it turns the guard green."
+          "note": "#267 — the ```json review-result``` block is the machine-readable verdict a review skill's final report carries; a copy that drops it loses the leading signal (rounds, severity mix, mutation-proven vs asserted findings) that made agent-review's output queryable across runs instead of prose only. REBOUND from a first cut that was vacuous: anyOf: [\"review-result\"] matched the bare token, which survives in the `record` command prose and in `review-result.py`'s own name even after the fenced block ITSELF is deleted — an adversarial reviewer proved this by deleting the whole block and watching skill-lint stay green (the guard's own job, per the issue-creation-code guard's note precedent: bind the sentence that states the rule, not a token the enactment also carries). Now binds the RULE SENTENCE — \"The reviewer's final report MUST end with a fenced ```json review-result``` block\" — via a pattern tolerant of the 4-backtick escaping the sentence itself needs to display 3 backticks inline. Verified both ways: deleting only that sentence (leaving the fence, the JSON example, the field docs, and the record-command prose intact, and `review-result` still appearing 6 of its original 8 times) turns the guard red; restoring it turns the guard green.",
+          "gate": {
+            "targets": [
+              {
+                "label": "green-as-done",
+                "mode": "a review round's findings live only in prose, so asserted and mutation-proven findings read the same and a can't-fail assertion left by a fix round is not a count"
+              }
+            ],
+            "added": {
+              "repo": "blamechris/skill-templates",
+              "pr": 275,
+              "at": "2026-09-20T19:31:10Z"
+            },
+            "evidence": [
+              {
+                "kind": "issue",
+                "repo": "blamechris/skill-templates",
+                "number": 267
+              },
+              {
+                "kind": "pr",
+                "repo": "blamechris/skill-templates",
+                "number": 275
+              }
+            ]
+          }
         }
       ]
     },
@@ -1869,8 +1894,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "da70104",
-      "lines": 245,
+      "hash": "e84239a",
+      "lines": 254,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {

@@ -953,3 +953,50 @@ jobs:
         # "enumerate everything below the max" (the latter passes by
         # accident whenever only the highest round is ever on file).
         run: ./assets/scripts/pr-record.test.sh
+
+      - name: gate-ledger regression tests
+        # #272, epic #266: for every gate (a skill-guard, a hook, a CI step, a
+        # script-check, a doctrine rule), record the failure mode it targets and
+        # the evidence chain that justified adding it. #263/#264 is the case it
+        # exists for — a guard was built for a frozen sample file, the freeze was
+        # never real, and nothing recorded that the guard targeted a sensor
+        # defect while the trace named a reasoning defect, so nothing could
+        # compare them. There is no `*.test.sh` glob in this workflow, so this
+        # script gets its own named step like every other asset script.
+        #
+        # What this pins: the closed vocabulary is session-distill.py's `LABELS`,
+        # imported by path rather than restated, and the pr-record.py ledger
+        # default/precedence (`DEFAULT_LEDGER`, `$CLAUDE_PR_LEDGER`, `--ledger`)
+        # is pr-record.py's own `ledger_path_for`, reused rather than a second
+        # copy of either. A gate joins a session-distill record ONLY on exact
+        # (session, run), and — when the evidence names a `claim` — only a label
+        # whose `supports` contains that claim; a pr-record joins ONLY on exact
+        # (repo, pr); neither ever falls back to a substring or a guess. Every
+        # verdict in the table fires on its own fixture (`untraced`,
+        # `evidence-unverified`, `mislabelled` — including the #263/#264 shape,
+        # where a gate targets a label the traced run's `classified_as` does not
+        # carry — `not-joinable`, `unobserved`, `recurring`, `suspect`, `quiet`),
+        # plus the `trace-unverified` marker on any gate carrying `trace`
+        # evidence. `check` rejects an out-of-vocabulary label, an `unclassified`
+        # target with no `mode`, empty `evidence`, an evidence entry missing the
+        # fields its kind requires, a non-full-UTC `added.at`, a non-integer
+        # `pr`/`number`, a duplicate id across gates.jsonl and skill-guards.json
+        # together, a `gates.jsonl` line with kind `skill-guard` (that record
+        # belongs on the guard), and an unknown top-level key — and counts, but
+        # does not fail on, a legacy guard with no `gate` field at all. An absent
+        # `gates.jsonl` is zero records; an unreadable (chmod 000) or
+        # unparseable one, or a garbage/wrong-kind/missing `--distill` file, or
+        # an explicitly-given `--pr-records` path that does not exist, is exit 2
+        # naming the path (and the line, for a bad `gates.jsonl` line) — never
+        # the same output an absent file produces, and never a silent empty
+        # result.
+        run: ./assets/scripts/gate-ledger.test.sh
+
+      - name: gate-ledger check (registry self-validation)
+        # Runs `check` against this repo's OWN skill-guards.json/gates.jsonl —
+        # the worked example gate on agent-review's structured-review-result
+        # guard (#275, fixing #267) must validate clean, and any future gate
+        # record added anywhere in the registry is checked here, same as the
+        # "this repo's own installed skills lint clean" step above does for
+        # skill-lint.
+        run: python3 assets/scripts/gate-ledger.py check --registry .
