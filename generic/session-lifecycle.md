@@ -165,8 +165,8 @@ The canonical rules live in `~/.claude/CLAUDE.md` under **"Follow-on protocol"**
 
 Installing `session-lifecycle` should be followed by installing any missing components in the same pass — the bundle head without its components is a checklist that can't execute.
 
-**Three machine-level scripts back the End steps**, plus four more that other skills use
-independently — all seven are bootstrapped once per machine from the registry rather than
+**Three machine-level scripts back the End steps**, plus five more that other skills use
+independently — all eight are bootstrapped once per machine from the registry rather than
 installed per repo, in one copy command, because both End step 1 and `/next` call the same
 copy of the first three:
 
@@ -174,7 +174,7 @@ copy of the first three:
 cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
    assets/scripts/usage-pace.py assets/scripts/filed-from.py \
    assets/scripts/review-result.py assets/scripts/rework-lag.py \
-   assets/scripts/session-distill.py ~/.claude/scripts/
+   assets/scripts/session-distill.py assets/scripts/pr-record.py ~/.claude/scripts/
 ```
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
@@ -203,8 +203,18 @@ session did on its own thread. Each run's evidence quality is classified against
 nine-label vocabulary — enforced in CODE, not trusted from the model's prompt-following: the
 `--json-schema` handed to the model carries the label set as an enum, and the returned document
 is re-checked against the same frozen label tuple before it is written, so an invented label
-becomes `"unclassified"` with the offending string recorded rather than passed through. Each
-ships with a sibling `<name>.test.sh` in
+becomes `"unclassified"` with the offending string recorded rather than passed through.
+`pr-record.py` (#270, epic #266) is the join table across all of the above: one JSON-line record
+per merged PR, keyed on `(repo, pr)`, written at merge time from the session that merged (or
+later, with `--session` given explicitly, for backfill). A session id is never searched for, only
+validated once given — its main transcript must nominate the PR (the same nomination grammar
+`rework-lag.py`'s `--attribute` uses, imported rather than copied), and an env-sourced session
+additionally REFUSEs unless the PR's `mergedAt` falls inside that transcript's own span. An agent
+is linked to the PR only with recorded evidence (its `.result.json`'s own `pr`, or its first
+message naming the PR or its branch), never by session membership alone, and `rounds_missing`
+makes visible what `review-result.py`'s no-overwrite-without-`--force` rule otherwise hides — a
+PR reviewed three times by the same agent leaves only its last round on disk. Each ships with a
+sibling `<name>.test.sh` in
 the registry, run by CI, and that is where their behaviour is pinned — this file states the
 doctrine, not the code. Bootstrap all or none: a machine with a stale
 `usage-benchmark-row.py` writes step 2's row on a different scale from every row above it, and

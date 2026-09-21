@@ -811,3 +811,60 @@ jobs:
         # `<session-dir>/session-distill.json` output path, and
         # `distill --out -` are now all exercised at least once each.
         run: ./assets/scripts/session-distill.test.sh
+
+      - name: pr-record regression tests
+        # #270, epic #266: the join table across the epic's other scripts —
+        # one JSON-line record per merged PR, keyed on (repo, pr), joining
+        # who did the work (session/agents), at what tier, in how many
+        # rounds (review-result.py), with what CI/thread outcome (gh), and
+        # what it spawned (filed-from.py's follow-on walk). There is no
+        # `*.test.sh` glob in this workflow, so this script gets its own
+        # named step like every other asset script.
+        #
+        # What this pins: a session id is never searched for, only
+        # validated once given — its main transcript (a SIBLING of the
+        # session directory, not inside it) must nominate the PR using
+        # rework-lag.py's own URL_RE/REF_RE/BARE_RE grammar, imported by
+        # path rather than copied, or the run REFUSES outright (exit 2,
+        # nothing written); a session sourced from
+        # $CLAUDE_CODE_SESSION_ID additionally REFUSES unless the PR's
+        # own `mergedAt` falls inside that transcript's span
+        # (merged_within_span), while a session named explicitly with
+        # `--session` records that same fact without enforcing it. An
+        # agent is linked to the PR only with recorded evidence — its
+        # `.result.json`'s own `pr`, and/or its first user-turn message
+        # naming the PR by `#N`/`PR N`/`pull/N` (each word-boundaried so
+        # `#2780` can never match `#278`) or naming the PR's own head
+        # branch — never by session membership alone; an agent matching
+        # neither is counted in `agents_unlinked`, not silently
+        # attributed. `usage` per agent is summed from assistant-line
+        # `message.usage`, deduplicated by `requestId` keeping the LAST
+        # record for each (the #259 lesson: the first is a partial), while
+        # a line carrying no `requestId` is never deduplicated against
+        # anything. `rounds_missing` reports every integer below the
+        # highest RECORDED round that has no row of its own — pinned by a
+        # fixture with only round 2 on record (missing: [1]), one with
+        # only round 1 (missing: []), and one with both round 1 and round
+        # 3 on record from two different agents (missing: [2] — the case
+        # a naive "everything below the max" implementation gets wrong the
+        # moment more than one round is actually on file). `ci.runs` is
+        # filtered down to runs whose `headSha` is one of the PR's own
+        # commit oids (an unrelated sha on the same branch must never
+        # appear), and both `ci.runs` and `review_rounds.threads` report a
+        # truncated gh answer in `unknown[]` while still emitting whatever
+        # was returned — never collapsing a partial answer into a
+        # measured zero. Every gh failure (PR view, run list, GraphQL
+        # threads, the follow-on issue search) is reported as `unknown`
+        # and forces exit 2 without ever reading as a silent `null` with
+        # no explanation; only a failed PR lookup or an unmerged PR is
+        # fatal outright. Sibling reuse is by path — review-result.py's
+        # session/sidecar resolution, filed-from.py's follow-on walk,
+        # rework-lag.py's nomination grammar — with `sys.dont_write_bytecode`
+        # toggled around each import (asserted here: no `__pycache__/`
+        # survives the suite), and a missing sibling REFUSES by name
+        # rather than crashing. The ledger is JSONL, one line per
+        # (repo, pr): a duplicate write REFUSES without `--replace`, which
+        # itself rewrites atomically (temp file + `os.replace`) leaving
+        # every other line byte-for-byte untouched, and `--stdout` prints
+        # the record without ever touching the ledger file at all.
+        run: ./assets/scripts/pr-record.test.sh
