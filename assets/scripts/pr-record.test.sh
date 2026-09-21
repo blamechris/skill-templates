@@ -497,7 +497,7 @@ sdir512 = os.path.join(proj, "sess-512")
 jsonl(sdir512 + ".jsonl", [user("about #512", ts="2026-12-01T00:00:00Z")])
 jfile(os.path.join(sdir512, "subagents", "agent-bbb00001.meta.json"),
       {"agentType": "general-purpose", "description": "Review", "model": "opus"})
-jsonl(os.path.join(sdir512, "subagents", "agent-bbb00001.jsonl"), [user("about #512")])
+jsonl(os.path.join(sdir512, "subagents", "agent-bbb00001.jsonl"), [user("about #512", ts="2026-11-30T23:00:00Z")])
 jfile(os.path.join(sdir512, "subagents", "agent-bbb00001.result.json"), {
     "schema": 1, "source": "record", "session": "sess-512", "agent": "agent-bbb00001",
     "skill": "agent-review", "pr": 512,
@@ -523,7 +523,7 @@ sdir513 = os.path.join(proj, "sess-513")
 jsonl(sdir513 + ".jsonl", [user("about #513", ts="2027-01-01T00:00:00Z")])
 jfile(os.path.join(sdir513, "subagents", "agent-ccc00001.meta.json"),
       {"agentType": "general-purpose", "description": "Review", "model": "opus"})
-jsonl(os.path.join(sdir513, "subagents", "agent-ccc00001.jsonl"), [user("about #513")])
+jsonl(os.path.join(sdir513, "subagents", "agent-ccc00001.jsonl"), [user("about #513", ts="2026-12-31T23:00:00Z")])
 jfile(os.path.join(sdir513, "subagents", "agent-ccc00001.result.json"), {
     "schema": 1, "source": "record", "session": "sess-513", "agent": "agent-ccc00001",
     "skill": "agent-review", "pr": 513,
@@ -556,7 +556,7 @@ os.makedirs(sdir515, exist_ok=True)
 jsonl(sdir515 + ".jsonl", [user("about #515", ts="2027-03-01T00:00:00Z")])
 jfile(os.path.join(sdir515, "subagents", "agent-ddd00001.meta.json"),
       {"agentType": "general-purpose", "description": "Review round 1", "model": "opus"})
-jsonl(os.path.join(sdir515, "subagents", "agent-ddd00001.jsonl"), [user("about #515")])
+jsonl(os.path.join(sdir515, "subagents", "agent-ddd00001.jsonl"), [user("about #515", ts="2027-02-28T23:00:00Z")])
 jfile(os.path.join(sdir515, "subagents", "agent-ddd00001.result.json"), {
     "schema": 1, "source": "record", "session": "sess-515", "agent": "agent-ddd00001",
     "skill": "agent-review", "pr": 515,
@@ -565,13 +565,290 @@ jfile(os.path.join(sdir515, "subagents", "agent-ddd00001.result.json"), {
 })
 jfile(os.path.join(sdir515, "subagents", "agent-ddd00002.meta.json"),
       {"agentType": "general-purpose", "description": "Review round 3", "model": "opus"})
-jsonl(os.path.join(sdir515, "subagents", "agent-ddd00002.jsonl"), [user("about #515")])
+jsonl(os.path.join(sdir515, "subagents", "agent-ddd00002.jsonl"), [user("about #515", ts="2027-02-28T23:30:00Z")])
 jfile(os.path.join(sdir515, "subagents", "agent-ddd00002.result.json"), {
     "schema": 1, "source": "record", "session": "sess-515", "agent": "agent-ddd00002",
     "skill": "agent-review", "pr": 515,
     "result": {"kind": "review-result", "verdict": "approve", "body_matches_tree": True,
                "pr": 515, "skill": "agent-review", "round": 3, "findings": []},
 })
+
+def rawfile(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+# ---------------------------------------------------------------- PR 516
+# C1 (malformed/invalid/null-pr result -> unknown[] + never linked-by-
+# result) and C3b (bounded head_ref match) together, reproducing the
+# reviewer's own review-281 fixture shape exactly (head_ref "fix", an
+# agent whose brief is "find the prefix config"):
+#   c1: .result.json is truncated/unparseable, but its raw text still
+#       names #516 and round 2 -- unknown[] must name the file and note
+#       the recoverable round, and it must NOT count as linked-by-result;
+#       its brief ("Adversarial review of PR 516") still links it by BRIEF.
+#   c2: .result.json parses but verdict "bogus" fails validate_document --
+#       unknown[] + not linked-by-result; brief has no PR/branch mention,
+#       so it is fully UNLINKED.
+#   c3: .result.json is fully valid, pr=516, but repo is "other/repo" --
+#       C3a: repo mismatch means no result link; brief has no mention,
+#       fully UNLINKED. No unknown[] entry (this is not malformed, just a
+#       genuinely different repo's record).
+#   c4: .result.json has pr=null (parses, validates -- pr is nullable in
+#       the schema) -- unknown[] (a null pr is always flagged) + not
+#       linked-by-result; brief has no mention, fully UNLINKED.
+#   c5: brief is "find the prefix config" -- "fix" must NOT match inside
+#       "prefix" (C3b); fully UNLINKED.
+#   c6: brief is "implement #516" -- the real, valid, linked-by-brief agent.
+jfile(os.path.join(ghdir, "pr_view_516.json"), {
+    "number": 516, "state": "MERGED", "title": "t", "author": {"login": "a"},
+    "mergedBy": {"login": "a"}, "headRefName": "fix",
+    "createdAt": "2027-04-01T00:00:00Z", "mergedAt": "2027-04-01T12:00:00Z",
+    "mergeCommit": {"oid": "z"}, "additions": 1, "deletions": 1, "changedFiles": 1,
+    "closingIssuesReferences": [], "commits": [], "reviews": [], "statusCheckRollup": [],
+})
+jfile(os.path.join(ghdir, "run_list_fix.json"), [])
+jfile(os.path.join(ghdir, "graphql_516.json"), {
+    "data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}
+})
+jfile(os.path.join(ghdir, "issue_list_516.json"), [])
+sdir516 = os.path.join(proj, "sess-516")
+jsonl(sdir516 + ".jsonl", [user("work on #516", ts="2027-04-01T11:00:00Z"),
+                           user("still on #516", ts="2027-04-01T13:00:00Z")])
+
+jfile(os.path.join(sdir516, "subagents", "agent-c1.meta.json"),
+      {"agentType": "general-purpose", "description": "review", "model": "opus"})
+jsonl(os.path.join(sdir516, "subagents", "agent-c1.jsonl"),
+      [user("Adversarial review of PR 516", ts="2027-04-01T11:10:00Z")])
+rawfile(os.path.join(sdir516, "subagents", "agent-c1.result.json"),
+        '{"schema":1,"result":{"kind":"review-result","pr":516,"round":2,')
+
+jfile(os.path.join(sdir516, "subagents", "agent-c2.meta.json"),
+      {"agentType": "general-purpose", "description": "review", "model": "opus"})
+jsonl(os.path.join(sdir516, "subagents", "agent-c2.jsonl"),
+      [user("review the changes", ts="2027-04-01T11:10:00Z")])
+jfile(os.path.join(sdir516, "subagents", "agent-c2.result.json"), {
+    "schema": 1, "source": "record",
+    "result": {"kind": "review-result", "verdict": "bogus", "body_matches_tree": True,
+               "pr": 516, "repo": "acme/widgets", "skill": "agent-review", "round": 3,
+               "findings": [{"severity": "critical", "title": "c", "file": None, "line": None,
+                             "evidence": "e", "mutation_ran": True, "red_line": False}]},
+})
+
+jfile(os.path.join(sdir516, "subagents", "agent-c3.meta.json"),
+      {"agentType": "general-purpose", "description": "review", "model": "opus"})
+jsonl(os.path.join(sdir516, "subagents", "agent-c3.jsonl"),
+      [user("review the changes", ts="2027-04-01T11:10:00Z")])
+jfile(os.path.join(sdir516, "subagents", "agent-c3.result.json"), {
+    "schema": 1, "source": "record",
+    "result": {"kind": "review-result", "verdict": "request_changes", "body_matches_tree": True,
+               "pr": 516, "repo": "other/repo", "skill": "agent-review", "round": 1,
+               "findings": [{"severity": "critical", "title": "c", "file": None, "line": None,
+                             "evidence": "e", "mutation_ran": True, "red_line": False}]},
+})
+
+jfile(os.path.join(sdir516, "subagents", "agent-c4.meta.json"),
+      {"agentType": "general-purpose", "description": "review", "model": "opus"})
+jsonl(os.path.join(sdir516, "subagents", "agent-c4.jsonl"),
+      [user("review the changes", ts="2027-04-01T11:10:00Z")])
+jfile(os.path.join(sdir516, "subagents", "agent-c4.result.json"), {
+    "schema": 1, "source": "record",
+    "result": {"kind": "review-result", "verdict": "approve", "body_matches_tree": True,
+               "pr": None, "repo": "acme/widgets", "skill": "agent-review", "round": 1,
+               "findings": []},
+})
+
+jfile(os.path.join(sdir516, "subagents", "agent-c5.meta.json"),
+      {"agentType": "general-purpose", "description": "unrelated", "model": "sonnet"})
+jsonl(os.path.join(sdir516, "subagents", "agent-c5.jsonl"),
+      [user("find the prefix config", ts="2027-04-01T11:10:00Z")])
+
+jfile(os.path.join(sdir516, "subagents", "agent-c6.meta.json"),
+      {"agentType": "general-purpose", "description": "impl", "model": "opus"})
+jsonl(os.path.join(sdir516, "subagents", "agent-c6.jsonl"),
+      [user("implement #516", ts="2027-04-01T11:10:00Z")])
+
+# ---------------------------------------------------------------- PR 517
+# C2: an unreadable (chmod 000) agent transcript and an unreadable (chmod
+# 000) agent meta.json must each add their own unknown[] entry -- neither
+# may silently look like "no evidence found". A THIRD agent's transcript
+# carries a valid-JSON-but-non-object line (a bare number) mixed in with
+# real ones -- also its own unknown[] entry, though it does not prevent
+# the brief from still being read off the other, well-formed lines.
+jfile(os.path.join(ghdir, "pr_view_517.json"), {
+    "number": 517, "state": "MERGED", "title": "t", "author": {"login": "a"},
+    "mergedBy": {"login": "a"}, "headRefName": "feat-517",
+    "createdAt": "2027-05-01T00:00:00Z", "mergedAt": "2027-05-01T12:00:00Z",
+    "mergeCommit": {"oid": "z"}, "additions": 1, "deletions": 1, "changedFiles": 1,
+    "closingIssuesReferences": [], "commits": [], "reviews": [], "statusCheckRollup": [],
+})
+jfile(os.path.join(ghdir, "run_list_feat-517.json"), [])
+jfile(os.path.join(ghdir, "graphql_517.json"), {
+    "data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}
+})
+jfile(os.path.join(ghdir, "issue_list_517.json"), [])
+sdir517 = os.path.join(proj, "sess-517")
+jsonl(sdir517 + ".jsonl", [user("work on #517", ts="2027-05-01T11:00:00Z"),
+                           user("still on #517", ts="2027-05-01T13:00:00Z")])
+
+jfile(os.path.join(sdir517, "subagents", "agent-d1.meta.json"),
+      {"agentType": "general-purpose", "description": "review", "model": "opus"})
+jsonl(os.path.join(sdir517, "subagents", "agent-d1.jsonl"),
+      [user("review #517", ts="2027-05-01T11:10:00Z")])
+os.chmod(os.path.join(sdir517, "subagents", "agent-d1.jsonl"), 0o000)
+
+rawfile(os.path.join(sdir517, "subagents", "agent-d2.meta.json"),
+        '{"agentType": "general-purpose"')  # deliberately truncated/unparseable meta.json
+jsonl(os.path.join(sdir517, "subagents", "agent-d2.jsonl"),
+      [user("review #517 too", ts="2027-05-01T11:11:00Z")])
+
+jfile(os.path.join(sdir517, "subagents", "agent-d3.meta.json"),
+      {"agentType": "general-purpose", "description": "review", "model": "opus"})
+rawfile(os.path.join(sdir517, "subagents", "agent-d3.jsonl"),
+        json.dumps(user("about #517", ts="2027-05-01T11:12:00Z")) + "\n"
+        + "42\n"
+        + json.dumps(user("wrapping up", ts="2027-05-01T11:13:00Z")) + "\n")
+
+# ---------------------------------------------------------------- PR 518
+# C3c: an agent with real linking evidence but started strictly AFTER the
+# PR's own merged_at must be excluded from `agents[]` and counted in
+# `agents_after_merge`, not `agents_unlinked` -- it is not "no evidence",
+# it is "evidence that is temporally impossible". A second agent has
+# linking evidence but NO started_at at all (an empty transcript) -- it
+# cannot be placed in time either direction, so it does not link, is
+# counted in `agents_unlinked`, and gets its own unknown[] entry.
+jfile(os.path.join(ghdir, "pr_view_518.json"), {
+    "number": 518, "state": "MERGED", "title": "t", "author": {"login": "a"},
+    "mergedBy": {"login": "a"}, "headRefName": "feat-518",
+    "createdAt": "2027-06-01T00:00:00Z", "mergedAt": "2027-06-01T12:00:00Z",
+    "mergeCommit": {"oid": "z"}, "additions": 1, "deletions": 1, "changedFiles": 1,
+    "closingIssuesReferences": [], "commits": [], "reviews": [], "statusCheckRollup": [],
+})
+jfile(os.path.join(ghdir, "run_list_feat-518.json"), [])
+jfile(os.path.join(ghdir, "graphql_518.json"), {
+    "data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}
+})
+jfile(os.path.join(ghdir, "issue_list_518.json"), [])
+sdir518 = os.path.join(proj, "sess-518")
+# The SESSION's own transcript spans well past the merge (flag-sourced, so
+# merged_within_span is recorded but not enforced) -- this is what lets an
+# agent that ACTUALLY started after the merge exist in the same session at
+# all.
+jsonl(sdir518 + ".jsonl", [user("work on #518", ts="2027-06-01T11:00:00Z"),
+                           user("still on #518, much later", ts="2027-06-02T09:00:00Z")])
+
+jfile(os.path.join(sdir518, "subagents", "agent-e1.meta.json"),
+      {"agentType": "general-purpose", "description": "late agent", "model": "opus"})
+jsonl(os.path.join(sdir518, "subagents", "agent-e1.jsonl"),
+      [user("implement #518", ts="2027-06-02T08:00:00Z")])  # merged_at is 2027-06-01T12:00:00Z -- this is after it
+
+jfile(os.path.join(sdir518, "subagents", "agent-e2.meta.json"),
+      {"agentType": "general-purpose", "description": "no timestamp", "model": "opus"})
+rawfile(os.path.join(sdir518, "subagents", "agent-e2.jsonl"),
+        json.dumps({"type": "user", "message": {"content": "implement #518 too"}}) + "\n")
+
+# ---------------------------------------------------------------- PR 519
+# S4: tier() reused from usage-pace.py by path -- an unrecognized model
+# family ("claude-mythos-9"... no: use a genuinely unrecognized string)
+# records "other", not null (null is reserved for NO model information at
+# all). Usage dedup uses the (message.id, requestId) key exactly as
+# usage-pace.py builds it, keeping the LAST record for that pair -- a
+# message.id shared by two lines with DIFFERENT requestIds must not be
+# collapsed together, and vice versa.
+jfile(os.path.join(ghdir, "pr_view_519.json"), {
+    "number": 519, "state": "MERGED", "title": "t", "author": {"login": "a"},
+    "mergedBy": {"login": "a"}, "headRefName": "feat-519",
+    "createdAt": "2027-07-01T00:00:00Z", "mergedAt": "2027-07-01T12:00:00Z",
+    "mergeCommit": {"oid": "z"}, "additions": 1, "deletions": 1, "changedFiles": 1,
+    "closingIssuesReferences": [], "commits": [], "reviews": [], "statusCheckRollup": [],
+})
+jfile(os.path.join(ghdir, "run_list_feat-519.json"), [])
+jfile(os.path.join(ghdir, "graphql_519.json"), {
+    "data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}
+})
+jfile(os.path.join(ghdir, "issue_list_519.json"), [])
+sdir519 = os.path.join(proj, "sess-519")
+jsonl(sdir519 + ".jsonl", [user("work on #519", ts="2027-07-01T11:00:00Z"),
+                           user("still on #519", ts="2027-07-01T13:00:00Z")])
+
+jfile(os.path.join(sdir519, "subagents", "agent-f1.meta.json"),
+      {"agentType": "general-purpose", "description": "impl", "model": "some-future-model"})
+jsonl(os.path.join(sdir519, "subagents", "agent-f1.jsonl"), [
+    user("implement #519", ts="2027-07-01T11:10:00Z"),
+    {"type": "assistant", "requestId": "r1",
+     "message": {"id": "msg-1", "model": "some-future-model-x1",
+                 "usage": {"input_tokens": 2, "output_tokens": 3}},
+     "timestamp": "2027-07-01T11:10:01Z"},
+    {"type": "assistant", "requestId": "r1",
+     "message": {"id": "msg-1", "model": "some-future-model-x1",
+                 "usage": {"input_tokens": 2, "output_tokens": 300}},
+     "timestamp": "2027-07-01T11:10:02Z"},
+    {"type": "assistant", "requestId": "r2",
+     "message": {"id": "msg-1", "model": "some-future-model-x1",
+                 "usage": {"input_tokens": 5, "output_tokens": 5}},
+     "timestamp": "2027-07-01T11:10:03Z"},
+    # Same requestId (r2) as the line above, but a DIFFERENT message.id --
+    # under the correct (message.id, requestId) key these are two distinct
+    # records and both count; a requestId-only key would collapse them,
+    # silently dropping the (msg-1, r2) contribution above.
+    {"type": "assistant", "requestId": "r2",
+     "message": {"id": "msg-2", "model": "some-future-model-x1",
+                 "usage": {"input_tokens": 10, "output_tokens": 10}},
+     "timestamp": "2027-07-01T11:10:04Z"},
+])
+
+# ---------------------------------------------------------------- PR 520
+# S5: statusCheckRollup can carry legacy StatusContext entries
+# (context/state) alongside or instead of CheckRun entries
+# (name/workflowName/conclusion) -- both must map into ci.final's
+# {name, workflow, conclusion} shape.
+jfile(os.path.join(ghdir, "pr_view_520.json"), {
+    "number": 520, "state": "MERGED", "title": "t", "author": {"login": "a"},
+    "mergedBy": {"login": "a"}, "headRefName": "feat-520",
+    "createdAt": "2027-08-01T00:00:00Z", "mergedAt": "2027-08-01T12:00:00Z",
+    "mergeCommit": {"oid": "z"}, "additions": 1, "deletions": 1, "changedFiles": 1,
+    "closingIssuesReferences": [], "commits": [], "reviews": [],
+    "statusCheckRollup": [
+        {"__typename": "CheckRun", "name": "validate", "workflowName": "validate-registry",
+         "conclusion": "SUCCESS"},
+        {"__typename": "StatusContext", "context": "ci/legacy-status", "state": "SUCCESS"},
+    ],
+})
+jfile(os.path.join(ghdir, "run_list_feat-520.json"), [])
+jfile(os.path.join(ghdir, "graphql_520.json"), {
+    "data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}
+})
+jfile(os.path.join(ghdir, "issue_list_520.json"), [])
+
+# ---------------------------------------------------------------- PR 521
+# S2: a session whose main transcript exists but whose sidecar DIRECTORY
+# does not exist AT ALL (not even created empty) -- this must read as
+# `agents: []` (a real, confident zero), exit 0, never a REFUSE.
+jfile(os.path.join(ghdir, "pr_view_521.json"), {
+    "number": 521, "state": "MERGED", "title": "t", "author": {"login": "a"},
+    "mergedBy": {"login": "a"}, "headRefName": "feat-521",
+    "createdAt": "2027-09-01T00:00:00Z", "mergedAt": "2027-09-01T12:00:00Z",
+    "mergeCommit": {"oid": "z"}, "additions": 1, "deletions": 1, "changedFiles": 1,
+    "closingIssuesReferences": [], "commits": [], "reviews": [], "statusCheckRollup": [],
+})
+jfile(os.path.join(ghdir, "run_list_feat-521.json"), [])
+jfile(os.path.join(ghdir, "graphql_521.json"), {
+    "data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}
+})
+jfile(os.path.join(ghdir, "issue_list_521.json"), [])
+# Deliberately: sess-521-nodir.jsonl exists, sess-521-nodir/ never created.
+jsonl(os.path.join(proj, "sess-521-nodir.jsonl"),
+      [user("work on #521", ts="2027-09-01T11:00:00Z"),
+       user("still on #521", ts="2027-09-01T13:00:00Z")])
+
+# ---------------------------------------------------------------- sess-514
+# A session for PR 514 (gh fixtures added separately below, in bash) with
+# a real but EMPTY subagents/ directory -- used by the ledger group (G) to
+# prove --replace genuinely swaps content (agents: [] on the second write)
+# rather than silently leaving the first write's agents: null in place.
+sdir514 = os.path.join(proj, "sess-514")
+os.makedirs(os.path.join(sdir514, "subagents"), exist_ok=True)
+jsonl(sdir514 + ".jsonl", [user("work on #514", ts="2027-02-01T00:00:00Z")])
 
 print("fixtures built OK")
 PYEOF
@@ -590,6 +867,22 @@ JSON
 echo '[]' > "$FAKE_GH_DIR/run_list_feat-514.json"
 echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]}}}}}' > "$FAKE_GH_DIR/graphql_514.json"
 echo '[]' > "$FAKE_GH_DIR/issue_list_514.json"
+
+# ---------------------------------------------------------------- PR 522/523
+# C4's concurrent-writer test: two distinct PRs written to the SAME fresh
+# ledger by two pr-record.py processes launched at once.
+for n in 522 523; do
+  cat > "$FAKE_GH_DIR/pr_view_$n.json" <<JSON
+{"number": $n, "state": "MERGED", "title": "t", "author": {"login": "a"},
+ "mergedBy": {"login": "a"}, "headRefName": "feat-$n",
+ "createdAt": "2027-10-01T00:00:00Z", "mergedAt": "2027-10-01T00:00:00Z",
+ "mergeCommit": {"oid": "z"}, "additions": 1, "deletions": 1, "changedFiles": 1,
+ "closingIssuesReferences": [], "commits": [], "reviews": [], "statusCheckRollup": []}
+JSON
+  echo '[]' > "$FAKE_GH_DIR/run_list_feat-$n.json"
+  echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]}}}}}' > "$FAKE_GH_DIR/graphql_$n.json"
+  echo '[]' > "$FAKE_GH_DIR/issue_list_$n.json"
+done
 
 # =========================================================================
 # 3. Test helpers
@@ -646,7 +939,7 @@ py_check "review_rounds.threads" "d['review_rounds']['threads'] == {'total': 2, 
 py_check "follow_ons" "d['follow_ons'] == [{'number': 520, 'state': 'OPEN', 'title': 'Follow-on from PR501'}]"
 py_check "ci.runs filtered by sha (2 of 3)" "len(d['ci']['runs']) == 2 and all(r['head_sha'] != 'ccc333ccc333ccc333ccc333ccc333ccc333ccc3' for r in d['ci']['runs'])"
 py_check "ci.runs_failed" "d['ci']['runs_failed'] == 1"
-py_check "session.nominates_pr" "d['session']['nominates_pr'] is True"
+py_check "session has no nominates_pr field (tautology removed)" "'nominates_pr' not in d['session']"
 py_check "session.merged_within_span" "d['session']['merged_within_span'] is True"
 py_check "session.source" "d['session']['source'] == 'flag'"
 py_check "unknown is empty" "d['unknown'] == []"
@@ -677,7 +970,7 @@ py_check "review_rounds.agent: 1 row, round 1" \
   "len(d['review_rounds']['agent']) == 1 and d['review_rounds']['agent'][0]['round'] == 1"
 py_check "review_rounds.agent[0] counts 1/1/1" \
   "d['review_rounds']['agent'][0]['critical'] == 1 and d['review_rounds']['agent'][0]['suggestion'] == 1 and d['review_rounds']['agent'][0]['nitpick'] == 1"
-py_check "rounds_missing == [] (only round 1 exists)" "d['review_rounds']['rounds_missing'] == []"
+py_check "rounds_missing is per-skill, round 1 only -> {agent-review: []}" "d['review_rounds']['rounds_missing'] == {'agent-review': []}"
 py_check "findings length == 3, tagged with agent+round" \
   "len(d['findings']) == 3 and all(f['agent']=='agent-aaa00001' and f['round']==1 for f in d['findings'])"
 
@@ -689,7 +982,6 @@ echo; echo "B. session validation"
 run_split --repo "$REPO" --session sess-502 --stdout 502
 if [ "$rc" -eq 0 ]; then ok "PR502 flag-sourced outside span: accepted (exit 0)"; else bad "PR502 exit" "rc=$rc err=$err"; fi
 py_check "PR502 merged_within_span is false" "d['session']['merged_within_span'] is False"
-py_check "PR502 nominates_pr is true" "d['session']['nominates_pr'] is True"
 
 run_env sess-503 --repo "$REPO" --stdout 503
 if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'REFUSE'; then
@@ -730,7 +1022,8 @@ py_check "PR506 unknown names ci.runs" "any('ci.runs' in u for u in d['unknown']
 
 run_split --repo "$REPO" --stdout 507
 if [ "$rc" -eq 2 ]; then ok "PR507 ci.runs truncated: exit 2"; else bad "PR507 exit" "rc=$rc"; fi
-py_check "PR507 ci.runs still populated (not null) despite truncation warning" "d['ci']['runs'] is not None and len(d['ci']['runs']) == 100"
+py_check "PR507 ci.runs is null (a truncated list is as untrustworthy as a failed one, S1)" "d['ci']['runs'] is None"
+py_check "PR507 ci.runs_failed is null too" "d['ci']['runs_failed'] is None"
 py_check "PR507 unknown names truncation" "any('truncated' in u for u in d['unknown'])"
 
 run_split --repo "$REPO" --stdout 508
@@ -766,13 +1059,13 @@ if printf '%s' "$out" | grep -q '^{'; then bad "PR511 REFUSE printed a record"; 
 # =========================================================================
 echo; echo "E. rounds_missing"
 run_split --repo "$REPO" --session sess-512 --stdout 512
-py_check "PR512 round 2 only -> rounds_missing [1]" "d['review_rounds']['rounds_missing'] == [1]"
+py_check "PR512 round 2 only -> rounds_missing {agent-review: [1]}" "d['review_rounds']['rounds_missing'] == {'agent-review': [1]}"
 
 run_split --repo "$REPO" --session sess-513 --stdout 513
-py_check "PR513 round 1 only -> rounds_missing []" "d['review_rounds']['rounds_missing'] == []"
+py_check "PR513 round 1 only -> rounds_missing {agent-review: []}" "d['review_rounds']['rounds_missing'] == {'agent-review': []}"
 
 run_split --repo "$REPO" --session sess-515 --stdout 515
-py_check "PR515 rounds 1 and 3 recorded -> rounds_missing [2]" "d['review_rounds']['rounds_missing'] == [2]"
+py_check "PR515 rounds 1 and 3 recorded -> rounds_missing {agent-review: [2]}" "d['review_rounds']['rounds_missing'] == {'agent-review': [2]}"
 
 # =========================================================================
 # GROUP F -- missing sibling REFUSEs
@@ -787,6 +1080,104 @@ if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qi 'filed-from.py'; then
 else
   bad "missing sibling" "rc=$rc out=$out"
 fi
+
+# =========================================================================
+# GROUP F2 -- C1 (malformed/invalid/null-pr result) + C3a (repo mismatch)
+# + C3b (bounded head_ref match), PR 516
+# =========================================================================
+echo; echo "F2. C1/C3a/C3b -- agent linkage hardening (PR 516)"
+
+run_split --repo "$REPO" --session sess-516 --stdout 516
+[ "$rc" -eq 2 ] && ok "PR516 exits 2 (unknown[] from malformed results)" || bad "PR516 exit" "rc=$rc err=$err"
+py_check "c1 (unparseable result) linked ONLY by brief, never by result" \
+  "next(a for a in d['agents'] if a['id']=='agent-c1')['linked_by'] == ['brief']"
+py_check "c1's malformed result names the file + recovered round 2 in unknown[]" \
+  "any('agent-c1' in u and 'round 2' in u for u in d['unknown'])"
+py_check "c2 (invalid verdict, no brief match) is fully unlinked" \
+  "not any(a['id']=='agent-c2' for a in d['agents'])"
+py_check "c2's invalid result is named in unknown[]" \
+  "any('agent-c2' in u for u in d['unknown'])"
+py_check "c3 (valid but repo mismatch) is fully unlinked, no unknown[] noise" \
+  "not any(a['id']=='agent-c3' for a in d['agents']) and not any('agent-c3' in u for u in d['unknown'])"
+py_check "c4 (null pr, otherwise valid) is fully unlinked" \
+  "not any(a['id']=='agent-c4' for a in d['agents'])"
+py_check "c4's null pr is named in unknown[] unconditionally" \
+  "any('agent-c4' in u and 'null' in u for u in d['unknown'])"
+py_check "c5 (brief 'find the prefix config') does NOT link -- 'fix' must not match inside 'prefix'" \
+  "not any(a['id']=='agent-c5' for a in d['agents'])"
+py_check "c6 (brief 'implement #516') links normally" \
+  "any(a['id']=='agent-c6' and a['linked_by']==['brief'] for a in d['agents'])"
+py_check "agents_unlinked counts c2, c3, c4, c5 (4)" "d['agents_unlinked'] == 4"
+
+# =========================================================================
+# GROUP F3 -- C2 (unreadable transcript/meta.json, non-object JSON line)
+# =========================================================================
+echo; echo "F3. C2 -- unreadable agent files (PR 517)"
+
+run_split --repo "$REPO" --session sess-517 --stdout 517
+[ "$rc" -eq 2 ] && ok "PR517 exits 2 (unknown[] from unreadable agent files)" || bad "PR517 exit" "rc=$rc err=$err"
+py_check "d1's chmod-000 transcript is named in unknown[]" \
+  "any('agent-d1' in u and 'unreadable' in u for u in d['unknown'])"
+py_check "d1 does not silently read as plain agents_unlinked with no signal" \
+  "not any(a['id']=='agent-d1' for a in d['agents'])"
+py_check "d2's unreadable (truncated) meta.json is named in unknown[]" \
+  "any('agent-d2' in u and 'meta.json' in u for u in d['unknown'])"
+py_check "d3's non-object JSON line (a bare 42) is named in unknown[]" \
+  "any('agent-d3' in u and 'non-object' in u for u in d['unknown'])"
+py_check "d3 still links normally off its other, well-formed lines" \
+  "any(a['id']=='agent-d3' and a['linked_by']==['brief'] for a in d['agents'])"
+
+# =========================================================================
+# GROUP F4 -- C3c (started-after-merge, and no-started_at at all)
+# =========================================================================
+echo; echo "F4. C3c -- timing gate (PR 518)"
+
+run_split --repo "$REPO" --session sess-518 --stdout 518
+[ "$rc" -eq 2 ] && ok "PR518 exits 2 (unknown[] from the no-started_at agent)" || bad "PR518 exit" "rc=$rc err=$err"
+py_check "e1 (started after merged_at) excluded from agents[]" \
+  "not any(a['id']=='agent-e1' for a in d['agents'])"
+py_check "agents_after_merge counts e1 (1)" "d['agents_after_merge'] == 1"
+py_check "e2 (no started_at at all) excluded from agents[], counted unlinked" \
+  "not any(a['id']=='agent-e2' for a in d['agents'])"
+py_check "e2's missing started_at is named in unknown[]" \
+  "any('agent-e2' in u and 'started_at' in u for u in d['unknown'])"
+py_check "agents_unlinked counts e2 (1), disjoint from agents_after_merge" "d['agents_unlinked'] == 1"
+
+# =========================================================================
+# GROUP F5 -- S4 (tier() reused from usage-pace.py; usage dedup by
+# (message.id, requestId))
+# =========================================================================
+echo; echo "F5. S4 -- tier reuse + usage dedup key (PR 519)"
+
+run_split --repo "$REPO" --session sess-519 --stdout 519
+[ "$rc" -eq 0 ] && ok "PR519 exits 0" || bad "PR519 exit" "rc=$rc err=$err"
+py_check "an unrecognized model family records 'other', not null" \
+  "next(a for a in d['agents'] if a['id']=='agent-f1')['tier'] == 'other'"
+py_check "usage dedup by (message.id, requestId): r1's LAST record (output 300) wins, both r2 lines (different message.id) add on top" \
+  "next(a for a in d['agents'] if a['id']=='agent-f1')['usage']['output'] == 315"
+py_check "usage dedup: input totals 2 (r1 last) + 5 (msg-1,r2) + 10 (msg-2,r2) = 17" \
+  "next(a for a in d['agents'] if a['id']=='agent-f1')['usage']['input'] == 17"
+
+# =========================================================================
+# GROUP F6 -- S5 (ci.final maps both CheckRun and StatusContext shapes)
+# =========================================================================
+echo; echo "F6. S5 -- ci.final StatusContext mapping (PR 520)"
+
+run_split --repo "$REPO" --stdout 520
+[ "$rc" -eq 0 ] && ok "PR520 exits 0" || bad "PR520 exit" "rc=$rc err=$err"
+py_check "ci.final has both entries mapped to {name, workflow, conclusion}" \
+  "d['ci']['final'] == [{'name': 'validate', 'workflow': 'validate-registry', 'conclusion': 'SUCCESS'}, {'name': 'ci/legacy-status', 'workflow': None, 'conclusion': 'SUCCESS'}]"
+
+# =========================================================================
+# GROUP F7 -- S2 (session resolved by transcript; sidecar directory may not
+# exist at all)
+# =========================================================================
+echo; echo "F7. S2 -- session directory need not exist (PR 521)"
+
+run_split --repo "$REPO" --session sess-521-nodir --stdout 521
+[ "$rc" -eq 0 ] && ok "PR521 exits 0 (no REFUSE for a missing sidecar directory)" || bad "PR521 exit" "rc=$rc err=$err"
+py_check "agents is [] (a real, confident zero), not null" "d['agents'] == []"
+py_check "agents_unlinked is 0, not null" "d['agents_unlinked'] == 0"
 
 # =========================================================================
 # GROUP G -- ledger idempotency
@@ -820,6 +1211,144 @@ run --repo "$REPO" --ledger "$LEDGER" --stdout 501
 if printf '%s' "$out" | grep -q '^{'; then ok "--stdout never touches the ledger (prints instead)"; else bad "--stdout output"; fi
 lines4=$(wc -l < "$LEDGER" | tr -d ' ')
 [ "$lines4" = "2" ] && ok "--stdout left the ledger line count unchanged" || bad "--stdout ledger side effect" "got $lines4"
+
+# ----- C5: --replace must genuinely change content, not silently no-op ----
+# The FIRST write above (no --session) left PR514's own line with
+# `"agents": null`. Replacing it WITH --session sess-514 (a real session
+# with an empty subagents/ dir) must flip that same line to
+# `"agents": []` -- a mutation that makes --replace a no-op (e.g. writing
+# the OLD record back, or writing the new one to the wrong line) leaves it
+# `null` and this check catches it.
+py_check_ledger() {
+  local label=$1 expr=$2
+  res=$("$PY" -c "
+import json
+target = None
+with open('$LEDGER', encoding='utf-8') as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get('repo') == '$REPO' and obj.get('pr') == 514:
+            target = obj
+d = target
+print(bool($expr))
+" 2>&1)
+  if [ "$res" = "True" ]; then ok "$label"; else bad "$label" "got: $res"; fi
+}
+py_check_ledger "before the session-bearing --replace, PR514's line has agents: null" "d['agents'] is None"
+
+run --repo "$REPO" --ledger "$LEDGER" --session sess-514 --replace 514
+[ "$rc" -eq 0 ] && ok "--replace with a session succeeds" || bad "--replace with session" "rc=$rc out=$out"
+py_check_ledger "C5: --replace genuinely changed PR514's content (agents: [] now, not null)" "d['agents'] == []"
+lines5=$(wc -l < "$LEDGER" | tr -d ' ')
+[ "$lines5" = "2" ] && ok "that --replace still did not change the line count" || bad "line count after content-changing replace" "got $lines5"
+
+# ----- C5: the duplicate key is (repo, pr), never pr alone -------------
+run --repo "other/repo" --ledger "$LEDGER" 514
+[ "$rc" -eq 0 ] && ok "C5: the SAME pr number (514) in a DIFFERENT repo is accepted, not treated as a duplicate" \
+  || bad "C5: dup key must include repo" "rc=$rc out=$out"
+lines6=$(wc -l < "$LEDGER" | tr -d ' ')
+[ "$lines6" = "3" ] && ok "ledger now has 3 lines (both repos' PR 514, plus the unrelated marker line)" \
+  || bad "line count after cross-repo write" "got $lines6"
+grep -c '"repo": "other/repo", "pr": 514' "$LEDGER" | grep -q '^1$' \
+  && ok "other/repo#514 is really present as its own line" || bad "other/repo#514 missing"
+grep -c "\"repo\": \"$REPO\", \"pr\": 514" "$LEDGER" | grep -q '^1$' \
+  && ok "$REPO#514 is still present, untouched by the cross-repo write" || bad "$REPO#514 missing after cross-repo write"
+
+# =========================================================================
+# GROUP G2 -- S3: --replace preserves blank lines and file mode, follows a
+# symlink through to its target, and detects a POSSIBLE duplicate (an
+# unparseable line whose raw text still names this repo+pr)
+# =========================================================================
+echo; echo "G2. S3 -- ledger structure preservation + possible-duplicate detection"
+
+REALLEDGER="$TMP/ledgers/real-ledger.jsonl"
+printf '%s\n' \
+  '{"kind":"pr-record","repo":"x/y","pr":1}' \
+  '' \
+  '{"kind":"pr-record","repo":"acme/widgets","pr":501,"session":{"id":"s TRUNCATED' \
+  '   ' \
+  '{"kind":"pr-record","repo":"z/z","pr":2}' \
+  > "$REALLEDGER"
+printf 'no-trailing-newline-marker' >> "$REALLEDGER"
+chmod 640 "$REALLEDGER"
+
+run --repo "$REPO" --ledger "$REALLEDGER" 501
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qi 'possibly.*already be a record\|unparseable'; then
+  ok "S3: an unparseable line naming this repo+pr REFUSEs as a possible duplicate"
+else
+  bad "S3: possible-duplicate detection" "rc=$rc out=$out"
+fi
+grep -qx '' "$REALLEDGER" && ok "S3: the REFUSE left the blank line intact" || bad "S3: blank line lost on REFUSE"
+
+run --repo "$REPO" --ledger "$REALLEDGER" --replace 501
+[ "$rc" -eq 0 ] && ok "S3: --replace overwrites even a possible (unparseable) duplicate" || bad "S3: --replace on possible dup" "rc=$rc out=$out"
+grep -qx '{"kind":"pr-record","repo":"x/y","pr":1}' "$REALLEDGER" && ok "S3: unrelated x/y#1 line still intact" || bad "S3: x/y#1 lost"
+grep -qx '{"kind":"pr-record","repo":"z/z","pr":2}' "$REALLEDGER" && ok "S3: unrelated z/z#2 line still intact" || bad "S3: z/z#2 lost"
+grep -qx '' "$REALLEDGER" && ok "S3: the blank line survived --replace too" || bad "S3: blank line lost on --replace"
+grep -qx '   ' "$REALLEDGER" && ok "S3: the whitespace-only line survived --replace too" || bad "S3: whitespace line lost on --replace"
+mode_after=$(stat -f '%Lp' "$REALLEDGER" 2>/dev/null || stat -c '%a' "$REALLEDGER" 2>/dev/null)
+[ "$mode_after" = "640" ] && ok "S3: the ledger's file mode (640) survived --replace" || bad "S3: file mode not preserved" "got $mode_after"
+
+# ----- symlink write-through -----
+LINKTARGET="$TMP/ledgers/link-target.jsonl"
+: > "$LINKTARGET"
+LEDGERLINK="$TMP/ledgers/ledger-link.jsonl"
+ln -s "$LINKTARGET" "$LEDGERLINK"
+run --repo "$REPO" --ledger "$LEDGERLINK" 501
+[ "$rc" -eq 0 ] && ok "S3: write through a symlinked ledger path succeeds" || bad "S3: symlink write" "rc=$rc out=$out"
+[ -L "$LEDGERLINK" ] && ok "S3: the ledger path is still a symlink (not replaced by a plain file)" || bad "S3: symlink was replaced by a plain file"
+lt_lines=$(wc -l < "$LINKTARGET" | tr -d ' ')
+[ "$lt_lines" = "1" ] && ok "S3: the record was actually written to the symlink's TARGET file" || bad "S3: write did not reach the symlink target" "got $lt_lines lines in target"
+
+# =========================================================================
+# GROUP G3 -- C4: exclusive lock, append-only for a new record, and two
+# concurrent writers both surviving
+# =========================================================================
+echo; echo "G3. C4 -- ledger locking and concurrent writers"
+
+APPENDLEDGER="$TMP/ledgers/append-only.jsonl"
+run --repo "$REPO" --ledger "$APPENDLEDGER" 501
+before_mtime_inode=$(stat -f '%i' "$APPENDLEDGER" 2>/dev/null || stat -c '%i' "$APPENDLEDGER" 2>/dev/null)
+run --repo "$REPO" --ledger "$APPENDLEDGER" 505
+after_inode=$(stat -f '%i' "$APPENDLEDGER" 2>/dev/null || stat -c '%i' "$APPENDLEDGER" 2>/dev/null)
+[ "$before_mtime_inode" = "$after_inode" ] && ok "C4: a brand-new (repo, pr) is APPENDED in place (same inode), never rewritten" \
+  || bad "C4: append should not replace the file's inode" "before=$before_mtime_inode after=$after_inode"
+[ -f "${APPENDLEDGER}.lock" ] && ok "C4: a sidecar <ledger>.lock file exists" || bad "C4: no lock file created"
+
+RACELEDGER="$TMP/ledgers/race.jsonl"
+: > "$RACELEDGER"
+( HOME="$HOMEDIR" "$PY" "$SUT" --repo "$REPO" --ledger "$RACELEDGER" 522 >/tmp/race1.$$out 2>&1 ) &
+PID1=$!
+( HOME="$HOMEDIR" "$PY" "$SUT" --repo "$REPO" --ledger "$RACELEDGER" 523 >/tmp/race2.$$out 2>&1 ) &
+PID2=$!
+wait "$PID1"; RC1=$?
+wait "$PID2"; RC2=$?
+rm -f "/tmp/race1.$$out" "/tmp/race2.$$out"
+[ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] && ok "C4: both concurrent writers exit 0" || bad "C4: concurrent writer exit codes" "rc1=$RC1 rc2=$RC2"
+race_lines=$(wc -l < "$RACELEDGER" | tr -d ' ')
+[ "$race_lines" = "2" ] && ok "C4: both concurrent writers' records survive (2 lines, neither clobbered the other)" \
+  || bad "C4: concurrent write line count" "got $race_lines"
+"$PY" -c "
+import json
+prs = set()
+with open('$RACELEDGER', encoding='utf-8') as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        obj = json.loads(line)  # must be valid JSON -- a torn/interleaved write would fail this
+        prs.add(obj['pr'])
+import sys
+sys.exit(0 if prs == {522, 523} else 1)
+"
+[ $? -eq 0 ] && ok "C4: both records are valid JSON with the expected PR numbers (522 and 523)" \
+  || bad "C4: concurrent write content"
 
 # =========================================================================
 # GROUP H -- no __pycache__ left behind anywhere in the checkout

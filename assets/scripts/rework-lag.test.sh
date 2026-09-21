@@ -1038,6 +1038,17 @@ jsonl_line_no_ts() { "$PY" -c "import json,sys; print(json.dumps({'type':'user',
 { jsonl_line "session abcdef: landed #101 today" "$D_T0_IN"; \
   jsonl_line "session abcdef: wrapping up" "$D_T1_IN"; } > "$PROJDIR/abcdef-full-id.jsonl"
 
+# 33333333: otherwise identical to aaaaaaaa (in-window, nominates #101), but
+# with a bare JSON ARRAY line mixed in between the two real lines.
+# _transcript_span_and_text used to call `.get("timestamp")` on whatever
+# json.loads() returned without checking it was a dict first -- a list has
+# no .get, so this crashed the whole --attribute run with an
+# AttributeError instead of just skipping the one line that isn't an
+# object.
+{ jsonl_line "session 33333333: landed #101 today" "$D_T0_IN"; \
+  echo '[1,2]'; \
+  jsonl_line "session 33333333: wrapping up" "$D_T1_IN"; } > "$PROJDIR/33333333-full-id.jsonl"
+
 cat > "$TMP/ledger.md" <<EOF
 | Date | Session | Notes |
 |---|---|---|
@@ -1050,6 +1061,7 @@ cat > "$TMP/ledger.md" <<EOF
 | 01-02 | 22222222 | note |
 | 01-02 | 11111111 | note |
 | 01-02 | abcdef | note |
+| 01-02 | 33333333 | note |
 EOF
 
 : > "$GH_LOG"
@@ -1074,7 +1086,9 @@ check("nominated but out-of-window (cccccccc) NOT credited", "cccccccc" not in s
 check("second in-window nominating session (dddddddd) also credited", "dddddddd" in sessions)
 check("cross-repo qualified nomination (otherowner/otherrepo#101) NOT credited",
       "11111111" not in sessions)
-check("exactly the two expected sessions, both listed", sessions == {"aaaaaaaa", "dddddddd"})
+check("non-object JSON line (bare array) mixed into a transcript doesn't crash "
+      "the run and 33333333 is still credited", "33333333" in sessions)
+check("exactly the three expected sessions, all listed", sessions == {"aaaaaaaa", "dddddddd", "33333333"})
 check("no per-PR 'ambiguous' key anywhere (FIX 2 shape)", "ambiguous" not in bucket101)
 
 unresolved = {u["sid"]: u["reason"] for u in d.get("attribution_unresolved", [])}

@@ -702,6 +702,15 @@ jobs:
         # removed SQL/Lua comment line (`-- ...`) becomes `--- ...` once
         # diffed and used to repath the rest of its hunk. Quoted non-ASCII
         # paths are unescaped so a file's adds and removes share one key.
+        #
+        # Fold-in from #270's round-2 review (pr-record.py reuses this
+        # script's `_transcript_span_and_text` for its own per-agent
+        # transcript reads): a JSON line that parses but isn't an object
+        # (a bare array/string/number) used to crash the whole function
+        # with an AttributeError the instant `.get("timestamp")` ran on
+        # it. It is now skipped like any other line that carries no
+        # usable timestamp, pinned by a fixture transcript with a bare
+        # `[1,2]` array mixed in between two real, nominating lines.
         run: ./assets/scripts/rework-lag.test.sh
 
       - name: session-distill regression tests
@@ -865,6 +874,82 @@ jobs:
         # rather than crashing. The ledger is JSONL, one line per
         # (repo, pr): a duplicate write REFUSES without `--replace`, which
         # itself rewrites atomically (temp file + `os.replace`) leaving
-        # every other line byte-for-byte untouched, and `--stdout` prints
-        # the record without ever touching the ledger file at all.
+        # every other line untouched, and `--stdout` prints the record
+        # without ever touching the ledger file at all.
+        #
+        # PR #270 round 2 (Opus review, 5 criticals + 5 suggestions + 2
+        # nitpicks, all fixed and pinned):
+        #
+        # C1: a `.result.json` that fails to parse, that fails
+        # review-result.py's own validate_document, or that validates but
+        # carries a null `pr`, can never supply a "result" link -- but
+        # when its raw text (or, for a parseable-but-invalid document, its
+        # own `pr` field) still points at this PR, it now adds an
+        # unknown[] entry naming the file and best-effort recovers a round
+        # number, forcing exit 2, instead of the round it represents
+        # silently vanishing from `rounds_missing`. C2: an unreadable
+        # (OSError) agent transcript or meta.json, and a transcript line
+        # that parses as JSON but is not an object, each add their own
+        # unknown[] entry rather than the agent quietly landing in
+        # `agents_unlinked` indistinguishable from "no evidence found".
+        # C3: the "result" link now requires `result.repo == repo`
+        # whenever `repo` is non-null (a same-numbered PR in a different
+        # repo is not evidence); the head_ref brief match is now bounded
+        # on both sides against `[A-Za-z0-9_./-]` (a branch called `fix`
+        # no longer matches inside "prefix"); and a NEW per-agent TIMING
+        # gate excludes any agent whose `started_at` is after the PR's own
+        # `merged_at` into a new `agents_after_merge` counter, with an
+        # agent that has no `started_at` at all excluded into
+        # `agents_unlinked` with its own unknown[] entry instead of
+        # linking on brief/result evidence alone -- reproduced on real
+        # data, where a later, unrelated session linked its own agent to
+        # PR #276 by brief text alone. C4: the ledger's read-check-write
+        # is now guarded by an exclusive `fcntl.flock` on a sidecar
+        # `<ledger>.lock`; a brand-new (repo, pr) is APPENDED as a single
+        # line rather than rewriting the whole file, and only `--replace`
+        # rewrites at all; a concurrent-writers test asserts two
+        # invocations racing the same ledger both survive. C5: the tests
+        # were hardened to actually catch a regression in each of --replace
+        # silently no-op'ing, the (repo, pr) duplicate key collapsing to
+        # `pr` alone, and validate_document being skipped -- each
+        # mutation-checked (broken, confirmed red, restored) rather than
+        # merely asserted once against working code. The tautological
+        # `session.nominates_pr: true` field (always true, since a
+        # non-nominating session always REFUSES before a record exists) is
+        # removed rather than computed.
+        #
+        # S1: a truncated `ci.runs` list (gh's own --limit reached) is now
+        # `null` + unknown[], matching the docstring's own claim -- a
+        # truncated list may be missing the very run that would have
+        # flipped `runs_failed`, so it is exactly as untrustworthy as a
+        # failed call. S2: a session is now resolved by its main
+        # TRANSCRIPT (`~/.claude/projects/*/<sid>.jsonl`), not by its
+        # sidecar directory -- 404 of 590 transcripts on the author's
+        # machine have no such directory at all, because a session that
+        # spawns no subagents never creates one, and that must read as
+        # `agents: []`, never a REFUSE. S3: `--replace` now preserves
+        # blank lines and the ledger's own file mode, follows a symlinked
+        # ledger path through to its target instead of overwriting the
+        # link itself, and treats an unparseable line whose raw text still
+        # names this PR and repo as a possible duplicate needing the same
+        # REFUSE (or `--replace`) as a confirmed one; the "byte-for-byte"
+        # preservation claim is removed since it was never quite true. S4:
+        # `tier()` is now imported from usage-pace.py by path instead of a
+        # second hand-maintained copy, and can record `"other"` for an
+        # unrecognized model family instead of only ever null; usage dedup
+        # now keys on `(message.id, requestId)` -- usage-pace.py's own key
+        # -- instead of `requestId` alone, pinned by two lines that share a
+        # requestId but differ in message.id. S5: `ci.final` now maps both
+        # of GitHub's statusCheckRollup shapes (`CheckRun` and the legacy
+        # `StatusContext`) into one {name, workflow, conclusion} form
+        # instead of silently dropping every StatusContext entry.
+        #
+        # Nitpick: `rounds_missing` is now an object keyed by skill
+        # (`{"agent-review": [1, 2]}`), computed independently per skill,
+        # rather than one flat list that could let one skill's complete
+        # round history mask another's gap -- pinned by a fixture with two
+        # different rounds recorded by two different agents under the same
+        # skill, distinguishing "subtract every recorded round" from
+        # "enumerate everything below the max" (the latter passes by
+        # accident whenever only the highest round is ever on file).
         run: ./assets/scripts/pr-record.test.sh
