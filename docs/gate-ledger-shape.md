@@ -44,8 +44,9 @@ against the base, which `check` does not have.
 ## The record (schema_version 1)
 
 Illustrative values; a `gates.jsonl` line carries all of these. A `gate` field in `skill-guards.json`
-carries everything except `id` and `kind`, because both are derived from the
-guard.
+carries `targets`, `added`, `evidence` and an optional `note`. Its `id` and `kind`
+are derived from the guard, `where` is the guard's own location, and
+`schema_version` defaults to 1, so all four are optional there.
 
 ```json
 {
