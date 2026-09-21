@@ -143,8 +143,10 @@ THE RECORD (schema_version 2), one per run, appended to
                          label auditable rather than a bare string. `kind`
                          is free text; the distill call is instructed to
                          use "verification" for a claim resting on a
-                         VERIFICATION COMMANDS entry and "omitted-gate" for
-                         a brief-named gate that never ran (proof null).
+                         VERIFICATION COMMANDS entry. It is told NOT to
+                         restate gates_run/gates_named_not_run as claims
+                         (#286: 3 of 8 re-run records did, each drawing a
+                         spurious absence label).
   verifications[]        DETERMINISTIC, never from the model -- one entry
                          per Bash tool_use, classified into zero or more of
                          test/lint/build/ci_read (see REPORT EXTRACTION AND
@@ -231,9 +233,8 @@ OLD stub silently stored "". Two things follow:
     on every record verbatim -- the distill model call is handed them as a
     `--- VERIFICATION COMMANDS ---` prompt section and instructed (in
     DISTILL_SYSTEM_PROMPT) to turn every verification whose result shaped
-    the report or an intermediate decision into its own claim, and every
-    `gates_named_not_run` category into an "omitted-gate" claim with
-    `proof` null -- but the persisted verifications[]/gates_run/
+    the report or an intermediate decision into its own claim, and never
+    to restate the gates fields as claims of its own -- the persisted verifications[]/gates_run/
     gates_named_not_run fields never depend on what the model returns.
 
 WHAT `runs` REFUSES TO GUESS, and what it does not guess at all: session id
@@ -1484,9 +1485,12 @@ DISTILL_SYSTEM_PROMPT = (
     "(kind \"verification\"), even when the report never restates it and "
     "even when a LATER entry re-checked the same thing -- a defective "
     "earlier check that a later one superseded is still a claim, not "
-    "discarded in favor of the one best proof. Each category named in "
-    "`gates_named_not_run` becomes a claim of kind \"omitted-gate\" with "
-    "`proof` null. Return only the JSON object the schema describes."
+    "discarded in favor of the one best proof. Claims are about the RUN, "
+    "never about this prompt: do not claim that a gate was or was not run, "
+    "or that a section is empty, on the strength of VERIFICATION COMMANDS "
+    "or gates_named_not_run -- those are recorded deterministically "
+    "already, and a claim restating them has no proof in the run. "
+    "Return only the JSON object the schema describes."
 )
 
 CHAIN_SYSTEM_PROMPT = (

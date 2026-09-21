@@ -1267,7 +1267,10 @@ spec.loader.exec_module(sd)
 
 assert "VERIFICATION COMMANDS" in sd.DISTILL_SYSTEM_PROMPT.upper() \
     or "verification" in sd.DISTILL_SYSTEM_PROMPT.lower(), sd.DISTILL_SYSTEM_PROMPT
-assert "omitted-gate" in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
+# #286: the model is told NOT to restate the gates fields as claims -- the
+# #285 "omitted-gate" instruction produced claims about the prompt itself
+assert "omitted-gate" not in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
+assert "never about this prompt" in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
 assert "harness_error" in sd.DISTILL_SYSTEM_PROMPT, sd.DISTILL_SYSTEM_PROMPT
 
 r = {
@@ -1298,7 +1301,7 @@ r2 = {"id": "agent-y", "kind": "subagent", "description": "d", "brief": "b", "re
       "tool_calls": 0, "tool_trace": []}
 sd.build_distill_prompt(r2)
 PY
-[ $? -eq 0 ] && ok "#285: DISTILL_SYSTEM_PROMPT mentions omitted-gate/harness_error; build_distill_prompt renders VERIFICATION COMMANDS + gates, and tolerates a stub missing those keys" \
+[ $? -eq 0 ] && ok "#285: DISTILL_SYSTEM_PROMPT forbids claims restating the gates fields and mentions harness_error; build_distill_prompt renders VERIFICATION COMMANDS + gates, and tolerates a stub missing those keys" \
   || bad "#285: build_distill_prompt VERIFICATION COMMANDS section" "rc=nonzero"
 
 # ---- verifications/gates_run/gates_named_not_run persist on the RECORD

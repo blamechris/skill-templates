@@ -123,9 +123,12 @@ distilled as if it were real.
 - The distill call is handed all of this as a `--- VERIFICATION COMMANDS
   ---` prompt section and instructed to turn every entry whose result
   shaped the report or an intermediate decision into its own claim (kind
-  `"verification"`, even when a later entry re-checked the same thing), and
-  every `gates_named_not_run` category into a `"omitted-gate"` claim with
-  `proof` null — but `verifications`/`gates_run`/`gates_named_not_run` are
+  `"verification"`, even when a later entry re-checked the same thing). It is
+  told **not** to restate the gates fields as claims (#286): the #285 wording
+  asked for an `"omitted-gate"` claim per named-not-run gate, and on the 8-run
+  re-run 3 records made claims about the prompt's own sections ("no gates were
+  named as not run", "no build commands were executed") with null proof, each
+  then labelled `absence-without-second-search`. `verifications`/`gates_run`/`gates_named_not_run` are
   persisted on the record regardless of what the model actually returns.
 - **`--resume` refuses a document written under a different
   `schema_version`** rather than mixing old-shape and new-shape records in
