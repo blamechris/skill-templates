@@ -174,7 +174,8 @@ copy of the first three:
 cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
    assets/scripts/usage-pace.py assets/scripts/filed-from.py \
    assets/scripts/review-result.py assets/scripts/rework-lag.py \
-   assets/scripts/session-distill.py assets/scripts/pr-record.py ~/.claude/scripts/
+   assets/scripts/session-distill.py assets/scripts/pr-record.py \
+   assets/scripts/gate-ledger.py ~/.claude/scripts/
 ```
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
@@ -213,7 +214,15 @@ additionally REFUSEs unless the PR's `mergedAt` falls inside that transcript's o
 is linked to the PR only with recorded evidence (its `.result.json`'s own `pr`, or its first
 message naming the PR or its branch), never by session membership alone, and `rounds_missing`
 makes visible what `review-result.py`'s no-overwrite-without-`--force` rule otherwise hides — a
-PR reviewed three times by the same agent leaves only its last round on disk. Each ships with a
+PR reviewed three times by the same agent leaves only its last round on disk.
+`gate-ledger.py` (#272, epic #266) records, for every gate — a `skill-guards.json` guard, a hook,
+a CI step, a script-check, a doctrine rule — the failure mode it targets (a label from
+`session-distill.py`'s closed vocabulary, imported rather than restated) and the evidence chain
+that justified adding it, then joins that against `session-distill.py` output by exact
+`(session, run)` and against `pr-record.py`'s ledger by exact `(repo, pr)` — no substring, no
+fallback guessing either way. #263/#264 is the case it exists for: a guard was built for a frozen
+sample file, the freeze was never real, and nothing recorded that the guard targeted a sensor
+defect while the trace named a reasoning defect, so nothing could compare them. Each ships with a
 sibling `<name>.test.sh` in
 the registry, run by CI, and that is where their behaviour is pinned — this file states the
 doctrine, not the code. Bootstrap all or none: a machine with a stale
