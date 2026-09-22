@@ -2778,6 +2778,9 @@ def cmd_report(a):
             die("cannot read %s (%s)" % (path, e))
 
     if a.json:
+        # #294: same outstanding-only view as the text report -- the JSON is
+        # what automation reads, so it must not carry superseded failures.
+        doc = dict(doc, failures=outstanding_failures(doc.get("failures"), doc.get("records")))
         print(json.dumps(doc, indent=2, ensure_ascii=False))
         return 0
 

@@ -2195,6 +2195,10 @@ case "$out" in
   *"failures: 2"*) ok "#294: report counts only outstanding failures on a document with a stale distill entry" ;;
   *) bad "#294: report counts only outstanding failures" "$out" ;;
 esac
+OUT_YJ=$(HOME="$HOMEDIR" "$PY" "$SUT" report --in "$TMP/out-y-legacy.json" --json 2>/dev/null)
+echo "$OUT_YJ" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); r=sorted(x["run"] for x in d["failures"]); assert r == ["agent-cccc0003", "main-turn-002"], r'
+[ $? -eq 0 ] && ok "#294: report --json also carries only outstanding failures" \
+  || bad "#294: report --json carries only outstanding failures" "$OUT_YJ"
 
 # ...and --resume over that same pre-fix document drops the stale entry at
 # load time, even though no run is re-attempted (every run already has a record).
