@@ -2851,6 +2851,127 @@ run_stdout sess-bac runs --json
 echo "$out" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert len(d["spawn_links"]["links"]) == 1 and d["spawn_links"]["unowned"] == [], d["spawn_links"]'
 [ $? -eq 0 ] && ok "#298: runs --json carries spawn_links" || bad "#298: runs --json spawn_links" "$out"
 
+# A brief call is not a distill call and must not be PROJECTED as one: it is
+# handed the brief only, and measured at $0.051 against $0.167.
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd_298k", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+assert sd.DEFAULT_BRIEF_COST_PER_CALL_USD < sd.DEFAULT_COST_PER_CALL_USD, (
+    sd.DEFAULT_BRIEF_COST_PER_CALL_USD, sd.DEFAULT_COST_PER_CALL_USD)
+PY
+[ $? -eq 0 ] && ok "#298: a brief call carries its own measured cost basis, below the distill/chain one" \
+  || bad "#298: DEFAULT_BRIEF_COST_PER_CALL_USD"
+
+run sess-bac distill --dry-run --brief-claims --out -
+"$PY" - "$SUT" <<PY
+import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("sd_298k2", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+out = """$out"""
+# 2 runs * 2 calls at the distill basis + 1 brief call at the brief basis --
+# NOT 5 * the distill basis, which is what a single-basis projection gave.
+want = 4 * sd.DEFAULT_COST_PER_CALL_USD + 1 * sd.DEFAULT_BRIEF_COST_PER_CALL_USD
+m = re.search(r"calls \(projected\): 5   cost \(projected\): \\\$([0-9.]+)", out)
+assert m, out
+assert abs(float(m.group(1)) - want) < 5e-5, (m.group(1), want)
+assert abs(want - 5 * sd.DEFAULT_COST_PER_CALL_USD) > 0.1, "the two bases must differ enough to matter"
+assert "brief call(s)" in out and "overstates it" in out, out
+PY
+[ $? -eq 0 ] && ok "#298: --dry-run prices brief calls on their own basis and names both, instead of charging them as distill calls" \
+  || bad "#298: --dry-run two-basis projection" "$out"
+
+# A brief claim id that collides with a DISTILL claim id is renamed, never
+# collapsed into one pointer.
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd_298d", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+# normalize_brief_claims strips the tilde, so a rename can never collide with
+# an id the model could itself have produced.
+assert sd.normalize_brief_claims([{"id": "c1~2"}], "agent-x", 1, "Agent")[0]["id"] == "b1.c12"
+
+claims = sd.normalize_claims([{"id": "b1.c10", "text": "t", "kind": "k"},
+                              {"id": "b1.c10~2", "text": "t", "kind": "k"}])
+brief = sd.normalize_brief_claims([{"id": "c10", "text": "b", "kind": "issue-state"}],
+                                  "agent-x", 1, "Agent")
+assert brief[0]["id"] == "b1.c10", brief
+fixed = sd.disambiguate_brief_claims(claims, brief)
+# ~2 is taken by a claim, so the rename walks on to ~3.
+assert [c["id"] for c in fixed] == ["b1.c10~3"], fixed
+assert brief[0]["id"] == "b1.c10", "the input list must not be mutated"
+# idempotent, and a no-op when nothing collides
+assert sd.disambiguate_brief_claims(claims, fixed) == fixed
+assert sd.disambiguate_brief_claims([], brief) == brief
+
+# ...and the record addresses the RENAMED id, with both claims still distinct.
+stub = {"id": "main-turn-001", "kind": "main-turn", "tool_inputs_full": []}
+rec, dropped = sd.build_record(
+    "s", stub, {"claims": [{"id": "b1.c10", "text": "the run's own claim", "kind": "k"}]},
+    {"later_wrong": [{"claim": "b1.c10~2", "how": "h",
+                      "contradicted_by": {"run": "agent-x", "at": "t", "quote": "q"}}],
+     "classified_as": [{"label": "recalled-not-reopened", "supports": ["b1.c10~2"], "why": "w"}]},
+    "now", "sonnet", {"distill": {"cost_usd": 0.1, "num_turns": 1}}, ["distill", "chain"],
+    [{"run": "agent-x", "repo_match": "n/a", "claims": ["b1.c10~2"], "source": "brief-as-claims"}],
+    brief)
+assert not dropped, dropped
+assert [c["id"] for c in rec["claims"]] == ["b1.c10"], rec["claims"]
+assert [c["id"] for c in rec["brief_claims"]] == ["b1.c10~2"], rec["brief_claims"]
+assert rec["later_wrong"][0]["claim"] == "b1.c10~2", rec["later_wrong"]
+assert rec["classified_as"][0]["supports"] == ["b1.c10~2"], rec["classified_as"]
+PY
+[ $? -eq 0 ] && ok "#298: a brief claim id colliding with a distill claim id is renamed (never collapsed into one pointer), the rename is idempotent and unreachable by the model, and the record addresses the renamed id" \
+  || bad "#298: disambiguate_brief_claims"
+
+# ...and the rename happens BEFORE the chain call, not only on the way to the
+# record: a prompt (and a candidate's claim list) carrying the pre-rename id
+# while the record carries the post-rename one is a pointer mismatch that
+# withdraws real later_wrong entries. build_record alone cannot catch this.
+cat > "$TMP/stub_bacdup.py" <<'STUBEOF'
+import json, os, sys
+stdin = sys.stdin.read()
+pass_kind = None
+for line in stdin.splitlines():
+    if line.startswith("SESSION_DISTILL_PASS: "): pass_kind = line[22:]
+def env(doc): return {"is_error": False, "result": json.dumps(doc), "total_cost_usd": 0.01}
+if pass_kind == "distill":
+    # the distill call answers with the id the BRIEF pass will also mint
+    doc = {"asked": "a", "understood": "a", "delivered": "a",
+           "claims": [{"id": "b1.c1", "text": "the run's own claim", "kind": "outcome",
+                       "proof": None, "quote": None}]}
+elif pass_kind == "brief":
+    doc = {"claims": [{"id": "c1", "text": "#250 is open", "kind": "issue-state",
+                       "quote": "I filed that as #250"}]}
+else:
+    with open(os.environ["BACDUP_PROMPT"], "w", encoding="utf-8") as f:
+        f.write(stdin)
+    doc = {"later_wrong": [{"claim": "b1.c1~2", "how": "the brief's claim was stale",
+                            "contradicted_by": {"run": "agent-bac00000001", "at": "t", "quote": "q"}}],
+           "classified_as": [{"label": "recalled-not-reopened", "supports": ["b1.c1~2", "0"],
+                              "why": "w"}]}
+print(json.dumps(env(doc)))
+STUBEOF
+BACDUP_PROMPT="$TMP/bacdup-prompt.txt" \
+  run sess-bac distill --brief-claims --only main-turn-001 --out "$TMP/out-bacdup.json" \
+      --model-cmd "$PY $TMP/stub_bacdup.py"
+"$PY" - "$TMP/out-bacdup.json" "$TMP/bacdup-prompt.txt" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+prompt = open(sys.argv[2], encoding="utf-8").read()
+rec = next(r for r in d["records"] if r["run"]["id"] == "main-turn-001")
+assert [c["id"] for c in rec["claims"]] == ["b1.c1"], rec["claims"]
+assert [c["id"] for c in rec["brief_claims"]] == ["b1.c1~2"], rec["brief_claims"]
+# the MODEL was shown the renamed id, in the brief-claims section...
+assert '"id": "b1.c1~2"' in prompt, prompt
+# ...and the brief-as-claims candidate names it too, so the #287 ambiguity
+# guard sees the same pointer the record keeps.
+assert rec["later_wrong"] and rec["later_wrong"][0]["claim"] == "b1.c1~2", rec["later_wrong"]
+assert [c["label"] for c in rec["classified_as"]] == ["recalled-not-reopened"], rec["classified_as"]
+PY
+[ $? -eq 0 ] && ok "#298: the collision rename happens before the chain call, so the prompt, the candidate claim lists and the record all address one id" \
+  || bad "#298: rename before the chain call" "rc=$rc $out"
+
 # ============================================================ GROUP Z — #288: per-pass cost accounting
 echo; echo "Z. #288 — per-pass cost on records, failed-attempt spend, verbatim envelope detail, timeout default"
 

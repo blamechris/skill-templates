@@ -155,13 +155,32 @@ ONLY -- no report, no tool trace -- so measured on 13cee7be main-turn-023
 (2026-09-22), 9 brief calls cost $0.459 in total ($0.051 each) against
 $0.688 for that run's own distill call and $0.400 for its chain call.
 `--dry-run` counts the brief calls from the owner map (one per SPAWNED run,
-not one per selected run) and prints them apart. The pass is opt-in
-because the call count is real even when the dollars are small: 133 extra
-calls on that session, 320 -> 453.
+not one per selected run) and prices them on their OWN basis,
+DEFAULT_BRIEF_COST_PER_CALL_USD -- charging them at
+DEFAULT_COST_PER_CALL_USD overstated a full-session projection by $15
+($75.65 against $60.22), an estimate contradicted by a measurement made in
+the same change. The pass is opt-in because the call count is real even
+when the dollars are small: 133 extra calls on that session, 320 -> 453.
+
+ONE KNOWN BOUND, STATED RATHER THAN LEFT TO BE FOUND: the RUNTIME
+`--max-cost-usd` calibration (`calibrated_cost_per_call`) averages every
+observed call cost together, so a run with many cheap brief calls pulls the
+average down and the pre-call projection for the NEXT, expensive call with
+it. The post-call check on OBSERVED spend still fires, so the budget
+overshoot stays bounded by one call's cost exactly as it already was; what
+a per-phase average would buy is a tighter PRE-call gate, and it would
+change `--jobs 1` projections for every existing pass. That is the same
+per-pass-average trade #301 left unfiled, not a new one this pass
+introduces, and it is not taken here.
 
 Each brief's claims are namespaced `b<k>.<id>` and carried on the owner's
 record as `brief_claims[]` -- never folded into `claims[]`, which stays
-what THIS run's own report asserted. The spawned run's whole REPORT reaches
+what THIS run's own report asserted. The `b<k>.` namespace separates one
+spawned run's claims from another's but not from the DISTILL call's own
+ids, which are whatever the model returned, so
+`disambiguate_brief_claims` renames a collision `<id>~2` BEFORE the chain
+prompt is written -- the alternative is not an error but a silent collapse
+of two assertions into one pointer. The spawned run's whole REPORT reaches
 the owner's chain call as a guaranteed candidate (`source:
 "brief-as-claims"`), so a brief claim the spawned run found stale becomes a
 `later_wrong` on the OWNER with `recalled-not-reopened` as its label. Found
@@ -725,6 +744,16 @@ DEFAULT_MODEL_CMD = (
 # be corrected once, real payloads still vary, and the fix is to measure
 # again, not to hand-pick a second guess.
 DEFAULT_COST_PER_CALL_USD = 0.167
+# #298: a BRIEF call is not a distill/chain call and must not be projected as
+# one. It is handed the brief ONLY -- no report, no tool trace -- which is
+# most of what makes the other two expensive. Measured 2026-09-22 on
+# 13cee7be main-turn-023: 9 brief calls, $0.4588 total, $0.051 each, against
+# $0.6885 for that run's own distill call and $0.4004 for its chain call.
+# Projecting brief calls at DEFAULT_COST_PER_CALL_USD overstated a
+# --brief-claims dry run by ~3x -- an estimate nobody checked against the
+# measurement made in the same change, which is the failure this file exists
+# to catch.
+DEFAULT_BRIEF_COST_PER_CALL_USD = 0.051
 # #288: 180 was exceeded by a real main turn in #273's calibration slice,
 # and every live validation since (#273's proof, #299's) has had to pass
 # --timeout-secs 540 by hand. A timeout that every real run overrides is
@@ -2534,6 +2563,41 @@ def normalize_brief_claims(raw, spawned_run_id, k, via_tool):
     return out
 
 
+def disambiguate_brief_claims(claims, brief_claims):
+    """BRIEF_CLAIMS with any id that collides with a `claims[]` id (or with an
+    earlier brief claim's) renamed `<id>~2`, `<id>~3`, ...
+
+    The `b<k>.` namespace separates one spawned run's brief claims from
+    another's, but nothing separates them from the DISTILL call's own claim
+    ids: `normalize_claims` mints whatever id the model returned, so a distill
+    call that happened to answer `b1.c10` would collide with a brief claim of
+    the same name. `build_record` addresses both lists through ONE
+    `claim_ids` set, so the collision does not error -- it silently collapses
+    two different assertions into one pointer, and a `later_wrong` citing it
+    becomes ambiguous about which claim it contradicts. Unreachable in
+    practice (both system prompts ask for plain `c1, c2, ...`) and cheap to
+    make impossible, which is the trade this file takes everywhere else.
+
+    `~` is deliberate: `normalize_brief_claims` strips it out of a model's id,
+    so a rename can never collide with an id the model could have produced,
+    and a `~`-bearing id is never digit-only, so it can never be read as a
+    `later_wrong` index pointer. Idempotent -- a second call over already-
+    distinct ids returns them unchanged."""
+    taken = {c["id"] for c in claims or []}
+    out = []
+    for bc in brief_claims or []:
+        cid = bc["id"]
+        if cid in taken:
+            n = 2
+            while "%s~%d" % (cid, n) in taken:
+                n += 1
+            cid = "%s~%d" % (cid, n)
+            bc = dict(bc, id=cid)
+        taken.add(cid)
+        out.append(bc)
+    return out
+
+
 def brief_claim_candidates(owner_run, brief_claims_by_run, runs_by_id):
     """The chain candidates an OWNER run gets from the runs it spawned: one
     per spawned run whose brief yielded claims, carrying that run's whole
@@ -3121,7 +3185,10 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
     # with one. They are kept in their own list on the record (a consumer
     # asking "what did this run verify?" must not get an assertion nothing
     # in this run ever checked), and unified only for pointer resolution.
-    brief_claims = list(brief_claims or [])
+    # Idempotent over what `cmd_distill` already resolved; the real work here
+    # is the budget-stop path, which builds a record without ever having run
+    # the chain call and so never passed through that resolution.
+    brief_claims = disambiguate_brief_claims(claims, list(brief_claims or []))
     addressable = claims + brief_claims
     claim_ids = {c["id"] for c in addressable}
     later_wrong, dropped_later_wrong, lw_index_map = normalize_later_wrong(
@@ -3390,7 +3457,9 @@ def cmd_distill(a):
         brief_calls = (sum(len(owned_by.get(r["id"]) or []) for r in todo)
                        if a.brief_claims else 0)
         calls = len(todo) * 2 + brief_calls
-        projected = calls * DEFAULT_COST_PER_CALL_USD
+        # Each basis priced separately -- see DEFAULT_BRIEF_COST_PER_CALL_USD.
+        projected = (len(todo) * 2 * DEFAULT_COST_PER_CALL_USD
+                     + brief_calls * DEFAULT_BRIEF_COST_PER_CALL_USD)
         print("session: %s" % sid)
         print("session_dir: %s" % session_dir)
         print("segmented_by: %s" % segmented_by)
@@ -3402,13 +3471,19 @@ def cmd_distill(a):
         # number -- DEFAULT_COST_PER_CALL_USD is a fixed constant measured
         # 2026-09-20 on real payloads (see its own comment), not a formula;
         # --dry-run makes zero calls, so it is the only basis available.
-        print("brief-as-claims: %s   brief calls (projected): %d   owners in this selection: %d" % (
-            "on" if a.brief_claims else "off (pass --brief-claims)",
-            brief_calls, sum(1 for r in todo if owned_by.get(r["id"]))))
+        print("brief-as-claims: %s   brief calls (projected): %d   owners in this selection: %d"
+              "   cost (projected): $%.4f" % (
+                  "on" if a.brief_claims else "off (pass --brief-claims)",
+                  brief_calls, sum(1 for r in todo if owned_by.get(r["id"])),
+                  brief_calls * DEFAULT_BRIEF_COST_PER_CALL_USD))
         print("calls (projected): %d   cost (projected): $%.4f  "
-              "(basis: $%.4f/call, DEFAULT_COST_PER_CALL_USD measured 2026-09-20 "
-              "on real payloads -- no live calls made yet to calibrate against)"
-              % (calls, projected, DEFAULT_COST_PER_CALL_USD))
+              "(basis: $%.4f/call for %d distill/chain call(s), DEFAULT_COST_PER_CALL_USD "
+              "measured 2026-09-20 on real payloads; $%.4f/call for %d brief call(s), "
+              "DEFAULT_BRIEF_COST_PER_CALL_USD measured 2026-09-22 -- a brief call carries "
+              "no report and no tool trace, so pricing it as a distill call overstates it "
+              "~3x. No live calls made yet to calibrate against)"
+              % (calls, projected, DEFAULT_COST_PER_CALL_USD, len(todo) * 2,
+                 DEFAULT_BRIEF_COST_PER_CALL_USD, brief_calls))
         if unreadable:
             print("unreadable:")
             for u in unreadable:
@@ -3578,6 +3653,14 @@ def cmd_distill(a):
             return {"record": record, "dropped_lw": dropped_lw, "failures": run_failures}
 
         claims = resolve_claims(distilled_doc.get("claims"), r.get("tool_inputs_full") or [])
+        # Resolved HERE, before the chain prompt is written, so the ids the
+        # model is shown are the ids the record persists. `brief_by_run` is
+        # rebuilt from the result rather than kept alongside it: a renamed
+        # claim must not survive under its old id in a candidate's claim list.
+        brief_claims = disambiguate_brief_claims(claims, brief_claims)
+        brief_by_run = {}
+        for bc in brief_claims:
+            brief_by_run.setdefault(bc["from_run"], []).append(bc)
         other_runs = [x for x in all_runs if x["id"] != r["id"]]
         current_repos = set(r.get("repos") or [])
         candidates = merge_round_pair_candidates(

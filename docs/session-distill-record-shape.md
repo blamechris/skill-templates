@@ -56,11 +56,7 @@ is where its brief lives.
      "quote": "...verbatim from the report...",
      "proof_located": true}
   ],
-  "brief_claims": [
-    {"id": "b1.c10", "text": "...a repo-state assertion THIS run made in a brief...",
-     "kind": "defect-location", "quote": "...verbatim from the brief...",
-     "source": "brief", "from_run": "agent-a125a8c132b05b56c", "via_tool": "Agent"}
-  ],
+  "brief_claims": [],
   "verifications": [
     {"index": 12, "tool_use_id": "toolu_...", "categories": ["lint"],
      "command": "swift format lint --recursive --strict Sources Tests Tools 2>&1 | head -50; echo \"EXIT=$?\"",
@@ -81,6 +77,36 @@ is where its brief lives.
   "distilled": {"at": "...Z", "model": "sonnet", "cost_usd": 0.6124, "passes": ["distill","chain"],
                 "calls": {"distill": {"cost_usd": 0.4011, "num_turns": 2},
                           "chain":   {"cost_usd": 0.2113, "num_turns": 2}}}
+}
+```
+
+`brief_claims` is `[]` here, and that is the ordinary case rather than an
+omission: only a run that SPAWNED others can own one, and `resolve_spawn_links`
+only ever resolves an owner to a **main turn**, so this subagent record could
+not carry an entry whatever flags were passed. A populated one, on the main
+turn that wrote the brief, with the `brief` pass its presence implies:
+
+```json
+{
+  "run": {"id": "main-turn-023", "kind": "main-turn", "spawned_by": null},
+  "brief_claims": [
+    {"id": "b1.c10",
+     "text": "Issue #239 concerns two tests that release the harness before the connection it backs is used, at HelperClientConnectionTests.swift:110-112 and HelperClientTests.swift:172-173",
+     "kind": "defect-location",
+     "quote": "two tests release the harness before the connection it backs is used (`HelperClientConnectionTests.swift:110-112`, `HelperClientTests.swift:172-173`)",
+     "source": "brief", "from_run": "agent-a125a8c132b05b56c", "via_tool": "Agent"}
+  ],
+  "later_wrong": [
+    {"claim": "b1.c10", "how": "the brief gave #239's line numbers and scope from an earlier read",
+     "contradicted_by": {"run": "agent-a125a8c132b05b56c", "at": "2026-09-20T05:29:00Z",
+                         "quote": "#239's line numbers and half its scope were stale"}}
+  ],
+  "classified_as": [{"label": "recalled-not-reopened", "supports": ["b1.c10", "0"], "why": "..."}],
+  "distilled": {"at": "...Z", "model": "sonnet", "cost_usd": 1.5477,
+                "passes": ["distill","brief","chain"],
+                "calls": {"distill": {"cost_usd": 0.6885, "num_turns": 3},
+                          "brief":   {"cost_usd": 0.4588, "num_turns": 24, "calls": 9},
+                          "chain":   {"cost_usd": 0.4004, "num_turns": 3}}}
 }
 ```
 
@@ -386,7 +412,12 @@ can be audited without paying for the extraction.
 Each brief's claims are namespaced `b<k>.<id>` (k being the spawned run's
 position in its owner's spawn list) and land on the owner's record as
 `brief_claims[]` — **never folded into `claims[]`**, which stays what this run's
-own report asserted. The spawned run's whole report reaches the owner's chain
+own report asserted. That namespace separates one spawned run's claims from
+another's but not from the distill call's own ids, which are whatever the model
+returned; `disambiguate_brief_claims` renames a collision `<id>~2` **before the
+chain prompt is written**, since `build_record` addresses both lists through one
+id set and a collision there is not an error but a silent collapse of two
+assertions into one pointer. The spawned run's whole report reaches the owner's chain
 call as a guaranteed candidate (`source: "brief-as-claims"`, `repo_match:
 "n/a"` — the link is the spawn, not an `#N` match), on one head+tail budget
 split across the owner's spawned runs.
@@ -398,8 +429,22 @@ distill-style call per spawned run"; a brief call is handed the **brief only**
 $0.051 each**, against $0.688 for that run's own distill call and $0.400 for
 its chain call. The call COUNT is still real — 133 extra calls session-wide,
 320 → 453 — which is why the pass is opt-in and `--dry-run` counts brief calls
-from the owner map (one per *spawned* run, not one per selected run) and prints
-them apart.
+from the owner map (one per *spawned* run, not one per selected run).
+
+`--dry-run` prices them on their own basis, `DEFAULT_BRIEF_COST_PER_CALL_USD`.
+The first cut charged them at `DEFAULT_COST_PER_CALL_USD` and so projected
+**$75.65** for the full session against **$60.22** — an estimate contradicted
+by a measurement made in the same change, which is the failure this whole file
+exists to catch.
+
+One known bound, stated rather than left to be found: the **runtime**
+`--max-cost-usd` calibration averages every observed call cost together, so
+many cheap brief calls pull down the pre-call projection for the next
+expensive one. The post-call check on observed spend still fires, so the
+overshoot stays bounded by one call's cost exactly as it already was; a
+per-phase average would tighten the *pre*-call gate and would change `--jobs 1`
+projections for every existing pass. That is #301's unfiled per-pass-average
+trade, not a new one, and it is not taken here.
 
 **Measured on `13cee7be`, live.** `main-turn-023` came back with three
 `recalled-not-reopened` labels, each on a brief claim and each cited from the
