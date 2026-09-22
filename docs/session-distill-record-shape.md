@@ -22,12 +22,12 @@ distiller that reads only `subagents/**` cannot see it and fails its own
 acceptance. The main session is a run; it is segmented by user turn because that
 is where its brief lives.
 
-## The record (schema_version 3)
+## The record (schema_version 4)
 
 ```json
 {
   "kind": "session-distill-record",
-  "schema_version": 3,
+  "schema_version": 4,
   "session": "13cee7be-edd8-4dfc-afe3-093e899db85b",
   "run": {
     "id": "agent-a1794d4c28be50f83",
@@ -50,7 +50,9 @@ is where its brief lives.
   "delivered":  "...",
   "claims": [
     {"id": "c1", "text": "...", "kind": "verification",
-     "proof": "...or null when the report asserts without naming a check...",
+     "proof_index": 12,
+     "proof_snippet": "swift format lint --recursive",
+     "proof": "...DERIVED from trace entry [proof_index]; null when uncited or out of range...",
      "quote": "...verbatim from the report...",
      "proof_located": true}
   ],
@@ -173,6 +175,35 @@ wrote `=="` for `==="` (main-turn-005 c2). None of the 8 records fails
 the all-unlocatable test; the placeholder record's one proof is 1/1
 unlocatable. A first-piece-only matcher reported 2 of 211, but only
 because a piece like `cd` matched vacuously.
+
+### #295 — the trace-index proof contract (schema_version 4)
+
+#291's locator matched a model-WRITTEN `proof` string, and the model writes
+it in whatever style a sample settles on: ` → output`, ` ... output: …`,
+a `[N]` prefix, stripped double quotes. On session `13cee7be` the same
+run's unlocatable rate swung 0–89% between samples, mostly from separator
+styles the locator did not strip rather than from real paraphrase.
+
+The model no longer writes `proof`. Each claim returns **`proof_index`**
+(the `[N]` of the TOOL TRACE entry) and **`proof_snippet`** (a short
+fragment copied verbatim from that entry's command). Then:
+
+- `proof` is **derived**: `tool_inputs_full[proof_index]`, head+tail
+  excerpted at 300+300 characters like a verification's `command`, or
+  `null` when the index is null or out of range. Anything the model put in
+  a `proof` field is discarded, so a record's `proof` cannot be a paraphrase.
+- `proof_located` is true iff the index is in range **and** the snippet
+  occurs in **that** entry, using #291's piece matcher and 8-character
+  floor. A real snippet cited against the wrong index is unlocatable, as is
+  an index with no snippet.
+- A claim **cites** a proof when it has a `proof_index`, a
+  `proof_snippet`, or a legacy free-text `proof`. `proof_located` is `null`
+  only for a claim that cites nothing. A legacy `proof` with no index
+  counts as cited and never locates, so a placeholder that ignores the
+  index contract still trips #291's all-unlocatable FAILURE.
+
+This adds no model calls. The distill input is unchanged, and the output
+is a short fragment instead of a full command string.
 
 ### #287 — repo-qualified `#N` retrieval
 
