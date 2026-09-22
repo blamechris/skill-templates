@@ -1845,7 +1845,7 @@ PY
 [ $? -eq 0 ] && ok "#291: locate_proof_fragment strips [N]/ToolName: prefixes and cuts at the first elision/arrow; proof_located checks the snippet against the CITED index only (a wrong index is caught) and is never vacuously true; compute_proof_located derives proof from the index and sets True/False/None; claims_all_proofs_unlocatable is the FAILURE predicate, and a zero/all-null-proof result is NOT a failure by this guard" \
   || bad "#291: proof-locatable guard unit tests" "rc=nonzero"
 
-echo; echo "W2. #291 — end to end: placeholder response is a FAILURE, chain never called; mixed doc flags only the invented proof"
+echo; echo "W2. #291 — end to end: placeholder response is a FAILURE, chain never called; mixed doc flags wrong-index and out-of-range citations (#295)"
 
 export MODEL_CALL_LOG="$TMP/calls-w.log"
 rm -f "$MODEL_CALL_LOG"

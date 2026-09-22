@@ -197,7 +197,7 @@ snippet cited against the wrong index is still caught. A claim "cites" a
 proof when it carries an index, a snippet, or a legacy free-text `proof`
 (which never locates) -- "non-null proof" above means "cites a proof".
 
-THE RECORD (schema_version 3), one per run, appended to
+THE RECORD (schema_version 4), one per run, appended to
 `session-distill.json`'s `records[]`:
 
   kind                  const "session-distill-record".
