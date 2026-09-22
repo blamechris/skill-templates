@@ -2540,6 +2540,22 @@ PY
 [ $? -eq 0 ] && ok "#288: after --resume prunes the superseded failures, failed_cost_usd keeps their spend and the total still reconciles" \
   || bad "#288: failed_cost_usd survives --resume" "$(cat "$OUT_Z")"
 
+# Copilot on #300: an envelope cost finer than 6 decimals must not make the
+# accumulated totals drift from the persisted per-call values.
+STUB_CALL_COST=0.1234564 STUB_FAIL_DISTILL=agent-aaaa0001 STUB_FAIL_COST=0.0000004 \
+  run sess-main distill --out "$TMP/out-z-precision.json" --model-cmd "$MODEL_CMD"
+"$PY" - "$TMP/out-z-precision.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+calls = [c["cost_usd"] for r in d["records"] for c in r["distilled"]["calls"].values()]
+fails = [f["cost_usd"] for f in d["failures"] if f["phase"] == "distill"]
+assert set(calls) == {0.123456, 0.0075}, calls  # 0.0075: cccc0003's fixed-cost chain stub
+assert d["failed_cost_usd"] == 0.0 == sum(fails), (d["failed_cost_usd"], fails)
+assert d["total_cost_usd"] == round(sum(calls) + sum(fails), 6), (d["total_cost_usd"], sum(calls))
+PY
+[ $? -eq 0 ] && ok "#288: costs are rounded once at the model boundary, so totals equal the sum of the persisted per-call values" \
+  || bad "#288: rounding consistency" "$(cat "$TMP/out-z-precision.json")"
+
 run - report --in "$OUT_Z"
 case "$out" in
   *"distill  \$"*"mean num_turns 6.0"*"chain    \$"*"mean num_turns 2.0"*"failed   \$0.2500"*) ok "#288: report prints the per-pass split, mean num_turns, and failed-attempt spend" ;;

@@ -2447,7 +2447,11 @@ def run_model(model_cmd_argv, system_prompt, schema, prompt_text, timeout_secs=N
         return None, 0.0, "model envelope is not a JSON object", None
 
     cost = envelope.get("total_cost_usd")
-    cost = cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else 0.0
+    # Rounded HERE, once, so every sum downstream (records, total_cost_usd,
+    # failed_cost_usd) adds the same 6-decimal values it persists -- the
+    # #288 invariant would otherwise drift on an envelope reporting more
+    # precision than the document stores.
+    cost = round(cost, 6) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else 0.0
     detail = {k: envelope.get(k) for k in ENVELOPE_DETAIL_KEYS}
 
     if envelope.get("is_error"):
