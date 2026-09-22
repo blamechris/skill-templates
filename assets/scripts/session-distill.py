@@ -2450,7 +2450,8 @@ def outstanding_failures(failures, records):
     }
     return [
         f for f in failures or []
-        if not (isinstance(f, dict) and f.get("phase") == "distill" and f.get("run") in have)
+        if not (isinstance(f, dict) and f.get("phase") == "distill"
+                and isinstance(f.get("run"), str) and f["run"] in have)
     ]
 
 

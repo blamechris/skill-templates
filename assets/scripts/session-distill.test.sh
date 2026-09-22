@@ -2211,5 +2211,17 @@ PY
 [ $? -eq 0 ] && ok "#294: --resume over a pre-fix document drops its stale distill failure at load time" \
   || bad "#294: --resume load-time prune of a pre-fix document" "$(cat "$TMP/out-y-legacy.json")"
 
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+recs = [{"run": {"id": "r1"}}]
+got = sd.outstanding_failures(
+    [{"run": {"id": "r1"}, "phase": "distill"}, {"run": "r1", "phase": "distill"}, "junk"], recs)
+assert got == [{"run": {"id": "r1"}, "phase": "distill"}, "junk"], got
+PY
+[ $? -eq 0 ] && ok "#294: outstanding_failures tolerates a non-string/unhashable run and non-dict entries (kept, never a crash)" \
+  || bad "#294: outstanding_failures on malformed failures[] entries"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
