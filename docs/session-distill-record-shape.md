@@ -248,7 +248,7 @@ meets all of these:
 - It **finished before the delta started**, so a fix still in flight cannot
   outrank the finished one.
 - Its repo set is **not disjoint** from the delta's (the #287 hazard, checked
-  here because the resulting candidate is tagged `repo_match: "same"`).
+  here because a round-pair candidate is never withdrawn as ambiguous).
 - It is in the **delta's own workflow** when any fix there qualifies.
   Pairing crosses workflows only as a fallback.
 
@@ -258,8 +258,10 @@ reason (`no-started-at`, `no-earlier-fix`, `no-finished-fix`,
 `repo-mismatch`, `ambiguous-latest-fix`) and is never guessed.
 
 The fix run's chain call then gets the paired delta's whole report as a
-guaranteed candidate (`source: "round-pair"`, `repo_match: "same"`, naming
-every claim). The report is capped at one head+tail budget per fix, split
+guaranteed candidate (`source: "round-pair"`, naming every claim). Its
+`repo_match` is `"same"` only when both runs' repo sets resolved and intersect,
+and `"n/a"` otherwise, because the link is the pairing, not an `#N` match.
+Neither value triggers the #287 withdrawal. The report is capped at one head+tail budget per fix, split
 across its deltas. It supersedes any cue-word hit from the same delta run and
 adds no model call. `runs` and `distill` both write the result under
 `round_pairs: {pairs[], unpaired_deltas[]}`.

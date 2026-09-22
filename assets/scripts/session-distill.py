@@ -2087,7 +2087,8 @@ def round_pair_candidates(fix_run, claims, pairing, runs_by_id):
     one per pair, carrying the delta's whole report (head+tail beyond
     ROUND_PAIR_REPORT_HEAD+TAIL, that budget split evenly across the fix's
     deltas) rather than a cue-word excerpt, tagged
-    `source: "round-pair"` and `repo_match: "same"`, and naming EVERY claim
+    `source: "round-pair"` (with `repo_match` "same" when both runs'
+    repo sets resolved and intersect, else "n/a"), and naming EVERY claim
     -- the delta reviewed the whole round, so any of its claims can be what
     a finding contradicts. This bypasses cue-word retrieval on purpose: a
     delta's "this new test cannot fail" rarely sits within
@@ -2100,6 +2101,7 @@ def round_pair_candidates(fix_run, claims, pairing, runs_by_id):
     # N times does not grow its chain prompt N-fold.
     n = max(1, len(mine))
     head, tail = ROUND_PAIR_REPORT_HEAD // n, ROUND_PAIR_REPORT_TAIL // n
+    f_repos = set(fix_run.get("repos") or [])
     for p in mine:
         d = runs_by_id.get(p["delta"])
         if d is None:
@@ -2109,7 +2111,11 @@ def round_pair_candidates(fix_run, claims, pairing, runs_by_id):
             "started_at": d.get("started_at"),
             "artifact": "round-pair:%s" % p["key"],
             "excerpt": excerpt_head_tail(d.get("report") or "", head, tail),
-            "repo_match": "same",
+            # "same" only when both sides resolved and share a repo. The
+            # link itself is the pairing, not a #N match, so an unresolved
+            # side is "n/a" -- never "ambiguous", which would withdraw it.
+            "repo_match": ("same" if f_repos and set(d.get("repos") or []) & f_repos
+                           else "n/a"),
             "source": "round-pair",
             "claims": claim_ids,
         })
@@ -2213,7 +2219,8 @@ CHAIN_SYSTEM_PROMPT = (
     "claim. "
     "A candidate tagged source=round-pair is different in kind: it is the "
     "DELTA REVIEW of this very fix round, paired deterministically (not "
-    "retrieved by cue words), and it carries the review's whole report. "
+    "retrieved by cue words), and it carries the review's whole report; "
+    "it is evidence by that pairing whatever its repo_match tag. "
     "A delta finding about code or tests THIS run added or changed -- for "
     "example a test this run added or claims verifies its fix that cannot "
     "fail, asserts nothing the fix changed, or stays green with the fix "
@@ -2415,10 +2422,10 @@ def build_chain_prompt(r, claims, candidates):
         lines.append("(none found)")
     for cand in candidates:
         if cand.get("source") == "round-pair":
-            lines.append("run=%s at=%s source=round-pair key=%r repo_match=same "
+            lines.append("run=%s at=%s source=round-pair key=%r repo_match=%s "
                          "(the DELTA REVIEW of this fix round -- full report follows)" % (
                              cand["run"], cand.get("started_at"),
-                             cand["artifact"][len("round-pair:"):]))
+                             cand["artifact"][len("round-pair:"):], cand.get("repo_match")))
             for ln in (cand.get("excerpt") or "(empty report)").splitlines():
                 lines.append("  | %s" % ln)
             continue

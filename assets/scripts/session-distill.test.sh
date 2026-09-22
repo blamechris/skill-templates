@@ -2312,9 +2312,17 @@ delta = {"id": "d1", "started_at": "t2", "report": "line one\nthe new test canno
 pairing = {"pairs": [{"fix": "f1", "delta": "d1", "key": "r1:#9"}], "unpaired_deltas": []}
 claims = [{"id": "c2"}, {"id": "c1"}]
 rp = sd.round_pair_candidates(fix, claims, pairing, {"d1": delta})
-assert len(rp) == 1 and rp[0]["source"] == "round-pair" and rp[0]["repo_match"] == "same", rp
+assert len(rp) == 1 and rp[0]["source"] == "round-pair", rp
 assert rp[0]["claims"] == ["c1", "c2"] and "cannot fail" in rp[0]["excerpt"], rp
 assert sd.round_pair_candidates({"id": "other"}, claims, pairing, {"d1": delta}) == []
+# repo_match is derived, never asserted: "same" needs both sides resolved and
+# intersecting; an unresolved side is "n/a" (still backs, never withdrawn).
+assert rp[0]["repo_match"] == "n/a", rp
+same = sd.round_pair_candidates({"id": "f1", "repos": ["A", "B"]}, claims, pairing,
+                                {"d1": dict(delta, repos=["B"])})
+assert same[0]["repo_match"] == "same", same
+half = sd.round_pair_candidates({"id": "f1", "repos": ["A"]}, claims, pairing, {"d1": delta})
+assert half[0]["repo_match"] == "n/a", half
 retrieved = [{"run": "d1", "repo_match": "ambiguous", "claims": ["c1"], "artifact": "#9"},
              {"run": "z", "repo_match": "same", "claims": ["c1"], "artifact": "#9", "excerpt": "e"}]
 merged = sd.merge_round_pair_candidates(rp, retrieved)
