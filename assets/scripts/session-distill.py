@@ -11,7 +11,7 @@ Usage:
   python3 ~/.claude/scripts/session-distill.py runs    [--session SID] [--json]
   python3 ~/.claude/scripts/session-distill.py distill [--session SID] [--limit N] [--only RUNID]
       [--dry-run] [--resume] [--out PATH] [--force]
-      [--model-cmd CMD] [--max-cost-usd N] [--timeout-secs N]
+      [--model-cmd CMD] [--max-cost-usd N] [--timeout-secs N] [--jobs N]
   python3 ~/.claude/scripts/session-distill.py report  [--session SID] [--in PATH] [--json]
 
 THE UNIT OF ANALYSIS IS A RUN: a (brief -> final report) pair. Two kinds:
@@ -435,6 +435,8 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -2804,6 +2806,8 @@ def cmd_distill(a):
         die("--model-cmd %r could not be parsed as a shell command (%s)" % (a.model_cmd, e))
     if not model_cmd:
         die("--model-cmd is empty")
+    if a.jobs < 1:
+        die("--jobs must be at least 1 (got %d)" % a.jobs)
 
     segmented_by, all_runs, unreadable, repo_vocabulary = build_all_run_stubs(rr, session_dir)
     round_pairs = pair_rounds(all_runs)
@@ -2931,102 +2935,110 @@ def cmd_distill(a):
             return sum(observed_costs) / len(observed_costs)
         return DEFAULT_COST_PER_CALL_USD
 
+    # #288: --jobs N. Each run is one unit of work in a pool of N workers,
+    # and every model call passes one budget gate, under one lock. The
+    # projection counts calls already in flight -- each is reserved at the
+    # calibrated per-call average until it settles -- so N concurrent calls
+    # cannot each see the same unspent headroom and together overrun it.
+    # Under a budget the pool calibrates first: until one call has settled
+    # the only per-call figure is DEFAULT_COST_PER_CALL_USD, and N
+    # reservations at a guess is N times the serial loop's error, so a
+    # second call waits for the first real cost. A stop (first one wins)
+    # refuses every later call: queued runs are
+    # never started, a run between its passes keeps a distill-only record,
+    # and calls already in flight finish and are billed. --jobs 1 is the
+    # serial loop: nothing is ever in flight at a gate, so every check,
+    # stop reason and at_run is what it was before the pool existed.
+    lock = threading.Condition()
+    inflight = 0
+    stopped = None
+
     def over_budget():
         return a.max_cost_usd is not None and total_cost > a.max_cost_usd
 
     def projected_over_budget():
         return (a.max_cost_usd is not None
-                and (total_cost + calibrated_cost_per_call()) > a.max_cost_usd)
+                and (total_cost + (inflight + 1) * calibrated_cost_per_call()) > a.max_cost_usd)
 
-    stopped = None
-    for r in todo:
-        if over_budget():
+    def stop(reason, run_id):
+        # caller holds `lock`
+        nonlocal stopped
+        if stopped is None:
             stopped = {
-                "reason": "max-cost-usd already exceeded by observed spend",
-                "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
+                "reason": reason,
+                "at_run": run_id, "budget": a.max_cost_usd, "spent": round(total_cost, 6),
             }
-            break
-        if projected_over_budget():
-            stopped = {
-                "reason": "max-cost-usd projected to be exceeded before this run's distill call",
-                "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
-            }
-            break
+        lock.notify_all()
 
-        # #294: this run is being attempted again, so whatever an earlier
-        # invocation recorded against it is superseded by this attempt's
-        # own outcome (a fresh failure, or a record) -- never both.
-        failures = [f for f in failures if not (isinstance(f, dict) and f.get("run") == r["id"])]
+    def admit(run_id, phase):
+        """May this run's `phase` call start? Reserves an in-flight slot when yes."""
+        nonlocal inflight
+        with lock:
+            while (a.max_cost_usd is not None and not observed_costs
+                   and inflight > 0 and stopped is None):
+                lock.wait()
+            if stopped is not None:
+                return False
+            if over_budget():
+                stop("max-cost-usd already exceeded by observed spend" if phase == "distill"
+                     else "max-cost-usd exceeded by observed spend after this run's distill call",
+                     run_id)
+                return False
+            if projected_over_budget():
+                stop("max-cost-usd projected to be exceeded before this run's %s call" % phase, run_id)
+                return False
+            inflight += 1
+            return True
 
+    def settle(run_id, cost, failed, after):
+        """Bill a finished call and release its slot. #278 M2: checked AFTER
+        the call too, on OBSERVED spend -- a call that errors can still have
+        spent money, and a budget checked only before a call never notices
+        that until the next call's gate."""
+        nonlocal inflight, total_cost, failed_cost
+        with lock:
+            inflight -= 1
+            total_cost += cost
+            observed_costs.append(cost)
+            if failed:
+                failed_cost += cost
+            if over_budget():
+                stop("max-cost-usd exceeded by observed spend after this run's %s call" % after, run_id)
+            lock.notify_all()
+
+    def process(r):
+        """One run, start to finish. None when its distill call was never
+        admitted; otherwise {"record": ..., "dropped_lw": ..., "failures": [...]}.
+        Records and failures are merged in `todo` order afterwards, so the
+        document does not depend on which worker finished first."""
+        if not admit(r["id"], "distill"):
+            return None
         distilled_doc, cost1, err1, detail1 = run_model(
             model_cmd, DISTILL_SYSTEM_PROMPT, DISTILL_SCHEMA, build_distill_prompt(r),
             a.timeout_secs)
-        total_cost += cost1
-        observed_costs.append(cost1)
+        if err1 is None:
+            # #291: the placeholder-response guard -- a schema-valid distill
+            # response whose every non-null proof fails to locate in this
+            # run's own (untruncated) tool inputs is a FAILURE, never a
+            # record, and the chain call is NEVER made for it (nothing to
+            # spend on top of a result this hollow). cost1 is still billed.
+            is_placeholder, n_nonnull, n_unlocatable = claims_all_proofs_unlocatable(
+                distilled_doc, r.get("tool_inputs_full") or [])
+            if is_placeholder:
+                err1 = ("proof-not-in-trace: every non-null proof (%d of %d claim(s)) failed "
+                        "to locate in this run's own tool inputs -- a schema-valid but "
+                        "content-free (placeholder) response" % (n_unlocatable, n_nonnull))
+        settle(r["id"], cost1, err1 is not None, "(failed) distill" if err1 else "distill")
         if err1:
-            failed_cost += cost1
-            failures.append(failure_entry(r["id"], "distill", err1, cost1, detail1))
-            # #278 M2: checked AFTER the call too, using OBSERVED spend --
-            # a call that errors can still have spent money (run_model's
-            # own contract), and a budget that only ever checks BEFORE a
-            # call never notices that until the next run's pre-check.
-            if over_budget():
-                stopped = {
-                    "reason": "max-cost-usd exceeded by observed spend after this run's (failed) distill call",
-                    "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
-                }
-                break
-            continue
+            return {"record": None, "dropped_lw": None,
+                    "failures": [failure_entry(r["id"], "distill", err1, cost1, detail1)]}
 
-        # #291: the placeholder-response guard -- a schema-valid distill
-        # response whose every non-null proof fails to locate in this
-        # run's own (untruncated) tool inputs is a FAILURE, never a
-        # record, and the chain call is NEVER made for it (nothing to
-        # spend on top of a result this hollow). cost1 -- already spent --
-        # is still folded into total_cost/observed_costs above, same
-        # discipline as the err1 path just above.
-        is_placeholder, n_nonnull, n_unlocatable = claims_all_proofs_unlocatable(
-            distilled_doc, r.get("tool_inputs_full") or [])
-        if is_placeholder:
-            failed_cost += cost1
-            failures.append(failure_entry(
-                r["id"], "distill",
-                "proof-not-in-trace: every non-null proof (%d of %d claim(s)) failed "
-                "to locate in this run's own tool inputs -- a schema-valid but "
-                "content-free (placeholder) response" % (n_unlocatable, n_nonnull),
-                cost1, detail1))
-            if over_budget():
-                stopped = {
-                    "reason": "max-cost-usd exceeded by observed spend after this run's (failed) distill call",
-                    "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
-                }
-                break
-            continue
-
-        if over_budget():
+        if not admit(r["id"], "chain"):
             record, dropped_lw = build_record(
                 sid, r, distilled_doc, None, now_iso(),
                 model_name_from_cmd(model_cmd), {"distill": call_detail(cost1, detail1)},
                 ["distill"])
-            records.append(record)
-            warn_dropped_later_wrong(r["id"], dropped_lw)
-            stopped = {
-                "reason": "max-cost-usd exceeded by observed spend after this run's distill call",
-                "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
-            }
-            break
-        if projected_over_budget():
-            record, dropped_lw = build_record(
-                sid, r, distilled_doc, None, now_iso(),
-                model_name_from_cmd(model_cmd), {"distill": call_detail(cost1, detail1)},
-                ["distill"])
-            records.append(record)
-            warn_dropped_later_wrong(r["id"], dropped_lw)
-            stopped = {
-                "reason": "max-cost-usd projected to be exceeded before this run's chain call",
-                "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
-            }
-            break
+            return {"record": record, "dropped_lw": dropped_lw, "failures": []}
 
         claims = resolve_claims(distilled_doc.get("claims"), r.get("tool_inputs_full") or [])
         other_runs = [x for x in all_runs if x["id"] != r["id"]]
@@ -3039,34 +3051,57 @@ def cmd_distill(a):
         chain_doc, cost2, err2, detail2 = run_model(
             model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA, build_chain_prompt(r, claims, candidates),
             a.timeout_secs)
-        total_cost += cost2
-        observed_costs.append(cost2)
+        # A failed chain call is billed to the record, not to failed_cost:
+        # the run still produced one.
+        settle(r["id"], cost2, False, "chain")
+        run_failures = []
         passes = ["distill"]
         if err2:
-            failures.append(failure_entry(r["id"], "chain", err2, cost2, detail2))
+            run_failures.append(failure_entry(r["id"], "chain", err2, cost2, detail2))
             chain_doc = None
         else:
             passes.append("chain")
 
-        # #278 N2: the record's own cost_usd now always includes cost2,
-        # matching what was just added to total_cost unconditionally --
-        # the OLD code added cost2 to total_cost regardless of err2 (a
-        # failed call can still have spent money) but recorded only cost1
-        # on the record when err2, so sum(record costs) != total_cost_usd.
+        # #278 N2: the record's own cost_usd always includes cost2, matching
+        # what settle() billed unconditionally, so sum(record costs) +
+        # failed_cost_usd == total_cost_usd.
         record, dropped_lw = build_record(
             sid, r, distilled_doc, chain_doc, now_iso(),
             model_name_from_cmd(model_cmd),
             {"distill": call_detail(cost1, detail1), "chain": call_detail(cost2, detail2)},
             passes, candidates)
-        records.append(record)
-        warn_dropped_later_wrong(r["id"], dropped_lw)
+        return {"record": record, "dropped_lw": dropped_lw, "failures": run_failures}
 
-        if over_budget():
-            stopped = {
-                "reason": "max-cost-usd exceeded by observed spend after this run's chain call",
-                "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
-            }
-            break
+    pool = ThreadPoolExecutor(max_workers=a.jobs)
+    futures = [pool.submit(process, r) for r in todo]
+    try:
+        done, _ = wait(futures, return_when=FIRST_EXCEPTION)
+        for f in done:
+            if f.exception() is not None:
+                raise f.exception()
+    except BaseException:
+        # Ctrl-C, or a crash in one run: refuse every later call (waking any
+        # worker held for calibration), drop the queue, and let in-flight
+        # calls return before re-raising -- without this the pool would go
+        # on to start every queued run.
+        with lock:
+            stop("aborted", None)
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
+    outcomes = [f.result() for f in futures]
+
+    for r, outcome in zip(todo, outcomes):
+        if outcome is None:
+            continue
+        # #294: this run was attempted again, so whatever an earlier
+        # invocation recorded against it is superseded by this attempt's own
+        # outcome (a fresh failure, or a record) -- never both.
+        failures = [f for f in failures if not (isinstance(f, dict) and f.get("run") == r["id"])]
+        failures.extend(outcome["failures"])
+        if outcome["record"] is not None:
+            records.append(outcome["record"])
+            warn_dropped_later_wrong(r["id"], outcome["dropped_lw"])
 
     doc = {
         "kind": "session-distill-document",
@@ -3305,6 +3340,9 @@ def build_parser():
     d.add_argument("--timeout-secs", type=int, default=MODEL_TIMEOUT_SECS,
                     help="per model call timeout (default %d; a long trace on a "
                          "busy CLI exceeds it)" % MODEL_TIMEOUT_SECS)
+    d.add_argument("--jobs", type=int, default=1, metavar="N",
+                    help="distill up to N runs concurrently (default 1). The budget "
+                         "projection counts in-flight calls; records keep run order")
     d.set_defaults(fn=cmd_distill)
 
     rp = sub.add_parser("report", help="summarize a session-distill.json document")

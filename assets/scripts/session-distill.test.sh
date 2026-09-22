@@ -453,6 +453,25 @@ if log:
     with open(log, "a", encoding="utf-8") as f:
         f.write("%s %s\n" % (run_id, pass_kind))
 
+# #288 --jobs: STUB_CONC_DIR makes each call hold a marker file for
+# STUB_SLEEP seconds and log how many markers were live when it started,
+# so a test can read the peak concurrency the pool actually reached, plus
+# timestamped start/end events so a test can read the order calls ran in.
+conc = os.environ.get("STUB_CONC_DIR")
+if conc:
+    import time
+    mine = os.path.join(conc, "live-%d" % os.getpid())
+    open(mine, "w").close()
+    live = len([n for n in os.listdir(conc) if n.startswith("live-")])
+    with open(os.path.join(conc, "peaks"), "a", encoding="utf-8") as f:
+        f.write("%d\n" % live)
+    with open(os.path.join(conc, "events"), "a", encoding="utf-8") as f:
+        f.write("%.6f start\n" % time.time())
+    time.sleep(float(os.environ.get("STUB_SLEEP", "0.3")))
+    with open(os.path.join(conc, "events"), "a", encoding="utf-8") as f:
+        f.write("%.6f end\n" % time.time())
+    os.remove(mine)
+
 def envelope(result, is_error=False, cost=None):
     # STUB_CALL_COST lets a test dictate the OBSERVED per-call cost the
     # model "reports" (#278 M2), independent of DEFAULT_COST_PER_CALL_USD
@@ -2571,6 +2590,91 @@ a = sd.build_parser().parse_args(["distill"])
 assert a.timeout_secs == 540 == sd.MODEL_TIMEOUT_SECS, a.timeout_secs
 PY
 [ $? -eq 0 ] && ok "#288: --timeout-secs defaults to 540" || bad "#288: --timeout-secs defaults to 540"
+
+# ============================================================ GROUP JOBS — #288 --jobs N
+echo; echo "JOBS. #288 --jobs N: a pool of runs, the same document, an honest budget"
+
+OUT_J1="$TMP/out-jobs1.json"; OUT_J4="$TMP/out-jobs4.json"
+run sess-main distill --out "$OUT_J1" --jobs 1 --model-cmd "$MODEL_CMD"
+CONC="$TMP/conc-j4"; mkdir -p "$CONC"
+STUB_CONC_DIR="$CONC" STUB_SLEEP=0.3 run sess-main distill --out "$OUT_J4" --jobs 4 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "#288: --jobs 4 exits 0" || bad "#288: --jobs 4 exits 0" "rc=$rc out=$out"
+"$PY" - "$OUT_J1" "$OUT_J4" <<'PY'
+import json, sys
+def norm(p):
+    d = json.load(open(p))
+    d.pop("generated_at")
+    for rec in d["records"]:
+        rec["distilled"].pop("at")
+    return d
+j1, j4 = norm(sys.argv[1]), norm(sys.argv[2])
+assert len(j1["records"]) >= 4, len(j1["records"])
+assert j1["failures"], "fixture should carry chain failures for the merge-order check"
+assert [r["run"]["id"] for r in j4["records"]] == [r["run"]["id"] for r in j1["records"]]
+assert j1 == j4, "documents differ beyond timestamps"
+PY
+[ $? -eq 0 ] && ok "#288: --jobs 4 writes the --jobs 1 document (records and failures in run order; only timestamps differ)" \
+  || bad "#288: --jobs 4 == --jobs 1 document" "$(diff <(cat "$OUT_J1") <(cat "$OUT_J4") | head -20)"
+PEAK=$(sort -n "$CONC/peaks" | tail -1)
+[ "$PEAK" -ge 2 ] && [ "$PEAK" -le 4 ] && ok "#288: --jobs 4 overlaps calls (peak $PEAK in flight, never above 4)" \
+  || bad "#288: --jobs 4 overlaps calls, never above 4" "peak=$PEAK"
+
+# Budget under a pool. Every call costs $0.30, above the $0.167 default guess.
+# Admitting 4 distill calls at the guess would reserve $0.67 and spend $1.20
+# against a $1.00 budget; calibrating on the first real cost and counting
+# in-flight reservations must stop at or under it.
+export MODEL_CALL_LOG="$TMP/calls-jobs.log"; rm -f "$MODEL_CALL_LOG"
+CONC="$TMP/conc-jb"; mkdir -p "$CONC"
+OUT_JB="$TMP/out-jobs-budget.json"
+STUB_CALL_COST=0.30 STUB_CONC_DIR="$CONC" STUB_SLEEP=0.2 \
+  run sess-main distill --out "$OUT_JB" --jobs 4 --max-cost-usd 1.00 --model-cmd "$MODEL_CMD"
+[ "$rc" -eq 0 ] && ok "#288: --jobs 4 under --max-cost-usd exits 0" || bad "#288: --jobs 4 under --max-cost-usd exits 0" "rc=$rc out=$out"
+CALLS_JB=$(wc -l < "$MODEL_CALL_LOG" | tr -d ' ')
+"$PY" - "$OUT_JB" "$CALLS_JB" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); calls = int(sys.argv[2])
+assert d["stopped"] and "max-cost-usd" in d["stopped"]["reason"], d["stopped"]
+assert d["total_cost_usd"] <= 1.00 + 1e-9, d["total_cost_usd"]
+assert abs(d["total_cost_usd"] - 0.30 * calls) < 1e-6, (d["total_cost_usd"], calls)
+recs = sum(r["distilled"]["cost_usd"] for r in d["records"])
+assert abs(recs + d["failed_cost_usd"] - d["total_cost_usd"]) < 1e-6, (recs, d["failed_cost_usd"])
+PY
+[ $? -eq 0 ] && ok "#288: --jobs 4 stops at or under the budget, bills every call it made, keeps the cost invariant" \
+  || bad "#288: --jobs 4 budget" "$(cat "$OUT_JB")"
+[ "$(sort -n "$CONC/events" | head -2 | awk '{print $2}' | tr '\n' ' ')" = "start end " ] && ok "#288: under a budget the first call runs alone until a real cost calibrates the projection" \
+  || bad "#288: calibrate-first" "$(sort -n "$CONC/events")"
+unset MODEL_CALL_LOG
+
+# A run that raises while the others sit in the calibration wait must abort
+# the pool, not hang it: the crashed call never settles its slot, so only the
+# abort path's stop() can wake the waiters.
+HOME="$HOMEDIR" CLAUDE_CODE_SESSION_ID=sess-main "$PY" - "$SUT" "$TMP/out-jobs-crash.json" "$MODEL_CMD" <<'PY'
+import importlib.util, subprocess, sys
+code = r"""
+import importlib.util, sys, time
+spec = importlib.util.spec_from_file_location("sd_crash", sys.argv[1])
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+real = sd.run_model
+def crashing(*a, **k):
+    time.sleep(0.3)
+    raise RuntimeError("boom")
+sd.run_model = crashing
+sys.exit(sd.main(["distill", "--out", sys.argv[2], "--jobs", "4", "--max-cost-usd", "5",
+                  "--model-cmd", sys.argv[3]]))
+"""
+try:
+    p = subprocess.run([sys.executable, "-c", code] + sys.argv[1:], capture_output=True,
+                       text=True, timeout=20)
+except subprocess.TimeoutExpired:
+    sys.exit("hung")
+assert p.returncode != 0 and "boom" in p.stderr, (p.returncode, p.stderr[-400:])
+PY
+[ $? -eq 0 ] && ok "#288: a run raising under --jobs 4 aborts the pool (waiters woken, no hang), and the error surfaces" \
+  || bad "#288: a run raising under --jobs 4 aborts the pool"
+
+run sess-main distill --out "$TMP/out-jobs0.json" --jobs 0 --model-cmd "$MODEL_CMD"
+[ "$rc" -ne 0 ] && case "$out" in *"--jobs must be at least 1"*) true ;; *) false ;; esac \
+  && ok "#288: --jobs 0 is refused" || bad "#288: --jobs 0 is refused" "rc=$rc out=$out"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
