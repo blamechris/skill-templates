@@ -2061,6 +2061,8 @@ spec = importlib.util.spec_from_file_location("sd_287_prompt", sys.argv[1])
 sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
 assert "ambiguous" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
 assert "CANNOT on its own support" in sd.CHAIN_SYSTEM_PROMPT, sd.CHAIN_SYSTEM_PROMPT
+# #295: a mis-indexed claim's derived proof is a real but unrelated command
+assert "`proof_located: false`" in sd.CHAIN_SYSTEM_PROMPT and "NOT evidence" in sd.CHAIN_SYSTEM_PROMPT
 chain = sd.build_chain_prompt({"id": "r"}, [{"id": "c1", "text": "#99 x", "quote": None}], [
     {"run": "r2", "started_at": "t", "artifact": "#99", "excerpt": "e", "repo_match": "ambiguous"}])
 assert "repo_match=ambiguous" in chain, chain
