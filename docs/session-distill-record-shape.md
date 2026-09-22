@@ -229,6 +229,47 @@ mentions are genuinely near a correction cue), but every one of its
 candidates is tagged `"ambiguous"` — so a `later_wrong` citing it alone,
 like the original LW1, is now dropped rather than recorded.
 
+### #292 — round pairs (fix → delta)
+
+Some defects live in the hand-off between runs, not inside one. Row 6 of the
+#273 ground truth, "every fix round left a can't-fail assertion", is visible
+only across two rounds: a fix round adds a test, and the delta review of that
+round finds that the test cannot fail. A per-run distill of either run alone
+has nothing to contradict, and cue-word retrieval rarely links them, so the
+row appeared in zero of 160 records.
+
+The pairing key is `description`, not `workflow_phase`. The phase is a
+free-text label (`Fix`, `Fix 2`, `Fix2`), while the description carries
+`fix<N>:<target>` / `delta<N>:<target>`, where a bare `fix` is round 1 and
+targets compare exactly (`259a` ≠ `#259`, `Aeolus#260` ≠ `#260`).
+`pair_rounds` pairs each delta with the **latest-started** same-key fix that
+meets all of these:
+
+- It **finished before the delta started**, so a fix still in flight cannot
+  outrank the finished one.
+- Its repo set is **not disjoint** from the delta's (the #287 hazard, checked
+  here because the resulting candidate is tagged `repo_match: "same"`).
+- It is in the **delta's own workflow** when any fix there qualifies.
+  Pairing crosses workflows only as a fallback.
+
+"Latest" matters because `13cee7be`'s `wf_30faad6a` holds two `fix:#259` and
+two `delta:#259` interleaved. A delta that cannot be paired is reported with a
+reason (`no-started-at`, `no-earlier-fix`, `no-finished-fix`,
+`repo-mismatch`, `ambiguous-latest-fix`) and is never guessed.
+
+The fix run's chain call then gets the paired delta's whole report as a
+guaranteed candidate (`source: "round-pair"`, `repo_match: "same"`, naming
+every claim). The report is capped at one head+tail budget per fix, split
+across its deltas. It supersedes any cue-word hit from the same delta run and
+adds no model call. `runs` and `distill` both write the result under
+`round_pairs: {pairs[], unpaired_deltas[]}`.
+
+**Measured on `13cee7be`.** All 20 deltas pair. The first live run, on
+`fix:#253`, surfaced row 6 directly: claim c13b ("the NDJSONTests suite
+passed") is contradicted from `delta:#253`, whose report says the new test
+"cannot fail for any mutation of the behaviour it was added for". The same run
+found three more vacuous-test contradictions.
+
 ### The five fields the issue names, and the two it does not
 
 `asked` / `understood` / `delivered` / `later_wrong[]` / `classified_as[]` are the
@@ -302,7 +343,8 @@ entry count, the number of runs carrying it, and that share of all runs.
    LATER for a mention of the same artifact within a correction cue window
    (`actually`, `in fact`, `wrong`, `retract`, `never ran`, `failed`, `turns
    out`, `correction`, `misread`, `regression`), repo-qualifying every `#N`
-   match along the way (#287, see above), then ONE model call per run over
+   match along the way (#287, see above), plus, for a fix round, its paired
+   delta review's whole report (#292, see above), then ONE model call per run over
    the candidates -> `later_wrong[]` + `classified_as[]`. Retrieval-before-model
    is what keeps this O(n) calls instead of O(n^2).
 

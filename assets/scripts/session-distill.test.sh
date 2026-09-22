@@ -2249,7 +2249,12 @@ PY
 import importlib.util
 spec = importlib.util.spec_from_file_location("sd_292p", "$SUT")
 sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
-def r(i, desc, at): return {"id": i, "description": desc, "started_at": at}
+def r(i, desc, at, end="auto", wf="wf_a", repos=None):
+    # A fix ends 5 minutes after it starts unless told otherwise.
+    if end == "auto" and at:
+        end = at[:14] + "%02d" % (int(at[14:16]) + 5) + at[16:]
+    return {"id": i, "description": desc, "started_at": at, "ended_at": end,
+            "spawned_by": wf, "repos": repos or []}
 runs = [
     r("f1", "fix:#259", "2026-09-16T11:23:04Z"),
     r("d1", "delta:#259", "2026-09-16T11:29:03Z"),
@@ -2264,15 +2269,38 @@ runs = [
     r("d6", "delta:#301", "2026-09-16T11:00:00Z"),
     r("d7", "delta:#259", None),
     r("x", "unrelated run", "2026-09-16T10:00:00Z"),
+    # a later-started fix still running when the delta starts must not win
+    r("f8old", "fix:#310", "2026-09-16T10:00:00Z"),
+    r("f8run", "fix:#310", "2026-09-16T11:00:00Z", end="2026-09-16T12:00:00Z"),
+    r("d8", "delta:#310", "2026-09-16T11:29:00Z"),
+    # only same-key fix still running -> no-finished-fix
+    r("f9", "fix:#311", "2026-09-16T11:00:00Z", end=None),
+    r("d9", "delta:#311", "2026-09-16T11:30:00Z"),
+    # same bare key, different repo -> repo-mismatch, never a pair
+    r("f10", "fix:#312", "2026-09-16T09:00:00Z", repos=["RepoA"]),
+    r("d10", "delta:#312", "2026-09-16T10:00:00Z", repos=["RepoB"]),
+    # same-workflow fix preferred over a LATER fix in another workflow
+    r("f11own", "fix:#313", "2026-09-16T09:00:00Z", wf="wf_own"),
+    r("f11other", "fix:#313", "2026-09-16T09:30:00Z", wf="wf_other"),
+    r("d11", "delta:#313", "2026-09-16T10:00:00Z", wf="wf_own"),
+    # ...but crossing workflows is the fallback when the own one has none
+    r("f12", "fix:#314", "2026-09-16T09:00:00Z", wf="wf_x"),
+    r("d12", "delta:#314", "2026-09-16T10:00:00Z", wf="wf_y"),
+    # top-level ("session") runs are not a workflow: no preference among them
+    r("f13s", "fix:#315", "2026-09-16T09:00:00Z", wf="session"),
+    r("f13w", "fix:#315", "2026-09-16T09:30:00Z", wf="wf_z"),
+    r("d13", "delta:#315", "2026-09-16T10:00:00Z", wf="session"),
 ]
 got = sd.pair_rounds(runs)
 pairs = {(p["fix"], p["delta"]) for p in got["pairs"]}
-assert pairs == {("f1", "d1"), ("f2", "d2"), ("f3", "d3")}, got["pairs"]
+assert pairs == {("f1", "d1"), ("f2", "d2"), ("f3", "d3"), ("f8old", "d8"),
+                 ("f11own", "d11"), ("f12", "d12"), ("f13w", "d13")}, got["pairs"]
 un = {u["delta"]: u["reason"] for u in got["unpaired_deltas"]}
 assert un == {"d4": "no-earlier-fix", "d5": "no-earlier-fix",
-              "d6": "ambiguous-latest-fix", "d7": "no-started-at"}, un
+              "d6": "ambiguous-latest-fix", "d7": "no-started-at",
+              "d9": "no-finished-fix", "d10": "repo-mismatch"}, un
 PY
-[ $? -eq 0 ] && ok "#292: pair_rounds pairs each delta with the latest earlier same-key fix; two pairs under one key stay apart; unpaired and tied deltas are reported, never guessed" \
+[ $? -eq 0 ] && ok "#292: pair_rounds pairs each delta with the latest FINISHED same-key fix, same workflow first, never across disjoint repos; two pairs under one key stay apart; unpaired and tied deltas are reported with a reason" \
   || bad "#292: pair_rounds"
 
 "$PY" - <<PY
@@ -2296,6 +2324,14 @@ lw, dropped, _ = sd.normalize_later_wrong(
     [{"claim": "c2", "how": "h", "contradicted_by": {"run": "d1", "at": "t2", "quote": "q"}}],
     {"c1", "c2"}, merged)
 assert len(lw) == 1 and not dropped, (lw, dropped)
+# Two deltas on one fix share ONE report budget, not one each.
+big = "x" * 100000
+two = {"pairs": [{"fix": "f1", "delta": "da", "key": "r1:#9"},
+                 {"fix": "f1", "delta": "db", "key": "r1:#9"}], "unpaired_deltas": []}
+rp2 = sd.round_pair_candidates(fix, claims, two, {"da": {"id": "da", "report": big},
+                                                   "db": {"id": "db", "report": big}})
+budget = sd.ROUND_PAIR_REPORT_HEAD + sd.ROUND_PAIR_REPORT_TAIL
+assert len(rp2) == 2 and sum(len(c["excerpt"]) for c in rp2) <= budget + 2, [len(c["excerpt"]) for c in rp2]
 prompt = sd.build_chain_prompt({"id": "f1"}, claims, merged)
 assert "source=round-pair" in prompt and "  | the new test cannot fail" in prompt, prompt
 PY

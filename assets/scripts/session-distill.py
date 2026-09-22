@@ -112,6 +112,19 @@ scanning for the same artifact near a correction-cue word ("actually",
 this O(n) calls instead of O(n^2) -- see docs/session-distill-record-shape.md's
 "Three passes, one model boundary".
 
+ROUND PAIRS (#292). Some defects exist only BETWEEN runs: a fix round adds
+a test, and the delta review of that round finds the test cannot fail.
+Neither run carries it alone, and cue-word retrieval rarely links them. So
+before the chain call, each `delta<N>:<T>` run (keyed on `description`;
+`workflow_phase` is free text) is paired with the latest `fix<N>:<T>` run
+that finished before it, in the same workflow when possible and never in a
+disjoint repo set (`pair_rounds`). The fix run's chain call then gets the
+paired delta's whole report as a guaranteed candidate (`source:
+"round-pair"`), so a delta finding about the fix's own added code becomes a
+`later_wrong` on the fix run. It costs no extra model call. `runs` and
+`distill` both write the pairing, with every unpaired delta and its reason,
+under `round_pairs`.
+
 REPO-QUALIFIED `#N` RETRIEVAL (#287). A `#N` artifact is only a real
 match when it names the SAME repo on both sides -- two repos sharing an
 issue/PR number (measured on session 13cee7be: Aeolus and skill-templates
@@ -1998,18 +2011,29 @@ def round_key(description):
 
 def pair_rounds(runs):
     """Deterministic fix -> delta pairing across the whole session, with no
-    model call. Each `delta<N>:<T>` pairs with the LATEST fix `fix<N>:<T>`
-    that started strictly before it -- "latest", because one workflow can
+    model call. A `delta<N>:<T>` run pairs with a `fix<N>:<T>` run that:
+
+      * FINISHED before the delta started (`ended_at <= delta.started_at`)
+        -- a delta cannot have reviewed a fix still in flight, and a later-
+        started fix that has not ended must not outrank the finished one;
+      * does not sit in a DISJOINT repo set -- a bare `fix:#259` in one
+        repo and `delta:#259` in another are unrelated (#287's shared-
+        number hazard), and the candidate this pair produces is tagged
+        `repo_match: "same"`, so the repo check has to happen here;
+      * is in the delta's own workflow (`spawned_by`) when any such fix
+        qualifies -- pairing crosses workflow runs only as a fallback.
+
+    Of those, the LATEST-started wins -- "latest", because one workflow can
     hold two rounds under one key (13cee7be's wf_30faad6a runs `fix:#259`
-    at 11:23 and 12:11, and `delta:#259` at 11:29 and 12:39). Pairing
-    crosses workflow runs: fix and delta usually share a `wf_` id, but
-    nothing guarantees it. A fix may be reviewed by more than one delta.
+    at 11:23 and 12:11, and `delta:#259` at 11:29 and 12:39). A fix may be
+    reviewed by more than one delta.
 
     Returns {"pairs": [{"fix", "delta", "key"}], "unpaired_deltas":
     [{"delta", "key", "reason"}]}. A delta is reported unpaired, never
-    guessed, when it has no start time, when no earlier fix carries its key
-    (`no-earlier-fix`), or when two earlier fixes tie for latest
-    (`ambiguous-latest-fix`)."""
+    guessed, with the reason the candidate set emptied: `no-started-at`,
+    `no-earlier-fix` (no same-key fix at all), `no-finished-fix` (every
+    same-key fix was still running or had no end time), `repo-mismatch`,
+    or `ambiguous-latest-fix` (two qualifying fixes tie)."""
     fixes = {}
     deltas = []
     for r in runs:
@@ -2019,8 +2043,7 @@ def pair_rounds(runs):
         kind, rnd, target = k
         key = "r%d:%s" % (rnd, target)
         if kind == "fix":
-            if r.get("started_at"):
-                fixes.setdefault(key, []).append(r)
+            fixes.setdefault(key, []).append(r)
         else:
             deltas.append((key, r))
 
@@ -2031,12 +2054,26 @@ def pair_rounds(runs):
         if not d_at:
             unpaired.append({"delta": d["id"], "key": key, "reason": "no-started-at"})
             continue
-        earlier = [f for f in fixes.get(key, []) if f["started_at"] < d_at]
-        if not earlier:
+        pool = fixes.get(key, [])
+        if not pool:
             unpaired.append({"delta": d["id"], "key": key, "reason": "no-earlier-fix"})
             continue
-        latest_at = max(f["started_at"] for f in earlier)
-        latest = [f for f in earlier if f["started_at"] == latest_at]
+        pool = [f for f in pool
+                if f.get("started_at") and f.get("ended_at") and f["ended_at"] <= d_at]
+        if not pool:
+            unpaired.append({"delta": d["id"], "key": key, "reason": "no-finished-fix"})
+            continue
+        d_repos = set(d.get("repos") or [])
+        pool = [f for f in pool
+                if not (d_repos and f.get("repos") and not (d_repos & set(f["repos"])))]
+        if not pool:
+            unpaired.append({"delta": d["id"], "key": key, "reason": "repo-mismatch"})
+            continue
+        wf = d.get("spawned_by")
+        same_wf = [f for f in pool if wf and wf != "session" and f.get("spawned_by") == wf]
+        pool = same_wf or pool
+        latest_at = max(f["started_at"] for f in pool)
+        latest = [f for f in pool if f["started_at"] == latest_at]
         if len(latest) > 1:
             unpaired.append({"delta": d["id"], "key": key, "reason": "ambiguous-latest-fix",
                              "fixes": sorted(f["id"] for f in latest)})
@@ -2048,7 +2085,8 @@ def pair_rounds(runs):
 def round_pair_candidates(fix_run, claims, pairing, runs_by_id):
     """The chain candidates a FIX run gets from its paired delta review(s):
     one per pair, carrying the delta's whole report (head+tail beyond
-    ROUND_PAIR_REPORT_HEAD+TAIL) rather than a cue-word excerpt, tagged
+    ROUND_PAIR_REPORT_HEAD+TAIL, that budget split evenly across the fix's
+    deltas) rather than a cue-word excerpt, tagged
     `source: "round-pair"` and `repo_match: "same"`, and naming EVERY claim
     -- the delta reviewed the whole round, so any of its claims can be what
     a finding contradicts. This bypasses cue-word retrieval on purpose: a
@@ -2057,9 +2095,12 @@ def round_pair_candidates(fix_run, claims, pairing, runs_by_id):
     also name, which is why row 6 of #273 appeared in zero records."""
     out = []
     claim_ids = sorted(c["id"] for c in claims)
-    for p in (pairing or {}).get("pairs") or []:
-        if p["fix"] != fix_run["id"]:
-            continue
+    mine = [p for p in (pairing or {}).get("pairs") or [] if p["fix"] == fix_run["id"]]
+    # One report budget per fix, split across its deltas, so a fix reviewed
+    # N times does not grow its chain prompt N-fold.
+    n = max(1, len(mine))
+    head, tail = ROUND_PAIR_REPORT_HEAD // n, ROUND_PAIR_REPORT_TAIL // n
+    for p in mine:
         d = runs_by_id.get(p["delta"])
         if d is None:
             continue
@@ -2067,8 +2108,7 @@ def round_pair_candidates(fix_run, claims, pairing, runs_by_id):
             "run": d["id"],
             "started_at": d.get("started_at"),
             "artifact": "round-pair:%s" % p["key"],
-            "excerpt": excerpt_head_tail(d.get("report") or "",
-                                         ROUND_PAIR_REPORT_HEAD, ROUND_PAIR_REPORT_TAIL),
+            "excerpt": excerpt_head_tail(d.get("report") or "", head, tail),
             "repo_match": "same",
             "source": "round-pair",
             "claims": claim_ids,
