@@ -11,7 +11,7 @@ Usage:
   python3 ~/.claude/scripts/session-distill.py runs    [--session SID] [--json]
   python3 ~/.claude/scripts/session-distill.py distill [--session SID] [--limit N] [--only RUNID]
       [--dry-run] [--resume] [--out PATH] [--force]
-      [--model-cmd CMD] [--max-cost-usd N]
+      [--model-cmd CMD] [--max-cost-usd N] [--timeout-secs N]
   python3 ~/.claude/scripts/session-distill.py report  [--session SID] [--in PATH] [--json]
 
 THE UNIT OF ANALYSIS IS A RUN: a (brief -> final report) pair. Two kinds:
@@ -197,11 +197,14 @@ snippet cited against the wrong index is still caught. A claim "cites" a
 proof when it carries an index, a snippet, or a legacy free-text `proof`
 (which never locates) -- "non-null proof" above means "cites a proof".
 
-THE RECORD (schema_version 4), one per run, appended to
+THE RECORD (schema_version 5), one per run, appended to
 `session-distill.json`'s `records[]`:
 
   kind                  const "session-distill-record".
-  schema_version        int, currently 4 (bumped from 3 by #295 -- each
+  schema_version        int, currently 5 (bumped from 4 by #288 --
+                         `distilled.calls` splits a record's cost per
+                         pass, and the document gains `failed_cost_usd`;
+                         see PER-PASS COST ACCOUNTING. 4 was bumped from 3 by #295 -- each
                          claim now carries `proof_index`/`proof_snippet`
                          and `proof` is derived from the trace, see THE
                          TRACE-INDEX PROOF CONTRACT. 3 was bumped from 2 by #291 -- each
@@ -268,7 +271,25 @@ THE RECORD (schema_version 4), one per run, appended to
                          vocabulary label was corrected to "unclassified"
                          for this record; the offending label text.
   distilled              {at, model, cost_usd, passes: ["distill"] or
-                         ["distill","chain"]}.
+                         ["distill","chain"], calls: {"distill": {cost_usd,
+                         num_turns}, "chain": {...}}}. `calls` has an entry
+                         for every call MADE (a failed chain call is in
+                         `calls` but not `passes`); `cost_usd` is its sum.
+
+PER-PASS COST ACCOUNTING (#288). A run's spend was one number, so a change
+to either pass could not be told apart from the other (#299's two samples
+ran above the prior range and could not be attributed). Each record's
+`distilled.calls` now carries each call's own `cost_usd` and the envelope's
+`num_turns`, and `report` prints both per pass. A call that produced NO
+record -- a distill-phase failure, the #291 placeholder included -- is
+summed into the document's `failed_cost_usd`, which `--resume` carries
+forward even after #294 prunes the failure entry itself, so
+`total_cost_usd == sum(record distilled.cost_usd) + failed_cost_usd` holds
+for a document assembled across retries. Every `failures[]` entry carries
+its `cost_usd` and the envelope's `subtype`, `api_error_status` and
+`num_turns` verbatim (null when absent, or when no envelope was parsed):
+#273's 11 `is_error` failures printed only `result`, which was None, so the
+one field that would have named the cause was the one discarded.
 
 REPORT EXTRACTION AND DETERMINISTIC VERIFICATIONS (#285). Hand-reading a
 real session's distilled payloads (issue #285's diagnosis comment) found
@@ -417,7 +438,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # The closed vocabulary -- exactly the checklist, 8 + "unclassified". Frozen
 # here and nowhere else: both enforcement points (the --json-schema enum
@@ -635,7 +656,18 @@ DEFAULT_MODEL_CMD = (
 # be corrected once, real payloads still vary, and the fix is to measure
 # again, not to hand-pick a second guess.
 DEFAULT_COST_PER_CALL_USD = 0.167
-MODEL_TIMEOUT_SECS = 180
+# #288: 180 was exceeded by a real main turn in #273's calibration slice,
+# and every live validation since (#273's proof, #299's) has had to pass
+# --timeout-secs 540 by hand. A timeout that every real run overrides is
+# the wrong default.
+MODEL_TIMEOUT_SECS = 540
+# #288: envelope fields copied VERBATIM onto a failure (null when the
+# envelope lacks them). `result` is None in the is_error envelopes #273
+# hit, so these are the only record of why a call failed -- `num_turns`
+# because #273's one captured replay put the distill call at 6 turns
+# against the chain call's 2, which fits structured-output retry
+# exhaustion but was never confirmed.
+ENVELOPE_DETAIL_KEYS = ("subtype", "api_error_status", "num_turns")
 
 
 def die(msg, code=2):
@@ -2386,11 +2418,14 @@ CHAIN_SCHEMA = {
 
 
 def run_model(model_cmd_argv, system_prompt, schema, prompt_text, timeout_secs=None):
-    """Invoke the model boundary once. Returns (doc, cost_usd, error):
-    exactly one of doc/error is not None. cost_usd is the envelope's
-    total_cost_usd (0.0 when absent or when the call never produced an
-    envelope) -- summed by the caller regardless of success, since a
-    failed call can still have spent money."""
+    """Invoke the model boundary once. Returns (doc, cost_usd, error,
+    detail): exactly one of doc/error is not None. cost_usd is the
+    envelope's total_cost_usd (0.0 when absent or when the call never
+    produced an envelope) -- summed by the caller regardless of success,
+    since a failed call can still have spent money. detail (#288) maps
+    each ENVELOPE_DETAIL_KEYS key to the envelope's own value, verbatim
+    (None when the key is absent), or is None when there was no envelope
+    object to read (timeout, unparseable stdout)."""
     argv = list(model_cmd_argv) + [
         "--system-prompt", system_prompt,
         "--json-schema", json.dumps(schema),
@@ -2401,31 +2436,51 @@ def run_model(model_cmd_argv, system_prompt, schema, prompt_text, timeout_secs=N
             encoding="utf-8", errors="replace",
             timeout=timeout_secs or MODEL_TIMEOUT_SECS)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return None, 0.0, "model invocation failed: %s" % e
+        return None, 0.0, "model invocation failed: %s" % e, None
 
     try:
         envelope = json.loads(proc.stdout)
     except json.JSONDecodeError as e:
-        return None, 0.0, "model stdout is not a valid JSON envelope: %s" % e
-
-    cost = envelope.get("total_cost_usd") if isinstance(envelope, dict) else None
-    cost = cost if isinstance(cost, (int, float)) else 0.0
+        return None, 0.0, "model stdout is not a valid JSON envelope: %s" % e, None
 
     if not isinstance(envelope, dict):
-        return None, cost, "model envelope is not a JSON object"
+        return None, 0.0, "model envelope is not a JSON object", None
+
+    cost = envelope.get("total_cost_usd")
+    cost = cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else 0.0
+    detail = {k: envelope.get(k) for k in ENVELOPE_DETAIL_KEYS}
+
     if envelope.get("is_error"):
-        return None, cost, "model reported is_error: true (%r)" % (envelope.get("result"),)
+        return None, cost, "model reported is_error: true (subtype=%r, result=%r)" % (
+            envelope.get("subtype"), envelope.get("result")), detail
 
     raw_result = envelope.get("result")
     if not isinstance(raw_result, str):
-        return None, cost, "envelope 'result' is not a string"
+        return None, cost, "envelope 'result' is not a string", detail
     try:
         doc = json.loads(raw_result)
     except json.JSONDecodeError as e:
-        return None, cost, "envelope 'result' is not valid JSON: %s" % e
+        return None, cost, "envelope 'result' is not valid JSON: %s" % e, detail
     if not isinstance(doc, dict):
-        return None, cost, "envelope 'result' did not parse to a JSON object"
-    return doc, cost, None
+        return None, cost, "envelope 'result' did not parse to a JSON object", detail
+    return doc, cost, None, detail
+
+
+def call_detail(cost, detail):
+    """#288: one model call's per-pass accounting for a record's
+    `distilled.calls` -- its cost, and the envelope's `num_turns` verbatim
+    (None when absent or when there was no envelope)."""
+    return {"cost_usd": round(cost, 6), "num_turns": (detail or {}).get("num_turns")}
+
+
+def failure_entry(run_id, phase, error, cost, detail):
+    """#288: a `failures[]` entry. Carries what the attempt COST (a failed
+    call bills: $0.17-$0.66 each in #273) and the envelope's
+    ENVELOPE_DETAIL_KEYS verbatim, all None when no envelope was parsed."""
+    entry = {"run": run_id, "phase": phase, "error": error, "cost_usd": round(cost, 6)}
+    for k in ENVELOPE_DETAIL_KEYS:
+        entry[k] = (detail or {}).get(k)
+    return entry
 
 
 def model_name_from_cmd(argv):
@@ -2571,7 +2626,7 @@ def warn_dropped_later_wrong(run_id, dropped_lw):
                   % (run_id, dc), file=sys.stderr)
 
 
-def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_name, cost_usd,
+def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_name, calls,
                   passes, candidates=None):
     """(record, dropped_later_wrong[]) -- dropped_later_wrong carries the
     claim references any `later_wrong` entry named that did not resolve to
@@ -2583,6 +2638,12 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
     produced for this run (#287); omitted (None) when the caller has none
     (e.g. a budget-stop record with only a distill pass), in which case
     the repo-ambiguity check simply never fires.
+
+    #288: CALLS maps each pass whose model call was MADE for this record
+    ("distill", and "chain" when attempted -- including a failed chain
+    call, which spent money but is not in PASSES) to `call_detail`'s
+    {cost_usd, num_turns}. `distilled.cost_usd` is derived from it, so the
+    per-pass split and the total can never disagree.
 
     #291: every claim gets a `proof_located` flag (True/False for a
     non-null `proof`, None for a null one) against RUN_STUB's own
@@ -2627,8 +2688,9 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
         "distilled": {
             "at": distilled_at,
             "model": model_name,
-            "cost_usd": round(cost_usd, 6),
+            "cost_usd": round(sum(c["cost_usd"] for c in calls.values()), 6),
             "passes": passes,
+            "calls": calls,
         },
     }
     return record, dropped_later_wrong
@@ -2803,11 +2865,18 @@ def cmd_distill(a):
     records = []
     failures = []
     total_cost = 0.0
+    # #288: spend on calls that produced NO record (a distill-phase failure,
+    # the #291 placeholder included). Kept as its own running sum rather
+    # than read back off failures[]: #294 prunes a failure once --resume
+    # supersedes it, and the money it cost is still spent. Invariant:
+    # total_cost_usd == sum(record distilled.cost_usd) + failed_cost_usd.
+    failed_cost = 0.0
     done_ids = set()
     if existing_doc:
         records = existing_doc.get("records") or []
         failures = existing_doc.get("failures") or []
         total_cost = existing_doc.get("total_cost_usd") or 0.0
+        failed_cost = existing_doc.get("failed_cost_usd") or 0.0
         done_ids = {
             rec["run"]["id"] for rec in records
             if isinstance(rec, dict) and isinstance(rec.get("run"), dict) and rec["run"].get("id")
@@ -2885,13 +2954,14 @@ def cmd_distill(a):
         # own outcome (a fresh failure, or a record) -- never both.
         failures = [f for f in failures if not (isinstance(f, dict) and f.get("run") == r["id"])]
 
-        distilled_doc, cost1, err1 = run_model(
+        distilled_doc, cost1, err1, detail1 = run_model(
             model_cmd, DISTILL_SYSTEM_PROMPT, DISTILL_SCHEMA, build_distill_prompt(r),
             a.timeout_secs)
         total_cost += cost1
         observed_costs.append(cost1)
         if err1:
-            failures.append({"run": r["id"], "phase": "distill", "error": err1})
+            failed_cost += cost1
+            failures.append(failure_entry(r["id"], "distill", err1, cost1, detail1))
             # #278 M2: checked AFTER the call too, using OBSERVED spend --
             # a call that errors can still have spent money (run_model's
             # own contract), and a budget that only ever checks BEFORE a
@@ -2914,13 +2984,13 @@ def cmd_distill(a):
         is_placeholder, n_nonnull, n_unlocatable = claims_all_proofs_unlocatable(
             distilled_doc, r.get("tool_inputs_full") or [])
         if is_placeholder:
-            failures.append({
-                "run": r["id"], "phase": "distill",
-                "error": (
-                    "proof-not-in-trace: every non-null proof (%d of %d claim(s)) failed "
-                    "to locate in this run's own tool inputs -- a schema-valid but "
-                    "content-free (placeholder) response" % (n_unlocatable, n_nonnull)),
-            })
+            failed_cost += cost1
+            failures.append(failure_entry(
+                r["id"], "distill",
+                "proof-not-in-trace: every non-null proof (%d of %d claim(s)) failed "
+                "to locate in this run's own tool inputs -- a schema-valid but "
+                "content-free (placeholder) response" % (n_unlocatable, n_nonnull),
+                cost1, detail1))
             if over_budget():
                 stopped = {
                     "reason": "max-cost-usd exceeded by observed spend after this run's (failed) distill call",
@@ -2932,7 +3002,8 @@ def cmd_distill(a):
         if over_budget():
             record, dropped_lw = build_record(
                 sid, r, distilled_doc, None, now_iso(),
-                model_name_from_cmd(model_cmd), cost1, ["distill"])
+                model_name_from_cmd(model_cmd), {"distill": call_detail(cost1, detail1)},
+                ["distill"])
             records.append(record)
             warn_dropped_later_wrong(r["id"], dropped_lw)
             stopped = {
@@ -2943,7 +3014,8 @@ def cmd_distill(a):
         if projected_over_budget():
             record, dropped_lw = build_record(
                 sid, r, distilled_doc, None, now_iso(),
-                model_name_from_cmd(model_cmd), cost1, ["distill"])
+                model_name_from_cmd(model_cmd), {"distill": call_detail(cost1, detail1)},
+                ["distill"])
             records.append(record)
             warn_dropped_later_wrong(r["id"], dropped_lw)
             stopped = {
@@ -2960,14 +3032,14 @@ def cmd_distill(a):
             find_chain_candidates(
                 claims, r.get("started_at"), current_repos, other_runs, repo_vocabulary))
 
-        chain_doc, cost2, err2 = run_model(
+        chain_doc, cost2, err2, detail2 = run_model(
             model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA, build_chain_prompt(r, claims, candidates),
             a.timeout_secs)
         total_cost += cost2
         observed_costs.append(cost2)
         passes = ["distill"]
         if err2:
-            failures.append({"run": r["id"], "phase": "chain", "error": err2})
+            failures.append(failure_entry(r["id"], "chain", err2, cost2, detail2))
             chain_doc = None
         else:
             passes.append("chain")
@@ -2979,7 +3051,9 @@ def cmd_distill(a):
         # on the record when err2, so sum(record costs) != total_cost_usd.
         record, dropped_lw = build_record(
             sid, r, distilled_doc, chain_doc, now_iso(),
-            model_name_from_cmd(model_cmd), cost1 + cost2, passes, candidates)
+            model_name_from_cmd(model_cmd),
+            {"distill": call_detail(cost1, detail1), "chain": call_detail(cost2, detail2)},
+            passes, candidates)
         records.append(record)
         warn_dropped_later_wrong(r["id"], dropped_lw)
 
@@ -2999,6 +3073,7 @@ def cmd_distill(a):
         "segmented_by": segmented_by,
         "model_cmd": a.model_cmd,
         "total_cost_usd": round(total_cost, 6),
+        "failed_cost_usd": round(failed_cost, 6),
         # #278 N3: the session's real total is distinct from how many runs
         # THIS invocation selected (--only narrows to one; --limit narrows
         # `todo` further but does not change selection) -- a document
@@ -3083,7 +3158,25 @@ def cmd_report(a):
     # see `failures` above) still carries at least one unlocatable proof.
     proofs_nonnull = 0
     proofs_unlocatable = 0
+    # #288: per-pass spend, from each record's distilled.calls -- the
+    # split #299 could not make. A record without `calls` (never written
+    # by schema 5) is counted apart rather than folded into either pass.
+    pass_cost = {"distill": 0.0, "chain": 0.0}
+    pass_calls = {"distill": 0, "chain": 0}
+    pass_turns = {"distill": [], "chain": []}
+    unsplit_records = 0
     for rec in records:
+        calls = (rec.get("distilled") or {}).get("calls")
+        if not isinstance(calls, dict):
+            unsplit_records += 1
+        else:
+            for pname in ("distill", "chain"):
+                c = calls.get(pname)
+                if isinstance(c, dict):
+                    pass_calls[pname] += 1
+                    pass_cost[pname] += c.get("cost_usd") or 0.0
+                    if isinstance(c.get("num_turns"), int):
+                        pass_turns[pname].append(c["num_turns"])
         for ca in rec.get("classified_as") or []:
             label = ca.get("label")
             label_counts[label] = label_counts.get(label, 0) + 1
@@ -3114,6 +3207,18 @@ def cmd_report(a):
     print("records: %d   failures: %d   cost_usd: $%.4f" % (
         len(records), len(outstanding_failures(doc.get("failures"), records)),
         doc.get("total_cost_usd") or 0.0))
+    # #288: printed unconditionally, so a per-pass cost question is
+    # answered by `report` rather than by re-reading every record.
+    for pname in ("distill", "chain"):
+        n = pass_calls[pname]
+        turns = pass_turns[pname]
+        print("  %-8s $%.4f over %d call(s)   mean $%.4f/call   mean num_turns %s" % (
+            pname, pass_cost[pname], n, (pass_cost[pname] / n) if n else 0.0,
+            ("%.1f" % (sum(turns) / len(turns))) if turns else "n/a"))
+    print("  %-8s $%.4f (calls that produced no record)" % (
+        "failed", doc.get("failed_cost_usd") or 0.0))
+    if unsplit_records:
+        print("  (%d record(s) carry no distilled.calls: pre-v5, not split)" % unsplit_records)
     if doc.get("stopped"):
         print("stopped: %s" % doc["stopped"].get("reason"))
     if doc.get("unreadable"):
