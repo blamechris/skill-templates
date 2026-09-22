@@ -462,6 +462,13 @@ def envelope(result, is_error=False, cost=None):
     r = result if isinstance(result, str) else json.dumps(result)
     return {"is_error": is_error, "result": r, "total_cost_usd": cost}
 
+# #294: STUB_FAIL_DISTILL=<run id> makes that run's distill call an
+# is_error envelope, so a test can fail a run once and then --resume it
+# with the variable unset (a succeeding stub).
+if pass_kind == "distill" and run_id and run_id == os.environ.get("STUB_FAIL_DISTILL"):
+    print(json.dumps(envelope(None, is_error=True)))
+    sys.exit(0)
+
 if pass_kind == "distill":
     if run_id == "agent-dddd0004":
         # #278 C2 fixture: two claims, so a later_wrong/classified_as
@@ -2146,6 +2153,75 @@ assert len(got) == 1 and got[0]["repo_match"] == "ambiguous", got
 PY
 [ $? -eq 0 ] && ok "#291: an empty-string proof is unlocatable and counts toward the FAILURE (only null is 'nothing to check'); #287: a later qualified #N occurrence in the same run wins over an earlier ambiguous one" \
   || bad "#291/#287 Copilot review fixes" "rc=nonzero"
+
+# ============================================================ GROUP Y — #294: --resume prunes superseded failures
+echo; echo "Y. #294 — --resume drops a failure once its run succeeds; report counts only outstanding failures"
+
+OUT_Y="$TMP/out-y.json"
+STUB_FAIL_DISTILL=agent-aaaa0001 run sess-main distill --out "$OUT_Y" --model-cmd "$MODEL_CMD"
+"$PY" - "$OUT_Y" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+f = [(x["run"], x["phase"]) for x in d["failures"]]
+assert ("agent-aaaa0001", "distill") in f, f
+assert "agent-aaaa0001" not in {r["run"]["id"] for r in d["records"]}
+PY
+[ $? -eq 0 ] && ok "#294: a stubbed distill failure is recorded and leaves no record (precondition)" \
+  || bad "#294: stubbed distill failure precondition" "$(cat "$OUT_Y")"
+
+run sess-main distill --out "$OUT_Y" --resume --model-cmd "$MODEL_CMD"
+"$PY" - "$OUT_Y" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+runs = [x["run"] for x in d["failures"]]
+assert "agent-aaaa0001" not in runs, d["failures"]
+assert "agent-aaaa0001" in {r["run"]["id"] for r in d["records"]}
+# chain-phase failures are real partials (a record with passes == ["distill"])
+# and --resume never retries them -- they must survive the prune.
+assert sorted(runs) == ["agent-cccc0003", "main-turn-002"], runs
+PY
+[ $? -eq 0 ] && ok "#294: --resume with a succeeding stub drops the run's stale distill failure, keeps chain-phase partials" \
+  || bad "#294: --resume prunes the superseded failure" "$(cat "$OUT_Y")"
+
+# A pre-fix document already carrying the stale entry: report must not count it.
+"$PY" - "$OUT_Y" "$TMP/out-y-legacy.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["failures"].append({"run": "agent-aaaa0001", "phase": "distill", "error": "stale"})
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run - report --in "$TMP/out-y-legacy.json"
+case "$out" in
+  *"failures: 2"*) ok "#294: report counts only outstanding failures on a document with a stale distill entry" ;;
+  *) bad "#294: report counts only outstanding failures" "$out" ;;
+esac
+OUT_YJ=$(HOME="$HOMEDIR" "$PY" "$SUT" report --in "$TMP/out-y-legacy.json" --json 2>/dev/null)
+echo "$OUT_YJ" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); r=sorted(x["run"] for x in d["failures"]); assert r == ["agent-cccc0003", "main-turn-002"], r'
+[ $? -eq 0 ] && ok "#294: report --json also carries only outstanding failures" \
+  || bad "#294: report --json carries only outstanding failures" "$OUT_YJ"
+
+# ...and --resume over that same pre-fix document drops the stale entry at
+# load time, even though no run is re-attempted (every run already has a record).
+run sess-main distill --out "$TMP/out-y-legacy.json" --resume --model-cmd "$MODEL_CMD"
+"$PY" - "$TMP/out-y-legacy.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert sorted(x["run"] for x in d["failures"]) == ["agent-cccc0003", "main-turn-002"], d["failures"]
+PY
+[ $? -eq 0 ] && ok "#294: --resume over a pre-fix document drops its stale distill failure at load time" \
+  || bad "#294: --resume load-time prune of a pre-fix document" "$(cat "$TMP/out-y-legacy.json")"
+
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+recs = [{"run": {"id": "r1"}}]
+got = sd.outstanding_failures(
+    [{"run": {"id": "r1"}, "phase": "distill"}, {"run": "r1", "phase": "distill"}, "junk"], recs)
+assert got == [{"run": {"id": "r1"}, "phase": "distill"}, "junk"], got
+PY
+[ $? -eq 0 ] && ok "#294: outstanding_failures tolerates a non-string/unhashable run and non-dict entries (kept, never a crash)" \
+  || bad "#294: outstanding_failures on malformed failures[] entries"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

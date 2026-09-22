@@ -2432,6 +2432,29 @@ def cmd_runs(a):
     return 2 if unreadable else 0
 
 
+def outstanding_failures(failures, records):
+    """#294: the failures still outstanding given `records`.
+
+    A `distill`-phase failure never coexists with a record from the same
+    attempt (that path `continue`s before build_record), so a distill
+    failure whose run now HAS a record is a stale entry from an earlier
+    invocation that a later `--resume` superseded -- it is dropped, not
+    archived: the record is the answer and the old error is not
+    outstanding. A `chain`-phase failure DOES coexist with its record (the
+    record is written with passes == ["distill"]) and `--resume` never
+    retries a run that has a record, so it stays: that chain call is still
+    missing. Also applied to documents written before this fix."""
+    have = {
+        rec["run"]["id"] for rec in records or []
+        if isinstance(rec, dict) and isinstance(rec.get("run"), dict) and rec["run"].get("id")
+    }
+    return [
+        f for f in failures or []
+        if not (isinstance(f, dict) and f.get("phase") == "distill"
+                and isinstance(f.get("run"), str) and f["run"] in have)
+    ]
+
+
 def cmd_distill(a):
     rr = load_review_result()
     sid = rr.resolve_session_id(a.session)
@@ -2515,6 +2538,7 @@ def cmd_distill(a):
             rec["run"]["id"] for rec in records
             if isinstance(rec, dict) and isinstance(rec.get("run"), dict) and rec["run"].get("id")
         }
+        failures = outstanding_failures(failures, records)
 
     todo = [r for r in all_runs_for_run if r["id"] not in done_ids]
     if a.limit is not None:
@@ -2581,6 +2605,11 @@ def cmd_distill(a):
                 "at_run": r["id"], "budget": a.max_cost_usd, "spent": round(total_cost, 6),
             }
             break
+
+        # #294: this run is being attempted again, so whatever an earlier
+        # invocation recorded against it is superseded by this attempt's
+        # own outcome (a fresh failure, or a record) -- never both.
+        failures = [f for f in failures if not (isinstance(f, dict) and f.get("run") == r["id"])]
 
         distilled_doc, cost1, err1 = run_model(
             model_cmd, DISTILL_SYSTEM_PROMPT, DISTILL_SCHEMA, build_distill_prompt(r),
@@ -2750,6 +2779,9 @@ def cmd_report(a):
             die("cannot read %s (%s)" % (path, e))
 
     if a.json:
+        # #294: same outstanding-only view as the text report -- the JSON is
+        # what automation reads, so it must not carry superseded failures.
+        doc = dict(doc, failures=outstanding_failures(doc.get("failures"), doc.get("records")))
         print(json.dumps(doc, indent=2, ensure_ascii=False))
         return 0
 
@@ -2801,7 +2833,8 @@ def cmd_report(a):
 
     print("session: %s" % doc.get("session"))
     print("records: %d   failures: %d   cost_usd: $%.4f" % (
-        len(records), len(doc.get("failures") or []), doc.get("total_cost_usd") or 0.0))
+        len(records), len(outstanding_failures(doc.get("failures"), records)),
+        doc.get("total_cost_usd") or 0.0))
     if doc.get("stopped"):
         print("stopped: %s" % doc["stopped"].get("reason"))
     if doc.get("unreadable"):
