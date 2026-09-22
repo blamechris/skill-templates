@@ -3148,5 +3148,121 @@ run sess-main distill --out "$TMP/out-jobs0.json" --jobs 0 --model-cmd "$MODEL_C
 [ "$rc" -ne 0 ] && case "$out" in *"--jobs must be at least 1"*) true ;; *) false ;; esac \
   && ok "#288: --jobs 0 is refused" || bad "#288: --jobs 0 is refused" "rc=$rc out=$out"
 
+# ============================================================ GROUP PROOFRUN — #295 box 3: per-run unlocatable rate in `report`
+echo; echo "PROOFRUN. #295 — report splits the unlocatable-proof rate PER RUN, not only as a session total"
+
+# The shape that opened #295: a session whose TOTAL looks healthy while one
+# run inside it paraphrases most of its proofs. If `report` only ever
+# printed the total, this document would read 13.9% and the 32.1% run would
+# be invisible -- which is the whole defect box 3 closes.
+DOC_PR="$TMP/doc-proofrun.json"
+"$PY" - "$DOC_PR" <<'PY2'
+import json, sys
+def claim(i, pl):
+    return {"id": "c%d" % i, "text": "t", "kind": "verification", "proof_located": pl}
+recs = [
+    {"run": {"id": "agent-paraphraser", "report_source": "text"},
+     "claims": [claim(i, i >= 9) for i in range(28)]},   # 9/28 = 32.1%
+    {"run": {"id": "agent-clean", "report_source": "text"},
+     "claims": [claim(i, True) for i in range(40)]},     # 0/40, never listed
+    {"run": {"id": "agent-small", "report_source": "text"},
+     "claims": [claim(i, i != 0) for i in range(4)]},    # 1/4 = 25.0%
+    # The highest absolute count in the document at the LOWEST rate: it
+    # must sort LAST. Sorting by count would put it first, which is the
+    # ordering bug the rate sort exists to avoid -- 10 misquotes out of 100
+    # proofs is a healthier run than 1 out of 4.
+    {"run": {"id": "agent-bulk", "report_source": "text"},
+     "claims": [claim(i, i >= 10) for i in range(100)]}, # 10/100 = 10.0%
+    {"run": {"id": "agent-nocite", "report_source": "text"},
+     "claims": [claim(0, None)]},                        # cites no proof at all
+    # brief claims carry no proof by construction -- they must not be
+    # counted, or every rate deflates by however many briefs were written.
+    {"run": {"id": "agent-briefonly", "report_source": "text"}, "claims": [],
+     "brief_claims": [{"id": "b1.c1", "text": "t", "kind": "unspecified", "source": "brief"}]},
+]
+json.dump({"kind": "session-distill-document", "schema_version": 6, "session": "s",
+           "total_cost_usd": 0.0, "records": recs, "failures": []}, open(sys.argv[1], "w"))
+PY2
+
+run - report --in "$DOC_PR"
+[ "$rc" -eq 0 ] && ok "#295: report over a per-run proof document exits 0" \
+  || bad "#295: report over a per-run proof document exits 0" "rc=$rc out=$out"
+
+# The session total is unchanged by this box -- 10 of 72 across the document.
+case "$out" in
+  *"proof_located: 20/172 non-null claim proof(s) unlocatable (11.6%)"*)
+    ok "#295: the session total still prints, and brief claims are excluded from it" ;;
+  *) bad "#295: the session total still prints, and brief claims are excluded from it" "$out" ;;
+esac
+
+# The per-run counts: 3 of 4 CITING runs offend, 1 clean, 2 cite nothing
+# (agent-nocite and agent-briefonly). The citing denominator is not the
+# record count -- a run with no cited proof cannot be "clean".
+case "$out" in
+  *"per run: 3 of 4 run(s) carry >=1 unlocatable proof; 1 clean; 2 cite no proof at all"*)
+    ok "#295: report prints the per-run split (offenders / clean / citing-nothing)" ;;
+  *) bad "#295: report prints the per-run split (offenders / clean / citing-nothing)" "$out" ;;
+esac
+
+# The outlier is NAMED with its own rate -- the assertion that fails if the
+# per-run listing is dropped and only the total survives.
+case "$out" in
+  *"agent-paraphraser"*"9/28"*) ok "#295: the outlier run is named with its own count/rate" ;;
+  *) bad "#295: the outlier run is named with its own count/rate" "$out" ;;
+esac
+case "$out" in
+  *"agent-clean"*) bad "#295: a run with 0 unlocatable proofs is NOT listed as an offender" "$out" ;;
+  *) ok "#295: a run with 0 unlocatable proofs is NOT listed as an offender" ;;
+esac
+
+# Worst RATE first -- 32.1% then 25.0% then 10.0%. Not the record order
+# they appear in, and specifically NOT the absolute count: agent-bulk
+# carries the most unlocatable proofs in the document (10, more than
+# agent-paraphraser's 9) and must still sort last, because its rate is the
+# lowest. A count sort passes every other assertion here and fails only
+# this one.
+"$PY" - <<PY2
+import sys
+out = """$out"""
+want = ["agent-paraphraser", "agent-small", "agent-bulk"]
+lines = [l for l in out.splitlines() if any(w in l for w in want)]
+assert len(lines) == 3, lines
+assert all(w in l for w, l in zip(want, lines)), lines
+PY2
+[ $? -eq 0 ] && ok "#295: offending runs are ordered worst rate first" \
+  || bad "#295: offending runs are ordered worst rate first" "$out"
+
+# The block is printed UNCONDITIONALLY, exactly like the total above it: a
+# session where every proof located must still say so, or "checked, none
+# found" is indistinguishable from "never checked".
+DOC_PR_OK="$TMP/doc-proofrun-clean.json"
+"$PY" - "$DOC_PR_OK" <<'PY2'
+import json, sys
+recs = [{"run": {"id": "agent-ok", "report_source": "text"},
+         "claims": [{"id": "c1", "text": "t", "kind": "verification", "proof_located": True}]}]
+json.dump({"kind": "session-distill-document", "schema_version": 6, "session": "s",
+           "total_cost_usd": 0.0, "records": recs, "failures": []}, open(sys.argv[1], "w"))
+PY2
+run - report --in "$DOC_PR_OK"
+case "$out" in
+  *"per run: 0 of 1 run(s) carry >=1 unlocatable proof; 1 clean; 0 cite no proof at all"*)
+    ok "#295: the per-run block prints at zero offenders too (never a silent section)" ;;
+  *) bad "#295: the per-run block prints at zero offenders too" "$out" ;;
+esac
+
+# A document with no records at all must not divide by zero.
+DOC_PR_EMPTY="$TMP/doc-proofrun-empty.json"
+"$PY" - "$DOC_PR_EMPTY" <<'PY2'
+import json, sys
+json.dump({"kind": "session-distill-document", "schema_version": 6, "session": "s",
+           "total_cost_usd": 0.0, "records": [], "failures": []}, open(sys.argv[1], "w"))
+PY2
+run - report --in "$DOC_PR_EMPTY"
+[ "$rc" -eq 0 ] && case "$out" in
+  *"per run: 0 of 0 run(s) carry >=1 unlocatable proof; 0 clean; 0 cite no proof at all"*) true ;;
+  *) false ;; esac \
+  && ok "#295: an empty document reports 0 of 0 rather than dividing by zero" \
+  || bad "#295: an empty document reports 0 of 0" "rc=$rc out=$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
