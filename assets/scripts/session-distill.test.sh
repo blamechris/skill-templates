@@ -348,10 +348,11 @@ w_jsonl(os.path.join(sdir_285, "subagents", "agent-jjjj0010.jsonl"), [
 # not exist anywhere in the run's own tool inputs -- and the run DOES have
 # a real, non-trivial tool call, so an "unlocatable" verdict here is not
 # the vacuous "tool_inputs_full was never populated" failure mode).
-# agent-291m0001 carries three claims: one proof copied in the prompt's
-# `[i] Tool: digest` form, one with a real command elided with `...` and
-# an ` -> output` suffix, and one invented -- only the invented one may
-# come back proof_located: false.
+# agent-291m0001 carries four claims (#295's index+snippet contract): a
+# plain snippet at the right index, a snippet elided with `...` and an
+# ` -> output` suffix at the right index, a REAL snippet cited against the
+# WRONG (neighbouring) index, and an out-of-range index -- only the first
+# two may come back proof_located: true.
 sdir_291 = os.path.join(proj, "sess-291")
 os.makedirs(sdir_291, exist_ok=True)
 
@@ -495,21 +496,26 @@ if pass_kind == "distill":
         # and must never reach the chain call.
         doc = {"asked": "test", "understood": "test", "delivered": "test",
                "claims": [{"id": "c1", "text": "test claim", "kind": "unspecified",
-                           "proof": "test proof", "quote": None}]}
+                           "proof_index": 0, "proof_snippet": "test proof", "quote": None}]}
         print(json.dumps(envelope(doc)))
     elif run_id == "agent-291m0001":
-        # #291: three claims -- one proof copied in the prompt's numbered
-        # `[i] Tool: digest` form (locatable), one with a real command
-        # elided by `...` and an ` -> output` suffix (locatable), one
-        # invented (must come back proof_located: false; the other two
-        # must not).
+        # #295: four claims -- a snippet at its right index, an elided
+        # snippet with an ` -> output` suffix at its right index (both
+        # locatable), a REAL snippet ("swift build", trace [3]) cited
+        # against the WRONG index [2], and an out-of-range index (both
+        # must come back proof_located: false). A model-written `proof`
+        # on c1 must be discarded in favour of the derived one.
         doc = {"asked": "a", "understood": "a", "delivered": "a", "claims": [
             {"id": "c1", "text": "the build passes", "kind": "verification",
-             "proof": "[3] Bash: swift build", "quote": "Build complete!"},
+             "proof_index": 3, "proof_snippet": "swift build",
+             "proof": "a paraphrase the model wrote", "quote": "Build complete!"},
             {"id": "c2", "text": "no TODOs remain", "kind": "verification",
-             "proof": "grep -r TODO src --include=*.py ... -> done", "quote": "done"},
-            {"id": "c3", "text": "network reachable", "kind": "verification",
-             "proof": "curl https://example.com/nonexistent-thing-xyz", "quote": "n/a"},
+             "proof_index": 1, "proof_snippet": "grep -r TODO src --include=*.py ... -> done",
+             "quote": "done"},
+            {"id": "c3", "text": "the build passes again", "kind": "verification",
+             "proof_index": 2, "proof_snippet": "swift build", "quote": "Build complete!"},
+            {"id": "c4", "text": "network reachable", "kind": "verification",
+             "proof_index": 99, "proof_snippet": "swift build", "quote": "n/a"},
         ]}
         print(json.dumps(envelope(doc)))
     elif run_id == "agent-287cl0001":
@@ -763,7 +769,7 @@ run sess-main distill --out "$OUT_D" --model-cmd "$MODEL_CMD"
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["kind"] == "session-distill-document"
-assert d["schema_version"] == 3
+assert d["schema_version"] == 4
 recs = {r["run"]["id"]: r for r in d["records"]}
 assert len(recs) == 5, recs.keys()
 
@@ -1505,9 +1511,9 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sd_285_schema", sys.argv[1])
 sd = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sd)
-assert sd.SCHEMA_VERSION == 3, sd.SCHEMA_VERSION
+assert sd.SCHEMA_VERSION == 4, sd.SCHEMA_VERSION
 PY
-[ $? -eq 0 ] && ok "#287/#291: SCHEMA_VERSION is 3" || bad "#287/#291: SCHEMA_VERSION is 3" "rc=nonzero"
+[ $? -eq 0 ] && ok "#295: SCHEMA_VERSION is 4" || bad "#295: SCHEMA_VERSION is 4" "rc=nonzero"
 
 OUT_V="$TMP/out-v.json"
 "$PY" - "$OUT_V" <<'PY'
@@ -1762,42 +1768,81 @@ assert sd.locate_proof_fragment(None) == ""
 # no prefix, no cut marker at all -- the whole (collapsed) string is the fragment
 assert sd.locate_proof_fragment("swift build") == "swift build"
 
-# proof_located: substring-of-some-full-input, never vacuously true
-assert sd.proof_located("[3] Bash: swift build", ["ls -la", "swift build"]) is True
-assert sd.proof_located("nonexistent-command-xyz", ["swift build"]) is False
-assert sd.proof_located("swift build", []) is False, "empty tool_inputs_full must never be vacuously located"
-assert sd.proof_located(None, ["swift build"]) is False
-assert sd.proof_located("", ["swift build"]) is False
+# proof_located (#295): the index must name a real entry AND the snippet
+# must occur in THAT entry -- never vacuously true
+full = ["ls -la", "swift build"]
+assert sd.proof_located(1, "swift build", full) is True
+assert sd.proof_located(1, "[1] Bash: swift build", full) is True, "a copied [N] Tool: prefix is stripped"
+assert sd.proof_located(0, "swift build", full) is False, "a real snippet at the WRONG index must be caught"
+assert sd.proof_located(2, "swift build", full) is False, "out of range"
+assert sd.proof_located(-1, "swift build", full) is False, "negative index is not python's last-item"
+assert sd.proof_located(True, "ls -la", full) is False, "a bool is not an index"
+assert sd.proof_located(None, "swift build", full) is False
+assert sd.proof_located(1, None, full) is False, "an index with no snippet is unchecked, so unlocatable"
+assert sd.proof_located(1, "", full) is False
+assert sd.proof_located(0, "nonexistent-command-xyz", full) is False
+assert sd.proof_located(0, "swift build", []) is False, "empty tool_inputs_full must never be vacuously located"
 
-# compute_proof_located: True/False for non-null proof, None (never absent) for null
-claims = [{"id": "c1", "proof": "swift build"}, {"id": "c2", "proof": None},
-          {"id": "c3", "proof": "missing-cmd-xyz"}]
+# compute_proof_located: derives `proof` from the index (discarding any
+# model-written text), True/False for a cited claim, None (never absent)
+# for an uncited one
+claims = [{"id": "c1", "proof_index": 0, "proof_snippet": "swift build", "proof": "paraphrase"},
+          {"id": "c2", "proof_index": None, "proof_snippet": None, "proof": None},
+          {"id": "c3", "proof_index": 0, "proof_snippet": "missing-cmd-xyz", "proof": None},
+          {"id": "c4", "proof_index": 7, "proof_snippet": "swift build", "proof": None},
+          {"id": "c5", "proof_index": None, "proof_snippet": None, "proof": "legacy free text"}]
 n_nonnull, n_unlocatable = sd.compute_proof_located(claims, ["swift build"])
-assert (n_nonnull, n_unlocatable) == (2, 1), (n_nonnull, n_unlocatable)
-assert claims[0]["proof_located"] is True, claims[0]
-assert claims[1]["proof_located"] is None, claims[1]
-assert claims[2]["proof_located"] is False, claims[2]
+assert (n_nonnull, n_unlocatable) == (4, 3), (n_nonnull, n_unlocatable)
+assert claims[0]["proof_located"] is True and claims[0]["proof"] == "swift build", claims[0]
+assert claims[1]["proof_located"] is None and claims[1]["proof"] is None, claims[1]
+assert claims[2]["proof_located"] is False and claims[2]["proof"] == "swift build", claims[2]
+assert claims[3]["proof_located"] is False and claims[3]["proof"] is None, claims[3]
+# a legacy free-text proof counts as cited (so the guard sees it) but is
+# never persisted and never locates
+assert claims[4]["proof_located"] is False and claims[4]["proof"] is None, claims[4]
+
+# the derived proof is excerpted, so one long heredoc cannot bloat a record
+long_cmd = "cat <<EOF " + "x" * 5000
+c = [{"id": "c1", "proof_index": 0, "proof_snippet": "cat <<EOF xxxx"}]
+sd.compute_proof_located(c, [long_cmd])
+assert c[0]["proof_located"] is True and len(c[0]["proof"]) <= 601, len(c[0]["proof"])
+
+# normalize_claims keeps only well-typed citation fields
+nc = sd.normalize_claims([{"id": "c1", "text": "t", "kind": "k", "proof_index": "3",
+                           "proof_snippet": 5}, {"id": "c2", "proof_index": True}])
+assert nc[0]["proof_index"] is None and nc[0]["proof_snippet"] is None, nc[0]
+assert nc[1]["proof_index"] is None, nc[1]
 
 # claims_all_proofs_unlocatable: the FAILURE predicate itself
 is_fail, nn, nu = sd.claims_all_proofs_unlocatable(
-    {"claims": [{"id": "c1", "proof": "test proof"}]}, ["grep -r TIMEOUT src"])
+    {"claims": [{"id": "c1", "proof_index": 0, "proof_snippet": "test proof"}]}, ["grep -r TIMEOUT src"])
 assert (is_fail, nn, nu) == (True, 1, 1), (is_fail, nn, nu)
+# a placeholder that ignores the index contract entirely still fails
+is_fail_l, nnl, nul = sd.claims_all_proofs_unlocatable(
+    {"claims": [{"id": "c1", "proof": "test proof"}]}, ["grep -r TIMEOUT src"])
+assert (is_fail_l, nnl, nul) == (True, 1, 1), (is_fail_l, nnl, nul)
+# every citation real but pointed one entry off: still a FAILURE
+is_fail_w, nnw, nuw = sd.claims_all_proofs_unlocatable(
+    {"claims": [{"id": "c1", "proof_index": 1, "proof_snippet": "grep -r TIMEOUT"}]},
+    ["grep -r TIMEOUT src", "swift build"])
+assert (is_fail_w, nnw, nuw) == (True, 1, 1), (is_fail_w, nnw, nuw)
 
 is_fail_mixed, nn2, nu2 = sd.claims_all_proofs_unlocatable(
-    {"claims": [{"id": "c1", "proof": "swift build"}, {"id": "c2", "proof": "missing-cmd-xyz"}]},
+    {"claims": [{"id": "c1", "proof_index": 0, "proof_snippet": "swift build"},
+                {"id": "c2", "proof_index": 0, "proof_snippet": "missing-cmd-xyz"}]},
     ["swift build"])
 assert (is_fail_mixed, nn2, nu2) == (False, 2, 1), (is_fail_mixed, nn2, nu2)
 
 # policy (left as-is, per the task's own instruction not to invent one):
-# zero claims, or every proof already null, is NOT a #291 failure -- there
-# is no non-null proof for this guard to fail on.
+# zero claims, or every claim uncited, is NOT a #291 failure -- there is
+# no cited proof for this guard to fail on.
 is_fail3, nn3, nu3 = sd.claims_all_proofs_unlocatable({"claims": []}, ["swift build"])
 assert (is_fail3, nn3, nu3) == (False, 0, 0), (is_fail3, nn3, nu3)
 is_fail4, nn4, nu4 = sd.claims_all_proofs_unlocatable(
-    {"claims": [{"id": "c1", "proof": None}]}, ["swift build"])
+    {"claims": [{"id": "c1", "proof_index": None, "proof_snippet": None}]}, ["swift build"])
 assert (is_fail4, nn4, nu4) == (False, 0, 0), (is_fail4, nn4, nu4)
 PY
-[ $? -eq 0 ] && ok "#291: locate_proof_fragment strips [N]/ToolName: prefixes and cuts at the first elision/arrow; proof_located never vacuously true on empty inputs; compute_proof_located sets True/False/None; claims_all_proofs_unlocatable is the FAILURE predicate, and a zero/all-null-proof result is NOT a failure by this guard" \
+[ $? -eq 0 ] && ok "#291: locate_proof_fragment strips [N]/ToolName: prefixes and cuts at the first elision/arrow; proof_located checks the snippet against the CITED index only (a wrong index is caught) and is never vacuously true; compute_proof_located derives proof from the index and sets True/False/None; claims_all_proofs_unlocatable is the FAILURE predicate, and a zero/all-null-proof result is NOT a failure by this guard" \
   || bad "#291: proof-locatable guard unit tests" "rc=nonzero"
 
 echo; echo "W2. #291 — end to end: placeholder response is a FAILURE, chain never called; mixed doc flags only the invented proof"
@@ -1839,19 +1884,25 @@ d = json.load(open(sys.argv[1]))
 assert len(d["records"]) == 1, d["records"]
 rec = d["records"][0]
 claims = {c["id"]: c for c in rec["claims"]}
-# the real proofs (one copied in "[N] Tool: digest" form, one elided with
-# "..." and an " -> output" suffix) both locate; only the invented one
-# (a curl to a URL never touched anywhere in this run) does not.
+# #295: the two right-index citations locate; a real snippet at the wrong
+# index and an out-of-range index do not.
 assert claims["c1"]["proof_located"] is True, claims["c1"]
 assert claims["c2"]["proof_located"] is True, claims["c2"]
 assert claims["c3"]["proof_located"] is False, claims["c3"]
+assert claims["c4"]["proof_located"] is False, claims["c4"]
+# `proof` is derived from the cited trace entry, never the model's text
+assert claims["c1"]["proof"] == "swift build", claims["c1"]
+assert claims["c2"]["proof"] == "grep -r TODO src --include=*.py | head -20; echo done", claims["c2"]
+assert claims["c3"]["proof"] == "pytest -q", claims["c3"]
+assert claims["c4"]["proof"] is None, claims["c4"]
+assert claims["c1"]["proof_index"] == 3 and claims["c1"]["proof_snippet"] == "swift build", claims["c1"]
 PY
-[ $? -eq 0 ] && ok "#291: mixed doc -- record written, only the invented proof comes back proof_located:false, the two real ones (numbered-form and elided-with-arrow form) are True" \
+[ $? -eq 0 ] && ok "#295: mixed doc -- record written, right-index citations locate, a real snippet at the wrong index and an out-of-range index do not, and proof is derived from the trace" \
   || bad "#291: mixed doc proof_located flags" "$(cat "$OUT_W2")"
 
 run - report --in "$OUT_W2"
 case "$out" in
-  *"proof_located: 1/3"*) ok "#291: report prints the unlocatable-proof count/rate" ;;
+  *"proof_located: 2/4"*) ok "#291: report prints the unlocatable-proof count/rate" ;;
   *) bad "#291: report prints the unlocatable-proof count/rate" "rc=$rc out=$out" ;;
 esac
 
@@ -2043,8 +2094,8 @@ spec = importlib.util.spec_from_file_location("sd_287_withdrawn", sys.argv[1])
 sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
 stub = {"id": "r1", "kind": "subagent", "tool_inputs_full": ["gh pr view 7"]}
 distilled = {"asked": "a", "understood": "u", "delivered": "d", "claims": [
-    {"id": "c1", "text": "#7 is fixed", "kind": "k", "proof": "gh pr view 7", "quote": "q"},
-    {"id": "c2", "text": "#8 merged", "kind": "k", "proof": "gh pr view 7", "quote": "q"}]}
+    {"id": "c1", "text": "#7 is fixed", "kind": "k", "proof_index": 0, "proof_snippet": "gh pr view 7", "quote": "q"},
+    {"id": "c2", "text": "#8 merged", "kind": "k", "proof_index": 0, "proof_snippet": "gh pr view 7", "quote": "q"}]}
 chain = {
     "later_wrong": [
         {"claim": "c1", "how": "h", "contradicted_by": {"run": "amb", "at": "t", "quote": "q"}},
@@ -2074,7 +2125,7 @@ spec = importlib.util.spec_from_file_location("sd_review", sys.argv[1])
 sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
 full = ["cd /Users/x/scratch/wt/skill-templates-frozen && bash assets/t.sh 2>&1 | tail -3",
         "git status", "npm test", "git commit -m 'wip'", "git push origin main"]
-loc = lambda p: sd.proof_located(p, full)
+loc = lambda p: any(sd.snippet_in_input(p, f) for f in full)
 # mid-command elision: the piece before the first "..." is only "cd"; every
 # piece must be found, in order, in ONE input
 assert loc("cd .../skill-templates-frozen && ... | tail -3")
@@ -2088,7 +2139,7 @@ assert loc("... npm test")
 # short fabrications locate only as a whole input
 assert not loc("git"), "a 3-char fragment must not locate as a piece"
 assert not loc("a")
-assert sd.proof_located("ls", ["ls"]) and not sd.proof_located("ls", ["ls -la"])
+assert sd.snippet_in_input("ls", "ls") and not sd.snippet_in_input("ls", "ls -la")
 
 # per-claim ambiguity: run-X has an ambiguous #264 candidate backing c1 and a
 # 'same' candidate backing only c2 -> c1's later_wrong is withdrawn, c2's kept

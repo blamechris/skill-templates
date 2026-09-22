@@ -185,11 +185,26 @@ by this guard -- there is no non-null proof for it to fail on, and this
 script does not otherwise police that (left as-is; #269/#285's own model-
 side labels are the mechanism for an empty or thin claims list).
 
+THE TRACE-INDEX PROOF CONTRACT (#295) replaces the model-written `proof`
+the guard above was first built on. The model returns `proof_index` (the
+`[N]` of a TOOL TRACE entry) and `proof_snippet` (a short verbatim
+fragment of that entry's command). `proof` is DERIVED from
+`tool_inputs_full[proof_index]` (excerpted 300+300, null when out of
+range), never model-written, so it cannot be paraphrased. `proof_located`
+is true iff the index is in range AND the snippet occurs in THAT entry
+(the piece matcher and PROOF_MIN_FRAGMENT_CHARS floor above), so a real
+snippet cited against the wrong index is still caught. A claim "cites" a
+proof when it carries an index, a snippet, or a legacy free-text `proof`
+(which never locates) -- "non-null proof" above means "cites a proof".
+
 THE RECORD (schema_version 3), one per run, appended to
 `session-distill.json`'s `records[]`:
 
   kind                  const "session-distill-record".
-  schema_version        int, currently 3 (bumped from 2 by #291 -- each
+  schema_version        int, currently 4 (bumped from 3 by #295 -- each
+                         claim now carries `proof_index`/`proof_snippet`
+                         and `proof` is derived from the trace, see THE
+                         TRACE-INDEX PROOF CONTRACT. 3 was bumped from 2 by #291 -- each
                          claim now carries `proof_located`, see THE
                          PROOF-LOCATABLE GUARD below. schema_version 2 was
                          bumped from 1 by #285 -- see REPORT EXTRACTION AND
@@ -213,7 +228,8 @@ THE RECORD (schema_version 3), one per run, appended to
                          "none" -- see below.
   asked / understood /
   delivered             free-text, from the distill call.
-  claims[]              the join column: {id, text, kind, proof, quote,
+  claims[]              the join column: {id, text, kind, proof,
+                         proof_index, proof_snippet, quote,
                          proof_located}. `later_wrong` and `classified_as`
                          both point at a claim id, which is what makes a
                          `classified_as` label auditable rather than a
@@ -401,7 +417,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # The closed vocabulary -- exactly the checklist, 8 + "unclassified". Frozen
 # here and nowhere else: both enforcement points (the --json-schema enum
@@ -840,45 +856,93 @@ def _segments_in_order(segs, full):
     return True
 
 
-def proof_located(proof, tool_inputs_full):
-    """True iff every piece of PROOF (proof_segments) occurs, in order,
-    within ONE entry of TOOL_INPUTS_FULL -- the run's own full, untruncated
-    tool_use inputs (#291). Never "located" against no pieces or an empty
-    TOOL_INPUTS_FULL (a run with no tool calls cannot locate anything).
-    Pieces totalling fewer than PROOF_MIN_FRAGMENT_CHARS locate only as a
-    WHOLE input: "git" is a substring of nearly any trace, so a fabricated
-    proof that short would otherwise always pass."""
-    segs = proof_segments(proof)
-    if not segs or not tool_inputs_full:
+def snippet_in_input(snippet, full):
+    """True iff every piece of SNIPPET (proof_segments) occurs, in order,
+    within FULL -- one of the run's own full, untruncated tool_use inputs
+    (#291). Never "located" against no pieces or an empty FULL. Pieces
+    totalling fewer than PROOF_MIN_FRAGMENT_CHARS locate only as the
+    WHOLE input: "git" is a substring of nearly any command, so a
+    fabricated snippet that short would otherwise always pass."""
+    segs = proof_segments(snippet)
+    if not segs or not full:
         return False
     if sum(len(x) for x in segs) < PROOF_MIN_FRAGMENT_CHARS:
-        return len(segs) == 1 and any(segs[0] == full for full in tool_inputs_full)
-    return any(_segments_in_order(segs, full) for full in tool_inputs_full)
+        return len(segs) == 1 and segs[0] == full
+    return _segments_in_order(segs, full)
+
+
+def _valid_proof_index(n, tool_inputs_full):
+    # bool is an int subclass; `true` is not trace entry 1.
+    return (isinstance(n, int) and not isinstance(n, bool)
+            and 0 <= n < len(tool_inputs_full or []))
+
+
+def proof_located(proof_index, proof_snippet, tool_inputs_full):
+    """#295: True iff PROOF_INDEX names a real entry of TOOL_INPUTS_FULL
+    AND PROOF_SNIPPET occurs in THAT entry (snippet_in_input). The index
+    is checked, not trusted: a plausible-but-wrong index -- a real
+    command's snippet cited against the neighbouring entry -- is
+    unlocatable, exactly like a snippet invented outright."""
+    if not _valid_proof_index(proof_index, tool_inputs_full):
+        return False
+    if not isinstance(proof_snippet, str):
+        return False
+    return snippet_in_input(proof_snippet, tool_inputs_full[proof_index])
+
+
+# #295: a derived `proof` is the cited input itself, head+tail-excerpted the
+# same way a verification's `command` is, so one heredoc cannot bloat a record.
+PROOF_EXCERPT_HEAD = 300
+PROOF_EXCERPT_TAIL = 300
+
+
+def claim_cites_proof(c):
+    """Whether claim C cites any evidence at all: a `proof_index`, a
+    `proof_snippet`, or a legacy model-written `proof`. Only a claim that
+    cites nothing is "nothing to check" (proof_located None). A free-text
+    `proof` with no index still COUNTS as cited -- and is always
+    unlocatable -- so a placeholder that ignores the index contract cannot
+    walk past #291's guard by omitting the fields it checks."""
+    return (c.get("proof_index") is not None or c.get("proof_snippet") is not None
+            or c.get("proof") is not None)
 
 
 def compute_proof_located(claims, tool_inputs_full):
     """Mutates each claim dict in CLAIMS (already normalize_claims'd) in
-    place, adding `proof_located`: True/False for a non-null `proof`, or
-    None when `proof` is null -- never a silently absent key (#291).
-    Returns (n_nonnull, n_unlocatable) so the caller can decide the
-    placeholder-response FAILURE (every non-null proof unlocatable, #291)
-    without re-deriving the same walk a second time."""
+    place (#295): `proof` is DERIVED from `tool_inputs_full[proof_index]`
+    when that index is in range, and null otherwise -- whatever the model
+    wrote there is discarded, so a record's `proof` can never be a
+    paraphrase. `proof_located` is True/False for a claim that cites
+    evidence (claim_cites_proof) or None when it cites none -- never a
+    silently absent key (#291). Returns (n_cited, n_unlocatable) so the
+    caller can decide the placeholder-response FAILURE (every cited proof
+    unlocatable, #291) without re-deriving the same walk a second time."""
     n_nonnull = 0
     n_unlocatable = 0
+    tool_inputs_full = tool_inputs_full or []
     for c in claims:
-        proof = c.get("proof")
-        # Only a NULL proof is "nothing to check". An empty string is a
-        # proof the model supplied and cannot be located, so counting it
-        # as null would let a placeholder of empty proofs past the guard.
-        if proof is None:
+        cited = claim_cites_proof(c)
+        n = c.get("proof_index")
+        c["proof"] = (excerpt_head_tail(tool_inputs_full[n], PROOF_EXCERPT_HEAD, PROOF_EXCERPT_TAIL)
+                      if _valid_proof_index(n, tool_inputs_full) else None)
+        if not cited:
             c["proof_located"] = None
             continue
         n_nonnull += 1
-        located = proof_located(proof, tool_inputs_full)
+        located = proof_located(n, c.get("proof_snippet"), tool_inputs_full)
         c["proof_located"] = located
         if not located:
             n_unlocatable += 1
     return n_nonnull, n_unlocatable
+
+
+def resolve_claims(raw, tool_inputs_full):
+    """normalize_claims + compute_proof_located: the claims list every
+    consumer after the distill call sees (#295) -- the chain prompt, the
+    record, and the placeholder guard all read one derivation."""
+    claims = normalize_claims(raw)
+    compute_proof_located(claims, tool_inputs_full)
+    return claims
 
 
 def claims_all_proofs_unlocatable(distilled_doc, tool_inputs_full):
@@ -894,6 +958,7 @@ def claims_all_proofs_unlocatable(distilled_doc, tool_inputs_full):
     absence-without-second-search etc. are the model's own job to flag,
     not this deterministic guard's)."""
     claims = normalize_claims((distilled_doc or {}).get("claims"))
+    # The same pair resolve_claims runs; the counts are needed here too.
     n_nonnull, n_unlocatable = compute_proof_located(claims, tool_inputs_full)
     return (n_nonnull > 0 and n_unlocatable == n_nonnull), n_nonnull, n_unlocatable
 
@@ -1552,7 +1617,15 @@ def normalize_claims(raw):
             "id": cid,
             "text": c.get("text") or "",
             "kind": c.get("kind") or "unspecified",
+            # #295: `proof` here is only the model's (legacy) free text, kept
+            # so claim_cites_proof can count it; compute_proof_located
+            # replaces it with the derived one before anything persists it.
             "proof": c.get("proof") if isinstance(c.get("proof"), str) else None,
+            "proof_index": (c.get("proof_index")
+                            if isinstance(c.get("proof_index"), int)
+                            and not isinstance(c.get("proof_index"), bool) else None),
+            "proof_snippet": (c.get("proof_snippet")
+                              if isinstance(c.get("proof_snippet"), str) else None),
             "quote": c.get("quote") if isinstance(c.get("quote"), str) else None,
         })
     return out
@@ -2151,17 +2224,26 @@ DISTILL_SYSTEM_PROMPT = (
     "`understood` is what the run itself interpreted that as, `delivered` "
     "is what it actually did, and `claims` is every checkable assertion "
     "the report makes -- each with a stable id (c1, c2, ...), a short "
-    "`kind`, a verbatim `quote` from the report, and a `proof`. "
+    "`kind`, a verbatim `quote` from the report, and a proof citation: "
+    "`proof_index` and `proof_snippet`. "
     "PROOF IS A FLOOR: read the TOOL TRACE section below the brief/report "
     "in full, command by command, however many entries it has -- the last "
     "entries matter as much as the first, and a longer trace is not an "
-    "excuse for a shorter search. If any trace entry's command or output "
-    "supports a claim, `proof` MUST be that trace entry's command, "
-    "verbatim, even when the report itself never restates it -- the trace "
+    "excuse for a shorter search. If any trace entry supports a claim, "
+    "cite it, even when the report itself never restates it -- the trace "
     "is evidence the report did not have to repeat for it to count. "
-    "`proof` is null ONLY after checking the whole trace and finding "
-    "nothing in it that supports the claim -- never null merely because "
-    "the report did not name a check. "
+    "`proof_index` is that entry's number N, the integer inside its `[N]` "
+    "tag. `proof_snippet` is a short fragment (roughly 10 to 60 "
+    "characters) copied character for character from that SAME entry's "
+    "text after its `[N] ToolName: ` tag (e.g. from `[3] Bash: swift "
+    "build`, copy `swift build`) -- not from its output, not "
+    "from the report, not reworded, no `[N]` or tool-name prefix, no "
+    "quotes around it, and not spanning the `…` elision. Pick the most "
+    "distinctive part of the command. The recorded proof is taken from "
+    "the trace at `proof_index`, and the snippet is checked against that "
+    "entry, so a wrong index is caught. Both are null ONLY after checking "
+    "the whole trace and finding nothing in it that supports the claim -- "
+    "never null merely because the report did not name a check. "
     "REPORT_SOURCE (#285) tells you what kind of report this is: "
     "`harness_error` means the run was cut off by the harness (e.g. a "
     "session-limit message) -- the REPORT text is not a real result, do "
@@ -2249,7 +2331,8 @@ DISTILL_SCHEMA = {
                     "id": {"type": "string"},
                     "text": {"type": "string"},
                     "kind": {"type": "string"},
-                    "proof": {"type": ["string", "null"]},
+                    "proof_index": {"type": ["integer", "null"]},
+                    "proof_snippet": {"type": ["string", "null"]},
                     "quote": {"type": ["string", "null"]},
                 },
             },
@@ -2505,8 +2588,8 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
     `cmd_distill` (which checks the SAME thing before this function is
     even called, to decide the placeholder-response FAILURE) never see
     two different derivations of the same fact."""
-    claims = normalize_claims((distilled_doc or {}).get("claims"))
-    compute_proof_located(claims, run_stub.get("tool_inputs_full") or [])
+    claims = resolve_claims((distilled_doc or {}).get("claims"),
+                            run_stub.get("tool_inputs_full") or [])
     claim_ids = {c["id"] for c in claims}
     later_wrong, dropped_later_wrong, lw_index_map = normalize_later_wrong(
         (chain_doc or {}).get("later_wrong") if chain_doc else None, claim_ids, candidates)
@@ -2866,7 +2949,7 @@ def cmd_distill(a):
             }
             break
 
-        claims = normalize_claims(distilled_doc.get("claims"))
+        claims = resolve_claims(distilled_doc.get("claims"), r.get("tool_inputs_full") or [])
         other_runs = [x for x in all_runs if x["id"] != r["id"]]
         current_repos = set(r.get("repos") or [])
         candidates = merge_round_pair_candidates(
