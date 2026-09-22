@@ -461,13 +461,24 @@ def envelope(result, is_error=False, cost=None):
     if cost is None:
         cost = float(os.environ.get("STUB_CALL_COST", "0.0075"))
     r = result if isinstance(result, str) else json.dumps(result)
-    return {"is_error": is_error, "result": r, "total_cost_usd": cost}
+    # #288: num_turns differs per pass (6 vs 2, the split #273's one
+    # captured replay showed) so a test can tell the passes apart.
+    return {"is_error": is_error, "result": r, "total_cost_usd": cost,
+            "num_turns": 6 if pass_kind == "distill" else 2}
 
 # #294: STUB_FAIL_DISTILL=<run id> makes that run's distill call an
 # is_error envelope, so a test can fail a run once and then --resume it
-# with the variable unset (a succeeding stub).
+# with the variable unset (a succeeding stub). #288: the envelope carries
+# a `subtype` and NO `api_error_status` key, and STUB_FAIL_COST prices
+# the failed call on its own.
 if pass_kind == "distill" and run_id and run_id == os.environ.get("STUB_FAIL_DISTILL"):
-    print(json.dumps(envelope(None, is_error=True)))
+    e = envelope(None, is_error=True, cost=float(os.environ.get("STUB_FAIL_COST", "0.0075")))
+    e["result"] = None
+    e["subtype"] = "error_max_structured_output_retries"
+    print(json.dumps(e))
+    sys.exit(0)
+if os.environ.get("STUB_GARBAGE") == run_id:
+    print("not an envelope")
     sys.exit(0)
 
 if pass_kind == "distill":
@@ -769,7 +780,7 @@ run sess-main distill --out "$OUT_D" --model-cmd "$MODEL_CMD"
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["kind"] == "session-distill-document"
-assert d["schema_version"] == 4
+assert d["schema_version"] == 5
 recs = {r["run"]["id"]: r for r in d["records"]}
 assert len(recs) == 5, recs.keys()
 
@@ -1511,9 +1522,9 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sd_285_schema", sys.argv[1])
 sd = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sd)
-assert sd.SCHEMA_VERSION == 4, sd.SCHEMA_VERSION
+assert sd.SCHEMA_VERSION == 5, sd.SCHEMA_VERSION
 PY
-[ $? -eq 0 ] && ok "#295: SCHEMA_VERSION is 4" || bad "#295: SCHEMA_VERSION is 4" "rc=nonzero"
+[ $? -eq 0 ] && ok "#288: SCHEMA_VERSION is 5" || bad "#288: SCHEMA_VERSION is 5" "rc=nonzero"
 
 OUT_V="$TMP/out-v.json"
 "$PY" - "$OUT_V" <<'PY'
@@ -1702,7 +1713,7 @@ rec, dropped = sd.build_record(
      "classified_as": [
         {"label": "proxy-as-thing", "supports": ["1"], "why": "about B"},
         {"label": "green-as-done", "supports": [2], "why": "about C"}]},
-    "t", "m", 0.0, 2)
+    "t", "m", {}, 2)
 lw = rec["later_wrong"]
 assert [e["claim"] for e in lw] == ["cB", "cC"], lw
 lab = {e["label"]: e["supports"] for e in rec["classified_as"]}
@@ -2107,7 +2118,7 @@ chain = {
         {"label": "green-as-done", "supports": ["c2", "1"], "why": "w"}]}
 cands = [{"run": "amb", "artifact": "#7", "repo_match": "ambiguous"},
          {"run": "same", "artifact": "#8", "repo_match": "same"}]
-rec, dropped = sd.build_record("s", stub, distilled, chain, "t", "m", 0.0,
+rec, dropped = sd.build_record("s", stub, distilled, chain, "t", "m", {},
                                ["distill", "chain"], candidates=cands)
 assert [lw["claim"] for lw in rec["later_wrong"]] == ["c2"], rec["later_wrong"]
 labels = [(e["label"], e["supports"]) for e in rec["classified_as"]]
@@ -2469,6 +2480,97 @@ PY
 run_stdout sess-rp runs --json
 echo "$out" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert len(d["round_pairs"]["pairs"]) == 1 and d["round_pairs"]["unpaired_deltas"] == [], d["round_pairs"]'
 [ $? -eq 0 ] && ok "#292: runs --json carries round_pairs" || bad "#292: runs --json round_pairs" "$out"
+
+# ============================================================ GROUP Z — #288: per-pass cost accounting
+echo; echo "Z. #288 — per-pass cost on records, failed-attempt spend, verbatim envelope detail, timeout default"
+
+OUT_Z="$TMP/out-z.json"
+STUB_FAIL_DISTILL=agent-aaaa0001 STUB_FAIL_COST=0.25 STUB_GARBAGE=agent-bbbb0002 \
+  run sess-main distill --out "$OUT_Z" --model-cmd "$MODEL_CMD"
+"$PY" - "$OUT_Z" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+fails = {(f["run"], f["phase"]): f for f in d["failures"]}
+f = fails[("agent-aaaa0001", "distill")]
+assert f["cost_usd"] == 0.25, f
+assert f["subtype"] == "error_max_structured_output_retries", f
+assert "api_error_status" in f and f["api_error_status"] is None, f
+assert f["num_turns"] == 6, f
+assert "error_max_structured_output_retries" in f["error"], f["error"]
+g = fails[("agent-bbbb0002", "distill")]
+assert g["cost_usd"] == 0.0 and g["subtype"] is None and g["num_turns"] is None, g
+# a failed chain call still bills and carries its own detail
+c = fails[("agent-cccc0003", "chain")]
+assert c["cost_usd"] == 0.0075 and c["num_turns"] == 2 and c["subtype"] is None, c
+assert abs(d["failed_cost_usd"] - 0.25) < 1e-9, d["failed_cost_usd"]
+PY
+[ $? -eq 0 ] && ok "#288: a failure carries cost_usd and subtype/api_error_status/num_turns verbatim (null when absent or no envelope); failed_cost_usd sums the no-record spend" \
+  || bad "#288: failure entry detail and failed_cost_usd" "$(cat "$OUT_Z")"
+
+"$PY" - "$OUT_Z" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+recs = {r["run"]["id"]: r for r in d["records"]}
+full = next(r["distilled"] for r in d["records"] if r["distilled"]["passes"] == ["distill", "chain"])
+assert full["calls"] == {"distill": {"cost_usd": 0.0075, "num_turns": 6},
+                         "chain": {"cost_usd": 0.0075, "num_turns": 2}}, full["calls"]
+assert full["cost_usd"] == 0.015, full
+part = recs["agent-cccc0003"]["distilled"]
+# the failed chain call is in `calls` (it spent) but not in `passes`
+assert part["passes"] == ["distill"] and set(part["calls"]) == {"distill", "chain"}, part
+for r in d["records"]:
+    assert abs(r["distilled"]["cost_usd"] - sum(c["cost_usd"] for c in r["distilled"]["calls"].values())) < 1e-9, r
+total = sum(r["distilled"]["cost_usd"] for r in d["records"]) + d["failed_cost_usd"]
+assert abs(total - d["total_cost_usd"]) < 1e-6, (total, d["total_cost_usd"])
+PY
+[ $? -eq 0 ] && ok "#288: distilled.calls splits each record's cost per pass (a failed chain call included), and total_cost_usd == sum(records) + failed_cost_usd" \
+  || bad "#288: per-pass split and total invariant" "$(cat "$OUT_Z")"
+
+# --resume: the retried runs succeed, #294 prunes their failures, and the
+# spend they cost stays on the books.
+run sess-main distill --out "$OUT_Z" --resume --model-cmd "$MODEL_CMD"
+"$PY" - "$OUT_Z" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert {f["run"] for f in d["failures"]} == {"agent-cccc0003", "main-turn-002"}, d["failures"]
+assert abs(d["failed_cost_usd"] - 0.25) < 1e-9, d["failed_cost_usd"]
+total = sum(r["distilled"]["cost_usd"] for r in d["records"]) + d["failed_cost_usd"]
+assert abs(total - d["total_cost_usd"]) < 1e-6, (total, d["total_cost_usd"])
+PY
+[ $? -eq 0 ] && ok "#288: after --resume prunes the superseded failures, failed_cost_usd keeps their spend and the total still reconciles" \
+  || bad "#288: failed_cost_usd survives --resume" "$(cat "$OUT_Z")"
+
+# Copilot on #300: an envelope cost finer than 6 decimals must not make the
+# accumulated totals drift from the persisted per-call values.
+STUB_CALL_COST=0.1234564 STUB_FAIL_DISTILL=agent-aaaa0001 STUB_FAIL_COST=0.0000004 \
+  run sess-main distill --out "$TMP/out-z-precision.json" --model-cmd "$MODEL_CMD"
+"$PY" - "$TMP/out-z-precision.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+calls = [c["cost_usd"] for r in d["records"] for c in r["distilled"]["calls"].values()]
+fails = [f["cost_usd"] for f in d["failures"] if f["phase"] == "distill"]
+assert set(calls) == {0.123456, 0.0075}, calls  # 0.0075: cccc0003's fixed-cost chain stub
+assert d["failed_cost_usd"] == 0.0 == sum(fails), (d["failed_cost_usd"], fails)
+assert d["total_cost_usd"] == round(sum(calls) + sum(fails), 6), (d["total_cost_usd"], sum(calls))
+PY
+[ $? -eq 0 ] && ok "#288: costs are rounded once at the model boundary, so totals equal the sum of the persisted per-call values" \
+  || bad "#288: rounding consistency" "$(cat "$TMP/out-z-precision.json")"
+
+run - report --in "$OUT_Z"
+case "$out" in
+  *"distill  \$"*"mean num_turns 6.0"*"chain    \$"*"mean num_turns 2.0"*"failed   \$0.2500"*) ok "#288: report prints the per-pass split, mean num_turns, and failed-attempt spend" ;;
+  *) bad "#288: report per-pass lines" "$out" ;;
+esac
+
+"$PY" - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sd_288", sys.argv[1])
+sd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sd)
+a = sd.build_parser().parse_args(["distill"])
+assert a.timeout_secs == 540 == sd.MODEL_TIMEOUT_SECS, a.timeout_secs
+PY
+[ $? -eq 0 ] && ok "#288: --timeout-secs defaults to 540" || bad "#288: --timeout-secs defaults to 540"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

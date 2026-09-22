@@ -22,12 +22,12 @@ distiller that reads only `subagents/**` cannot see it and fails its own
 acceptance. The main session is a run; it is segmented by user turn because that
 is where its brief lives.
 
-## The record (schema_version 4)
+## The record (schema_version 5)
 
 ```json
 {
   "kind": "session-distill-record",
-  "schema_version": 4,
+  "schema_version": 5,
   "session": "13cee7be-edd8-4dfc-afe3-093e899db85b",
   "run": {
     "id": "agent-a1794d4c28be50f83",
@@ -73,9 +73,36 @@ is where its brief lives.
   ],
   "unclassified_reason": null,
   "later_wrong_withdrawn": [],
-  "distilled": {"at": "...Z", "model": "sonnet", "cost_usd": 0.0074, "passes": ["distill","chain"]}
+  "distilled": {"at": "...Z", "model": "sonnet", "cost_usd": 0.6124, "passes": ["distill","chain"],
+                "calls": {"distill": {"cost_usd": 0.4011, "num_turns": 2},
+                          "chain":   {"cost_usd": 0.2113, "num_turns": 2}}}
 }
 ```
+
+### #288 — per-pass cost accounting (schema_version 5)
+
+A run's spend was one number, `distilled.cost_usd`. #299's two post-change
+samples ran above the prior range, and nothing could say which pass the extra
+spend sat in. Now:
+
+- `distilled.calls` holds one entry per call **made** for the record: its own
+  `cost_usd` and the envelope's `num_turns`. A failed chain call is in `calls`
+  but not in `passes`, because it spent money without producing a result.
+  `distilled.cost_usd` is the sum of `calls`, so the split and the total cannot
+  disagree.
+- The document's `failed_cost_usd` sums the calls that produced **no** record:
+  distill-phase failures, including #291's placeholder. `--resume` carries it
+  forward even after #294 prunes the failure entry, so
+  `total_cost_usd == Σ record cost_usd + failed_cost_usd` holds across retries.
+- Every `failures[]` entry carries its `cost_usd` and the envelope's `subtype`,
+  `api_error_status` and `num_turns` verbatim, or null when the envelope lacks
+  them or never parsed. #273's 11 `is_error` failures printed only `result`,
+  which was `None`, and dropped the one field that would have named the cause.
+- `report` prints the per-pass totals, the mean cost per call and the mean
+  `num_turns`, plus `failed_cost_usd`.
+- The default `--timeout-secs` goes from 180 to 540. 180 was exceeded by a
+  real main turn in #273, and every live validation since has passed 540 by
+  hand.
 
 ### #285 — report extraction and deterministic verifications (schema_version 2)
 
@@ -404,7 +431,7 @@ session-distill.py schema
 session-distill.py runs    [--session SID] [--json]
 session-distill.py distill [--session SID] [--limit N] [--only RUNID]
                            [--dry-run] [--resume] [--out PATH] [--force]
-                           [--model-cmd CMD] [--max-cost-usd N]
+                           [--model-cmd CMD] [--max-cost-usd N] [--timeout-secs N]
 session-distill.py report  [--session SID] [--in PATH] [--json]
 ```
 
