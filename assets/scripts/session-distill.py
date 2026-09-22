@@ -10,7 +10,7 @@ Usage:
   python3 ~/.claude/scripts/session-distill.py schema
   python3 ~/.claude/scripts/session-distill.py runs    [--session SID] [--json]
   python3 ~/.claude/scripts/session-distill.py distill [--session SID] [--limit N] [--only RUNID]
-      [--dry-run] [--resume] [--out PATH] [--force]
+      [--dry-run] [--resume] [--out PATH] [--force] [--brief-claims]
       [--model-cmd CMD] [--max-cost-usd N] [--timeout-secs N] [--jobs N]
   python3 ~/.claude/scripts/session-distill.py report  [--session SID] [--in PATH] [--json]
 
@@ -101,7 +101,8 @@ and skipped -- never a crash, never a silently empty record.
 `.test.sh` points `--model-cmd` at a fixture shell/python script that reads
 the run id off stdin and echoes a canned envelope, so CI spends nothing.
 
-TWO MODEL CALLS PER RUN: the `distill` command asks one call for
+TWO MODEL CALLS PER RUN (three with `--brief-claims`, see BRIEF-AS-CLAIMS
+below): the `distill` command asks one call for
 `{asked, understood, delivered, claims[]}`, then does deterministic
 retrieval over the claims' artifacts (`#\\d+`, backtick-quoted spans, and
 `path/like/this.ext` tokens) against every OTHER run that started later,
@@ -124,6 +125,49 @@ paired delta's whole report as a guaranteed candidate (`source:
 `later_wrong` on the fix run. It costs no extra model call. `runs` and
 `distill` both write the pairing, with every unpaired delta and its reason,
 under `round_pairs`.
+
+BRIEF-AS-CLAIMS (#298), `--brief-claims`. The other between-runs defect
+runs the other way: a SPAWNED RUN'S BRIEF IS NOT WRITTEN BY THE RUN THAT
+RECEIVES IT. The main-thread turn that issued the Agent/Workflow call wrote
+it, and the factual assertions it makes about repo state ("#250 is open",
+"two tests release the harness at HelperClientTests.swift:172-173") are
+that turn's claims. Row 5 of the #273 ground truth is exactly this: the
+worker `a125a8c1` got it RIGHT -- its report says #256 "largely already
+landed in #254" and #239's first site "was already fixed by #237" -- so a
+per-run distill of the worker has no claim of its own to label, and the
+defect had nowhere to land.
+
+THE OWNER MAPPING IS AN EXACT JOIN, NOT A TIME WINDOW (`resolve_spawn_
+links`, deterministic and free, written under `spawn_links` on both
+documents whether or not the pass runs). A direct subagent's own
+.meta.json carries `toolUseId`, the id of the `Agent` tool_use block on a
+main-transcript assistant line; a workflow subagent does not, and is
+joined instead through the `Workflow` tool_result that announces its
+runId's transcript directory. The owner is the main turn whose span
+contains that line. Measured on 13cee7be: 133 of 133 subagent runs resolve,
+0 unowned (15 by `toolUseId`, 118 through 11 workflow announcements). A run
+that resolves through neither route is REPORTED under `spawn_links.
+unowned` with the reason, never placed by proximity.
+
+THE COST IS ONE CALL PER SPAWNED RUN, and it is cheaper than the issue's
+"distill-style call" estimate implies: the brief call is handed the BRIEF
+ONLY -- no report, no tool trace -- so measured on 13cee7be main-turn-023
+(2026-09-22), 9 brief calls cost $0.459 in total ($0.051 each) against
+$0.688 for that run's own distill call and $0.400 for its chain call.
+`--dry-run` counts the brief calls from the owner map (one per SPAWNED run,
+not one per selected run) and prints them apart. The pass is opt-in
+because the call count is real even when the dollars are small: 133 extra
+calls on that session, 320 -> 453.
+
+Each brief's claims are namespaced `b<k>.<id>` and carried on the owner's
+record as `brief_claims[]` -- never folded into `claims[]`, which stays
+what THIS run's own report asserted. The spawned run's whole REPORT reaches
+the owner's chain call as a guaranteed candidate (`source:
+"brief-as-claims"`), so a brief claim the spawned run found stale becomes a
+`later_wrong` on the OWNER with `recalled-not-reopened` as its label. Found
+live on 13cee7be main-turn-023: three of them, one cited from `a125a8c1`
+("#239's line numbers and half its scope were stale") and two from
+`a1794d4c` ("three was an undercount; it is seven").
 
 REPO-QUALIFIED `#N` RETRIEVAL (#287). A `#N` artifact is only a real
 match when it names the SAME repo on both sides -- two repos sharing an
@@ -197,11 +241,13 @@ snippet cited against the wrong index is still caught. A claim "cites" a
 proof when it carries an index, a snippet, or a legacy free-text `proof`
 (which never locates) -- "non-null proof" above means "cites a proof".
 
-THE RECORD (schema_version 5), one per run, appended to
+THE RECORD (schema_version 6), one per run, appended to
 `session-distill.json`'s `records[]`:
 
   kind                  const "session-distill-record".
-  schema_version        int, currently 5 (bumped from 4 by #288 --
+  schema_version        int, currently 6 (bumped from 5 by #298 -- every
+                         record carries `brief_claims`, see
+                         BRIEF-AS-CLAIMS above. 5 was bumped from 4 by #288 --
                          `distilled.calls` splits a record's cost per
                          pass, and the document gains `failed_cost_usd`;
                          see PER-PASS COST ACCOUNTING. 4 was bumped from 3 by #295 -- each
@@ -270,11 +316,27 @@ THE RECORD (schema_version 5), one per run, appended to
   unclassified_reason    string or null -- set exactly when an off-
                          vocabulary label was corrected to "unclassified"
                          for this record; the offending label text.
-  distilled              {at, model, cost_usd, passes: ["distill"] or
-                         ["distill","chain"], calls: {"distill": {cost_usd,
-                         num_turns}, "chain": {...}}}. `calls` has an entry
-                         for every call MADE (a failed chain call is in
-                         `calls` but not `passes`); `cost_usd` is its sum.
+  brief_claims[]         (#298) the repo-state assertions THIS run made in
+                         the briefs it wrote for runs it spawned:
+                         {id ("b<k>.<id>"), text, kind, quote, source
+                         ("brief"), from_run, via_tool}. ALWAYS PRESENT,
+                         `[]` when `--brief-claims` was not passed or the
+                         run spawned nothing -- a reader must not have to
+                         consult `distilled.passes` to tell an absent key
+                         from an empty one. Addressable by `later_wrong`
+                         and `classified_as` exactly like `claims[]`, and
+                         deliberately kept out of it: `claims[]` stays what
+                         this run's own report asserted.
+  distilled              {at, model, cost_usd, passes: a sublist of
+                         ["distill","brief","chain"], calls: {"distill":
+                         {cost_usd, num_turns}, "brief": {cost_usd,
+                         num_turns, calls: N}, "chain": {...}}}. `calls`
+                         has an entry for every call MADE (a failed chain
+                         or brief call is in `calls` but not `passes`);
+                         `cost_usd` is its sum. The "brief" entry
+                         aggregates a run's several brief calls and carries
+                         its own `calls: N` so `report` counts calls, not
+                         records.
 
 PER-PASS COST ACCOUNTING (#288). A run's spend was one number, so a change
 to either pass could not be told apart from the other (#299's two samples
@@ -440,7 +502,12 @@ from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+# #298 bumps this to 6: every record now carries `brief_claims`, and a
+# reader of a version-5 record cannot tell an absent key from a run that
+# owned no brief claim. `--resume` refuses to mix versions in one
+# records[] list, so an older document is redistilled rather than grown a
+# second record shape.
+SCHEMA_VERSION = 6
 
 # The closed vocabulary -- exactly the checklist, 8 + "unclassified". Frozen
 # here and nowhere else: both enforcement points (the --json-schema enum
@@ -1553,6 +1620,14 @@ def build_subagent_stub(rr, jsonl_path, unreadable):
         "model": meta.get("model"),
         "description": meta.get("description"),
         "workflow_phase": meta.get("workflowPhase"),
+        # #298: the id of the `Agent`/`Task` tool_use block that spawned
+        # this run, verbatim from the sidecar's own .meta.json -- the join
+        # key `resolve_spawn_links` maps back to a MAIN-TURN run. Absent on
+        # a workflow subagent (measured on 13cee7be: 15 of 15 direct
+        # subagents carry it, 0 of 118 workflow subagents do), which is why
+        # the workflow announcement is the second, separately-derived
+        # route rather than a time window over both.
+        "spawn_tool_use_id": meta.get("toolUseId"),
         "started_at": started_at,
         "ended_at": ended_at,
         "transcript": os.path.abspath(jsonl_path),
@@ -1572,7 +1647,8 @@ def build_subagent_stub(rr, jsonl_path, unreadable):
 
 
 def build_all_run_stubs(rr, session_dir):
-    """(segmented_by, [run_stub, ...], unreadable[], repo_vocabulary) --
+    """(segmented_by, [run_stub, ...], unreadable[], repo_vocabulary,
+    spawn_links) --
     every main-turn and every subagent run in the session, sorted by
     started_at (runs with no timestamp sort first, deterministically, by
     id).
@@ -1598,6 +1674,12 @@ def build_all_run_stubs(rr, session_dir):
     stubs = []
     segmented_by = None
     unreadable = []
+    # #298: (start, end, run_id) per main-turn span, kept locally rather
+    # than written onto the stub -- `resolve_spawn_links` needs the LINE
+    # INDEX a spawning tool_use sits at, and a line index is a fact about
+    # this parse of this transcript, not about the run.
+    turn_spans = []
+    main_objs = []
 
     main_path = session_dir + ".jsonl"
     if os.path.exists(main_path):
@@ -1612,9 +1694,12 @@ def build_all_run_stubs(rr, session_dir):
                 unreadable.append(
                     "main transcript %s: 0 of %d line(s) parsed" % (main_path, dropped))
             if objs:
+                main_objs = objs
                 segmented_by, spans = segment_main_turns(objs)
                 for k, (start, end) in enumerate(spans):
-                    stubs.append(build_main_turn_stub(main_path, objs, start, end, k + 1, segmented_by))
+                    stub = build_main_turn_stub(main_path, objs, start, end, k + 1, segmented_by)
+                    stubs.append(stub)
+                    turn_spans.append((start, end, stub["id"]))
             # objs == [] and dropped == 0: a genuinely empty file. Not an
             # error -- segmented_by stays None because no rule ran.
 
@@ -1627,7 +1712,9 @@ def build_all_run_stubs(rr, session_dir):
     for stub in stubs:
         stub["repos"] = sorted(compute_run_repo_set(stub, repo_vocabulary))
 
-    return segmented_by, stubs, unreadable, repo_vocabulary
+    spawn_links = resolve_spawn_links(stubs, main_objs, turn_spans)
+
+    return segmented_by, stubs, unreadable, repo_vocabulary, spawn_links
 
 
 # --------------------------------------------------------------- claim/label handling
@@ -2229,11 +2316,257 @@ def round_pair_candidates(fix_run, claims, pairing, runs_by_id):
     return out
 
 
-def merge_round_pair_candidates(round_pair, retrieved):
-    """ROUND_PAIR first, then every retrieved candidate from a run the
-    round pair does not already cover in full."""
-    covered = {c["run"] for c in round_pair}
-    return list(round_pair) + [c for c in retrieved if c.get("run") not in covered]
+def merge_round_pair_candidates(guaranteed, retrieved):
+    """GUARANTEED first (round-pair candidates, #292, and brief-as-claims
+    candidates, #298 -- both linked deterministically rather than by cue
+    word), then every retrieved candidate from a run the guaranteed list
+    does not already cover in full."""
+    covered = {c["run"] for c in guaranteed}
+    return list(guaranteed) + [c for c in retrieved if c.get("run") not in covered]
+
+
+# ---------------------------------------------------------- #298 brief-as-claims
+#
+# A SPAWNED RUN'S BRIEF IS NOT WRITTEN BY THE RUN THAT RECEIVES IT. It is
+# written by the main-thread turn that issued the Agent/Workflow call, and
+# the factual assertions it makes about repo state ("#250 is open", "two
+# tests release the harness at HelperClientTests.swift:172-173") are that
+# turn's claims, not the worker's. Row 5 of the #273 ground truth is
+# exactly this shape: `a125a8c1`'s brief asserts four client-test issues as
+# open work, its report states that #256 was "largely already landed in
+# #254" and #239's first site "was already fixed by #237", and a per-run
+# distill of the worker has no claim of its own to label -- the worker got
+# it right. The defect (`recalled-not-reopened`) belongs to the run that
+# wrote the brief, and until this pass existed nothing in the record
+# pointed there.
+#
+# THE OWNER MAPPING IS AN EXACT JOIN, NOT A TIME WINDOW. Two routes, each
+# citing a real id, measured on 13cee7be:
+#   * a direct subagent carries `toolUseId` in its own .meta.json -- the id
+#     of the `Agent` tool_use block on a main-transcript assistant line
+#     (15 of 15 resolve).
+#   * a workflow subagent does NOT (0 of 118). Its `spawned_by` is the
+#     workflow runId, which the `Workflow` tool_use's own tool_result
+#     announces as `.../subagents/workflows/<runId>` (11 of 11 resolve).
+# The owner is then the main turn whose span contains that line. A time
+# window would have been the obvious rule and is wrong for the same reason
+# the round-pair key is `description` and not `workflow_phase`: a
+# background Agent can outlive the turn that launched it, and two turns can
+# have agents in flight at once.
+#
+# THE ANNOUNCEMENT SCAN IS RESTRICTED TO SPAWNING TOOLS, and this is not
+# defensive coding. On 13cee7be a later `Bash` call cats two workflows'
+# journal files by path; an unrestricted scan therefore offered `wf_8e1b38dd`
+# and `wf_9432d435` two candidate tool_use ids each, one of them a Bash
+# call that spawned nothing. Filtering by the referenced tool_use's own
+# NAME removes both, and a runId still announced by two DIFFERENT spawning
+# calls is reported unowned rather than resolved by picking one.
+SPAWNING_TOOLS = ("Agent", "Task", "Workflow")
+WORKFLOW_DIR_RE = re.compile(r"workflows/(wf_[A-Za-z0-9_-]+)")
+BRIEF_TEXT_HEAD = 24000
+BRIEF_TEXT_TAIL = 6000
+BRIEF_REPORT_HEAD = 24000
+BRIEF_REPORT_TAIL = 6000
+
+
+def index_main_tool_uses(objs):
+    """{tool_use_id: {"line": i, "tool": name}} over an already-parsed MAIN
+    transcript. First occurrence wins: an id is unique per call, and a
+    repeat is a transcript artefact, not a second spawn."""
+    index = {}
+    for i, o in enumerate(objs or []):
+        if not isinstance(o, dict) or o.get("type") != "assistant":
+            continue
+        content = (o.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id"):
+                index.setdefault(b["id"], {"line": i, "tool": b.get("name") or "unknown"})
+    return index
+
+
+def index_workflow_spawns(objs, use_index):
+    """{workflow runId: [tool_use_id, ...]} -- every SPAWNING tool_use whose
+    own tool_result announces that runId's transcript directory. A list,
+    not a single id, so the caller reports an ambiguous announcement rather
+    than picking one (see the section comment above for why the tool-name
+    filter is load-bearing)."""
+    out = {}
+    for o in objs or []:
+        if not isinstance(o, dict) or o.get("type") != "user":
+            continue
+        content = (o.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not isinstance(b, dict) or b.get("type") != "tool_result":
+                continue
+            tid = b.get("tool_use_id")
+            hit = use_index.get(tid)
+            if not tid or hit is None or hit["tool"] not in SPAWNING_TOOLS:
+                continue
+            raw = b.get("content")
+            text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+            for m in WORKFLOW_DIR_RE.finditer(text):
+                ids = out.setdefault(m.group(1), [])
+                if tid not in ids:
+                    ids.append(tid)
+    return out
+
+
+def resolve_spawn_links(stubs, main_objs, turn_spans):
+    """{"links": [{spawned, owner, via, via_tool, via_source}],
+        "unowned": [{spawned, reason, via?}]} -- which MAIN-TURN run wrote
+    each subagent run's brief, resolved by the exact join described in the
+    section comment above. A run whose owner cannot be resolved is
+    REPORTED, never guessed: `no-spawning-tool-use` (neither route yielded
+    an id), `ambiguous-workflow-announcement` (two spawning calls announced
+    the same runId), `tool-use-not-in-main` (the id names no tool_use in
+    this main transcript -- a sub-subagent's spawn, or a compacted-away
+    line), `no-main-turn-for-tool-use` (the line falls outside every
+    segmented turn, e.g. before the first human prompt)."""
+    links = []
+    unowned = []
+    use_index = index_main_tool_uses(main_objs)
+    wf_spawns = index_workflow_spawns(main_objs, use_index)
+    spans = sorted(turn_spans or [], key=lambda t: t[0])
+
+    def owner_of(line):
+        for start, end, run_id in spans:
+            if start <= line < end:
+                return run_id
+        return None
+
+    for stub in stubs:
+        if stub.get("kind") != "subagent":
+            continue
+        via = stub.get("spawn_tool_use_id")
+        via_source = "meta.toolUseId"
+        if not via:
+            spawned_by = stub.get("spawned_by")
+            if isinstance(spawned_by, str) and spawned_by.startswith("wf_"):
+                ids = wf_spawns.get(spawned_by) or []
+                if len(ids) > 1:
+                    unowned.append({"spawned": stub["id"], "reason": "ambiguous-workflow-announcement",
+                                    "via": sorted(ids)})
+                    continue
+                via = ids[0] if ids else None
+                via_source = "workflow-announcement"
+        if not via:
+            unowned.append({"spawned": stub["id"], "reason": "no-spawning-tool-use"})
+            continue
+        hit = use_index.get(via)
+        if hit is None:
+            unowned.append({"spawned": stub["id"], "via": via, "reason": "tool-use-not-in-main"})
+            continue
+        owner = owner_of(hit["line"])
+        if owner is None:
+            unowned.append({"spawned": stub["id"], "via": via, "reason": "no-main-turn-for-tool-use"})
+            continue
+        links.append({"spawned": stub["id"], "owner": owner, "via": via,
+                      "via_tool": hit["tool"], "via_source": via_source})
+    links.sort(key=lambda l: (l["owner"], l["spawned"]))
+    unowned.sort(key=lambda u: u["spawned"])
+    return {"links": links, "unowned": unowned}
+
+
+def owned_spawned_runs(spawn_links, runs_by_id):
+    """{owner run id: [spawned run id, ...]} -- each owner's spawned runs in
+    started_at order (id as the tie-break, so the order does not depend on
+    dict iteration), skipping any run whose brief is empty: there is
+    nothing to extract claims from, and a model call over an empty brief is
+    a call spent on nothing."""
+    out = {}
+    for link in (spawn_links or {}).get("links") or []:
+        spawned = runs_by_id.get(link["spawned"])
+        if spawned is None or not (spawned.get("brief") or "").strip():
+            continue
+        out.setdefault(link["owner"], []).append(link["spawned"])
+    for owner, ids in out.items():
+        ids.sort(key=lambda rid: ((runs_by_id[rid].get("started_at") or ""), rid))
+    return out
+
+
+def normalize_brief_claims(raw, spawned_run_id, k, via_tool):
+    """The brief call's claims, NAMESPACED and attributed.
+
+    Ids are rewritten `b<k>.<id>` (k being this spawned run's 1-based
+    position in its owner's spawn list) because one owner's chain call
+    carries its OWN claims (`c1`, `c2`, ...) alongside the brief claims of
+    every run it spawned, and two spawned runs both returning `c1` would
+    otherwise be one pointer for two different assertions. A duplicate id
+    WITHIN one brief is suffixed rather than dropped: the model wrote two
+    claims and both are real. `from_run` keeps the record auditable -- a
+    label on a brief claim can be traced to the brief it was read out of
+    and the run that received it."""
+    out = []
+    seen = set()
+    for i, c in enumerate(raw or []):
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("id")
+        if not isinstance(cid, str) or not cid.strip():
+            cid = "c%d" % (i + 1)
+        cid = re.sub(r"[^A-Za-z0-9_-]", "", cid) or "c%d" % (i + 1)
+        base = "b%d.%s" % (k, cid)
+        cid = base
+        n = 2
+        while cid in seen:
+            cid = "%s-%d" % (base, n)
+            n += 1
+        seen.add(cid)
+        out.append({
+            "id": cid,
+            "text": c.get("text") or "",
+            "kind": c.get("kind") or "unspecified",
+            "quote": c.get("quote") if isinstance(c.get("quote"), str) else None,
+            # A brief claim has no `proof`: it is an assertion the OWNER
+            # made about repo state before any tool ran in the spawned run,
+            # so there is no trace entry in the owner's own run that could
+            # justify it. The absence is the point, not a missing field --
+            # `proof`/`proof_located` are deliberately not minted here
+            # rather than written as null and read later as "unlocatable".
+            "source": "brief",
+            "from_run": spawned_run_id,
+            "via_tool": via_tool,
+        })
+    return out
+
+
+def brief_claim_candidates(owner_run, brief_claims_by_run, runs_by_id):
+    """The chain candidates an OWNER run gets from the runs it spawned: one
+    per spawned run whose brief yielded claims, carrying that run's whole
+    REPORT (head+tail on one budget split across the owner's spawned runs,
+    so an owner that launched eight agents does not grow its chain prompt
+    eight-fold) and tagged `source: "brief-as-claims"`.
+
+    Like the round-pair candidate this bypasses cue-word retrieval on
+    purpose. The worker's "already landed in #254" sits nowhere near a
+    correction cue AND an artifact the owner's own claims name -- the
+    owner's claims are in its brief, which cue-word retrieval never reads.
+    `repo_match` is "n/a": the link is the spawn itself, not a `#N` match,
+    so there is no repo ambiguity to resolve and nothing for
+    `normalize_later_wrong`'s ambiguity guard to withdraw."""
+    out = []
+    live = [rid for rid in (brief_claims_by_run or {}) if brief_claims_by_run.get(rid)]
+    live.sort(key=lambda rid: ((runs_by_id[rid].get("started_at") or "") if rid in runs_by_id else "", rid))
+    n = max(1, len(live))
+    head, tail = BRIEF_REPORT_HEAD // n, BRIEF_REPORT_TAIL // n
+    for rid in live:
+        spawned = runs_by_id.get(rid)
+        if spawned is None:
+            continue
+        out.append({
+            "run": rid,
+            "started_at": spawned.get("started_at"),
+            "artifact": "brief-as-claims:%s" % rid,
+            "excerpt": excerpt_head_tail(spawned.get("report") or "", head, tail),
+            "repo_match": "n/a",
+            "source": "brief-as-claims",
+            "claims": [c["id"] for c in brief_claims_by_run[rid]],
+        })
+    return out
 
 # ---------------------------------------------------------------------- model boundary
 
@@ -2302,6 +2635,38 @@ DISTILL_SYSTEM_PROMPT = (
     "Return only the JSON object the schema describes."
 )
 
+# #298: the brief pass. One call per SPAWNED run, charged to the run that
+# WROTE the brief. The hard part is not extraction, it is the cut between
+# an assertion and an instruction: a brief is mostly instructions ("run
+# `swift test` before every commit", "open ONE PR"), and an instruction is
+# not checkable against what the spawned run found. Only the statements of
+# FACT about repo state are, and those are the ones a brief written from
+# memory gets wrong.
+BRIEF_SYSTEM_PROMPT = (
+    "You are reading the BRIEF one agent run was given, for skill-templates "
+    "issue #298. The brief was written by the run that SPAWNED this one, "
+    "and you are extracting the brief's factual assertions about the state "
+    "of the repository -- the claims the SPAWNING run made, not the work it "
+    "asked for. "
+    "EXTRACT ONLY STATEMENTS OF FACT about repo state that a person could "
+    "check by opening the artifact: an issue or PR is open/closed/merged, "
+    "an issue's diagnosis or scope, a defect being at a named file and "
+    "line, a test or suite's current result, what a named commit/PR "
+    "changed, what a file currently contains, which gates CI runs. "
+    "DO NOT EXTRACT instructions, requirements, constraints, rules of "
+    "engagement, deliverables, or anything phrased as what the run must do "
+    "or report -- \"run the full suite before every commit\", \"open ONE "
+    "PR\", \"no attribution\" are not claims, they are the task. A "
+    "conditional (\"if your fix closes it, close it\") is not a claim "
+    "either, but the state it presumes (\"it is open\") IS one when the "
+    "brief states it. "
+    "Each claim gets a stable id (c1, c2, ...), a short `kind` (for example "
+    "\"issue-state\", \"defect-location\", \"suite-result\", "
+    "\"prior-work\"), and a `quote` copied verbatim from the brief. Keep "
+    "`text` to one sentence stating the asserted fact plainly. "
+    "Return only the JSON object the schema describes."
+)
+
 CHAIN_SYSTEM_PROMPT = (
     "You are checking one run's claims against candidate later mentions "
     "from the same session for contradictions, and classifying each "
@@ -2348,6 +2713,22 @@ CHAIN_SYSTEM_PROMPT = (
     "quote is the delta's own words. A delta finding about code this run "
     "did not touch, or one the delta itself marks as resolved or not a "
     "defect, is not a contradiction of this run. "
+    "BRIEF CLAIMS (#298) are listed in their own section and carry ids of "
+    "the form b<k>.<id>. They are assertions about repo state that THIS "
+    "run made in a brief it wrote for a run it spawned -- this run owns "
+    "them exactly as it owns its own claims, and they are checked the same "
+    "way. The candidate tagged source=brief-as-claims is that spawned "
+    "run's whole report, linked by the spawn itself rather than by cue "
+    "words, and is evidence by that link whatever its repo_match tag. "
+    "When the spawned run found the repo in a different state than the "
+    "brief asserted -- an issue the brief treated as open was already "
+    "closed or already fixed, a defect was not at the line the brief gave, "
+    "a scope the brief described was stale -- that is a later_wrong on the "
+    "BRIEF CLAIM, with contradicted_by.run the spawned run and the quote "
+    "its own words. Label it `recalled-not-reopened` when the brief stated "
+    "repo state that re-opening the artifact would have corrected. A brief "
+    "claim the spawned run simply acted on, or never spoke to, is not "
+    "contradicted. "
     "Return only the JSON object the schema describes."
 )
 
@@ -2370,6 +2751,27 @@ DISTILL_SCHEMA = {
                     "kind": {"type": "string"},
                     "proof_index": {"type": ["integer", "null"]},
                     "proof_snippet": {"type": ["string", "null"]},
+                    "quote": {"type": ["string", "null"]},
+                },
+            },
+        },
+    },
+}
+
+BRIEF_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "required": ["claims"],
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["id", "text", "kind"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "text": {"type": "string"},
+                    "kind": {"type": "string"},
                     "quote": {"type": ["string", "null"]},
                 },
             },
@@ -2479,6 +2881,21 @@ def call_detail(cost, detail):
     return {"cost_usd": round(cost, 6), "num_turns": (detail or {}).get("num_turns")}
 
 
+def brief_call_detail(made):
+    """#298: `distilled.calls["brief"]` -- ONE entry for the run's brief
+    calls together, because a record may carry several (one per run it
+    spawned) and `distilled.cost_usd` sums `calls.values()`. It carries
+    `calls: N` so `report` counts calls rather than records; `num_turns`
+    is the sum over the calls that reported one, None when none did."""
+    turns = [(d or {}).get("num_turns") for _, d in made]
+    turns = [t for t in turns if isinstance(t, int) and not isinstance(t, bool)]
+    return {
+        "cost_usd": round(sum(c for c, _ in made), 6),
+        "num_turns": sum(turns) if turns else None,
+        "calls": len(made),
+    }
+
+
 def failure_entry(run_id, phase, error, cost, detail):
     """#288: a `failures[]` entry. Carries what the attempt COST (a failed
     call bills: $0.17-$0.66 each in #273) and the envelope's
@@ -2543,7 +2960,26 @@ def build_distill_prompt(r):
     return "\n".join(lines)
 
 
-def build_chain_prompt(r, claims, candidates):
+def build_brief_prompt(owner, spawned, via_tool):
+    """#298: one brief call's prompt. The BRIEF text only -- not the
+    spawned run's report, and not its tool trace. The report is what the
+    brief is checked AGAINST, and it reaches the model in the owner's chain
+    call as a candidate; handing it to the extraction call too would let
+    the extracted claims be written already knowing the answer."""
+    return "\n".join([
+        "SESSION_DISTILL_PASS: brief",
+        "OWNER_RUN_ID: %s" % owner["id"],
+        "SPAWNED_RUN_ID: %s" % spawned["id"],
+        "SPAWNED_VIA: %s" % (via_tool or "unknown"),
+        "SPAWNED_DESCRIPTION: %s" % (spawned.get("description") or ""),
+        "SPAWNED_STARTED_AT: %s" % (spawned.get("started_at") or ""),
+        "",
+        "--- BRIEF (written by OWNER_RUN_ID, given to SPAWNED_RUN_ID) ---",
+        excerpt_head_tail(spawned.get("brief") or "", BRIEF_TEXT_HEAD, BRIEF_TEXT_TAIL),
+    ])
+
+
+def build_chain_prompt(r, claims, candidates, brief_claims=None):
     lines = ["SESSION_DISTILL_PASS: chain", "RUN_ID: %s" % r["id"], "", "--- LABELS ---"]
     for label in LABELS:
         lines.append("%s: %s" % (label, LABEL_DEFINITIONS[label]))
@@ -2563,11 +2999,30 @@ def build_chain_prompt(r, claims, candidates):
     lines.append("--- CLAIMS ---")
     for c in claims:
         lines.append(json.dumps(c, ensure_ascii=False))
+    # #298: brief claims are listed apart from the run's own claims, with
+    # the run they were written FOR, because what contradicts them is that
+    # run's report rather than a later mention anywhere in the session.
+    brief_claims = brief_claims or []
+    lines.append("")
+    lines.append("--- BRIEF CLAIMS (%d: repo-state assertions THIS run made in briefs it wrote) ---"
+                 % len(brief_claims))
+    if not brief_claims:
+        lines.append("(none: this run spawned no run whose brief was read, or the pass is off)")
+    for c in brief_claims:
+        lines.append(json.dumps(c, ensure_ascii=False))
     lines.append("")
     lines.append("--- CANDIDATE LATER MENTIONS ---")
     if not candidates:
         lines.append("(none found)")
     for cand in candidates:
+        if cand.get("source") == "brief-as-claims":
+            lines.append("run=%s at=%s source=brief-as-claims repo_match=%s "
+                         "(the REPORT of a run THIS run spawned and briefed -- "
+                         "check the BRIEF CLAIMS naming it against what follows)" % (
+                             cand["run"], cand.get("started_at"), cand.get("repo_match")))
+            for ln in (cand.get("excerpt") or "(empty report)").splitlines():
+                lines.append("  | %s" % ln)
+            continue
         if cand.get("source") == "round-pair":
             lines.append("run=%s at=%s source=round-pair key=%r repo_match=%s "
                          "(the DELTA REVIEW of this fix round -- full report follows)" % (
@@ -2633,7 +3088,7 @@ def warn_dropped_later_wrong(run_id, dropped_lw):
 
 
 def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_name, calls,
-                  passes, candidates=None):
+                  passes, candidates=None, brief_claims=None):
     """(record, dropped_later_wrong[]) -- dropped_later_wrong carries the
     claim references any `later_wrong` entry named that did not resolve to
     a real claim id (#278 C2), or (#287) a dict `{"claim","run","reason":
@@ -2660,11 +3115,19 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
     two different derivations of the same fact."""
     claims = resolve_claims((distilled_doc or {}).get("claims"),
                             run_stub.get("tool_inputs_full") or [])
-    claim_ids = {c["id"] for c in claims}
+    # #298: brief claims are this run's claims too -- owned by it, just
+    # asserted in a brief it wrote rather than in its own report -- so
+    # `later_wrong` may name one and `classified_as` may support a label
+    # with one. They are kept in their own list on the record (a consumer
+    # asking "what did this run verify?" must not get an assertion nothing
+    # in this run ever checked), and unified only for pointer resolution.
+    brief_claims = list(brief_claims or [])
+    addressable = claims + brief_claims
+    claim_ids = {c["id"] for c in addressable}
     later_wrong, dropped_later_wrong, lw_index_map = normalize_later_wrong(
         (chain_doc or {}).get("later_wrong") if chain_doc else None, claim_ids, candidates)
     classified_as, unclassified_reason = enforce_classified_as(
-        (chain_doc or {}).get("classified_as") if chain_doc else None, claims, later_wrong,
+        (chain_doc or {}).get("classified_as") if chain_doc else None, addressable, later_wrong,
         lw_index_map,
         withdrawn=[d["index"] for d in dropped_later_wrong if isinstance(d, dict)])
     record = {
@@ -2676,6 +3139,10 @@ def build_record(sid, run_stub, distilled_doc, chain_doc, distilled_at, model_na
         "understood": (distilled_doc or {}).get("understood") or "",
         "delivered": (distilled_doc or {}).get("delivered") or "",
         "claims": claims,
+        # #298: ALWAYS PRESENT, empty when the pass did not run -- a
+        # consumer must not have to read `distilled.passes` to tell an
+        # absent key from a run that owned no brief claim.
+        "brief_claims": brief_claims,
         # #285: DETERMINISTIC, computed once in build_all_run_stubs (no
         # model call) -- persisted verbatim regardless of what the distill/
         # chain calls returned, so a model that ignores VERIFICATION
@@ -2718,7 +3185,8 @@ def cmd_runs(a):
     rr = load_review_result()
     sid = rr.resolve_session_id(a.session)
     session_dir = rr.resolve_session_dir(sid)
-    segmented_by, runs, unreadable, repo_vocabulary = build_all_run_stubs(rr, session_dir)
+    segmented_by, runs, unreadable, repo_vocabulary, spawn_links = build_all_run_stubs(
+        rr, session_dir)
     round_pairs = pair_rounds(runs)
     main_turns = sum(1 for r in runs if r["kind"] == "main-turn")
     subagent_runs = sum(1 for r in runs if r["kind"] == "subagent")
@@ -2739,6 +3207,11 @@ def cmd_runs(a):
         # #292: which delta review each fix round is checked against, and
         # every delta that could not be paired (reported, never guessed).
         "round_pairs": round_pairs,
+        # #298: which MAIN-TURN run wrote each subagent run's brief, and
+        # every subagent whose owner could not be resolved, with the
+        # reason -- deterministic, present whether or not the brief pass
+        # is ever run.
+        "spawn_links": spawn_links,
     }
 
     if a.json:
@@ -2758,6 +3231,13 @@ def cmd_runs(a):
             print("  %-18s <- %-18s %s" % (p["fix"], p["delta"], p["key"]))
         for u in round_pairs["unpaired_deltas"]:
             print("  unpaired %-18s %s (%s)" % (u["delta"], u["key"], u["reason"]))
+        print("spawn_links: %d   unowned: %d" % (
+            len(spawn_links["links"]), len(spawn_links["unowned"])))
+        for link in spawn_links["links"]:
+            print("  %-18s <- %-14s via %s (%s)" % (
+                link["spawned"], link["owner"], link["via_tool"], link["via_source"]))
+        for u in spawn_links["unowned"]:
+            print("  unowned  %-18s %s" % (u["spawned"], u["reason"]))
         if unreadable:
             print("unreadable:")
             for u in unreadable:
@@ -2809,9 +3289,15 @@ def cmd_distill(a):
     if a.jobs < 1:
         die("--jobs must be at least 1 (got %d)" % a.jobs)
 
-    segmented_by, all_runs, unreadable, repo_vocabulary = build_all_run_stubs(rr, session_dir)
+    segmented_by, all_runs, unreadable, repo_vocabulary, spawn_links = build_all_run_stubs(
+        rr, session_dir)
     round_pairs = pair_rounds(all_runs)
     runs_by_id = {r["id"]: r for r in all_runs}
+    # #298: deterministic, computed whether or not --brief-claims is set --
+    # `spawn_links` goes on the document either way, so an owner mapping
+    # can be audited without paying for the pass.
+    owned_by = owned_spawned_runs(spawn_links, runs_by_id)
+    via_by_spawned = {l["spawned"]: l["via_tool"] for l in spawn_links["links"]}
 
     if a.only:
         all_runs_for_run = [r for r in all_runs if r["id"] == a.only]
@@ -2896,7 +3382,14 @@ def cmd_distill(a):
         todo = todo[:a.limit]
 
     if a.dry_run:
-        calls = len(todo) * 2
+        # #298: --brief-claims adds one call per run each selected run
+        # SPAWNED (not one per selected run), so the projection is counted
+        # from the owner map rather than scaled -- on a session whose main
+        # turns launched workflows, that is the difference between a
+        # rounding error and doubling the bill.
+        brief_calls = (sum(len(owned_by.get(r["id"]) or []) for r in todo)
+                       if a.brief_claims else 0)
+        calls = len(todo) * 2 + brief_calls
         projected = calls * DEFAULT_COST_PER_CALL_USD
         print("session: %s" % sid)
         print("session_dir: %s" % session_dir)
@@ -2909,6 +3402,9 @@ def cmd_distill(a):
         # number -- DEFAULT_COST_PER_CALL_USD is a fixed constant measured
         # 2026-09-20 on real payloads (see its own comment), not a formula;
         # --dry-run makes zero calls, so it is the only basis available.
+        print("brief-as-claims: %s   brief calls (projected): %d   owners in this selection: %d" % (
+            "on" if a.brief_claims else "off (pass --brief-claims)",
+            brief_calls, sum(1 for r in todo if owned_by.get(r["id"]))))
         print("calls (projected): %d   cost (projected): $%.4f  "
               "(basis: $%.4f/call, DEFAULT_COST_PER_CALL_USD measured 2026-09-20 "
               "on real payloads -- no live calls made yet to calibrate against)"
@@ -2981,7 +3477,7 @@ def cmd_distill(a):
                 return False
             if over_budget():
                 stop("max-cost-usd already exceeded by observed spend" if phase == "distill"
-                     else "max-cost-usd exceeded by observed spend after this run's distill call",
+                     else "max-cost-usd exceeded by observed spend before this run's %s call" % phase,
                      run_id)
                 return False
             if projected_over_budget():
@@ -3033,43 +3529,84 @@ def cmd_distill(a):
             return {"record": None, "dropped_lw": None,
                     "failures": [failure_entry(r["id"], "distill", err1, cost1, detail1)]}
 
+        run_failures = []
+        passes = ["distill"]
+        calls = {"distill": call_detail(cost1, detail1)}
+
+        # #298: the brief pass -- one call per run THIS run spawned and
+        # briefed, charged here because THIS run wrote those briefs. It
+        # runs between distill and chain so the brief claims are in hand
+        # when the chain prompt is built; the spawned run's REPORT reaches
+        # the chain call as a guaranteed candidate, never this call.
+        brief_claims = []
+        brief_by_run = {}
+        brief_calls_made = []
+        if a.brief_claims:
+            for k, spawned_id in enumerate(owned_by.get(r["id"]) or [], 1):
+                spawned = runs_by_id.get(spawned_id)
+                if spawned is None:
+                    continue
+                if not admit(r["id"], "brief"):
+                    break
+                brief_doc, cost_b, err_b, detail_b = run_model(
+                    model_cmd, BRIEF_SYSTEM_PROMPT, BRIEF_SCHEMA,
+                    build_brief_prompt(r, spawned, via_by_spawned.get(spawned_id)),
+                    a.timeout_secs)
+                # Billed to the RECORD, like a failed chain call and for
+                # the same reason: this run produces a record either way,
+                # and the brief pass adds to it rather than creating it.
+                settle(r["id"], cost_b, False, "brief")
+                brief_calls_made.append((cost_b, detail_b))
+                if err_b:
+                    run_failures.append(failure_entry(r["id"], "brief", err_b, cost_b, detail_b))
+                    continue
+                cs = normalize_brief_claims(brief_doc.get("claims"), spawned_id, k,
+                                            via_by_spawned.get(spawned_id))
+                if cs:
+                    brief_by_run[spawned_id] = cs
+                    brief_claims.extend(cs)
+        if brief_calls_made:
+            calls["brief"] = brief_call_detail(brief_calls_made)
+        if brief_claims:
+            passes.append("brief")
+
         if not admit(r["id"], "chain"):
             record, dropped_lw = build_record(
                 sid, r, distilled_doc, None, now_iso(),
-                model_name_from_cmd(model_cmd), {"distill": call_detail(cost1, detail1)},
-                ["distill"])
-            return {"record": record, "dropped_lw": dropped_lw, "failures": []}
+                model_name_from_cmd(model_cmd), calls, passes,
+                brief_claims=brief_claims)
+            return {"record": record, "dropped_lw": dropped_lw, "failures": run_failures}
 
         claims = resolve_claims(distilled_doc.get("claims"), r.get("tool_inputs_full") or [])
         other_runs = [x for x in all_runs if x["id"] != r["id"]]
         current_repos = set(r.get("repos") or [])
         candidates = merge_round_pair_candidates(
-            round_pair_candidates(r, claims, round_pairs, runs_by_id),
+            round_pair_candidates(r, claims, round_pairs, runs_by_id)
+            + brief_claim_candidates(r, brief_by_run, runs_by_id),
             find_chain_candidates(
                 claims, r.get("started_at"), current_repos, other_runs, repo_vocabulary))
 
         chain_doc, cost2, err2, detail2 = run_model(
-            model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA, build_chain_prompt(r, claims, candidates),
+            model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA,
+            build_chain_prompt(r, claims, candidates, brief_claims),
             a.timeout_secs)
         # A failed chain call is billed to the record, not to failed_cost:
         # the run still produced one.
         settle(r["id"], cost2, False, "chain")
-        run_failures = []
-        passes = ["distill"]
         if err2:
             run_failures.append(failure_entry(r["id"], "chain", err2, cost2, detail2))
             chain_doc = None
         else:
             passes.append("chain")
+        calls["chain"] = call_detail(cost2, detail2)
 
         # #278 N2: the record's own cost_usd always includes cost2, matching
         # what settle() billed unconditionally, so sum(record costs) +
         # failed_cost_usd == total_cost_usd.
         record, dropped_lw = build_record(
             sid, r, distilled_doc, chain_doc, now_iso(),
-            model_name_from_cmd(model_cmd),
-            {"distill": call_detail(cost1, detail1), "chain": call_detail(cost2, detail2)},
-            passes, candidates)
+            model_name_from_cmd(model_cmd), calls,
+            passes, candidates, brief_claims)
         return {"record": record, "dropped_lw": dropped_lw, "failures": run_failures}
 
     pool = ThreadPoolExecutor(max_workers=a.jobs)
@@ -3128,6 +3665,10 @@ def cmd_distill(a):
         # #292: session-wide and deterministic, so unpaired deltas are on
         # the record even when no fix run was distilled this invocation.
         "round_pairs": round_pairs,
+        # #298: likewise -- who owns whose brief, and every subagent whose
+        # owner could not be resolved, on the document even when
+        # --brief-claims was never passed.
+        "spawn_links": spawn_links,
     }
     text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
@@ -3200,19 +3741,23 @@ def cmd_report(a):
     # #288: per-pass spend, from each record's distilled.calls -- the
     # split #299 could not make. A record without `calls` (never written
     # by schema 5) is counted apart rather than folded into either pass.
-    pass_cost = {"distill": 0.0, "chain": 0.0}
-    pass_calls = {"distill": 0, "chain": 0}
-    pass_turns = {"distill": [], "chain": []}
+    # #298: "brief" is a third pass, and its `calls` entry aggregates the
+    # several brief calls one record can carry -- so the call COUNT comes
+    # from that entry's own `calls`, not from one-per-record.
+    pass_cost = {"distill": 0.0, "brief": 0.0, "chain": 0.0}
+    pass_calls = {"distill": 0, "brief": 0, "chain": 0}
+    pass_turns = {"distill": [], "brief": [], "chain": []}
     unsplit_records = 0
     for rec in records:
         calls = (rec.get("distilled") or {}).get("calls")
         if not isinstance(calls, dict):
             unsplit_records += 1
         else:
-            for pname in ("distill", "chain"):
+            for pname in ("distill", "brief", "chain"):
                 c = calls.get(pname)
                 if isinstance(c, dict):
-                    pass_calls[pname] += 1
+                    n_calls = c.get("calls")
+                    pass_calls[pname] += n_calls if isinstance(n_calls, int) and n_calls > 0 else 1
                     pass_cost[pname] += c.get("cost_usd") or 0.0
                     if isinstance(c.get("num_turns"), int):
                         pass_turns[pname].append(c["num_turns"])
@@ -3248,7 +3793,7 @@ def cmd_report(a):
         doc.get("total_cost_usd") or 0.0))
     # #288: printed unconditionally, so a per-pass cost question is
     # answered by `report` rather than by re-reading every record.
-    for pname in ("distill", "chain"):
+    for pname in ("distill", "brief", "chain"):
         n = pass_calls[pname]
         turns = pass_turns[pname]
         print("  %-8s $%.4f over %d call(s)   mean $%.4f/call   mean num_turns %s" % (
@@ -3340,6 +3885,10 @@ def build_parser():
     d.add_argument("--timeout-secs", type=int, default=MODEL_TIMEOUT_SECS,
                     help="per model call timeout (default %d; a long trace on a "
                          "busy CLI exceeds it)" % MODEL_TIMEOUT_SECS)
+    d.add_argument("--brief-claims", action="store_true",
+                    help="#298: also extract each spawned run's BRIEF into claims owned "
+                         "by the main turn that wrote it, checked against what that run "
+                         "found. ONE EXTRA CALL PER SPAWNED RUN -- see --dry-run")
     d.add_argument("--jobs", type=int, default=1, metavar="N",
                     help="distill up to N runs concurrently (default 1). The budget "
                          "projection counts in-flight calls; records keep run order")

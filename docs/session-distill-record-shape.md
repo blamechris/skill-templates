@@ -22,12 +22,12 @@ distiller that reads only `subagents/**` cannot see it and fails its own
 acceptance. The main session is a run; it is segmented by user turn because that
 is where its brief lives.
 
-## The record (schema_version 5)
+## The record (schema_version 6)
 
 ```json
 {
   "kind": "session-distill-record",
-  "schema_version": 5,
+  "schema_version": 6,
   "session": "13cee7be-edd8-4dfc-afe3-093e899db85b",
   "run": {
     "id": "agent-a1794d4c28be50f83",
@@ -55,6 +55,11 @@ is where its brief lives.
      "proof": "...DERIVED from trace entry [proof_index]; null when uncited or out of range...",
      "quote": "...verbatim from the report...",
      "proof_located": true}
+  ],
+  "brief_claims": [
+    {"id": "b1.c10", "text": "...a repo-state assertion THIS run made in a brief...",
+     "kind": "defect-location", "quote": "...verbatim from the brief...",
+     "source": "brief", "from_run": "agent-a125a8c132b05b56c", "via_tool": "Agent"}
   ],
   "verifications": [
     {"index": 12, "tool_use_id": "toolu_...", "categories": ["lint"],
@@ -341,6 +346,78 @@ passed") is contradicted from `delta:#253`, whose report says the new test
 "cannot fail for any mutation of the behaviour it was added for". The same run
 found three more vacuous-test contradictions.
 
+### #298 — brief-as-claims (schema_version 6)
+
+The other between-runs defect runs the other way, and row 5 of the #273 ground
+truth is its shape: three of four client-test issues were **partly already
+fixed** by #237/#254 when the brief for `a125a8c1` was written. The worker got
+it right — its report says #256 was "largely already landed in #254" and #239's
+first site "was already fixed by #237" — so a per-run distill of the worker has
+no claim of its own to label. The defect belongs to the main-thread turn that
+wrote the brief **from memory**, and nothing in the record pointed there.
+
+**A spawned run's brief is not written by the run that receives it.** Its
+factual assertions about repo state ("#250 is open", "two tests release the
+harness at `HelperClientTests.swift:172-173`") are the spawning run's claims.
+`--brief-claims` extracts them, one model call per spawned run, and attributes
+them to the owner.
+
+**The owner mapping is an exact join, not a time window.** Two routes, each
+citing a real id, both measured on `13cee7be`:
+
+| route | key | resolved |
+|---|---|---|
+| direct subagent | its own `.meta.json`'s `toolUseId` → the `Agent` tool_use line | 15 of 15 |
+| workflow subagent | `spawned_by` runId → the `Workflow` tool_result announcing `.../workflows/<runId>` | 118 of 118, via 11 announcements |
+
+The owner is the main turn whose span contains that line. **133 of 133 subagent
+runs resolve; 0 unowned.** A time window was the obvious rule and is wrong for
+the same reason the round-pair key is `description`: a background Agent can
+outlive the turn that launched it, and two turns can have agents in flight at
+once. The announcement scan is restricted to **spawning** tool_results, which
+is load-bearing rather than defensive — on `13cee7be` a later `Bash` call cats
+two workflows' journals by path, and an unfiltered scan offered those two a
+second, spawn-less candidate each. A runId announced by two different spawning
+calls is reported `ambiguous-workflow-announcement`, never resolved by picking
+one. `runs` and `distill` both write `spawn_links: {links[], unowned[]}`
+whether or not the pass is run: the mapping is deterministic and free, so it
+can be audited without paying for the extraction.
+
+Each brief's claims are namespaced `b<k>.<id>` (k being the spawned run's
+position in its owner's spawn list) and land on the owner's record as
+`brief_claims[]` — **never folded into `claims[]`**, which stays what this run's
+own report asserted. The spawned run's whole report reaches the owner's chain
+call as a guaranteed candidate (`source: "brief-as-claims"`, `repo_match:
+"n/a"` — the link is the spawn, not an `#N` match), on one head+tail budget
+split across the owner's spawned runs.
+
+**Cost, measured rather than estimated.** The issue's basis was "one extra
+distill-style call per spawned run"; a brief call is handed the **brief only**
+— no report, no tool trace — so it is far cheaper than a distill call. On
+`13cee7be` `main-turn-023` (2026-09-22): 9 brief calls, **$0.459 total,
+$0.051 each**, against $0.688 for that run's own distill call and $0.400 for
+its chain call. The call COUNT is still real — 133 extra calls session-wide,
+320 → 453 — which is why the pass is opt-in and `--dry-run` counts brief calls
+from the owner map (one per *spawned* run, not one per selected run) and prints
+them apart.
+
+**Measured on `13cee7be`, live.** `main-turn-023` came back with three
+`recalled-not-reopened` labels, each on a brief claim and each cited from the
+run that received the brief: `b1.c10` from `a125a8c1` ("#239's line numbers and
+half its scope were stale"), and `b2.c3`/`b2.c8` from `a1794d4c` ("three was an
+undercount; it is seven"). The worker records stay clean, which is the point —
+the workers were right.
+
+**Row 1a is NOT handled here, and the reason is measured.** `a55f340b`'s brief
+never names lint, so `gates_named_not_run` cannot fire. The obvious extension —
+inherit the gate names from the OWNER's brief or workflow script — was tested
+against the data and does not work: that run's owner is the `Workflow` call at
+main transcript line 1969, whose 16,797-character script mentions lint **zero**
+times. The gate is absent from the whole spawn chain, so no reading of it can
+recover the gate. It needs the CI config (`.github/workflows` job names), which
+is a filesystem dependency at distill time over a repo whose state has since
+moved, and is split out as its own issue.
+
 ### The five fields the issue names, and the two it does not
 
 `asked` / `understood` / `delivered` / `later_wrong[]` / `classified_as[]` are the
@@ -400,7 +477,7 @@ unresolvable pointer covers nothing.
 entry count, the number of runs carrying it, and that share of all runs.
 "The right run carries the label" means little when 79% of runs do.
 
-## Three passes, one model boundary
+## Three passes, one model boundary (four with `--brief-claims`)
 
 1. **`runs`** — deterministic inventory. No model. Walks the session dir, emits
    one run stub per run with provenance, the brief, the report, and a compact
@@ -409,13 +486,18 @@ entry count, the number of runs carrying it, and that share of all runs.
 2. **`distill`** — one model call per run: stub -> `{asked, understood, delivered, claims[]}`,
    guarded by #291's proof-locatable check before any chain call is made (see
    above).
-3. **`chain`** — per run, deterministic retrieval first: pull the artifacts named
+3. **`brief`** (#298, `--brief-claims` only) — one model call per run THIS run
+   spawned, over that run's BRIEF alone: `{claims[]}`, the repo-state assertions
+   the owner made. Charged to the owner, because the owner wrote them.
+4. **`chain`** — per run, deterministic retrieval first: pull the artifacts named
    in each claim (`#\d+`, paths, commands, symbols), scan every run that STARTED
    LATER for a mention of the same artifact within a correction cue window
    (`actually`, `in fact`, `wrong`, `retract`, `never ran`, `failed`, `turns
    out`, `correction`, `misread`, `regression`), repo-qualifying every `#N`
    match along the way (#287, see above), plus, for a fix round, its paired
-   delta review's whole report (#292, see above), then ONE model call per run over
+   delta review's whole report (#292, see above), plus, for a run that spawned
+   others, each spawned run's whole report against that run's brief claims
+   (#298, see above), then ONE model call per run over
    the candidates -> `later_wrong[]` + `classified_as[]`. Retrieval-before-model
    is what keeps this O(n) calls instead of O(n^2).
 
@@ -442,6 +524,7 @@ session-distill.py schema
 session-distill.py runs    [--session SID] [--json]
 session-distill.py distill [--session SID] [--limit N] [--only RUNID]
                            [--dry-run] [--resume] [--out PATH] [--force]
+                           [--brief-claims]
                            [--model-cmd CMD] [--max-cost-usd N] [--timeout-secs N] [--jobs N]
 session-distill.py report  [--session SID] [--in PATH] [--json]
 ```

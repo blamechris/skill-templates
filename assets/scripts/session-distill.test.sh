@@ -799,7 +799,7 @@ run sess-main distill --out "$OUT_D" --model-cmd "$MODEL_CMD"
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["kind"] == "session-distill-document"
-assert d["schema_version"] == 5
+assert d["schema_version"] == 6
 recs = {r["run"]["id"]: r for r in d["records"]}
 assert len(recs) == 5, recs.keys()
 
@@ -1541,9 +1541,9 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sd_285_schema", sys.argv[1])
 sd = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sd)
-assert sd.SCHEMA_VERSION == 5, sd.SCHEMA_VERSION
+assert sd.SCHEMA_VERSION == 6, sd.SCHEMA_VERSION
 PY
-[ $? -eq 0 ] && ok "#288: SCHEMA_VERSION is 5" || bad "#288: SCHEMA_VERSION is 5" "rc=nonzero"
+[ $? -eq 0 ] && ok "#298: SCHEMA_VERSION is 6 (brief_claims on every record)" || bad "#298: SCHEMA_VERSION is 6 (brief_claims on every record)" "rc=nonzero"
 
 OUT_V="$TMP/out-v.json"
 "$PY" - "$OUT_V" <<'PY'
@@ -2499,6 +2499,357 @@ PY
 run_stdout sess-rp runs --json
 echo "$out" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert len(d["round_pairs"]["pairs"]) == 1 and d["round_pairs"]["unpaired_deltas"] == [], d["round_pairs"]'
 [ $? -eq 0 ] && ok "#292: runs --json carries round_pairs" || bad "#292: runs --json round_pairs" "$out"
+
+# ============================================================ #298 brief-as-claims
+echo; echo "#298. brief-as-claims (spawned run's brief -> the spawning run's claims)"
+
+# The owner join, unit level. The tool-NAME filter on the announcement scan
+# is load-bearing, not defensive: on 13cee7be a Bash call cats two
+# workflows' journals BY PATH, and an unfiltered scan offered those two
+# workflows a second, spawn-less candidate each.
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd_298i", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+def use(i, name):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": i, "name": name, "input": {}}]}}
+def res(i, text):
+    return {"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": i, "content": text}]}}
+
+objs = [
+    use("t_wf", "Workflow"),
+    res("t_wf", "Transcript dir: /x/subagents/workflows/wf_aaa"),
+    use("t_bash", "Bash"),
+    res("t_bash", "cat /x/subagents/workflows/wf_aaa/journal.jsonl /x/subagents/workflows/wf_bbb/j"),
+    use("t_wf", "Workflow"),          # a repeated id: first occurrence wins
+]
+idx = sd.index_main_tool_uses(objs)
+assert idx["t_wf"] == {"line": 0, "tool": "Workflow"}, idx
+assert idx["t_bash"]["tool"] == "Bash", idx
+ann = sd.index_workflow_spawns(objs, idx)
+# The Bash result named BOTH workflows and announces NEITHER.
+assert ann == {"wf_aaa": ["t_wf"]}, ann
+PY
+[ $? -eq 0 ] && ok "#298: the workflow-announcement scan reads only SPAWNING tool_results (a Bash call naming a workflows dir announces nothing); a repeated tool_use id resolves to its first occurrence" \
+  || bad "#298: index_main_tool_uses / index_workflow_spawns"
+
+# resolve_spawn_links: both routes, and every refusal reported with a reason.
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd_298l", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+def use(i, name):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": i, "name": name, "input": {}}]}}
+def res(i, text):
+    return {"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": i, "content": text}]}}
+def sub(i, spawned_by, tool_use_id=None):
+    return {"id": i, "kind": "subagent", "spawned_by": spawned_by,
+            "spawn_tool_use_id": tool_use_id, "brief": "b", "started_at": "t"}
+
+objs = [
+    use("t_early", "Agent"),                                   # line 0: before any turn
+    {"type": "user", "origin": {"kind": "human"}, "message": {"content": "go"}},   # line 1
+    use("t_direct", "Agent"),                                  # line 2
+    use("t_wf", "Workflow"),                                   # line 3
+    res("t_wf", "dir /x/subagents/workflows/wf_one"),           # line 4
+    {"type": "user", "origin": {"kind": "human"}, "message": {"content": "again"}},  # line 5
+    use("t_wf2a", "Workflow"),                                 # line 6
+    res("t_wf2a", "dir /x/subagents/workflows/wf_two"),          # line 7
+    use("t_wf2b", "Agent"),                                    # line 8
+    res("t_wf2b", "resumed /x/subagents/workflows/wf_two"),      # line 9
+]
+spans = [(1, 5, "main-turn-001"), (5, 10, "main-turn-002")]
+stubs = [
+    {"id": "main-turn-001", "kind": "main-turn"},
+    sub("agent-direct", "session", "t_direct"),
+    sub("agent-wf1", "wf_one"),
+    sub("agent-wf2", "wf_two"),                 # announced twice -> ambiguous
+    sub("agent-gone", "session", "t_absent"),   # id names no tool_use here
+    sub("agent-early", "session", "t_early"),   # tool_use before the first turn
+    sub("agent-orphan", "session"),             # neither route yields an id
+]
+got = sd.resolve_spawn_links(stubs, objs, spans)
+links = {l["spawned"]: (l["owner"], l["via"], l["via_tool"], l["via_source"]) for l in got["links"]}
+assert links == {
+    "agent-direct": ("main-turn-001", "t_direct", "Agent", "meta.toolUseId"),
+    "agent-wf1": ("main-turn-001", "t_wf", "Workflow", "workflow-announcement"),
+}, links
+un = {u["spawned"]: u["reason"] for u in got["unowned"]}
+assert un == {"agent-wf2": "ambiguous-workflow-announcement",
+              "agent-gone": "tool-use-not-in-main",
+              "agent-early": "no-main-turn-for-tool-use",
+              "agent-orphan": "no-spawning-tool-use"}, un
+# A main turn is never linked as a spawned run, and the lists are sorted.
+assert all(l["spawned"] != "main-turn-001" for l in got["links"])
+assert [l["spawned"] for l in got["links"]] == sorted(l["spawned"] for l in got["links"])
+
+# owned_spawned_runs: started_at order, and an empty brief is not a call.
+runs_by_id = {
+    "a": {"id": "a", "brief": "x", "started_at": "2026-01-02T00:00:00Z"},
+    "b": {"id": "b", "brief": "x", "started_at": "2026-01-01T00:00:00Z"},
+    "c": {"id": "c", "brief": "   ", "started_at": "2026-01-03T00:00:00Z"},
+}
+links = {"links": [{"spawned": k, "owner": "mt"} for k in ("a", "b", "c")]}
+assert sd.owned_spawned_runs(links, runs_by_id) == {"mt": ["b", "a"]}, sd.owned_spawned_runs(links, runs_by_id)
+PY
+[ $? -eq 0 ] && ok "#298: resolve_spawn_links maps a direct subagent by meta.toolUseId and a workflow subagent by its announcement, and reports (never guesses) ambiguous/absent/out-of-turn/idless owners; owned_spawned_runs orders by start and skips an empty brief" \
+  || bad "#298: resolve_spawn_links / owned_spawned_runs"
+
+# Claim namespacing, candidates, prompt, record.
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd_298c", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+raw = [{"id": "c1", "text": "#250 is open", "kind": "issue-state", "quote": "I filed that as #250"},
+       {"id": "c1", "text": "the defect is at X.swift:110", "kind": "defect-location"},
+       {"text": "main is green", "kind": "suite-result"},
+       "not a dict"]
+cs = sd.normalize_brief_claims(raw, "agent-x", 2, "Agent")
+assert [c["id"] for c in cs] == ["b2.c1", "b2.c1-2", "b2.c3"], [c["id"] for c in cs]
+assert all(c["from_run"] == "agent-x" and c["source"] == "brief" and c["via_tool"] == "Agent"
+           for c in cs), cs
+# A brief claim never mints proof fields: nothing in the OWNER's own run
+# could have justified it, and a null proof would read as "unlocatable".
+assert all("proof" not in c and "proof_located" not in c for c in cs), cs
+assert sd.normalize_brief_claims(None, "agent-x", 1, "Agent") == []
+
+owner = {"id": "main-turn-001"}
+spawned_a = {"id": "agent-x", "started_at": "t2", "report": "already landed in #254"}
+spawned_b = {"id": "agent-y", "started_at": "t1", "report": "y" * 100000}
+by_run = {"agent-x": cs, "agent-y": sd.normalize_brief_claims([{"id": "c1"}], "agent-y", 1, "Agent")}
+cands = sd.brief_claim_candidates(owner, by_run, {"agent-x": spawned_a, "agent-y": spawned_b})
+assert [c["run"] for c in cands] == ["agent-y", "agent-x"], cands   # started_at order
+assert all(c["source"] == "brief-as-claims" and c["repo_match"] == "n/a" for c in cands), cands
+assert cands[1]["claims"] == ["b2.c1", "b2.c1-2", "b2.c3"], cands[1]
+assert "already landed in #254" in cands[1]["excerpt"]
+budget = sd.BRIEF_REPORT_HEAD + sd.BRIEF_REPORT_TAIL
+assert sum(len(c["excerpt"]) for c in cands) <= budget + 2, [len(c["excerpt"]) for c in cands]
+# A spawned run whose brief yielded nothing gets no candidate and no budget.
+assert sd.brief_claim_candidates(owner, {"agent-x": []}, {"agent-x": spawned_a}) == []
+
+own = [{"id": "c1", "text": "t", "kind": "k", "proof": None, "quote": None}]
+prompt = sd.build_chain_prompt(owner, own, cands, cs)
+assert "--- BRIEF CLAIMS (3" in prompt and "b2.c1" in prompt, prompt
+assert "source=brief-as-claims" in prompt and "  | already landed in #254" in prompt, prompt
+assert "(none: this run spawned no run" in sd.build_chain_prompt(owner, own, [], []), "empty section"
+
+# A later_wrong and a label may both point at a BRIEF claim id; the record
+# keeps the two claim lists apart.
+chain = {"later_wrong": [{"claim": "b2.c1", "how": "already closed",
+                          "contradicted_by": {"run": "agent-x", "at": "t2", "quote": "landed in #254"}}],
+         "classified_as": [{"label": "recalled-not-reopened", "supports": ["b2.c1", "0"], "why": "w"}]}
+stub = {"id": "main-turn-001", "kind": "main-turn", "tool_inputs_full": []}
+rec, dropped = sd.build_record("s", stub, {"claims": own}, chain, "now", "sonnet",
+                               {"distill": {"cost_usd": 0.1, "num_turns": 1}},
+                               ["distill", "brief", "chain"], cands, cs)
+assert not dropped, dropped
+assert [c["id"] for c in rec["claims"]] == ["c1"], rec["claims"]
+assert [c["id"] for c in rec["brief_claims"]] == ["b2.c1", "b2.c1-2", "b2.c3"], rec["brief_claims"]
+assert rec["later_wrong"][0]["claim"] == "b2.c1", rec["later_wrong"]
+assert rec["classified_as"][0]["label"] == "recalled-not-reopened", rec["classified_as"]
+assert rec["classified_as"][0]["supports"] == ["b2.c1", "0"], rec["classified_as"]
+# ...and brief_claims is present-and-empty when the pass never ran.
+bare, _ = sd.build_record("s", stub, {"claims": own}, None, "now", "sonnet",
+                          {"distill": {"cost_usd": 0.1, "num_turns": 1}}, ["distill"])
+assert bare["brief_claims"] == [], bare["brief_claims"]
+# A later_wrong naming a brief claim that does NOT exist is still dropped.
+_, drop2 = sd.build_record("s", stub, {"claims": own},
+                           {"later_wrong": [{"claim": "b9.c9", "how": "h",
+                                             "contradicted_by": {"run": "agent-x"}}],
+                            "classified_as": []},
+                           "now", "sonnet", {"distill": {"cost_usd": 0.1, "num_turns": 1}},
+                           ["distill"], cands, cs)
+assert drop2 == ["b9.c9"], drop2
+
+# brief_call_detail aggregates several calls into ONE entry that still sums.
+det = sd.brief_call_detail([(0.1, {"num_turns": 3}), (0.2, {"num_turns": 4}), (0.3, None)])
+assert det == {"cost_usd": 0.6, "num_turns": 7, "calls": 3}, det
+assert sd.brief_call_detail([(0.1, None)])["num_turns"] is None
+PY
+[ $? -eq 0 ] && ok "#298: brief claims are namespaced per spawned run and never mint proof; the candidate carries that run's report on one shared budget; the chain prompt lists both; a later_wrong and a label may point at a brief claim, and claims/brief_claims stay apart on the record" \
+  || bad "#298: brief claim normalize / candidates / prompt / record"
+
+# End to end. A main turn spawns one agent; the brief asserts stale repo
+# state, the agent's report corrects it. The defect belongs to the MAIN
+# TURN -- the worker got it right -- and nothing but this pass puts it there.
+"$PY" - "$PROJ" <<'PY'
+import json, os, sys
+proj = sys.argv[1]
+sdir = os.path.join(proj, "sess-bac")
+subs = os.path.join(sdir, "subagents")
+os.makedirs(subs, exist_ok=True)
+def w(path, lines):
+    with open(path, "w", encoding="utf-8") as f:
+        for l in lines:
+            f.write(json.dumps(l) + "\n")
+w(sdir + ".jsonl", [
+    {"type": "user", "timestamp": "2026-09-20T04:00:00Z", "origin": {"kind": "human"},
+     "message": {"content": "fix the client-test cluster"}},
+    {"type": "assistant", "timestamp": "2026-09-20T04:38:00Z", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_bac1", "name": "Agent",
+         "input": {"description": "Fix client-test cluster", "prompt": "..."}}]}},
+    {"type": "user", "timestamp": "2026-09-20T05:30:00Z", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_bac1", "content": "done"}]}},
+    {"type": "assistant", "timestamp": "2026-09-20T05:31:00Z",
+     "message": {"content": [{"type": "text", "text": "The agent opened PR #264."}]}},
+])
+with open(os.path.join(subs, "agent-bac00000001.meta.json"), "w") as f:
+    json.dump({"agentType": "general-purpose", "model": "opus",
+               "description": "Fix client-test cluster", "toolUseId": "toolu_bac1"}, f)
+w(os.path.join(subs, "agent-bac00000001.jsonl"), [
+    {"type": "user", "timestamp": "2026-09-20T04:38:33Z", "message": {"content":
+        "READ FIRST: gh issue view 256, gh issue view 239. #256 hands every client a "
+        "750 ms deadline. Two tests release the harness at HelperClientTests.swift:172-173. "
+        "I filed that as #250; if your fix closes it, close it."}},
+    {"type": "assistant", "timestamp": "2026-09-20T05:29:00Z", "message": {"content": [
+        {"type": "text", "text": "#256 was largely already landed in #254. #239's first "
+                                  "site was already fixed by #237. #250 was correctly "
+                                  "closed by #254; I did not reopen it."}]}},
+])
+PY
+cat > "$TMP/stub_bac.py" <<'STUBEOF'
+import json, os, sys
+stdin = sys.stdin.read()
+run_id = pass_kind = None
+for line in stdin.splitlines():
+    if line.startswith("RUN_ID: "): run_id = line[8:]
+    if line.startswith("OWNER_RUN_ID: "): run_id = line[14:]
+    if line.startswith("SESSION_DISTILL_PASS: "): pass_kind = line[22:]
+with open(os.environ["BAC_LOG"], "a", encoding="utf-8") as f:
+    f.write("%s %s\n" % (pass_kind, run_id))
+def env(doc): return {"is_error": False, "result": json.dumps(doc), "total_cost_usd": 0.01}
+if pass_kind == "distill":
+    doc = {"asked": "a", "understood": "a", "delivered": "a",
+           "claims": [{"id": "c1", "text": "the agent opened PR #264", "kind": "outcome",
+                       "proof": None, "quote": "The agent opened PR #264."}]}
+elif pass_kind == "brief":
+    assert "HelperClientTests.swift:172-173" in stdin, "the brief text must reach this call"
+    assert "already landed in #254" not in stdin, "the spawned run's REPORT must not"
+    doc = {"claims": [
+        {"id": "c1", "text": "#250 is open", "kind": "issue-state",
+         "quote": "I filed that as #250"},
+        {"id": "c2", "text": "two tests release the harness at HelperClientTests.swift:172-173",
+         "kind": "defect-location", "quote": "Two tests release the harness"}]}
+elif run_id == "main-turn-001":
+    with open(os.environ["BAC_PROMPT"], "w", encoding="utf-8") as f:
+        f.write(stdin)
+    doc = {"later_wrong": [{"claim": "b1.c1", "how": "the brief asserted #250 open; it was closed by #254",
+                            "contradicted_by": {"run": "agent-bac00000001", "at": "2026-09-20T05:29:00Z",
+                                                "quote": "#250 was correctly closed by #254"}}],
+           "classified_as": [{"label": "recalled-not-reopened", "supports": ["b1.c1", "0"],
+                              "why": "the brief stated issue state from memory"}]}
+else:
+    doc = {"later_wrong": [], "classified_as": []}
+print(json.dumps(env(doc)))
+STUBEOF
+
+BAC_LOG="$TMP/bac-calls-off.txt" run sess-bac distill --out "$TMP/out-bac-off.json" --model-cmd "$PY $TMP/stub_bac.py"
+"$PY" - "$TMP/out-bac-off.json" "$TMP/bac-calls-off.txt" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+calls = open(sys.argv[2]).read().split()
+assert "brief" not in calls, calls
+rec = next(r for r in d["records"] if r["run"]["id"] == "main-turn-001")
+assert rec["brief_claims"] == [], rec["brief_claims"]
+assert rec["later_wrong"] == [], rec["later_wrong"]
+assert "brief" not in rec["distilled"]["passes"], rec["distilled"]["passes"]
+# The mapping is deterministic, so it is on the document either way.
+assert d["spawn_links"]["links"] == [{"spawned": "agent-bac00000001", "owner": "main-turn-001",
+                                      "via": "toolu_bac1", "via_tool": "Agent",
+                                      "via_source": "meta.toolUseId"}], d["spawn_links"]
+PY
+[ $? -eq 0 ] && ok "#298: without --brief-claims no brief call is made, brief_claims is present-and-empty, and spawn_links is on the document anyway" \
+  || bad "#298: brief pass is opt-in" "rc=$rc $out"
+
+BAC_LOG="$TMP/bac-calls.txt" BAC_PROMPT="$TMP/bac-prompt.txt" \
+  run sess-bac distill --brief-claims --out "$TMP/out-bac.json" --model-cmd "$PY $TMP/stub_bac.py"
+"$PY" - "$TMP/out-bac.json" "$TMP/bac-prompt.txt" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+prompt = open(sys.argv[2], encoding="utf-8").read()
+rec = next(r for r in d["records"] if r["run"]["id"] == "main-turn-001")
+# THE ACCEPTANCE: the defect lands on the run that WROTE the brief, cited
+# from the run that received it.
+lw = rec["later_wrong"]
+assert len(lw) == 1 and lw[0]["claim"] == "b1.c1", lw
+assert lw[0]["contradicted_by"]["run"] == "agent-bac00000001", lw
+assert [c["label"] for c in rec["classified_as"]] == ["recalled-not-reopened"], rec["classified_as"]
+assert [c["id"] for c in rec["brief_claims"]] == ["b1.c1", "b1.c2"], rec["brief_claims"]
+assert all(c["from_run"] == "agent-bac00000001" for c in rec["brief_claims"]), rec["brief_claims"]
+# ...and the worker's OWN record carries no such defect: it got it right.
+worker = next(r for r in d["records"] if r["run"]["id"] == "agent-bac00000001")
+assert worker["later_wrong"] == [] and worker["brief_claims"] == [], worker
+# the chain prompt carried both the brief claims and the spawned report
+assert "--- BRIEF CLAIMS (2" in prompt and "source=brief-as-claims" in prompt, prompt
+assert "already landed in #254" in prompt, prompt
+# accounting: the brief call is its own pass, counted and billed on the record
+assert rec["distilled"]["passes"] == ["distill", "brief", "chain"], rec["distilled"]["passes"]
+assert rec["distilled"]["calls"]["brief"]["calls"] == 1, rec["distilled"]["calls"]
+assert abs(rec["distilled"]["cost_usd"] - 0.03) < 1e-9, rec["distilled"]
+total = sum(r["distilled"]["cost_usd"] for r in d["records"]) + d["failed_cost_usd"]
+assert abs(total - d["total_cost_usd"]) < 1e-9, (total, d["total_cost_usd"])
+PY
+[ $? -eq 0 ] && ok "#298: ROW 5's SHAPE -- the brief's stale claim becomes a later_wrong + recalled-not-reopened on the MAIN TURN that wrote it, cited from the spawned run, whose own record stays clean; the brief pass is billed and counted" \
+  || bad "#298: brief-as-claims end to end" "rc=$rc $out"
+
+# --dry-run counts brief calls from the OWNER map (one per spawned run),
+# never one per selected run.
+run sess-bac distill --dry-run --brief-claims --out -
+case "$out" in
+  *"brief calls (projected): 1"*"calls (projected): 5"*) ok "#298: --dry-run projects one brief call per spawned run on top of 2 per run" ;;
+  *) bad "#298: --dry-run brief projection" "$out" ;;
+esac
+run sess-bac distill --dry-run --out -
+case "$out" in
+  *"brief-as-claims: off"*"calls (projected): 4"*) ok "#298: --dry-run without the flag projects no brief call" ;;
+  *) bad "#298: --dry-run without the flag" "$out" ;;
+esac
+
+# A failed brief call is a recorded failure, not a crash, and the chain call
+# still happens -- the brief pass adds to a record, it does not create one.
+cat > "$TMP/stub_bacfail.py" <<'STUBEOF'
+import json, sys
+stdin = sys.stdin.read()
+pass_kind = None
+for line in stdin.splitlines():
+    if line.startswith("SESSION_DISTILL_PASS: "): pass_kind = line[22:]
+if pass_kind == "brief":
+    print(json.dumps({"is_error": True, "result": "boom", "total_cost_usd": 0.01}))
+elif pass_kind == "distill":
+    print(json.dumps({"is_error": False, "total_cost_usd": 0.01, "result": json.dumps(
+        {"asked": "a", "understood": "a", "delivered": "a",
+         "claims": [{"id": "c1", "text": "t", "kind": "k", "proof": None, "quote": None}]})}))
+else:
+    print(json.dumps({"is_error": False, "total_cost_usd": 0.01,
+                      "result": json.dumps({"later_wrong": [], "classified_as": []})}))
+STUBEOF
+run sess-bac distill --brief-claims --out "$TMP/out-bacfail.json" --model-cmd "$PY $TMP/stub_bacfail.py"
+"$PY" - "$TMP/out-bacfail.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+f = [x for x in d["failures"] if x["phase"] == "brief"]
+assert len(f) == 1 and f[0]["run"] == "main-turn-001", d["failures"]
+rec = next(r for r in d["records"] if r["run"]["id"] == "main-turn-001")
+assert rec["distilled"]["passes"] == ["distill", "chain"], rec["distilled"]["passes"]
+assert rec["brief_claims"] == [], rec["brief_claims"]
+# billed to the record (like a failed chain call), so the totals reconcile
+assert rec["distilled"]["calls"]["brief"]["calls"] == 1, rec["distilled"]["calls"]
+total = sum(r["distilled"]["cost_usd"] for r in d["records"]) + d["failed_cost_usd"]
+assert abs(total - d["total_cost_usd"]) < 1e-9, (total, d["total_cost_usd"])
+PY
+[ $? -eq 0 ] && ok "#298: a failed brief call is a recorded failure with its cost, the chain call still runs, and the record is still written" \
+  || bad "#298: failed brief call" "rc=$rc $out"
+
+run_stdout sess-bac runs --json
+echo "$out" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert len(d["spawn_links"]["links"]) == 1 and d["spawn_links"]["unowned"] == [], d["spawn_links"]'
+[ $? -eq 0 ] && ok "#298: runs --json carries spawn_links" || bad "#298: runs --json spawn_links" "$out"
 
 # ============================================================ GROUP Z — #288: per-pass cost accounting
 echo; echo "Z. #288 — per-pass cost on records, failed-attempt spend, verbatim envelope detail, timeout default"
