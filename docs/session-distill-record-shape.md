@@ -103,6 +103,17 @@ spend sat in. Now:
 - The default `--timeout-secs` goes from 180 to 540. 180 was exceeded by a
   real main turn in #273, and every live validation since has passed 540 by
   hand.
+- `--jobs N` runs up to N runs at once. #273 took about 7.5 hours serially, and
+  the proof had to be sharded by hand into 6 `--only` processes and merged.
+  Records and failures are merged back in run order, so `--jobs 4` writes the
+  `--jobs 1` document and only the timestamps differ. Every call passes one
+  budget gate. The projection reserves the calibrated per-call average for
+  each call still in flight. Under a budget, the pool runs a single call until
+  one real cost has been observed. A stop refuses every later call: queued runs
+  never start, and a run between its passes keeps a distill-only record. Calls
+  already in flight finish and are billed. The overshoot bound is therefore N
+  times the serial loop's: each in-flight call can exceed the average it
+  reserved.
 
 ### #285 — report extraction and deterministic verifications (schema_version 2)
 
@@ -431,7 +442,7 @@ session-distill.py schema
 session-distill.py runs    [--session SID] [--json]
 session-distill.py distill [--session SID] [--limit N] [--only RUNID]
                            [--dry-run] [--resume] [--out PATH] [--force]
-                           [--model-cmd CMD] [--max-cost-usd N] [--timeout-secs N]
+                           [--model-cmd CMD] [--max-cost-usd N] [--timeout-secs N] [--jobs N]
 session-distill.py report  [--session SID] [--in PATH] [--json]
 ```
 
