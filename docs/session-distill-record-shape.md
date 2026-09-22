@@ -309,6 +309,21 @@ proof_located: 20/172 non-null claim proof(s) unlocatable (11.6%)
   reason the total does: "checked, none found" must not be
   indistinguishable from "never printed".
 
+An **absent** `proof_located` key is not an explicit `null`, and the two
+must not be conflated — `null` means the model cited nothing, absent means
+the flag did not exist yet (pre-v3, before #291). A record with claims of
+which not one carries the key is counted apart:
+
+```
+    (3 record(s) carry no proof_located at all: pre-v3, never checked)
+```
+
+mirroring `unsplit_records` above. Folding those into `cite no proof at
+all` would assert something false about the **model** on the strength of
+the **document's** age — the same misleading-aggregate defect this whole
+section exists to fix. A record with no claims at all is *not* pre-v3: it
+genuinely cited nothing, and stays in the tail count.
+
 ### #287 — repo-qualified `#N` retrieval
 
 Two repos sharing an issue/PR number turned an unrelated later mention

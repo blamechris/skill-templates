@@ -244,7 +244,9 @@ discriminate: `13cee7be` read 4/211 (1.9%) session-wide while ONE run in
 it sat at 19/28 (67.9%). The per-run block names every run carrying >=1
 unlocatable proof, worst rate first, and counts the runs that cited no
 proof at all -- the other way this flag goes quiet. Brief claims are
-excluded (they carry no proof by construction). Measured on
+excluded (they carry no proof by construction), and a record whose claims
+carry no `proof_located` KEY at all is counted apart as pre-v3 rather
+than as a run that cited nothing. Measured on
 the 8 real re-run records at `~/Obsidian/no-it-all/records/session-
 distill-13cee7be-rerun-2026-09-21/`: 4 of 211 real non-null proofs are
 unlocatable, each a real misquote of the command that ran (a dropped
@@ -3882,7 +3884,16 @@ def cmd_report(a):
         # rate by the number of briefs the session happened to write.
         rec_nonnull = 0
         rec_unlocatable = 0
-        for c in rec.get("claims") or []:
+        rec_checked = 0
+        rec_claims = rec.get("claims") or []
+        for c in rec_claims:
+            # An ABSENT `proof_located` is not the same state as an explicit
+            # null, and `.get()` cannot tell them apart. Null means the model
+            # cited nothing; absent means the flag did not exist yet (pre-v3,
+            # before #291). Counting the second as the first asserts something
+            # false about the model rather than about the document's age.
+            if "proof_located" in c:
+                rec_checked += 1
             pl = c.get("proof_located")
             if pl is not None:
                 rec_nonnull += 1
@@ -3890,7 +3901,8 @@ def cmd_report(a):
                     rec_unlocatable += 1
         proofs_nonnull += rec_nonnull
         proofs_unlocatable += rec_unlocatable
-        proof_runs.append(((rec.get("run") or {}).get("id"), rec_nonnull, rec_unlocatable))
+        proof_runs.append(((rec.get("run") or {}).get("id"), rec_nonnull,
+                           rec_unlocatable, rec_checked, len(rec_claims)))
 
     print("session: %s" % doc.get("session"))
     print("records: %d   failures: %d   cost_usd: $%.4f" % (
@@ -3938,21 +3950,37 @@ def cmd_report(a):
         proofs_unlocatable, proofs_nonnull, proof_rate))
     # #295 box 3: the per-run split, printed unconditionally for the same
     # reason the total is -- "0 of 8 runs" is a measurement, and a silent
-    # section is not. `citing` counts the runs that cited any proof at all,
-    # because a run citing NONE is the other way this flag goes quiet: it
-    # contributes nothing to the total and would otherwise be invisible.
-    citing = [t for t in proof_runs if t[1] > 0]
+    # section is not. Each tuple is (run id, cited, unlocatable, checked,
+    # claims). Three populations, and conflating any two of them is how an
+    # aggregate lies:
+    #   unchecked  has claims, but NOT ONE carries the flag -- a pre-v3
+    #              record (before #291), never checked. Counted apart, like
+    #              `unsplit_records` above, because calling it "cited
+    #              nothing" asserts something false about the MODEL rather
+    #              than about the DOCUMENT's age.
+    #   scored     everything the flag actually ran over, plus records with
+    #              no claims at all (those cited nothing, truly).
+    #   citing     of those, the ones that cited >=1 proof. A run citing
+    #              NONE is the other way this flag goes quiet: it
+    #              contributes nothing to the total and is otherwise
+    #              invisible, so the tail of the line names it.
+    unchecked = [t for t in proof_runs if t[3] == 0 and t[4] > 0]
+    scored = [t for t in proof_runs if t[3] > 0 or t[4] == 0]
+    citing = [t for t in scored if t[1] > 0]
     offenders = [t for t in citing if t[2] > 0]
     print("  per run: %d of %d run(s) carry >=1 unlocatable proof; %d clean; "
           "%d cite no proof at all" % (
               len(offenders), len(citing), len(citing) - len(offenders),
-              len(proof_runs) - len(citing)))
+              len(scored) - len(citing)))
+    if unchecked:
+        print("    (%d record(s) carry no proof_located at all: pre-v3, never checked)"
+              % len(unchecked))
     # Worst rate first, then the larger denominator, then the run id -- so
     # the ordering is total and two runs at the same rate never swap
     # between invocations. A run id may be absent on a hand-built
     # document; `or ""` keeps the sort from raising on None.
-    for run_id, n_nonnull, n_unlocatable in sorted(
-            offenders, key=lambda t: (-(t[2] / t[1]), -t[1], t[0] or "")):
+    for t in sorted(offenders, key=lambda t: (-(t[2] / t[1]), -t[1], t[0] or "")):
+        run_id, n_nonnull, n_unlocatable = t[0], t[1], t[2]
         print("    %-40s %4d/%-4d (%5.1f%%)" % (
             run_id, n_unlocatable, n_nonnull, 100.0 * n_unlocatable / n_nonnull))
     print()

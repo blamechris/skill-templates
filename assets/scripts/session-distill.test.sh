@@ -3264,5 +3264,58 @@ run - report --in "$DOC_PR_EMPTY"
   && ok "#295: an empty document reports 0 of 0 rather than dividing by zero" \
   || bad "#295: an empty document reports 0 of 0" "rc=$rc out=$out"
 
+# A PRE-v3 document: claims that really did cite proofs, written before
+# #291 existed, so the `proof_located` KEY is absent rather than null.
+# `.get()` cannot tell absent from null, and counting the first as the
+# second says something false about the MODEL ("cited nothing") on the
+# strength of the DOCUMENT's age. Mixed with one live record, so the
+# report must still score what it can.
+DOC_PR_OLD="$TMP/doc-proofrun-prev3.json"
+"$PY" - "$DOC_PR_OLD" <<'PY2'
+import json, sys
+recs = [{"run": {"id": "agent-old-%d" % i, "report_source": "text"},
+         "claims": [{"id": "c1", "text": "t", "kind": "verification",
+                     "proof": "swift build"}]} for i in range(3)]
+recs.append({"run": {"id": "agent-new", "report_source": "text"},
+             "claims": [{"id": "c1", "text": "t", "proof_located": False},
+                        {"id": "c2", "text": "t", "proof_located": True}]})
+json.dump({"kind": "session-distill-document", "schema_version": 2, "session": "s",
+           "total_cost_usd": 0.0, "records": recs, "failures": []}, open(sys.argv[1], "w"))
+PY2
+run - report --in "$DOC_PR_OLD"
+case "$out" in
+  *"(3 record(s) carry no proof_located at all: pre-v3, never checked)"*)
+    ok "#295: pre-v3 records (proof_located key ABSENT) are reported apart, not as runs that cited nothing" ;;
+  *) bad "#295: pre-v3 records are reported apart" "$out" ;;
+esac
+# ...and they must not inflate the citing-nothing tail, which is a claim
+# about the model rather than about the document.
+case "$out" in
+  *"per run: 1 of 1 run(s) carry >=1 unlocatable proof; 0 clean; 0 cite no proof at all"*)
+    ok "#295: a pre-v3 record is excluded from the per-run denominators, and the live record still scores" ;;
+  *) bad "#295: pre-v3 records excluded from the per-run denominators" "$out" ;;
+esac
+# A record with NO CLAIMS AT ALL is not pre-v3 -- it genuinely cited
+# nothing, and belongs in the tail count rather than the parenthetical.
+DOC_PR_NOCLAIMS="$TMP/doc-proofrun-noclaims.json"
+"$PY" - "$DOC_PR_NOCLAIMS" <<'PY2'
+import json, sys
+recs = [{"run": {"id": "agent-empty", "report_source": "text"}, "claims": []},
+        {"run": {"id": "agent-live", "report_source": "text"},
+         "claims": [{"id": "c1", "text": "t", "proof_located": True}]}]
+json.dump({"kind": "session-distill-document", "schema_version": 6, "session": "s",
+           "total_cost_usd": 0.0, "records": recs, "failures": []}, open(sys.argv[1], "w"))
+PY2
+run - report --in "$DOC_PR_NOCLAIMS"
+[ "$rc" -eq 0 ] && case "$out" in
+  *"per run: 0 of 1 run(s) carry >=1 unlocatable proof; 1 clean; 1 cite no proof at all"*) true ;;
+  *) false ;; esac \
+  && ok "#295: a claimless record counts as citing nothing, NOT as pre-v3" \
+  || bad "#295: a claimless record counts as citing nothing, not pre-v3" "rc=$rc out=$out"
+case "$out" in
+  *"pre-v3"*) bad "#295: a claimless record must not be reported as pre-v3" "$out" ;;
+  *) ok "#295: the pre-v3 parenthetical stays silent when no record is pre-v3" ;;
+esac
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
