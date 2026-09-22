@@ -231,7 +231,9 @@ so a fabricated `git` never passes. A result with `>=1` non-null
 other distill-phase failure — **the chain call is never made for it**.
 Otherwise every claim with a non-null `proof` gets `proof_located:
 true|false` (`null` for a null `proof`) and `report` prints the
-unlocatable-proof count/rate. A zero-claim or all-null-proof result is
+unlocatable-proof count/rate — see [the per-run
+split](#295--the-per-run-unlocatable-rate) for why the total is not
+printed alone. A zero-claim or all-null-proof result is
 **not** a failure by this guard — left as-is, since there is no non-null
 proof for it to fail on.
 
@@ -273,6 +275,54 @@ fragment copied verbatim from that entry's command). Then:
 
 This adds no model calls. The distill input is unchanged, and the output
 is a short fragment instead of a full command string.
+
+### #295 — the per-run unlocatable rate
+
+A session total cannot discriminate one paraphrasing run from a healthy
+session, and on `13cee7be` it did not: the session read **4 of 211
+(1.9%)** while run `agent-a125a8c132b05b56c` inside it sat at **19 of 28
+(67.9%)** — the measurement that opened #295 in the first place. `report`
+therefore prints both granularities:
+
+```
+proof_located: 20/172 non-null claim proof(s) unlocatable (11.6%)
+  per run: 3 of 4 run(s) carry >=1 unlocatable proof; 1 clean; 2 cite no proof at all
+    agent-paraphraser                           9/28   ( 32.1%)
+    agent-small                                 1/4    ( 25.0%)
+    agent-bulk                                 10/100  ( 10.0%)
+```
+
+- Only runs carrying **at least one** unlocatable proof are listed; the
+  counts line accounts for the rest, so a clean session is still a
+  measurement rather than a blank.
+- Ordered by **rate**, not by absolute count. `agent-bulk` above carries
+  the most unlocatable proofs in the document and sorts last: 10 of 100 is
+  a healthier run than 1 of 4. Ties break on the larger denominator, then
+  the run id, so the ordering is total and stable across invocations.
+- `cite no proof at all` counts runs whose every claim has
+  `proof_located: null`. Such a run contributes nothing to the total and
+  would otherwise be invisible — it is the other way this flag goes quiet.
+- **Brief claims are excluded.** A brief claim carries no proof by
+  construction (see BRIEF-AS-CLAIMS), so folding them in would deflate
+  every rate by however many briefs the session happened to write.
+- The block prints unconditionally, at `0 of 0` included, for the same
+  reason the total does: "checked, none found" must not be
+  indistinguishable from "never printed".
+
+An **absent** `proof_located` key is not an explicit `null`, and the two
+must not be conflated — `null` means the model cited nothing, absent means
+the flag did not exist yet (pre-v3, before #291). A record with claims of
+which not one carries the key is counted apart:
+
+```
+    (3 record(s) carry no proof_located at all: pre-v3, never checked)
+```
+
+mirroring `unsplit_records` above. Folding those into `cite no proof at
+all` would assert something false about the **model** on the strength of
+the **document's** age — the same misleading-aggregate defect this whole
+section exists to fix. A record with no claims at all is *not* pre-v3: it
+genuinely cited nothing, and stays in the tail count.
 
 ### #287 — repo-qualified `#N` retrieval
 
