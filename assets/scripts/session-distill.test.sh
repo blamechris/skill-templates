@@ -2223,5 +2223,155 @@ PY
 [ $? -eq 0 ] && ok "#294: outstanding_failures tolerates a non-string/unhashable run and non-dict entries (kept, never a crash)" \
   || bad "#294: outstanding_failures on malformed failures[] entries"
 
+# ============================================================ #292 round pairs
+echo; echo "#292. round pairs (fix -> delta)"
+
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd_292", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+k = sd.round_key
+assert k("fix:#251") == ("fix", 1, "#251")
+assert k("delta2:#251") == ("delta", 2, "#251")
+assert k("Fix5:Aeolus#260") == ("fix", 5, "aeolus#260")
+assert k("fix2:259a") == ("fix", 2, "259a")
+for no in ("Fix Aeolus 259 CI lint failure", "fixture: x", "delta:", "prefix:#1", None, 7):
+    assert k(no) is None, no
+PY
+[ $? -eq 0 ] && ok "#292: round_key parses fix<N>/delta<N>:<target> (bare = round 1) and nothing else" \
+  || bad "#292: round_key parsing"
+
+# The 13cee7be wf_30faad6a shape: two fix:#259 and two delta:#259 in one
+# workflow, interleaved -- each delta pairs with the LATEST earlier fix.
+# Plus: a cross-workflow pair, a round mismatch (delta2 never pairs with a
+# round-1 fix), a delta with no earlier fix, and a tie for latest.
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd_292p", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+def r(i, desc, at): return {"id": i, "description": desc, "started_at": at}
+runs = [
+    r("f1", "fix:#259", "2026-09-16T11:23:04Z"),
+    r("d1", "delta:#259", "2026-09-16T11:29:03Z"),
+    r("f2", "fix:#259", "2026-09-16T12:11:58Z"),
+    r("d2", "delta:#259", "2026-09-16T12:39:12Z"),
+    r("f3", "fix:#255", "2026-09-16T09:15:59Z"),
+    r("d3", "delta:#255", "2026-09-16T09:42:43Z"),
+    r("d4", "delta2:#259", "2026-09-16T13:00:00Z"),
+    r("d5", "delta:#300", "2026-09-16T13:00:00Z"),
+    r("f6a", "fix:#301", "2026-09-16T10:00:00Z"),
+    r("f6b", "fix:#301", "2026-09-16T10:00:00Z"),
+    r("d6", "delta:#301", "2026-09-16T11:00:00Z"),
+    r("d7", "delta:#259", None),
+    r("x", "unrelated run", "2026-09-16T10:00:00Z"),
+]
+got = sd.pair_rounds(runs)
+pairs = {(p["fix"], p["delta"]) for p in got["pairs"]}
+assert pairs == {("f1", "d1"), ("f2", "d2"), ("f3", "d3")}, got["pairs"]
+un = {u["delta"]: u["reason"] for u in got["unpaired_deltas"]}
+assert un == {"d4": "no-earlier-fix", "d5": "no-earlier-fix",
+              "d6": "ambiguous-latest-fix", "d7": "no-started-at"}, un
+PY
+[ $? -eq 0 ] && ok "#292: pair_rounds pairs each delta with the latest earlier same-key fix; two pairs under one key stay apart; unpaired and tied deltas are reported, never guessed" \
+  || bad "#292: pair_rounds"
+
+"$PY" - <<PY
+import importlib.util
+spec = importlib.util.spec_from_file_location("sd_292c", "$SUT")
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+fix = {"id": "f1"}
+delta = {"id": "d1", "started_at": "t2", "report": "line one\nthe new test cannot fail"}
+pairing = {"pairs": [{"fix": "f1", "delta": "d1", "key": "r1:#9"}], "unpaired_deltas": []}
+claims = [{"id": "c2"}, {"id": "c1"}]
+rp = sd.round_pair_candidates(fix, claims, pairing, {"d1": delta})
+assert len(rp) == 1 and rp[0]["source"] == "round-pair" and rp[0]["repo_match"] == "same", rp
+assert rp[0]["claims"] == ["c1", "c2"] and "cannot fail" in rp[0]["excerpt"], rp
+assert sd.round_pair_candidates({"id": "other"}, claims, pairing, {"d1": delta}) == []
+retrieved = [{"run": "d1", "repo_match": "ambiguous", "claims": ["c1"], "artifact": "#9"},
+             {"run": "z", "repo_match": "same", "claims": ["c1"], "artifact": "#9", "excerpt": "e"}]
+merged = sd.merge_round_pair_candidates(rp, retrieved)
+assert [c["run"] for c in merged] == ["d1", "z"] and merged[0]["source"] == "round-pair", merged
+# The delta's ambiguous cue hit no longer withdraws a later_wrong citing it:
+lw, dropped, _ = sd.normalize_later_wrong(
+    [{"claim": "c2", "how": "h", "contradicted_by": {"run": "d1", "at": "t2", "quote": "q"}}],
+    {"c1", "c2"}, merged)
+assert len(lw) == 1 and not dropped, (lw, dropped)
+prompt = sd.build_chain_prompt({"id": "f1"}, claims, merged)
+assert "source=round-pair" in prompt and "  | the new test cannot fail" in prompt, prompt
+PY
+[ $? -eq 0 ] && ok "#292: a fix run's round-pair candidate carries the whole delta report, names every claim, supersedes a cue hit from the same run, and backs a later_wrong citing it" \
+  || bad "#292: round_pair_candidates / merge / prompt"
+
+# End to end: a fix and its delta in a workflow dir. The chain prompt for the
+# fix run must carry the delta's report, and the later_wrong citing the delta
+# must survive into the record. The fix's claims name no artifact the delta
+# mentions near a cue word, so cue retrieval alone finds nothing.
+"$PY" - "$PROJ" <<'PY'
+import json, os, sys
+proj = sys.argv[1]
+sdir = os.path.join(proj, "sess-rp")
+wf = os.path.join(sdir, "subagents", "workflows", "wf_rp")
+def w(path, lines):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for l in lines:
+            f.write(json.dumps(l) + "\n")
+def run(name, desc, phase, brief, report, t0):
+    with open(os.path.join(wf, name + ".meta.json"), "w") as f:
+        json.dump({"agentType": "general-purpose", "model": "sonnet",
+                   "description": desc, "workflowPhase": phase}, f)
+    w(os.path.join(wf, name + ".jsonl"), [
+        {"type": "user", "timestamp": t0, "message": {"content": [{"type": "text", "text": brief}]}},
+        {"type": "assistant", "timestamp": t0[:-3] + "59Z",
+         "message": {"content": [{"type": "text", "text": report}]}},
+    ])
+os.makedirs(wf, exist_ok=True)
+run("agent-rpfix0001", "fix:#77", "Fix", "fix the review findings on #77",
+    "Added a regression test for the retry path.", "2026-09-16T10:00:00Z")
+run("agent-rpdel0001", "delta:#77", "Delta", "delta-review the fix round on #77",
+    "FINDING: the fix round's new retry test compares two constants and cannot fail.",
+    "2026-09-16T10:30:00Z")
+PY
+cat > "$TMP/stub_rp.py" <<'STUBEOF'
+import json, os, sys
+stdin = sys.stdin.read()
+run_id = pass_kind = None
+for line in stdin.splitlines():
+    if line.startswith("RUN_ID: "): run_id = line[8:]
+    if line.startswith("SESSION_DISTILL_PASS: "): pass_kind = line[22:]
+def env(doc): return {"is_error": False, "result": json.dumps(doc), "total_cost_usd": 0.001}
+if pass_kind == "distill":
+    doc = {"asked": "a", "understood": "a", "delivered": "a",
+           "claims": [{"id": "c1", "text": "the new test pins the retry path",
+                       "kind": "verification", "proof": None, "quote": "Added a regression test"}]}
+elif run_id == "agent-rpfix0001":
+    with open(os.environ["RP_PROMPT_OUT"], "w", encoding="utf-8") as f:
+        f.write(stdin)
+    doc = {"later_wrong": [{"claim": "c1", "how": "the delta found the test cannot fail",
+                            "contradicted_by": {"run": "agent-rpdel0001", "at": "2026-09-16T10:30:00Z",
+                                                "quote": "compares two constants and cannot fail"}}],
+           "classified_as": [{"label": "green-as-done", "supports": ["0"], "why": "w"}]}
+else:
+    doc = {"later_wrong": [], "classified_as": []}
+print(json.dumps(env(doc)))
+STUBEOF
+
+RP_PROMPT_OUT="$TMP/rp-prompt.txt" run sess-rp distill --out "$TMP/out-rp.json" --model-cmd "$PY $TMP/stub_rp.py"
+"$PY" - "$TMP/out-rp.json" "$TMP/rp-prompt.txt" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+prompt = open(sys.argv[2], encoding="utf-8").read()
+assert "source=round-pair" in prompt and "cannot fail" in prompt, prompt
+assert d["round_pairs"]["pairs"] == [{"fix": "agent-rpfix0001", "delta": "agent-rpdel0001", "key": "r1:#77"}], d["round_pairs"]
+rec = next(r for r in d["records"] if r["run"]["id"] == "agent-rpfix0001")
+assert [lw["contradicted_by"]["run"] for lw in rec["later_wrong"]] == ["agent-rpdel0001"], rec
+PY
+[ $? -eq 0 ] && ok "#292: distill feeds the paired delta report into the fix run's chain call, and the later_wrong citing it lands on the fix record" \
+  || bad "#292: distill round-pair end to end" "rc=$rc $out"
+
+run_stdout sess-rp runs --json
+echo "$out" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert len(d["round_pairs"]["pairs"]) == 1 and d["round_pairs"]["unpaired_deltas"] == [], d["round_pairs"]'
+[ $? -eq 0 ] && ok "#292: runs --json carries round_pairs" || bad "#292: runs --json round_pairs" "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

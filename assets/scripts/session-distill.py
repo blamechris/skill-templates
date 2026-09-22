@@ -1973,6 +1973,115 @@ def find_chain_candidates(claims, current_started_at, current_repos, other_runs,
     return candidates
 
 
+
+# #292: round pairing. `workflow_phase` is a free-text label ("Fix",
+# "Fix 2", "Fix2", "Delta 3") and is NOT a join key; `description` carries
+# one: `fix<N>:<target>` / `delta<N>:<target>` ("fix:#251", "delta2:#251",
+# "fix5:Aeolus#260", "fix2:259a"). A bare `fix`/`delta` is round 1. The
+# target is compared exactly (case-folded) -- `259a` and `#259` are
+# different targets, and so are `Aeolus#260` and `#260`.
+ROUND_KEY_RE = re.compile(r"^\s*(fix|delta)(\d*)\s*:\s*(\S(?:.*\S)?)\s*$", re.IGNORECASE)
+ROUND_PAIR_REPORT_HEAD = 24000
+ROUND_PAIR_REPORT_TAIL = 6000
+
+
+def round_key(description):
+    """("fix"|"delta", round, target) parsed from a run's `description`, or
+    None when it is not a fix/delta round (most runs)."""
+    if not isinstance(description, str):
+        return None
+    m = ROUND_KEY_RE.match(description)
+    if not m:
+        return None
+    return m.group(1).lower(), int(m.group(2) or 1), m.group(3).lower()
+
+
+def pair_rounds(runs):
+    """Deterministic fix -> delta pairing across the whole session, with no
+    model call. Each `delta<N>:<T>` pairs with the LATEST fix `fix<N>:<T>`
+    that started strictly before it -- "latest", because one workflow can
+    hold two rounds under one key (13cee7be's wf_30faad6a runs `fix:#259`
+    at 11:23 and 12:11, and `delta:#259` at 11:29 and 12:39). Pairing
+    crosses workflow runs: fix and delta usually share a `wf_` id, but
+    nothing guarantees it. A fix may be reviewed by more than one delta.
+
+    Returns {"pairs": [{"fix", "delta", "key"}], "unpaired_deltas":
+    [{"delta", "key", "reason"}]}. A delta is reported unpaired, never
+    guessed, when it has no start time, when no earlier fix carries its key
+    (`no-earlier-fix`), or when two earlier fixes tie for latest
+    (`ambiguous-latest-fix`)."""
+    fixes = {}
+    deltas = []
+    for r in runs:
+        k = round_key(r.get("description"))
+        if k is None:
+            continue
+        kind, rnd, target = k
+        key = "r%d:%s" % (rnd, target)
+        if kind == "fix":
+            if r.get("started_at"):
+                fixes.setdefault(key, []).append(r)
+        else:
+            deltas.append((key, r))
+
+    pairs = []
+    unpaired = []
+    for key, d in deltas:
+        d_at = d.get("started_at")
+        if not d_at:
+            unpaired.append({"delta": d["id"], "key": key, "reason": "no-started-at"})
+            continue
+        earlier = [f for f in fixes.get(key, []) if f["started_at"] < d_at]
+        if not earlier:
+            unpaired.append({"delta": d["id"], "key": key, "reason": "no-earlier-fix"})
+            continue
+        latest_at = max(f["started_at"] for f in earlier)
+        latest = [f for f in earlier if f["started_at"] == latest_at]
+        if len(latest) > 1:
+            unpaired.append({"delta": d["id"], "key": key, "reason": "ambiguous-latest-fix",
+                             "fixes": sorted(f["id"] for f in latest)})
+            continue
+        pairs.append({"fix": latest[0]["id"], "delta": d["id"], "key": key})
+    return {"pairs": pairs, "unpaired_deltas": unpaired}
+
+
+def round_pair_candidates(fix_run, claims, pairing, runs_by_id):
+    """The chain candidates a FIX run gets from its paired delta review(s):
+    one per pair, carrying the delta's whole report (head+tail beyond
+    ROUND_PAIR_REPORT_HEAD+TAIL) rather than a cue-word excerpt, tagged
+    `source: "round-pair"` and `repo_match: "same"`, and naming EVERY claim
+    -- the delta reviewed the whole round, so any of its claims can be what
+    a finding contradicts. This bypasses cue-word retrieval on purpose: a
+    delta's "this new test cannot fail" rarely sits within
+    CUE_WINDOW_CHARS of a correction cue and an artifact the fix's claims
+    also name, which is why row 6 of #273 appeared in zero records."""
+    out = []
+    claim_ids = sorted(c["id"] for c in claims)
+    for p in (pairing or {}).get("pairs") or []:
+        if p["fix"] != fix_run["id"]:
+            continue
+        d = runs_by_id.get(p["delta"])
+        if d is None:
+            continue
+        out.append({
+            "run": d["id"],
+            "started_at": d.get("started_at"),
+            "artifact": "round-pair:%s" % p["key"],
+            "excerpt": excerpt_head_tail(d.get("report") or "",
+                                         ROUND_PAIR_REPORT_HEAD, ROUND_PAIR_REPORT_TAIL),
+            "repo_match": "same",
+            "source": "round-pair",
+            "claims": claim_ids,
+        })
+    return out
+
+
+def merge_round_pair_candidates(round_pair, retrieved):
+    """ROUND_PAIR first, then every retrieved candidate from a run the
+    round pair does not already cover in full."""
+    covered = {c["run"] for c in round_pair}
+    return list(round_pair) + [c for c in retrieved if c.get("run") not in covered]
+
 # ---------------------------------------------------------------------- model boundary
 
 # #278 M1: on a real run, `proof` came back non-null for only 4 of 14
@@ -2061,7 +2170,19 @@ CHAIN_SYSTEM_PROMPT = (
     "a contradiction. Only cite one when something else about it (a "
     "repo_match=\"same\" candidate, or a repo_match=\"n/a\" candidate "
     "naming the same artifact/claim) also ties the same run to the same "
-    "claim. Return only the JSON object the schema describes."
+    "claim. "
+    "A candidate tagged source=round-pair is different in kind: it is the "
+    "DELTA REVIEW of this very fix round, paired deterministically (not "
+    "retrieved by cue words), and it carries the review's whole report. "
+    "A delta finding about code or tests THIS run added or changed -- for "
+    "example a test this run added or claims verifies its fix that cannot "
+    "fail, asserts nothing the fix changed, or stays green with the fix "
+    "reverted -- contradicts the claim it concerns and MUST become a "
+    "later_wrong entry whose contradicted_by.run is the delta run and whose "
+    "quote is the delta's own words. A delta finding about code this run "
+    "did not touch, or one the delta itself marks as resolved or not a "
+    "defect, is not a contradiction of this run. "
+    "Return only the JSON object the schema describes."
 )
 
 DISTILL_SCHEMA = {
@@ -2253,6 +2374,14 @@ def build_chain_prompt(r, claims, candidates):
     if not candidates:
         lines.append("(none found)")
     for cand in candidates:
+        if cand.get("source") == "round-pair":
+            lines.append("run=%s at=%s source=round-pair key=%r repo_match=same "
+                         "(the DELTA REVIEW of this fix round -- full report follows)" % (
+                             cand["run"], cand.get("started_at"),
+                             cand["artifact"][len("round-pair:"):]))
+            for ln in (cand.get("excerpt") or "(empty report)").splitlines():
+                lines.append("  | %s" % ln)
+            continue
         lines.append("run=%s at=%s artifact=%r repo_match=%s" % (
             cand["run"], cand.get("started_at"), cand["artifact"], cand.get("repo_match", "n/a")))
         lines.append("  %s" % cand["excerpt"])
@@ -2389,6 +2518,7 @@ def cmd_runs(a):
     sid = rr.resolve_session_id(a.session)
     session_dir = rr.resolve_session_dir(sid)
     segmented_by, runs, unreadable, repo_vocabulary = build_all_run_stubs(rr, session_dir)
+    round_pairs = pair_rounds(runs)
     main_turns = sum(1 for r in runs if r["kind"] == "main-turn")
     subagent_runs = sum(1 for r in runs if r["kind"] == "subagent")
 
@@ -2405,6 +2535,9 @@ def cmd_runs(a):
         # #287: the session-wide repo vocabulary every run's own `repos`
         # set (also on each run stub above) was resolved against.
         "repo_vocabulary": sorted(repo_vocabulary),
+        # #292: which delta review each fix round is checked against, and
+        # every delta that could not be paired (reported, never guessed).
+        "round_pairs": round_pairs,
     }
 
     if a.json:
@@ -2418,6 +2551,12 @@ def cmd_runs(a):
                 r["id"], r["kind"], r.get("spawned_by") or "-",
                 r["brief_chars"], r["report_chars"], r.get("report_source") or "-",
                 r["tool_calls"], (r.get("description") or "")[:40]))
+        print("round_pairs: %d   unpaired_deltas: %d" % (
+            len(round_pairs["pairs"]), len(round_pairs["unpaired_deltas"])))
+        for p in round_pairs["pairs"]:
+            print("  %-18s <- %-18s %s" % (p["fix"], p["delta"], p["key"]))
+        for u in round_pairs["unpaired_deltas"]:
+            print("  unpaired %-18s %s (%s)" % (u["delta"], u["key"], u["reason"]))
         if unreadable:
             print("unreadable:")
             for u in unreadable:
@@ -2468,6 +2607,8 @@ def cmd_distill(a):
         die("--model-cmd is empty")
 
     segmented_by, all_runs, unreadable, repo_vocabulary = build_all_run_stubs(rr, session_dir)
+    round_pairs = pair_rounds(all_runs)
+    runs_by_id = {r["id"]: r for r in all_runs}
 
     if a.only:
         all_runs_for_run = [r for r in all_runs if r["id"] == a.only]
@@ -2681,8 +2822,10 @@ def cmd_distill(a):
         claims = normalize_claims(distilled_doc.get("claims"))
         other_runs = [x for x in all_runs if x["id"] != r["id"]]
         current_repos = set(r.get("repos") or [])
-        candidates = find_chain_candidates(
-            claims, r.get("started_at"), current_repos, other_runs, repo_vocabulary)
+        candidates = merge_round_pair_candidates(
+            round_pair_candidates(r, claims, round_pairs, runs_by_id),
+            find_chain_candidates(
+                claims, r.get("started_at"), current_repos, other_runs, repo_vocabulary))
 
         chain_doc, cost2, err2 = run_model(
             model_cmd, CHAIN_SYSTEM_PROMPT, CHAIN_SCHEMA, build_chain_prompt(r, claims, candidates),
@@ -2735,6 +2878,9 @@ def cmd_distill(a):
         "failures": failures,
         "unreadable": unreadable,
         "stopped": stopped,
+        # #292: session-wide and deterministic, so unpaired deltas are on
+        # the record even when no fix run was distilled this invocation.
+        "round_pairs": round_pairs,
     }
     text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
