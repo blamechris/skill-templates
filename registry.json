@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "193a3f5",
+  "generatedFromCommit": "df774b0",
   "skillCount": 41,
   "skills": [
     {
@@ -2281,7 +2281,7 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "193a3f5",
+      "hash": "df774b0",
       "lines": 458,
       "description": "Advance a delegated outcome through bounded issue waves, or clear an explicitly selected backlog. Convergence follows observable acceptance and genuine dependencies, not the number of easy issues closed.",
       "guards": [
