@@ -1,6 +1,6 @@
 # /tackle-issues
 
-Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.
+Advance a delegated outcome through bounded issue waves, or clear an explicitly selected backlog. Convergence follows observable acceptance and genuine dependencies, not the number of easy issues closed.
 
 Composes `/autonomous-dev-flow` logic internally but adds multi-wave retry with escalating strategies, dynamic queue replenishment, and a morning summary.
 
@@ -11,7 +11,8 @@ Composes `/autonomous-dev-flow` logic internally but adds multi-wave retry with 
   - `milestone:"v1.2"` (all open issues in milestone)
   - `#12 #15 #18` or `12 15 18` (specific issues by number)
   - `label:ready-to-build max:10 sort:created-asc` (with options)
-  - If empty, auto-detect: scan open issues sorted by complexity (low first, then medium, skip high)
+  - If empty, select issues needed for the delegated outcome and its observable acceptance criteria; do not substitute easy cleanup for the outcome
+  - `mode:backlog-clear` — clear the explicitly selected backlog rather than target a product milestone; use only when requested
   - Options: `max:N` (default 20, hard cap 30), `sort:created-asc` (default) or `sort:created-desc`
   - `waves:N` (default 3, max 4) — maximum retry waves
   - `merge:off` — disable the Unattended Merge Gate for this run; PRs accumulate for `/batch-merge`. Default is whatever Critical Rule 5 records for this repo; where rule 5 withholds merge authority this flag is redundant and `merge:on` is not honoured
@@ -41,10 +42,10 @@ A marathon spans multiple *sessions*, not one endless context. Context re-reads 
 - **Session ledger + STATE header.** Keep an append-only session ledger ({{CUSTOMIZE: ledger path, e.g. `autonomous-session-<date>.md` at repo root — gitignored, never commit}}). Its top carries a rolling **STATE header** — a compact block (~2K tokens, hard-capped, rewritten in place) holding: current wave + position, queue pointer, open blockers, awaiting-user list, the last **verified** merge (PR + SHA), completions from the last wave, and a compact per-issue attempt table (issue# → attempts, last strategy tried, status) — the fields the Phase 4 convergence check reads instead of the full history. After a compaction or on a fresh session, the STATE header is the **only mandatory read**. The full history below it is consulted on-demand — allowed, and expected, for three purposes: the **Phase 4 convergence assessment**, **Phase 5 merge accounting**, and the **Phase 6 morning summary**. What is prohibited is the routine post-compaction top-to-bottom re-read as a ritual, not these accounting passes.
 - **Per-wave merge table.** At each wave boundary, append a **"Merged this wave"** table (PR, issue, review, checks, merge SHA) to the ledger history. Phases 5–6 aggregate these tables across all waves — with per-wave session restarts, "merged by this session" means the whole marathon, never just the last wave.
 - **Shed context at each wave boundary — mode-aware.** When a wave completes (after Phase 2 replenishment and the Phase 4 convergence check), write this scope's handoff seed (`$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`), refresh the durable queue ({{CUSTOMIZE: queue path — default `scratchpad/autonomous-queue.json`}}), update the STATE header, then:
-  - **Attended runs** — end the session; the user/orchestrator relaunches the next wave seeded from handoff seed + queue + STATE header — never the full history.
-  - **Unattended with a configured re-launcher** ({{CUSTOMIZE: wave re-launcher — e.g. chroxy scheduled trigger, cron/launchd job, /loop wrapper; leave "none" if absent}}) — end the session; the re-launcher starts the next wave from the same seeds. The seed path is byte-identical at every wave boundary of this scope, so a relaunch task written in advance cannot point at a file that moved.
-  - **Unattended with no re-launcher** — do **NOT** end the session (nothing would relaunch it; the marathon would silently halt after one wave): write the STATE header, then force/await a compaction at the wave boundary so the next wave starts lean, and continue.
-  A restart (or boundary compaction) that halves context pays for itself within ~6–10 requests; the context-shedding goal holds in all three modes.
+  - **Owner-requested pause/restart** — end with the verified seed path and remaining work. A user watching the session is not itself a pause request.
+  - **Authorized re-launcher available** ({{CUSTOMIZE: wave re-launcher — e.g. chroxy controller, cron/launchd job, /loop wrapper; leave "none" if absent}}) — submit the handoff seed + queue + STATE header — never the full history — and verify acceptance with a task/session identifier before ending. A configured launcher or saved seed is not proof the next run was accepted.
+  - **No accepted re-launch** — continue using supported host continuation/compaction where available. If the host cannot continue, report that capability limit and exact restart action; do not claim background work or invent an unsupported command.
+  Carry outcome, acceptance criteria, authority and consumed retry/budget limits across the boundary. Measure handoff and reconstruction cost as well as context cost before claiming savings.
 - **The wave seed is written outside every worktree, and it archives rather than overwrites.** Both halves come from `/session-lifecycle` End step 1 and neither is optional:
 
   ```bash
@@ -57,8 +58,8 @@ A marathon spans multiple *sessions*, not one endless context. Context re-reads 
   **② The header, and archive-on-collide.** The command writes the frontmatter End step 1 prescribes — `type`, `date` (full UTC timestamp), `scope`, `session`, `picks_up_at`, `sensitivity`. If the canonical file already exists carrying a **different** `session:` — another session ended on this repo while the marathon was running — it renames that one to `NEXT-<scope>.<UTC>-<sid>.md` before writing, and a failure to archive is a REFUSE that writes nothing. Successive waves of one marathon share a session id only within a session; across a restart the new session archives the previous wave's seed, which is the intended record.
 
   **Do not hand-write the seed or reimplement any of this at the boundary.** The scope key, the id, the archive and the proof are one implementation with its own test suite; a wave that writes its own version is the drift that cost five review rounds.
-- **One wave per session; no numeric context ceiling.** Shed context at the wave boundary — end-and-reseed, or the forced compaction in unattended-no-re-launcher mode — and route heavy tool output through subagents rather than the main thread (a healthy wave legitimately crosses 150K mid-flight; the global doctrine retired the number 2026-08-19). An issue that balloons the wave is a scope problem: finish or park it, write the handoff, end the wave early.
-- **Per-wave cost circuit breaker.** At each wave boundary, check session cost ({{CUSTOMIZE: cost source — e.g. the statusline computes it; name the per-session budget, e.g. "$X eq."}}). Over budget → write the handoff and **stop and notify**; do not start the next wave. This breaker is the sole sanctioned exception to Critical Rule 4's "everything after is fully autonomous".
+- **One wave per session where continuation is supported; no numeric context ceiling.** Shed context at the wave boundary through an accepted re-launch or supported compaction, and route heavy tool output through subagents (a healthy wave can cross 150K mid-flight). If an item balloons, finish or park it within the attempt limit and continue independent work; a context checkpoint does not complete the outcome.
+- **Per-wave cost circuit breaker.** At each wave boundary, compare measured cost with the configured limit and its scope ({{CUSTOMIZE: cost source and owner-set budget, including whether it is per wave, session or run}}). Over budget → write the handoff and **stop and notify**; do not start the next wave. Preserve run limits across restarts; missing measurements are unknown, not zero, and do not justify an invented limit.
 - **Verify state directly, never from a stale reading.** A monitor/watcher ending is **not** a verdict — assert PR/CI state with a direct query before recording it. And `mergeStateStatus` is only meaningful at the **current** head — re-check it after any push before acting on a BLOCKED/CLEAN reading.
 
 `MASTER_LOG` (below) lives in the ledger; the STATE header summarizes it, and Resume Strategy re-derives ground truth from GitHub regardless.
@@ -90,11 +91,12 @@ Parse `$ARGUMENTS` — same as `/autonomous-dev-flow` but with higher defaults:
 Build the initial queue using the same logic as `/autonomous-dev-flow` Phase 0:
 - Fetch issues by label, milestone, explicit list, or auto-detect
 - Filter out assigned issues
-- Apply sort and cap
+- Record the user's outcome, observable acceptance and current usable state. Order by the gap each item closes and necessary dependencies, then apply the cap; in explicit backlog-clear mode use the selected backlog and requested sort.
+- Keep review-generated cleanup outside the active queue unless it is needed for acceptance or belongs to the explicitly selected backlog.
 
 **Validate:**
 - At least 1 issue must be open and unassigned
-- If 0 issues match, report and stop
+- If 0 issues match, recheck acceptance. A missing tracker item is not proof the outcome is complete: create a bounded in-scope item where authorized, or report the actual missing dependency.
 
 Display the marathon queue:
 
@@ -112,12 +114,12 @@ Display the marathon queue:
 **Self-merge:** {per Critical Rule 5 — Unattended Merge Gate ON / off (`merge:off`) / withheld by this repo}
 **Estimated scope:** {N} issues × {W} max waves
 
-Start marathon session?
+**Authorization:** {existing delegated scope / exact unresolved authority needed}
 ```
 
-Wait for user confirmation. **This is the ONLY confirmation point** — everything after runs fully autonomously, including retries across waves.
+Use the user's existing authorization; do not ask for queue approval again when this run is already authorized. If authority or scope is genuinely missing, ask only for that and continue independent authorized preparation. Routine decisions and retries are autonomous within the stated scope and caps.
 
-After confirmation, initialize tracking:
+After establishing authorization, initialize tracking:
 
 ```
 MASTER_LOG = []   # Tracks every attempt: {issue, wave, branch, pr, verdict, error}
@@ -140,6 +142,7 @@ For each issue in the current wave's queue, run the full `/autonomous-dev-flow` 
 - **Two fix attempts per issue per wave** (same as original). If still failing after 2 attempts, mark as `retry` instead of just `flagged`.
 - **Track the failure reason** in `MASTER_LOG` — this informs the retry strategy in later waves.
 - **High-complexity decomposition** happens in Wave 1 only. Sub-issues created during decomposition are added to the current wave's queue (not deferred to Wave 2).
+- **Fallback before a blocker:** if an authorized fallback is verified to preserve safety, correctness, required runtime/cost constraints and essential capability, use it, file the underlying problem and continue without an owner pause. Otherwise block only the affected item with its evidence and advance independent work. Do not pass a new/worsened defect or missing promised acceptance behavior through review merely by filing it or estimating >15 minutes; fix, remove or verify containment before merge.
 
 After each issue, output the wave progress table:
 
@@ -168,7 +171,7 @@ From `MASTER_LOG`, gather issues where the latest attempt was not `Done`:
 | Done | PR merged through the Unattended Merge Gate, or review-clean and left open where rule 5 withholds merge authority (or under `merge:off`) | No — skip in future waves |
 | Retry | Tests failing or review found critical issues | Yes — re-attempt |
 | Flagged | 2 fix attempts failed in a wave | Yes — with different strategy |
-| Skipped | Non-automatable (blocked, no criteria, etc.) | No — genuinely blocked |
+| Skipped | Specific unavailable access/authority/QA or exhausted approaches; no verified adequate fallback | No — document the evidence, continue independent work |
 | Decomposed | Broken into sub-issues | No — sub-issues are in queue |
 
 #### 2b. Scan for New Issues
@@ -184,7 +187,7 @@ gh issue list --state open --json number,title,labels,assignees,createdAt --limi
 # (user may have labeled new issues while session was running)
 ```
 
-Add new unassigned issues to the queue if they match the original filter criteria and aren't already in `MASTER_LOG`.
+Add new unassigned issues only if they are necessary for the delegated outcome or match the explicitly selected backlog, and are not already in `MASTER_LOG`. Discovery during a review does not itself make work a priority.
 
 #### 2c. Check for User Merges
 
@@ -218,9 +221,9 @@ Combine:
 2. New issues from replenishment scan
 3. Remaining issues not yet attempted (if queue was large)
 
-Cap at `max` setting. Retry candidates go first (they have the most context built up).
+Cap at `max` setting. Order by acceptance dependencies and remaining user value; context already spent is not a reason to prefer a retry over a necessary feature.
 
-If the next wave queue is empty, skip to Morning Summary.
+If the next wave queue is empty, run Phase 4's acceptance and dependency check first. An untracked acceptance gap becomes a bounded in-scope item while attempt, wave and budget limits remain; an empty queue alone is not completion. Produce the Morning Summary only when Phase 4 establishes a real ending condition.
 
 ### Phase 3: Retry Strategy Escalation
 
@@ -244,7 +247,7 @@ For issues that failed in both Wave 1 and Wave 2:
    - If the implementation approach failed, try a different architecture
    - If tests were the issue, reconsider the test strategy
    - If review found design issues, rethink the design
-3. **Simplify scope** — implement the minimum viable version that satisfies core acceptance criteria. Defer edge cases to a follow-up issue.
+3. **Simplify implementation** — retain the agreed acceptance criteria. Defer only optional/unrelated work or an underlying problem contained by a verified adequate fallback; new/worsened defects and required edge cases stay blocking.
 4. **If simplification isn't possible** — create a detailed "blocked" comment on the issue:
 
 ```bash
@@ -278,13 +281,11 @@ Only runs if `waves:4` was specified. For any remaining retry candidates:
 
 After each wave, check for convergence BEFORE entering the next wave:
 
-**Convergence = stop the session** when ANY of these is true:
-- All issues are `Done` or `Skipped` — nothing left to try
-- Zero issues changed status in the last wave — no progress being made
-- All retry candidates have been attempted in 3+ waves — maximum effort reached
-- Queue is empty after replenishment
+**Zero new completions means reassess**, not automatically stop. Check acceptance evidence, failed approaches, dependencies and remaining authorized work. Continue when there is a concrete untried approach or independently useful item within the configured wave/attempt/budget limits; do not repeat an unchanged failing strategy or reset counters by restarting the session.
 
-**Progress metric:** Count issues that moved to `Done` in the latest wave. If this count is 0 and there are retry candidates, the session has converged on failure — further waves won't help.
+End the bounded run when acceptance is demonstrated (or the explicitly selected backlog converges), all remaining relevant work genuinely depends on unavailable QA/access/authority with no adequate verified fallback, or its wave/retry/budget cap is exhausted. A host continuation limit is a separate execution state. Name the actual reason and any unfinished outcome; `Done` PRs, decomposition and an empty queue do not alone prove delivery.
+
+**Progress evidence:** record which acceptance gap narrowed as well as issue completions. A necessary implementation or verified experiment can advance the outcome without closing an issue.
 
 ```markdown
 ## Convergence Check — Wave {W} Complete
@@ -296,8 +297,8 @@ After each wave, check for convergence BEFORE entering the next wave:
 | Remaining retries | {K} |
 | New issues discovered | {J} |
 
-**Decision:** {Continue to Wave W+1 / Converged — moving to summary}
-**Reason:** {e.g., "3 new completions, 2 retries remaining — continuing" or "0 new completions, same 2 issues failing — converged"}
+**Decision:** {Continue to Wave W+1 / Complete / QA or access needed / Retry or budget cap / Host continuation limit}
+**Reason:** {acceptance evidence or specific constraint; if continuing, the different approach and remaining attempt budget}
 ```
 
 ### Phase 5: Merge Accounting
@@ -312,6 +313,8 @@ Where Critical Rule 5 grants gated self-merge, merging happens **inline during w
 ```
 
 ### Phase 6: Morning Summary
+
+Lead with the delegated outcome, current usable result, remaining acceptance gap and actual continuation state. Name the accepted next task/session if one exists, or the precise QA/access action or exhausted limit. Do not turn an optional follow-up into a user decision, and do not claim that a seed alone scheduled continuation.
 
 Output a comprehensive summary designed for the user to read when they return. This is the primary deliverable of an overnight session. It covers the **entire marathon across all waves** — build it from the ledger's per-wave "Merged this wave" tables and full history (an on-demand-allowed read; see Session Boundaries), not from what the current session segment happens to remember.
 
@@ -394,7 +397,7 @@ These issues could not be implemented after {W} waves. Each has a detailed comme
 
 ## Resume Strategy
 
-This skill resumes from **GitHub state** — GitHub remains the source of truth for issue/PR status, same as `/autonomous-dev-flow`. The session ledger carries the plan/decision record and the wave handoff note carries only session-boundary seeds (queue position, blockers, awaiting-user, last verified merge); both are disposable for resume purposes — everything they seed is re-derivable from GitHub.
+This skill resumes from **GitHub state** for issue/PR status. The ledger and handoff preserve the user's outcome, acceptance, authority, decisions and consumed limits alongside queue position and last verified merge; those facts are not all reconstructible from issue status. Re-derive repository state while preserving the delegated intent and run caps.
 
 If a marathon session is interrupted (crash, timeout, user stops it), re-running with the same arguments will:
 
@@ -416,11 +419,11 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 1. **NO attribution** — No Co-Authored-By, no "Generated with Claude", no AI mentions. Zero Attribution Policy.
 2. **TDD is mandatory** — RED → GREEN → REFACTOR for every issue, every wave. No skipping tests.
 3. **Branch from main every time** — Never stack branches. Fresh branch for every attempt, including retries.
-4. **One confirmation point** — The initial marathon queue approval. Everything after — including all waves and retries — is fully autonomous; the sole sanctioned stop besides convergence is the per-wave cost circuit breaker (see Session Boundaries and the Session Ledger).
+4. **Respect existing authorization** — No repeat queue approval or routine decision pause. Continue all waves within scope and caps; preserve owner-reserved actions, genuine dependencies and the verified continuation contract.
 5. **Self-merge authority for this repo** — {{CUSTOMIZE: This repo's self-merge posture, written as a directive. This is the SINGLE source of truth: every merge step in this skill defers to this rule, so write exactly one of the two below and delete the other. GATED (the usual choice): "Merge only through the Unattended Merge Gate — /full-review clean + ALL checks green on the final commit + ALL review threads resolved. No `gh pr merge --auto`, no protection overrides. `merge:off` disables self-merging for a single run (PRs accumulate for `/batch-merge`). Every self-merged PR MUST appear as an entry in the Morning Summary." WITHHELD, for repos where every merge must be a human act: "NEVER merge, however clean the PR is. This repo does not grant unattended merge authority, so the Unattended Merge Gate does not apply here and `merge:on` is NOT honoured — an invocation flag cannot grant authority the repo withholds. Every PR accumulates for `/batch-merge` or user review, so `merge:off` is redundant here rather than required."}}
 6. **Clean up failed attempts** — Close old PRs and delete old branches before retrying. Don't leave orphaned PRs.
 7. **Escalate strategy across waves** — Wave 1: standard approach. Wave 2: fresh context + address failures. Wave 3: alternative approach + scope reduction. Don't repeat the same failing approach.
-8. **Converge, don't loop forever** — If a wave produces zero new completions, stop. Further waves won't help.
+8. **Converge, don't loop forever** — Zero completions triggers a bounded reassessment, not automatic failure. Keep the configured wave/attempt/budget caps, preserve them across restarts, and do not repeat a failing approach unchanged.
 9. **Progress table after every issue** — The user may check in at any time. The table must show wave context.
 10. **Respect the hard cap** — Max 30 issues across all waves (including sub-issues from decomposition). Refuse larger queues.
 11. **Resume from GitHub state** — GitHub is the source of truth for issue/PR status; detect wave progress from closed/open PR counts per issue. The ledger and handoff note are seeds, never a second source of truth.
