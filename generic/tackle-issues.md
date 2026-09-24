@@ -223,7 +223,7 @@ Combine:
 
 Cap at `max` setting. Order by acceptance dependencies and remaining user value; context already spent is not a reason to prefer a retry over a necessary feature.
 
-If the next wave queue is empty, skip to Morning Summary.
+If the next wave queue is empty, run Phase 4's acceptance and dependency check first. An untracked acceptance gap becomes a bounded in-scope item while attempt, wave and budget limits remain; an empty queue alone is not completion. Produce the Morning Summary only when Phase 4 establishes a real ending condition.
 
 ### Phase 3: Retry Strategy Escalation
 
