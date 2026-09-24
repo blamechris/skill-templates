@@ -116,7 +116,7 @@ anywhere in `generic/` or `assets/`.
 This applies to the main agent AND to any subagent reporting back (a subagent's final message should likewise end with its own status block). The point is consistency: the user tracks progress at a glance from the last lines, without re-reading the whole message. In the desktop/mobile app a block of short bullets scans; the old one-`·`-separated-line format does not and is **retired** — don't emit it. Don't pad the block — it's a status, not a recap.
 
 <!--default:next-line-->
-**After the status block, add one final line:** `**Next:** <one sentence — the single thing Chris should do now>` (merge X / answer the DECISION / start a fresh session / nothing — all clear). It is the executive summary of the whole message; if he reads only this line, he knows what to do. Never omit it, never make it two sentences. It follows the four bullets, outside the block.
+**After the status block, add one final line:** `**Next:** <one sentence stating what happens next and who acts>`. Name the agent's next action or accepted continuation when work will proceed; say “no user action needed” when true. Ask Chris only for genuinely required QA, access, authority or a decision, with what it unblocks. If a budget/retry or host limit stopped execution, name it and the restart needed. Never imply that a saved seed scheduled a run. Keep this to one sentence after the four bullets.
 
 <!--default:exec-brief-->
 **End of a long / multi-task session → an HTML executive brief, not a wall of text.** When a session shipped real work (several PRs/issues, an epic, a marathon), close it by generating a self-contained HTML report via the `visual-brief` skill into the Obsidian vault (`$CLAUDE_BRIEF_DIR`) and opening it. Shape it for a busy reader — a "two-minute" CEO view:
@@ -209,9 +209,8 @@ old push-deploy.
 ## Session boundaries (all projects)
 
 <!--default:restart-triggers-->
-Context re-reads dominate cost (70% in the 2026-07 audit): every request re-reads
-the whole context at cache-read rates, so a restart that halves context pays for
-itself within ~10 requests. Rules:
+Context re-reads add cost. Use bounded sessions and compare total measured cost,
+including handoff and reconstruction, before claiming that restarting saved usage. Rules:
 
 - **Restart into a fresh session** — seeded from this scope's seed,
   `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (paste its absolute path as the opening message)
@@ -219,19 +218,23 @@ itself within ~10 requests. Rules:
   marathon wave boundary; a second compaction; or when switching work class (new epic,
   security-critical work, high fan-in refactors, visual-verify features). Outside a repo,
   `/next` ranks the fleet from those same seeds.
-- **Continue** only when the next task genuinely needs the context already loaded.
+- **Continue** a dependent chain while its loaded context is useful. If a fresh session
+  is preferable, verify the continuation mechanism below before ending authorized work.
 - **One wave per session — there is no in-wave token ceiling to hold.** A single
   wave's context legitimately crosses 150K mid-flight (measured 2026-08-19: the
   median one-PR wave passes it by request ~40), so a numeric ceiling can only be
   violated and trains sessions to ignore rules. The real levers: restart at the
   wave boundary, and route heavy tool output — full-file reads, test logs, recon
   dumps — through subagents instead of the main thread.
-- **Applies to orchestrator/chat sessions too**, not just repo marathons: a wave ends →
-  write the handoff → end the session (recommend it explicitly when attended). For
-  autonomous continuity, create a one-time scheduled task at the boundary that fires a
-  fresh session seeded from the handoff — **naming that absolute path explicitly** — the
-  wave, not the session, is the unit of continuity (skill-templates#181). The path is
-  stable across waves, which is what makes a relaunch task safe to write in advance.
+- **Applies to orchestrator/chat sessions too.** A wave boundary is a checkpoint, not
+  completion of the delegated outcome. Write the seed and, when an authorized orchestrator
+  exists, submit the next run with **that absolute path explicitly** and verify acceptance
+  (task/session identifier) before ending. A launcher configuration or seed alone is not
+  acceptance. Otherwise continue with supported host continuation/compaction; if the host
+  cannot continue, report the capability limit and the precise restart action. Do not
+  invent host capabilities or create an unauthorized schedule. An owner-requested pause,
+  actual budget/retry limit, or genuine external dependency still stops its affected work.
+  Preserve the outcome, acceptance, authority and consumed run limits across restarts.
 - **Ending a session = two artifacts, every time:** ① the session's row appended to
   the usage benchmark (`~/Obsidian/no-it-all/briefs/usage-benchmark.md`) — generate it
   with `python3 ~/.claude/scripts/usage-benchmark-row.py` and replace only the
@@ -540,9 +543,20 @@ parsing those notes returns 7,587 PRs for a single week.
 <!--default:follow-on-protocol-->
 When a task completes and work remains:
 
-1. In-scope and ≤15 min → fold into the current PR.
-2. Anything else → file a scoped issue (`/create-issue` where installed) and queue
-   it (autonomous-queue in marathons, else the tracker).
-3. Blocked → comment-and-skip with a reason bucket (needs-dogfood/device,
-   needs-owner-decision, visual-verify).
-4. Never expand scope silently, never fake-merge, never drop a follow-on unrecorded.
+1. A defect introduced or worsened by the current PR, or missing promised acceptance
+   behavior, must be fixed, removed or verified contained before merge. Neither an issue
+   URL nor a >15-minute estimate excuses it. Review general summaries as well as inline
+   threads; resolution status is not proof of correction.
+2. An authorized fallback is sufficient only when verified to preserve safety, correctness,
+   required runtime/cost constraints and essential capability. Record its evidence, file
+   the underlying problem and continue without an owner pause. Otherwise block only the
+   affected item and continue independent authorized work.
+3. For optional improvements and pre-existing unrelated defects, in-scope and ≤15 min may
+   fold into the current PR; otherwise file a scoped issue (`/create-issue` where installed).
+   Prioritize by the delegated outcome and observable acceptance. New cleanup does not
+   enter the active queue merely because it is easy or came from a review. An explicitly
+   requested backlog-clear run keeps its selected backlog scope.
+4. Name the specific evidence and missing QA/access/authority for a real blocker. Ask for
+   user action only when needed; zero issue closures alone does not establish a blocker.
+   Keep configured retry/budget caps and do not silently expand scope, fake-merge, or drop
+   a follow-on unrecorded.

@@ -25,13 +25,15 @@ step 7) — full-review does not repeat that call, only relies on it having run.
 
 After agent-review completes, run the `/check-pr` skill on the same PR. By now, Copilot review has typically arrived (~4 min). This skill:
 - Waits for Copilot review if still pending (Step 0 polling)
-- Processes every review comment (Copilot + human + agent-review findings if inline)
-- Fixes, dismisses, or defers each comment with inline replies
+- Processes inline comments **and general review/issue-comment summaries**, including agent-review findings that have no inline thread
+- Verifies each finding and fixes it, disproves it with evidence, or defers only an eligible pre-existing unrelated defect/optional improvement; replies at the original source
 - Pushes all fixes and verifies every thread has a reply
-- **Resolves every conversation thread via GraphQL** so branch protection's "conversations resolved" gate clears. Replies alone don't do this.
+- **Resolves verified dispositions via GraphQL**; unresolved PR defects remain blocking. Replies and issue URLs alone do not establish a fix.
 - Cross-references fixes against open from-review issues
 
 **Capture the results:** comments processed, fixes committed, issues created/closed.
+
+Before accepting either phase's verdict, inspect the actual findings. A new or worsened defect, or missing promised acceptance behavior, must be fixed, removed, or contained by an authorized fallback verified to preserve safety, correctness, required runtime/cost constraints and essential capability. More than 15 minutes of work or a follow-up issue is not an exemption. With a verified fallback, track the underlying problem and continue; otherwise block this PR and advance independent authorized work.
 
 ### Phase 2.5: Verify CI (Optional)
 
@@ -61,13 +63,15 @@ suite never notices).
 3. Tell the verifier explicitly that **"nothing found" is a valid result** — it must not
    manufacture findings to justify the pass.
 4. A real finding loops back through Phase 2 (fix → reply → resolve → re-verify the new
-   delta); "nothing found" proceeds to merge.
+   delta); "nothing found" proceeds to the final acceptance/merge gates, not directly to merge.
 
 If Phase 2 pushed no commits, skip (nothing new to verify).
 
 **Capture the results:** verified/skipped, findings looped back (if any).
 
 ### Phase 3: Combined Summary
+
+Check the current head against the PR's promised acceptance and all findings from both phases, including general summaries and any carried-forward deferrals. Declare a clean verdict only when every disposition has evidence and no new/worsened defect or acceptance gap remains uncontained. Resolved threads, green CI and filed issues are necessary records where required, not substitutes for this check. Preserve the repository's merge authority and safety gates.
 
 Output a **single combined summary table** covering both phases. This is the PRIMARY output.
 
@@ -95,7 +99,7 @@ Then below the table:
 - **Sequential, not parallel.** Agent-review MUST complete before check-pr starts. This is by design — the delay lets Copilot review arrive.
 - **Same branch.** Both skills operate on the same PR branch. Check-pr may commit fixes on top of the reviewed code.
 - **Deduplication.** If agent-review creates a follow-up issue and check-pr's fixes resolve it, close the issue in Phase 2 with a PR cross-reference.
-- **Threads resolved before declaring done.** Check-pr's step 6b runs the GraphQL `resolveReviewThread` mutation for every thread. Without it, branch protection blocks merge silently — the user has to click "Resolve conversation" once per thread. If you skip this, full-review is not done; you've handed the user manual cleanup.
+- **Findings verified before declaring done.** Check-pr's step 6b resolves supported dispositions. All required threads must be resolved before merge, and general-review findings must be accounted for even without a thread. Do not clear a defect by resolving its conversation.
 - **Attribution.** Follow Zero Attribution Policy throughout — no AI mentions in commits, replies, or issues.
 
 ## Customization Points
