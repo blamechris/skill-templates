@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "d2999e7",
+  "generatedFromCommit": "193a3f5",
   "skillCount": 41,
   "skills": [
     {
@@ -496,9 +496,9 @@
     },
     {
       "name": "check-pr",
-      "hash": "81d191b",
-      "lines": 484,
-      "description": "Address all PR review comments systematically and respond inline.",
+      "hash": "193a3f5",
+      "lines": 494,
+      "description": "Address PR review findings from inline threads and general review summaries, verify their disposition, and respond where each was raised.",
       "guards": [
         {
           "label": "idempotency",
@@ -975,8 +975,8 @@
     },
     {
       "name": "full-review",
-      "hash": "81d191b",
-      "lines": 103,
+      "hash": "193a3f5",
+      "lines": 107,
       "description": "Run a complete review pipeline: agent-review first, then check-pr. The agent-review pass naturally fills the ~4 minute Copilot review delay, so check-pr starts with comments already waiting.",
       "guards": [
         {
@@ -1478,9 +1478,9 @@
     },
     {
       "name": "prime-directive",
-      "hash": "a0b98e6",
-      "lines": 128,
-      "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
+      "hash": "193a3f5",
+      "lines": 129,
+      "description": "A reload-resilient directive for unattended work toward a delegated outcome, or an explicitly requested backlog-clearing marathon. Re-invoke it after every context compaction to restore the mission, acceptance criteria, authority, per-issue loop, and never-strip guardrails before resuming. `/tackle-issues` and `/autonomous-dev-flow` provide the wave machinery.",
       "guards": [
         {
           "label": "reload-contract",
@@ -1894,8 +1894,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "d2999e7",
-      "lines": 254,
+      "hash": "193a3f5",
+      "lines": 256,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
@@ -2281,9 +2281,9 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "a0b98e6",
-      "lines": 455,
-      "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
+      "hash": "193a3f5",
+      "lines": 458,
+      "description": "Advance a delegated outcome through bounded issue waves, or clear an explicitly selected backlog. Convergence follows observable acceptance and genuine dependencies, not the number of easy issues closed.",
       "guards": [
         {
           "label": "wave-model",
