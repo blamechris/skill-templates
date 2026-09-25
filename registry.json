@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "d2999e7",
+  "generatedFromCommit": "b8c2f98",
   "skillCount": 41,
   "skills": [
     {
@@ -1099,8 +1099,8 @@
     },
     {
       "name": "look-approve",
-      "hash": "1af9c66",
-      "lines": 474,
+      "hash": "b8c2f98",
+      "lines": 476,
       "description": "Get a visual deliverable **approved** — by showing it, not describing it. Runs the real app from an isolated worktree of the approval target, captures **moving** evidence (an animated GIF tour plus one still per feature under review), emits a SHORT one-screen approval card as a self-contained HTML file, puts a single approve / approve-with-notes / reject question to the owner, and records the verdict on the tracking issue. The deliverable is a visual and a *\"we gotta do this\"* — never six pages of prose. Reach for it when a UI/art/feel change is sitting on `main` waiting for a human to say yes.",
       "guards": [
         {
@@ -2073,8 +2073,8 @@
     },
     {
       "name": "smoke-form",
-      "hash": "eb1a1e5",
-      "lines": 343,
+      "hash": "b8c2f98",
+      "lines": 346,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device. With its **wake-on-save loop** (section 6 + `assets/smoke-intake.mjs`), the tester's Pass / Pass-with-note / Fail marks **stream live to the driving agent**, which triages and files issues in real time — no copy-paste, no waiting.",
       "guards": [
         {
@@ -2641,8 +2641,8 @@
     },
     {
       "name": "visual-brief",
-      "hash": "b6ef0bc",
-      "lines": 237,
+      "hash": "b8c2f98",
+      "lines": 244,
       "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together.",
       "guards": [
         {
@@ -2689,18 +2689,17 @@
           ]
         },
         {
-          "label": "respects-reader-colour-scheme",
-          "note": "#135: the skeleton shipped a hardcoded dark palette with no prefers-color-scheme query, so every brief rendered dark whatever the reader's system setting. Each alternate must match the CSS RULE BLOCK — the query plus its opening brace and :root — not the query string alone. Two earlier versions failed: listing the prose rules as alternates passed when only the query was deleted (anyOf matches ANY one), and matching the bare query still passed because Customization Points quotes '@media (prefers-color-scheme:light)' verbatim in backticks, so the guard matched the documentation instead of the code. Both partial mutants now fail. The two alternates are one claim in its two legitimate spellings: dark default with a light query, or light default with a dark one.",
+          "label": "dark-by-default-no-light-flip",
+          "note": "Replaces #135's respects-reader-colour-scheme, which REQUIRED a prefers-color-scheme light flip. The owner asked for dark reports on 2026-09-24 ('so it wasn't so bright and hard on the eyes'): the Claude app's browser pane renders local HTML in LIGHT mode whatever the OS setting, so following prefers-color-scheme gave a glaring white brief. The invariant is now two-sided and one regex carries both halves, because anyOf is an OR and two alternates could each pass alone: (1) a dark-only declaration ':root{color-scheme:dark;' is present — ':root{' with the brace, so the inert ':root[data-theme=\"light\"]' block cannot satisfy it, and 'dark;' with the semicolon, so #135's 'dark light;' cannot; (2) the leading lookahead rejects any @media rule on a single line that keys prefers-color-scheme:light and opens a brace — the brace requirement is what lets prose QUOTE the old query without tripping the guard. Proven red on: the origin/main #135 skeleton verbatim; 'dark' widened to 'dark light'; the light block re-keyed to @media (prefers-color-scheme:light) with the dark declaration kept; the dark declaration deleted; a light default with a prefers dark flip; and the '@media screen and (...: light) {' spelling. Green on the ported skeleton and on a line quoting the old query in backticks. Like #135's guard it binds the CODE, because the skeleton is the artifact every brief is generated from: deleting only the 'Dark, always, by default' prose bullet leaves it green, and that is correct rather than vacuous — the output is still dark.",
           "anyOf": [
-            "@media\\s*\\(\\s*prefers-color-scheme\\s*:\\s*light\\s*\\)\\s*\\{\\s*:root",
-            "@media\\s*\\(\\s*prefers-color-scheme\\s*:\\s*dark\\s*\\)\\s*\\{\\s*:root"
+            "\\A(?![\\s\\S]*@media[^{\\n]*prefers-color-scheme\\s*:\\s*light[^{\\n]*\\{)[\\s\\S]*:root\\s*\\{\\s*color-scheme\\s*:\\s*dark\\s*;"
           ]
         }
       ]
     },
     {
       "name": "weekly-review",
-      "hash": "f61c715",
+      "hash": "b8c2f98",
       "lines": 271,
       "description": "The **Monday TPM pass over everything on this machine**: scan every repo for the trailing week's git activity, fan out one read-only scan agent per active repo, sweep the quiet tail, aggregate local session usage from the transcripts, and write a dated Markdown note plus a self-contained HTML brief into the vault. The chat message it ends with is **a short list of decisions waiting on the owner and one pointer to the note** — never a recap of the week, which is what the note is for. Reach for it at the top of the week, or any time \"what happened across all my projects, and what needs me?\" is the actual question.",
       "guards": [
