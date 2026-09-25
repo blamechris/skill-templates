@@ -16,6 +16,7 @@ so it renders anywhere and can be dropped straight into an Obsidian vault.
   - `--type status|code|plan|recap` — shape the layout (default: infer from subject).
   - `--dir PATH` — output directory (overrides the env/default below).
   - `--no-open` — write the file but don't launch the browser.
+  - `--light` — emit the light palette (`<html lang="en" data-theme="light">`). Default is dark.
   - `--metrics` — include session metrics (tokens used, duration) as chips; see step 1.
 
 ## Output location (resolution order)
@@ -93,12 +94,16 @@ Use the skeleton below. Rules:
   is fine (e.g. a copy button); the file must work opened directly via `file://`.
 - **House style:** sectioned cards, status chips, tables, monospace code blocks.
   Keep it scannable — short lines, clear hierarchy, no fluff.
-- **Follow the reader's theme, don't impose one.** The skeleton ships dark by
-  default and flips to light under `prefers-color-scheme`. Every colour must go
-  through a CSS variable so that one media query flips the whole document —
-  writing a literal hex into a rule produces a brief that looks correct to you and
-  broken to a reader on the other setting. No JS theme switching: it needs none,
-  and a script would reintroduce a flash of the wrong theme.
+- **Dark, always, by default.** The reader asked for it (2026-09-24): these briefs are
+  read in the Claude app's browser pane and in Obsidian, and the pane renders local
+  HTML in LIGHT mode regardless of the OS setting — so the old "follow the reader's
+  `prefers-color-scheme`" behaviour produced a glaring white page. The skeleton
+  therefore sets `color-scheme: dark` and has NO `prefers-color-scheme` media query.
+  The light palette is kept as an inert `:root[data-theme="light"]` block that
+  applies only when the brief is generated with `--light` (put
+  `data-theme="light"` on `<html>`). Every colour must still go through a CSS
+  variable — a literal hex in a rule breaks the light variant silently. No JS theme
+  switching.
 - **Citations:** render `path:line` references in a monospace pill so they read as
   clickable locations. Group a code brief around a "flow" the reader can follow.
 - **Honesty surfaces:** if something is unverified / needs the user, mark it
@@ -150,20 +155,21 @@ points into an Obsidian vault, mention it's now linkable there.
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{TITLE}}</title>
 <style>
-  /* Dark is the house default; the light block below overrides it when the READER
-     prefers light. Every colour goes through a variable so one media query flips
-     the whole document — a hardcoded hex here is a bug that only shows in one theme. */
-  :root{color-scheme:dark light;
+  /* DARK ALWAYS by default (reader preference — the Claude browser pane renders local
+     HTML light regardless of OS, so prefers-color-scheme gave a glaring white page).
+     The light palette below is INERT unless <html data-theme="light"> (the --light flag).
+     Every colour goes through a variable — a hardcoded hex breaks the light variant. */
+  :root{color-scheme:dark;
     --bg:#0b0d12;--panel:#141821;--panel2:#1b212d;--line:#262d3b;--ink:#e8ecf3;
     --dim:#9aa6b8;--faint:#7d8a9f;--accent:#7c9cff;--accent2:#a78bfa;--ok:#4ade80;
     --warn:#fbbf24;--bad:#f87171;--glow:#1a2030;--code-bg:#0e131c;--code-ink:#cdd7ea;
     --ref-bg:#16202e;--callout-bg:#221a08;--callout-line:#4a3a12;--shadow:rgba(0,0,0,.35);
     --mono:ui-monospace,SFMono-Regular,Menlo,monospace;}
-  @media (prefers-color-scheme:light){:root{
+  :root[data-theme="light"]{color-scheme:light;
     --bg:#f6f7fa;--panel:#ffffff;--panel2:#eef1f6;--line:#d5dbe5;--ink:#161b26;
     --dim:#4f5a70;--faint:#5c6678;--accent:#2350c8;--accent2:#6b32c9;--ok:#0f7a37;
     --warn:#8a5300;--bad:#bf2020;--glow:#e8edfa;--code-bg:#eef1f6;--code-ink:#1d2836;
-    --ref-bg:#e4ecfc;--callout-bg:#fdf5e3;--callout-line:#e8d5a3;--shadow:rgba(15,23,42,.10);}}
+    --ref-bg:#e4ecfc;--callout-bg:#fdf5e3;--callout-line:#e8d5a3;--shadow:rgba(15,23,42,.10);}
   *{box-sizing:border-box} body{margin:0;background:radial-gradient(1200px 700px at 70% -10%,var(--glow),var(--bg) 55%);
     color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:48px 20px 96px}
   .wrap{max-width:820px;margin:0 auto} .eyebrow{font:600 12px/1 var(--mono);letter-spacing:.18em;
@@ -224,7 +230,8 @@ Component cheatsheet:
 - **Default output dir** — `$CLAUDE_BRIEF_DIR` or `~/.claude/briefs/`. Point it at
   an Obsidian vault subfolder for durable, linkable recall.
 - **House palette** — the CSS variables in the skeleton. There are **two** sets:
-  `:root` (dark, the default) and the `@media (prefers-color-scheme:light)` block.
+  `:root` (dark — always the default) and the opt-in `:root[data-theme="light"]` block
+  used only with `--light`.
   Swap either for brand colors — but change **both**, or the brief looks right in
   one theme and broken in the other. Keep every colour behind a variable: a
   hardcoded hex in a rule is invisible until someone reads in the other mode.
