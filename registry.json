@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "302cdc2",
+  "generatedFromCommit": "4a39c94",
   "skillCount": 41,
   "skills": [
     {
@@ -1099,7 +1099,7 @@
     },
     {
       "name": "look-approve",
-      "hash": "b8c2f98",
+      "hash": "4a39c94",
       "lines": 476,
       "description": "Get a visual deliverable **approved** — by showing it, not describing it. Runs the real app from an isolated worktree of the approval target, captures **moving** evidence (an animated GIF tour plus one still per feature under review), emits a SHORT one-screen approval card as a self-contained HTML file, puts a single approve / approve-with-notes / reject question to the owner, and records the verdict on the tracking issue. The deliverable is a visual and a *\"we gotta do this\"* — never six pages of prose. Reach for it when a UI/art/feel change is sitting on `main` waiting for a human to say yes.",
       "guards": [
@@ -2073,7 +2073,7 @@
     },
     {
       "name": "smoke-form",
-      "hash": "b8c2f98",
+      "hash": "4a39c94",
       "lines": 346,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device. With its **wake-on-save loop** (section 6 + `assets/smoke-intake.mjs`), the tester's Pass / Pass-with-note / Fail marks **stream live to the driving agent**, which triages and files issues in real time — no copy-paste, no waiting.",
       "guards": [
@@ -2641,7 +2641,7 @@
     },
     {
       "name": "visual-brief",
-      "hash": "b8c2f98",
+      "hash": "4a39c94",
       "lines": 244,
       "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together.",
       "guards": [
@@ -2699,7 +2699,7 @@
     },
     {
       "name": "weekly-review",
-      "hash": "b8c2f98",
+      "hash": "4a39c94",
       "lines": 271,
       "description": "The **Monday TPM pass over everything on this machine**: scan every repo for the trailing week's git activity, fan out one read-only scan agent per active repo, sweep the quiet tail, aggregate local session usage from the transcripts, and write a dated Markdown note plus a self-contained HTML brief into the vault. The chat message it ends with is **a short list of decisions waiting on the owner and one pointer to the note** — never a recap of the week, which is what the note is for. Reach for it at the top of the week, or any time \"what happened across all my projects, and what needs me?\" is the actual question.",
       "guards": [
