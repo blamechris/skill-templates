@@ -304,10 +304,12 @@ Hard limits: **no prose section**, no per-PR narrative, no metrics table, no
 laptop. If something genuinely cannot be shown in a still, it goes in the honesty
 callout in one clause — not a paragraph.
 
-Reuse the house palette and chrome from `/visual-brief`'s skeleton (CSS variables
-for **both** `:root` dark and the `prefers-color-scheme: light` block — a
-hardcoded hex renders correct for you and broken for the reader). Only the layout
-differs:
+Reuse the house palette and chrome from `/visual-brief`'s skeleton — **dark,
+always**: `:root{color-scheme:dark;…}` with no `prefers-color-scheme` light flip,
+because the Claude app's browser pane renders local HTML light whatever the OS
+setting. The light palette lives only in the opt-in `:root[data-theme="light"]`
+block; keep every colour behind a CSS variable, since a hardcoded hex breaks that
+variant silently. Only the layout differs:
 
 ```html
 <div class="wrap">
