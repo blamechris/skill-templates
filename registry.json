@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "df774b0",
+  "generatedFromCommit": "d239aa9",
   "skillCount": 41,
   "skills": [
     {
@@ -141,8 +141,8 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "600c374",
-      "lines": 520,
+      "hash": "d239aa9",
+      "lines": 522,
       "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
       "guards": [
         {
@@ -496,8 +496,8 @@
     },
     {
       "name": "check-pr",
-      "hash": "193a3f5",
-      "lines": 494,
+      "hash": "d239aa9",
+      "lines": 496,
       "description": "Address PR review findings from inline threads and general review summaries, verify their disposition, and respond where each was raised.",
       "guards": [
         {
@@ -975,8 +975,8 @@
     },
     {
       "name": "full-review",
-      "hash": "193a3f5",
-      "lines": 107,
+      "hash": "d239aa9",
+      "lines": 111,
       "description": "Run a complete review pipeline: agent-review first, then check-pr. The agent-review pass naturally fills the ~4 minute Copilot review delay, so check-pr starts with comments already waiting.",
       "guards": [
         {
@@ -1478,8 +1478,8 @@
     },
     {
       "name": "prime-directive",
-      "hash": "193a3f5",
-      "lines": 129,
+      "hash": "d239aa9",
+      "lines": 135,
       "description": "A reload-resilient directive for unattended work toward a delegated outcome, or an explicitly requested backlog-clearing marathon. Re-invoke it after every context compaction to restore the mission, acceptance criteria, authority, per-issue loop, and never-strip guardrails before resuming. `/tackle-issues` and `/autonomous-dev-flow` provide the wave machinery.",
       "guards": [
         {
@@ -1894,8 +1894,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "193a3f5",
-      "lines": 256,
+      "hash": "d239aa9",
+      "lines": 258,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
@@ -2281,8 +2281,8 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "df774b0",
-      "lines": 458,
+      "hash": "d239aa9",
+      "lines": 461,
       "description": "Advance a delegated outcome through bounded issue waves, or clear an explicitly selected backlog. Convergence follows observable acceptance and genuine dependencies, not the number of easy issues closed.",
       "guards": [
         {
