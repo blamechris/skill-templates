@@ -113,10 +113,13 @@ man = json.load(open(os.path.join(g, "standard-v1.json")))
 R = "repos_blamechris_soundbed"
 def put(key, obj, kind="json"):
     open(os.path.join(d, f"{key}.{kind}"), "w").write("" if obj is None else json.dumps(obj))
-repo = {"private": True, "visibility": "private", **man["github"]["repo"], **man["github"]["features"]}
+repo = {"private": True, "visibility": "private", "permissions": {"admin": True, "pull": True},
+        **man["github"]["repo"], **man["github"]["features"]}
 put(R, repo)
 put(f"{R}_actions_permissions", man["github"]["actions_permissions"])
 put(f"{R}_actions_permissions_workflow", man["github"]["workflow_permissions"])
+put(f"{R}_actions_permissions_fork-pr-workflows-private-repos",
+    {**man["github"]["fork_pr_workflows_private"], "require_approval_for_fork_pr_workflows": False})
 put(f"{R}_actions_permissions_artifact-and-log-retention", {"days": 14, "maximum_allowed_days": 90})
 put(f"{R}_vulnerability-alerts", None, "204")
 put(f"{R}_automated-security-fixes", {"enabled": True, "paused": False})
@@ -139,7 +142,9 @@ put(f"{R}_actions_secrets_per_page_100_page_1",
 PY
 
 M="$TMP/mutant"; MG="$TMP/mutant-gh"
-fresh() { rm -rf "$M" "$MG"; cp -R "$BASE" "$M"; cp -R "$GHBASE" "$MG"; }
+# A mutation that does not apply must fail the test, never silently verify the base.
+BROKEN=0
+fresh() { rm -rf "$M" "$MG"; cp -R "$BASE" "$M"; cp -R "$GHBASE" "$MG"; BROKEN=0; }
 verify() { FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --repo "$M" --ref HEAD --gh-repo blamechris/soundbed --json "$@" 2>&1; }
 result_of() {  # <json> <rule>
   python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(next((r["result"] for r in d["results"] if r["rule"]==sys.argv[2]), "ABSENT"))' "$1" "$2" 2>/dev/null || echo UNPARSEABLE
@@ -154,12 +159,18 @@ if t == s:
     sys.exit(f"edit made no change to {p}: {expr}")
 open(p, "w").write(t)
 PY
+  [ $? -eq 0 ] || BROKEN=1
 }
 gh_edit() {  # <fixture key> <python statement over d>
   python3 - "$MG/$1.json" "$2" <<'PY'
 import json, sys
-p = sys.argv[1]; d = json.load(open(p)); exec(sys.argv[2]); json.dump(d, open(p, "w"))
+p = sys.argv[1]; d = json.load(open(p)); before = json.dumps(d, sort_keys=True)
+exec(sys.argv[2])
+if json.dumps(d, sort_keys=True) == before:
+    sys.exit(f"gh_edit made no change to {p}: {sys.argv[2]}")
+json.dump(d, open(p, "w"))
 PY
+  [ $? -eq 0 ] || BROKEN=1
 }
 
 snap() { git -C "$M" add -A >/dev/null 2>&1; git -C "$M" commit -qm mutant >/dev/null 2>&1; }
@@ -168,6 +179,7 @@ COVERED=""
 # expect <name> <rule> <RESULT> <exit>: verify the current mutant and assert the rule's row.
 expect() {
   local name=$1 rule=$2 want=$3 wantrc=$4 out rc got
+  if [ "$BROKEN" -ne 0 ]; then bad "$name" "the mutation did not apply (see the error above)"; return; fi
   git -C "$M" add -A >/dev/null 2>&1; git -C "$M" commit -qm mutant >/dev/null 2>&1
   out=$(verify); rc=$?
   got=$(result_of "$out" "$rule")
@@ -190,7 +202,7 @@ if [ "$summary" = "module.credits.coverage=N-A overlay.kotlin.app-id=N-A" ]; the
 else
   bad "every probed rule PASSes except the two with nothing to probe yet" "non-PASS rows: $summary"
 fi
-if grep -Eq -- '(^| )(-X|--method|-f|-F|--input)( |$)' "$MG/calls.log" || grep -qv '^api -H ' "$MG/calls.log"; then
+if grep -Eq -- '(^| )(-X|--method|-f|-F|--field|--raw-field|--input)( |$)' "$MG/calls.log" || grep -qv '^api -H ' "$MG/calls.log"; then
   bad "verify issues only gh api GETs" "$(head -3 "$MG/calls.log")"
 else
   ok "verify issues only gh api GETs ($(wc -l < "$MG/calls.log" | tr -d ' ') calls)"
@@ -228,7 +240,7 @@ fresh; edit .github/workflows/ci.yml 's.replace("needs: [route, hygiene, changes
 fresh; edit .github/workflows/ci.yml 's.replace("    if: always()\n", "")';            expect "ci-gate without if: always()" core.ci-gate FAIL 1
 fresh; edit .github/workflows/ci.yml 's.replace("on:\n  pull_request:\n", "on:\n  pull_request:\n    paths: [\"src/**\"]\n")'; expect "a workflow-level path filter" core.ci-triggers FAIL 1
 fresh; edit .github/workflows/ci.yml 's.replace("  push:\n    branches: [main]\n", "  push:\n")'; expect "push not restricted to main" core.ci-triggers FAIL 1
-fresh; edit .github/workflows/ci.yml 's.replace("git ls-files -ci --exclude-standard", "git ls-files --others")'; expect "hygiene job no longer checks ignored files" core.ci-hygiene FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("ls-files -ci --exclude-standard", "ls-files --others")'; expect "hygiene job no longer checks ignored files" core.ci-hygiene FAIL 1
 fresh; edit .github/workflows/ci.yml 's.replace("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "actions/checkout@v7", 1)'; expect "an action pinned to a tag" core.actions-pinned FAIL 1
 fresh; edit .github/dependabot.yml 's.replace("interval: weekly", "interval: daily", 1)'; expect "github-actions updates not weekly" core.dependabot FAIL 1
 fresh; edit .github/workflows/ci.yml 's.replace("if: needs.changes.outputs.kotlin == \x27true\x27", "if: true")'; expect "kotlin job not gated on changes" overlay.kotlin.ci FAIL 1
@@ -258,6 +270,7 @@ fresh; gh_edit repos_blamechris_soundbed 'd["allow_auto_merge"] = True';        
 fresh; gh_edit repos_blamechris_soundbed 'd["has_wiki"] = True';                         expect "wiki on" github.features FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_actions_permissions 'd["sha_pinning_required"] = False'; expect "SHA pinning not required" github.actions FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_actions_permissions_workflow 'd["default_workflow_permissions"] = "write"'; expect "token writable" github.workflow-token FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_permissions_fork-pr-workflows-private-repos 'd["run_workflows_from_fork_pull_requests"] = True'; expect "fork PRs may run workflows" github.fork-pr-workflows FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_actions_permissions_artifact-and-log-retention 'd["days"] = 90'; expect "retention 90 days" github.retention FAIL 1
 fresh; mv "$MG/repos_blamechris_soundbed_vulnerability-alerts.204" "$MG/repos_blamechris_soundbed_vulnerability-alerts.404"; expect "Dependabot alerts off (a meaningful 404)" github.security FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_automated-security-fixes 'd["enabled"] = False'; expect "security updates off" github.security FAIL 1
@@ -301,8 +314,17 @@ echo "== waivers"
 fresh; edit .claude/skill-profile.md 's.replace("- waivers: none", "- waivers: core.gitattributes (docs/adr/0002-no-attributes.md)")'
 edit .gitattributes 's.replace("*.bat text eol=crlf\n", "")'
 expect "a waiver without its ADR is a FAIL" core.gitattributes FAIL 1
-mkdir -p "$M/docs/adr" && printf '# ADR-0002\n' > "$M/docs/adr/0002-no-attributes.md"
-expect "a waiver with its ADR is WAIVED" core.gitattributes WAIVED 0
+mkdir -p "$M/docs/adr" && printf '# ADR-0002\n\nNo line-ending rules here.\n' > "$M/docs/adr/0002-no-attributes.md"
+expect "a waiver whose ADR never names the rule is a FAIL" core.gitattributes FAIL 1
+printf '# ADR-0002\n\nWaives `core.gitattributes`: no line-ending rules here.\n' > "$M/docs/adr/0002-no-attributes.md"
+expect "a waiver with an ADR that names the rule is WAIVED" core.gitattributes WAIVED 0
+fresh; edit .claude/skill-profile.md 's.replace("- waivers: none", "- waivers: core.gitattributes (README.md)")'
+edit .gitattributes 's.replace("*.bat text eol=crlf\n", "")'
+expect "a waiver citing a file outside docs/adr/ is a FAIL" core.gitattributes FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("- waivers: none", "- waivers: profile.genesis-intent (docs/adr/0001-project-genesis.md)")'
+expect "the intent rule cannot be waived" profile.genesis-intent FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("- waivers: none", "- waivers: core.gitatributes (docs/adr/0001-project-genesis.md)")'
+expect "a waiver naming no probed rule is an intent problem" profile.genesis-intent FAIL 1
 fresh; edit .claude/skill-profile.md 's.replace("- waivers: none", "- waivers: github.ruleset.no-bypass (docs/adr/0001-project-genesis.md)")'
 expect "the no-bypass rule cannot be waived" github.ruleset.no-bypass FAIL 1
 
@@ -334,7 +356,7 @@ out=$(cd "$M" && FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --repo "$M" --ref HEA
 [ "$rc" -eq 2 ] && ok "no --gh-repo and no github origin is exit 2" || bad "no --gh-repo and no github origin is exit 2" "exit $rc — $(flat "$out")"
 
 echo "== core-only round trip (no overlays, no modules)"
-V --plan --json --name plainrepo --modules none --date 2026-09-26 > "$TMP/plain.json" || bad "core-only plan renders"
+V --plan --json --name plainrepo --modules runner-mac --date 2026-09-26 > "$TMP/plain.json" || bad "core-only plan renders"
 P="$TMP/plain"; mkdir -p "$P" && git -C "$P" init -q
 python3 - "$TMP/plain.json" "$P" "$PLAN" "$BASE" <<'PY'
 import json, os, shutil, sys
@@ -353,10 +375,10 @@ commit_all "$P" plain
 PG="$TMP/plain-gh"; cp -R "$GHBASE" "$PG"
 for f in "$PG"/repos_blamechris_soundbed*; do mv "$f" "${f/repos_blamechris_soundbed/repos_blamechris_plainrepo}"; done
 out=$(FAKE_GH_DIR="$PG" PATH="$FAKEBIN:$PATH" V --repo "$P" --ref HEAD --gh-repo blamechris/plainrepo --json 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && [ "$(result_of "$out" module.runner-mac)" = N-A ] && [ "$(result_of "$out" overlay.kotlin.ci)" = N-A ]; then
-  ok "a core-only repo verifies clean with every layer rule N-A"
-else bad "a core-only repo verifies clean with every layer rule N-A" "exit $rc — $(flat "$out")"; fi
-if grep -q 'changes:' "$P/.github/workflows/ci.yml" || ! grep -q 'needs: \[route, hygiene\]' "$P/.github/workflows/ci.yml"; then
+if [ "$rc" -eq 0 ] && [ "$(result_of "$out" module.repo-relay.secrets)" = N-A ] && [ "$(result_of "$out" overlay.kotlin.ci)" = N-A ]; then
+  ok "a core + runner repo verifies clean with every other layer rule N-A"
+else bad "a core + runner repo verifies clean with every other layer rule N-A" "exit $rc — $(flat "$out")"; fi
+if grep -q '^  changes:' "$P/.github/workflows/ci.yml" || ! grep -q 'needs: \[route, hygiene\]' "$P/.github/workflows/ci.yml"; then
   bad "a core-only ci.yml has no changes job and ci-gate needs [route, hygiene]"
 else ok "a core-only ci.yml has no changes job and ci-gate needs [route, hygiene]"; fi
 
@@ -364,7 +386,7 @@ echo "== plan"
 if grep -q '@@' "$PLAN"; then bad "the soundbed plan leaves no placeholder" "$(grep -o '@@[A-Z_]*@@' "$PLAN" | sort -u | tr '\n' ' ')"
 else ok "the soundbed plan leaves no placeholder"; fi
 plan_field() { python3 -c "import json,sys; p=json.load(open(sys.argv[1])); print($2)" "$1"; }
-got=$(V --plan --json --name sound-bed --stack kotlin --modules none | python3 -c 'import json,sys; print(json.load(sys.stdin)["intent"]["app_id"])')
+got=$(V --plan --json --name sound-bed --stack kotlin --modules runner-mac | python3 -c 'import json,sys; print(json.load(sys.stdin)["intent"]["app_id"])')
 [ "$got" = com.blamechris.soundbed ] && ok "app ID derived with separators dropped (sound-bed -> com.blamechris.soundbed)" || bad "app ID derivation" "got $got"
 got=$(V --plan --json --name plainrepo | python3 -c 'import json,sys; p=json.load(sys.stdin); print(p["intent"]["app_id"], ",".join(p["intent"]["modules"]))')
 [ "$got" = "none runner-mac,repo-memory,repo-relay" ] && ok "no app overlay: app ID none; modules default to the ratified three" || bad "plan defaults" "got $got"
@@ -376,12 +398,13 @@ refuses() {  # <name> <args...>
 refuses "refuses an invalid app ID" --name soundbed --stack kotlin --app-id com.blamechris.sound-bed
 refuses "refuses a derived app ID that starts with a digit" --name 9lives --stack kotlin
 refuses "refuses a planned overlay" --name x --stack flutter
-refuses "refuses a planned module" --name x --modules docs-site
-refuses "refuses an unknown module" --name x --modules telepathy
+refuses "refuses a planned module" --name x --modules runner-mac,docs-site
+refuses "refuses an unknown module" --name x --modules runner-mac,telepathy
 refuses "refuses a public repo (the public bundle is planned)" --name x --visibility public
 refuses "refuses a non-slug name" --name Sound_Bed
 refuses "refuses a missing name" --stack kotlin
-refuses "refuses a repeated module" --name x --modules credits,credits
+refuses "refuses a repeated module" --name x --modules runner-mac,credits,credits
+refuses "refuses a module set without the only runner module (the scaffold PR could never merge)" --name x --modules repo-memory
 rel=$(plan_field "$PLAN" '[i for i in p["issues"] if i["kind"]=="human-setup"][0]["body"]')
 if printf '%s' "$rel" | grep -q 'already set in: `blamechris/chroxy`, `blamechris/archery-apprentice`' \
    && printf '%s' "$rel" | grep -q '`module.repo-relay.secrets`' && ! printf '%s' "$rel" | grep -qi 'token:'; then
@@ -456,6 +479,168 @@ $SAVEM"
 sc_case "a ci fragment whose job ci-gate does not need" "rendered ci.yml: ci-gate needs" "$LOADM
 m['overlays']['kotlin']['ci_job'] = 'kotlin-renamed'
 $SAVEM"
+
+echo "== branches the round trip cannot reach"
+fresh; gh_edit repos_blamechris_soundbed_actions_secrets_per_page_100_page_1 'd["secrets"] = []'
+edit CLAUDE.md 's.replace("## Git workflow\n", "")'
+gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 9, "title": "human-setup: both", "body": "rules `module.repo-relay.secrets` and `core.claude-md`"}]'
+snap; out=$(verify); rc=$?
+if [ "$rc" -eq 1 ] && [ "$(result_of "$out" core.claude-md)" = FAIL ] && [ "$(result_of "$out" module.repo-relay.secrets)" = PENDING-HUMAN ]; then
+  ok "a human-setup issue excuses only rules marked human (core.claude-md stays FAIL)"
+else bad "a human-setup issue excuses only rules marked human (core.claude-md stays FAIL)" "exit $rc — $(flat "$out")"; fi
+fresh; mv "$MG/repos_blamechris_soundbed_vulnerability-alerts.204" "$MG/repos_blamechris_soundbed_vulnerability-alerts.401"
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" github.security)" = ERROR ]; then ok "a 401 where a 404 means 'off' is still ERROR / exit 2"
+else bad "a 401 where a 404 means 'off' is still ERROR / exit 2" "exit $rc — $(flat "$out")"; fi
+fresh; python3 - "$MG" <<'PY2'
+import json, os, sys
+d = sys.argv[1]; key = "repos_blamechris_soundbed_labels_per_page_100_page_{}.json"
+seed = json.load(open(os.path.join(d, key.format(1))))
+extra = [{"name": f"area:{i}", "color": "ededed"} for i in range(100 - len(seed) + 1)]
+allof = extra + seed                      # the last seed labels land on page 2
+json.dump(allof[:100], open(os.path.join(d, key.format(1)), "w"))
+json.dump(allof[100:], open(os.path.join(d, key.format(2)), "w"))
+PY2
+expect "labels spread over two pages are all read" github.labels PASS 0
+rm "$MG/repos_blamechris_soundbed_labels_per_page_100_page_2.json"
+out=$(verify); rc=$?
+[ "$rc" -eq 2 ] && ok "a page the API will not return is exit 2, not a missing label" || bad "a page the API will not return is exit 2, not a missing label" "exit $rc — $(flat "$out")"
+fresh; edit .github/workflows/ci.yml 're.sub(r"^on:\n(?:[ \t].*\n|\n)*", "on: [push, pull_request]\n\n", s, count=1, flags=re.M)'
+expect "inline on: [push, pull_request] is not restricted to main" core.ci-triggers FAIL 1
+fresh; edit .github/workflows/ci.yml '"\n".join((" " * (2 * (len(l) - len(l.lstrip(" "))))) + l.lstrip(" ") for l in s.split("\n"))'
+snap; out=$(verify); rc=$?
+if [ "$rc" -eq 0 ] && [ "$(result_of "$out" core.ci-gate)" = PASS ] && [ "$(result_of "$out" overlay.kotlin.ci)" = PASS ]; then
+  ok "a 4-space-indented ci.yml parses the same job graph"
+else bad "a 4-space-indented ci.yml parses the same job graph" "exit $rc — $(flat "$out")"; fi
+blank=$(python3 -c 'import json,sys
+bad = [f["path"] for p in sys.argv[1:] for f in json.load(open(p))["files"] if "\n\n\n" in f["content"] or f["content"].startswith("\n")]
+print(" ".join(bad))' "$PLAN" "$TMP/plain.json")
+[ -z "$blank" ] && ok "rendered files carry no blank-line scar where a placeholder rendered empty" || bad "rendered files carry no blank-line scar" "$blank"
+out=$(V --list-rules 2>&1); rc=$?
+n=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1] + "/assets/genesis/standard-v1.json"))["rules"]))' "$REG")
+if [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$out" | grep -c ' probe \| advisory ')" -eq "$n" ]; then ok "--list-rules text prints one row per rule ($n)"
+else bad "--list-rules text prints one row per rule ($n)" "exit $rc — $(flat "$out")"; fi
+out=$(V --plan --name soundbed --stack kotlin 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^## Genesis plan — blamechris/soundbed (Standard v1)' \
+   && printf '%s' "$out" | grep -q '^### Decisions' && printf '%s' "$out" | grep -q '| App ID | com.blamechris.soundbed \*(default)\*'; then
+  ok "--plan text prints the write table and the Decisions table"
+else bad "--plan text prints the write table and the Decisions table" "exit $rc — $(flat "$out")"; fi
+
+echo "== review-found defects stay fixed"
+fresh; edit .claude/skill-profile.md 's.replace("- visibility: private", "- visibility: Private")'; expect "a mis-cased visibility is an intent FAIL, not a crash" profile.genesis-intent FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("- visibility: private", "- visibility: public")'; expect "a public intent is refused while its bundle is planned" profile.genesis-intent FAIL 1
+fresh; printf '[]\n' > "$M/.claude/settings.json";                              expect "settings.json that is not an object is a FAIL, not a crash" core.claude-settings FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'next(r for r in d["rules"] if r["type"] == "required_status_checks")["parameters"]["required_status_checks"].append({"context": "ci-gate"})'
+expect "a required check with no integration_id is compared, not a crash" github.ruleset FAIL 1
+fresh; printf '["not", "a", "repo"]\n' > "$MG/repos_blamechris_soundbed.json"
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then ok "an API shape a probe did not expect is ERROR / exit 2 with a report"
+else bad "an API shape a probe did not expect is ERROR / exit 2 with a report" "exit $rc — $(flat "$out")"; fi
+fresh; edit .claude/skill-profile.md 's.replace("- credits-paths: none", "- credits-paths: ./app/src/main/res/raw/")'
+mkdir -p "$M/app/src/main/res/raw" && printf 'x' > "$M/app/src/main/res/raw/rain.ogg"
+expect "a ./-prefixed credits path still finds the uncredited asset" module.credits.coverage FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("- credits-paths: none", "- credits-paths: app/src/main/res/raws")'
+mkdir -p "$M/app/src/main/res/raw" && printf 'x' > "$M/app/src/main/res/raw/rain.ogg"
+expect "a credits path that matches nothing is a FAIL, never a vacuous PASS" module.credits.coverage FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("- credits-paths: none", "- credits-paths: app/src/main/res/raw/rain.ogg")'
+mkdir -p "$M/app/src/main/res/raw" && printf 'x' > "$M/app/src/main/res/raw/rain.ogg"
+expect "a credits path naming a single file is checked" module.credits.coverage FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("  push:\n    branches: [main]\n", "  push:\n    branches:\n      - main\n      - \"**\"\n")'
+expect "a block-list push.branches that adds ** is not main-only" core.ci-triggers FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("  push:\n    branches: [main]\n", "  push:\n    branches:\n      - main\n")'
+expect "a block-list push.branches of exactly main passes" core.ci-triggers PASS 0
+fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'd["conditions"]["ref_name"]["exclude"] = ["~DEFAULT_BRANCH"]'
+expect "a ruleset that excludes the default branch" github.ruleset FAIL 1
+fresh; gh_edit repos_blamechris_soundbed 'd["permissions"]["admin"] = False'
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" github.security)" = ERROR ]; then ok "a non-admin token cannot see Dependabot settings: ERROR, not 'off'"
+else bad "a non-admin token cannot see Dependabot settings: ERROR, not 'off'" "exit $rc — $(flat "$out")"; fi
+fresh; gh_edit repos_blamechris_soundbed 'del d["allow_squash_merge"]'
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" github.merge-settings)" = ERROR ]; then ok "a settings key the API withheld is ERROR, not a mismatch"
+else bad "a settings key the API withheld is ERROR, not a mismatch" "exit $rc — $(flat "$out")"; fi
+fresh; edit .github/workflows/ci.yml 's.replace("    if: always()\n", "    if: always() && github.event_name == \x27push\x27\n")'
+expect "ci-gate that can be skipped on PRs" core.ci-gate FAIL 1
+fresh; edit .github/workflows/ci.yml 're.sub(r"(  ci-gate:\n(?:.*\n)*?    steps:\n)(?:.*\n?)*", lambda m: m.group(1) + "      # fail on failure or cancelled\n      - run: echo ok\n", s, count=1)'
+expect "ci-gate whose only mention of failure is a comment" core.ci-gate FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("  hygiene:\n", "  \"deploy\":\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo deploy\n\n  hygiene:\n")'
+expect "a quoted job key ci-gate does not need" core.ci-gate FAIL 1
+fresh; edit .github/dependabot.yml 's.replace("  - package-ecosystem: github-actions\n    directory: /\n", "  - directory: /\n    package-ecosystem: github-actions\n")'
+expect "a dependabot entry written directory-first is still read" core.dependabot PASS 0
+fresh; edit .github/dependabot.yml 's.replace("interval: weekly", "interval: daily", 1) + "  - directory: /web\n    package-ecosystem: npm\n    schedule:\n      interval: weekly\n    labels: [dependencies]\n"'
+expect "a later entry cannot lend github-actions its weekly schedule" core.dependabot FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("## merge Customizations\n", "## merge Customizations\n\n```bash\n# how we merge here\ngh pr merge\n```\n\n")'
+expect "a fenced # comment does not end a profile section" profile.merge-strategy PASS 0
+fresh; gh_edit repos_blamechris_soundbed_actions_secrets_per_page_100_page_1 'd["secrets"] = []'
+gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 12, "title": "wip", "body": "`module.repo-relay.secrets`", "pull_request": {"url": "x"}}]'
+expect "an open PR is not a human-setup issue" module.repo-relay.secrets FAIL 1
+fresh
+out=$(FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --repo "$M/docs" --ref HEAD --gh-repo blamechris/soundbed --json 2>&1); rc=$?
+[ "$rc" -eq 0 ] && ok "--repo pointing at a subdirectory still reads the whole commit" || bad "--repo pointing at a subdirectory still reads the whole commit" "exit $rc — $(flat "$out")"
+
+echo "== the CI scripts themselves (route, changes), run under node"
+if ! command -v node >/dev/null 2>&1; then
+  echo "  skip node is not installed; the route/changes scripts are not simulated here"
+else
+  python3 - "$PLAN" "$TMP" <<'PY'
+import json, re, sys
+ci = next(f["content"] for f in json.load(open(sys.argv[1]))["files"] if f["path"] == ".github/workflows/ci.yml")
+lines = ci.splitlines()
+def script(job):
+    i = lines.index(f"  {job}:")
+    j = next(k for k in range(i, len(lines)) if lines[k].strip() == "script: |")
+    ind = len(lines[j]) - len(lines[j].lstrip()) + 2
+    body = []
+    for ln in lines[j + 1:]:
+        if ln.strip() and len(ln) - len(ln.lstrip()) < ind:
+            break
+        body.append(ln[ind:])
+    return "\n".join(body)
+for job in ("route", "changes"):
+    open(f"{sys.argv[2]}/{job}.js", "w").write(script(job))
+PY
+  cat > "$TMP/sim.js" <<'JS'
+// Runs a github-script body with a mocked context/github/core; prints outputs + failure.
+const fs = require('fs');
+const [,, file, scenarioJson] = process.argv;
+const sc = JSON.parse(scenarioJson);
+const out = {}; let failed = null;
+const core = { info() {}, setOutput(k, v) { out[k] = v; }, setFailed(m) { failed = m; } };
+const exists = (path, ref) => (sc.tree[ref] || []).includes(path);
+const github = {
+  rest: {
+    pulls: { listFiles: 'listFiles' },
+    repos: {
+      compareCommitsWithBasehead: async () => ({ data: { files: sc.files.map(filename => ({ filename })) } }),
+      getContent: async ({ path, ref }) => { if (exists(path, ref)) return {}; const e = new Error('nf'); e.status = 404; throw e; },
+    },
+  },
+  paginate: async () => sc.files.map(filename => ({ filename })),
+};
+const context = { repo: { owner: 'o', repo: 'r' }, payload: sc.payload, eventName: sc.event, sha: 'HEAD' };
+Object.assign(process.env, sc.env || {});
+const body = fs.readFileSync(file, 'utf8');
+new Function('context', 'github', 'core', 'process', `return (async () => {${body}})()`)(context, github, core, process)
+  .then(() => console.log(JSON.stringify({ out, failed })))
+  .catch(e => console.log(JSON.stringify({ error: String(e) })));
+JS
+  sim() {  # <name> <job> <scenario json> <python assertion over r>
+    local r; r=$(node "$TMP/sim.js" "$TMP/$2.js" "$3" 2>&1)
+    if python3 -c "import json,sys; r=json.loads(sys.argv[1]); assert $4, r" "$r" 2>/dev/null; then ok "$1"; else bad "$1" "$(flat "$r")"; fi
+  }
+  PR='{"number":1,"title":"feat: x","head":{"sha":"H","repo":{"fork":false}},"base":{"sha":"B"}}'
+  sim "route: a fork PR runs hosted" route '{"event":"pull_request","payload":{"pull_request":{"number":1,"title":"[macos] x","head":{"sha":"H","repo":{"fork":true}},"base":{"sha":"B"}}}}' 'r["out"]["runner"] == "[\"ubuntu-latest\"]"'
+  sim "route: runner_mode beats the title tag" route "{\"event\":\"workflow_dispatch\",\"payload\":{\"head_commit\":{\"message\":\"[linux] x\"}},\"env\":{\"RUNNER_MODE\":\"windows\"}}" 'r["out"]["runner"] == "[\"self-hosted\",\"Windows\"]"'
+  sim "route: a PR title tag routes the PR" route '{"event":"pull_request","payload":{"pull_request":{"number":1,"title":"[macos] fix","head":{"sha":"H","repo":{"fork":false}},"base":{"sha":"B"}}},"env":{"RUNNER_MODE":""}}' 'r["out"]["runner"] == "[\"self-hosted\",\"macOS\"]"'
+  sim "route: [github] anywhere in a push message breaks glass" route '{"event":"push","payload":{"head_commit":{"message":"fix: x\n\n[github]"}},"env":{"RUNNER_MODE":""}}' 'r["out"]["runner"] == "[\"ubuntu-latest\"]"'
+  sim "route: RUNNER_DEFAULT when nothing else applies" route "{\"event\":\"pull_request\",\"payload\":{\"pull_request\":$PR},\"env\":{\"RUNNER_MODE\":\"\",\"RUNNER_DEFAULT\":\"[\\\"self-hosted\\\",\\\"Linux\\\"]\"}}" 'r["out"]["runner"] == "[\"self-hosted\",\"Linux\"]"'
+  sim "route: the Mac fallback" route "{\"event\":\"pull_request\",\"payload\":{\"pull_request\":$PR},\"env\":{\"RUNNER_MODE\":\"\",\"RUNNER_DEFAULT\":\"\"}}" 'r["out"]["runner"] == "[\"self-hosted\",\"macOS\",\"ARM64\"]"'
+  sim "changes: a docs-only PR skips kotlin" changes "{\"event\":\"pull_request\",\"payload\":{\"pull_request\":$PR},\"files\":[\"docs/a.md\",\"README.md\",\".claude/skill-profile.md\"],\"tree\":{\"H\":[\"gradlew\"],\"B\":[\"gradlew\"]}}" 'r["out"]["kotlin"] == "false" and not r["failed"]'
+  sim "changes: spec/vectors (a file type nobody listed) runs kotlin" changes "{\"event\":\"pull_request\",\"payload\":{\"pull_request\":$PR},\"files\":[\"spec/vectors/a.json\"],\"tree\":{\"H\":[\"gradlew\"],\"B\":[\"gradlew\"]}}" 'r["out"]["kotlin"] == "true"'
+  sim "changes: no gradlew yet skips kotlin (no test target yet)" changes "{\"event\":\"pull_request\",\"payload\":{\"pull_request\":$PR},\"files\":[\"app/src/Main.kt\"],\"tree\":{\"H\":[],\"B\":[]}}" 'r["out"]["kotlin"] == "false" and not r["failed"]'
+  sim "changes: deleting gradlew fails instead of switching the gate off" changes "{\"event\":\"pull_request\",\"payload\":{\"pull_request\":$PR},\"files\":[\"gradlew\"],\"tree\":{\"H\":[],\"B\":[\"gradlew\"]}}" 'r["failed"] and "gradlew" in r["failed"]'
+  sim "changes: a push with no base touches everything" changes '{"event":"push","payload":{"before":"0000000000000000000000000000000000000000","after":"H"},"files":[],"tree":{"HEAD":["gradlew"]}}' 'r["out"]["kotlin"] == "true"'
+fi
 
 echo "== every probed rule has a mutation that FAILs it"
 probed=$(V --list-rules --json | python3 -c 'import json,sys; print(" ".join(r["id"] for r in json.load(sys.stdin) if r["class"]=="probe"))')

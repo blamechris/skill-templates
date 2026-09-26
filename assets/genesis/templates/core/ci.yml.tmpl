@@ -31,16 +31,21 @@ concurrency:
 
 jobs:
   # Runner routing, in precedence order:
-  #   1. a fork PR runs hosted, and nothing overrides this;
+  #   1. a fork PR runs hosted (the repo-level fork-PR policy is what keeps fork code off the
+  #      self-hosted runner; a fork can edit this file, so routing alone is not a boundary);
   #   2. the workflow_dispatch input `runner_mode`;
-  #   3. a head-commit TITLE tag: [github] [macos] [windows] [linux] ([github] uses hosted quota);
+  #   3. a tag in the title that lands on main — the PR title on a PR (it becomes the squash
+  #      title), the head commit's title on a push: [github] [macos] [windows] [linux]
+  #      ([github] uses hosted quota);
   #   4. vars.RUNNER_DEFAULT, a JSON label array;
   #   5. ["self-hosted","macOS","ARM64"].
-  # There is no automatic fallback to hosted runners (a job queues until a runner exists)
-  # and no skip tag: native [skip ci] leaves ci-gate Pending, which is the safe outcome.
+  # `[github]` is the break-glass for a runner that is down, so `route` itself moves to a hosted
+  # runner for it: a router that needs the missing runner could never route around it. There
+  # is no automatic fallback to hosted runners (a job queues until a runner exists) and no skip
+  # tag: native [skip ci] leaves ci-gate Pending, which is the safe outcome.
   route:
     name: route
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || fromJSON(vars.RUNNER_DEFAULT || '["self-hosted","macOS","ARM64"]') }}
+    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) || github.event.inputs.runner_mode == 'github' || contains(github.event.pull_request.title, '[github]') || contains(github.event.head_commit.message, '[github]')) && 'ubuntu-latest' || fromJSON(vars.RUNNER_DEFAULT || '["self-hosted","macOS","ARM64"]') }}
     timeout-minutes: 5
     outputs:
       runner: ${{ steps.route.outputs.runner }}
@@ -67,16 +72,12 @@ jobs:
               runner = MODES[process.env.RUNNER_MODE]; why = `runner_mode=${process.env.RUNNER_MODE}`;
             }
             if (!runner) {
-              let title = '';
-              if (pr) {
-                const { data } = await github.rest.repos.getCommit({
-                  owner: context.repo.owner, repo: context.repo.repo, ref: pr.head.sha,
-                });
-                title = data.commit.message.split('\n')[0];
-              } else if (context.payload.head_commit) {
-                title = context.payload.head_commit.message.split('\n')[0];
-              }
-              const tag = (title.match(/\[(github|macos|windows|linux)\]/i) || [])[1];
+              // The title that lands on main: a PR's title becomes its squash commit's title.
+              // `[github]` is matched anywhere in a push's message, as route's runs-on does.
+              const text = pr ? pr.title : ((context.payload.head_commit || {}).message || '');
+              const title = text.split('\n')[0];
+              const tag = (title.match(/\[(github|macos|windows|linux)\]/i) || [])[1]
+                || (!pr && /\[github\]/i.test(text) ? 'github' : undefined);
               if (tag) { runner = MODES[tag.toLowerCase()]; why = `title tag [${tag}]`; }
             }
             if (!runner && process.env.RUNNER_DEFAULT) {
@@ -100,7 +101,8 @@ jobs:
       - name: No tracked file is ignored
         shell: bash
         run: |
-          ignored=$(git ls-files -ci --exclude-standard)
+          # core.excludesFile=/dev/null: the runner host's global ignores are not this repo's.
+          ignored=$(git -c core.excludesFile=/dev/null ls-files -ci --exclude-standard)
           if [ -n "$ignored" ]; then
             echo "::error::tracked files match .gitignore — untrack them or narrow the rule:"
             printf '%s\n' "$ignored"
@@ -113,7 +115,7 @@ jobs:
     name: ci-gate
     needs: [@@CI_GATE_NEEDS@@]
     if: always()
-    runs-on: ${{ fromJSON(needs.route.outputs.runner || '["self-hosted","macOS","ARM64"]') }}
+    runs-on: ${{ needs.route.outputs.runner && fromJSON(needs.route.outputs.runner) || fromJSON(vars.RUNNER_DEFAULT || '["self-hosted","macOS","ARM64"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0

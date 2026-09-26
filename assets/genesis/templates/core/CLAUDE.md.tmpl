@@ -48,9 +48,11 @@ The default risk tier is MEDIUM. The self-merge posture is pinned in
 
 One required check: `ci-gate`, which needs every job in `.github/workflows/ci.yml` and
 fails on any failure or cancellation. Jobs run where the `route` job sends them: a fork PR
-goes to hosted runners; otherwise the `runner_mode` dispatch input, then a head-commit title
-tag (`[github]`, `[macos]`, `[windows]`, `[linux]`), then `vars.RUNNER_DEFAULT`, then
-`["self-hosted","macOS","ARM64"]`. There is no skip tag and no automatic fallback to hosted.
+goes to hosted runners; otherwise the `runner_mode` dispatch input, then a tag in the title
+that lands on main (the PR title on a PR, the head commit's title on a push: `[github]`,
+`[macos]`, `[windows]`, `[linux]`), then `vars.RUNNER_DEFAULT`, then
+`["self-hosted","macOS","ARM64"]`. `[github]` is the break-glass when the runner is down.
+There is no skip tag and no automatic fallback to hosted.
 
 ## Docs map
 

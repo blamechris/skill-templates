@@ -2,6 +2,11 @@
 # blamechris/chroxy .github/workflows/repo-relay.yml at 2c352cf. Issue references below
 # are to chroxy, where each hardening step was found. The secrets are names only; the
 # owner sets their values (a human-setup issue says which to reuse or create).
+#
+# One deliberate deviation from chroxy (a public repo, where hosted minutes are free): the
+# job runs where this repo's CI runs, vars.RUNNER_DEFAULT or the self-hosted Mac, because a
+# private repo pays for every hosted minute and this workflow fires on every PR, issue,
+# comment and release event. archery-apprentice deviates the same way.
 name: Repo Relay
 
 on:
@@ -49,7 +54,7 @@ env:
 
 jobs:
   notify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNNER_DEFAULT || '["self-hosted","macOS","ARM64"]') }}
     # Cap hung runs: the concurrency group serializes runs, so an unbounded
     # hang would queue later notifications behind it for up to the 6h default
     timeout-minutes: 10
