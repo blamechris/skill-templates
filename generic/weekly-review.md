@@ -204,7 +204,7 @@ Voice: past tense, specific, numbers over adjectives, every claim traceable to a
 
 ### 6. The HTML companion
 
-Self-contained (inline `<style>`, no CDN, no framework), reusing `/visual-brief`'s skeleton and house palette — CSS variables for **both** `:root` dark and the `prefers-color-scheme: light` block, since a hardcoded hex renders correct for you and broken for the reader.
+Self-contained (inline `<style>`, no CDN, no framework), reusing `/visual-brief`'s skeleton and house palette — **dark, always**: `:root{color-scheme:dark;…}` with no `prefers-color-scheme` light flip, because the Claude app's browser pane renders local HTML light whatever the OS setting and the flip produced a glaring white page. The light palette lives only in the skeleton's opt-in `:root[data-theme="light"]` block. Keep every colour behind a CSS variable, since a hardcoded hex breaks that light variant silently.
 
 Layout, top to bottom: eyebrow + `<h1>` with the date range · a `.sub` paragraph that is the two-minute version · outcome `.chips` (PRs merged, active products, items needing the owner, anything red) · **one `.callout` listing what needs the owner**, numbered, the same items the chat message will lead with · then one `<section>` per active product · then the fleet sweep · then the per-PR record in `<details>` blocks, which is vault material rather than headline material.
 

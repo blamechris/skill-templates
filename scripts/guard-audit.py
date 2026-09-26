@@ -8,8 +8,8 @@ such guards shipped before this existed.
 
 `prose` is a PROXY for `rule`, and the proxy has one known blind spot in each
 direction. It over-reports when the rule genuinely lives in code — visual-brief's
-`@media (prefers-color-scheme:…)` block IS the artifact under guard, so that guard
-appears here permanently and correctly. It under-reports when the skill documents
+`:root{color-scheme:dark;` skeleton declaration IS the artifact under guard, so that
+guard appears here permanently and correctly. It under-reports when the skill documents
 its own rule in prose elsewhere (merge-gate's "Why This Works" list restates rules
 that live in the snippet). Neither is decidable from the line's shape, so a hit
 here is a CANDIDATE: adjudicate it by deleting only the sentence that states the
