@@ -1,0 +1,45 @@
+# ADR-0001: Project genesis
+
+- **Status:** Accepted
+- **Date:** @@DATE@@
+- **Deciders:** blamechris
+- **Supersedes:** none
+
+## Context
+
+`blamechris/@@NAME@@` is a new repository. The fleet starts every new repository from
+the Fleet Project Genesis Standard v1, so that settings, ruleset, labels, doctrine files,
+skills and CI are in place before the first line of feature code.
+
+## Options
+
+1. Start from the standard with `/project-genesis` (this ADR).
+2. Start ad hoc and back-port later, which is how drift between fleet repos accumulated.
+
+## Decision
+
+Created with `/project-genesis` to Standard v1:
+
+| Choice | Value |
+|---|---|
+| Visibility | @@VISIBILITY@@ |
+| Stack overlays | @@OVERLAYS@@ |
+| Modules | @@MODULES@@ |
+| App ID | @@APP_ID@@ |
+| Self-merge posture | @@POSTURE@@ |
+| Waivers | none |
+
+@@CREDITS_POSTURE@@
+
+## Consequences
+
+- `main` accepts changes only through squash-merged PRs gated on `ci-gate`; the ruleset
+  has no bypass actors.
+- The app ID above is reserved now. Once an app is published under it, it can never change.
+- Deviations from the standard are recorded as a `waivers:` entry in
+  `.claude/skill-profile.md` plus an ADR, and audit reports them WAIVED.
+
+## Evidence
+
+- Standard v1 manifest: `assets/genesis/standard-v1.json` in `blamechris/skill-templates`
+  at `@@REGISTRY_COMMIT@@` (CONFIRMED — rendered from it).

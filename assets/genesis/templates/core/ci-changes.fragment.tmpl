@@ -1,0 +1,44 @@
+  # Path groups for the platform jobs. A group is true when the change touches it AND its
+  # ready-file exists at the head commit, so an overlay whose build does not exist yet
+  # ("no test target yet") skips instead of failing. A push with no usable base, a
+  # dispatch, or a file list the API truncates counts as touching everything.
+  changes:
+    name: changes
+    needs: route
+    runs-on: ${{ fromJSON(needs.route.outputs.runner) }}
+    timeout-minutes: 5
+    outputs:
+@@CI_CHANGES_OUTPUTS@@
+    steps:
+      - id: groups
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const GROUPS = @@CI_CHANGES_GROUPS@@;
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const sha = pr ? pr.head.sha : context.sha;
+            let files = null; // null = treat every group as touched
+            if (pr) {
+              const list = await github.paginate(github.rest.pulls.listFiles, {
+                owner, repo, pull_number: pr.number, per_page: 100,
+              });
+              if (list.length < 3000) files = list.flatMap(f => [f.filename, f.previous_filename].filter(Boolean));
+            } else if (context.eventName === 'push' && !/^0+$/.test(context.payload.before || '0')) {
+              const { data } = await github.rest.repos.compareCommitsWithBasehead({
+                owner, repo, basehead: `${context.payload.before}...${context.payload.after}`,
+              });
+              const list = data.files || [];
+              if (list.length < 300) files = list.flatMap(f => [f.filename, f.previous_filename].filter(Boolean));
+            }
+            async function exists(path) {
+              try { await github.rest.repos.getContent({ owner, repo, path, ref: sha }); return true; }
+              catch (e) { if (e.status === 404) return false; throw e; }
+            }
+            for (const [name, g] of Object.entries(GROUPS)) {
+              const res = g.patterns.map(p => new RegExp(p));
+              const touched = files === null || files.some(f => res.some(r => r.test(f)));
+              const ready = !g.ready || await exists(g.ready);
+              core.info(`${name}: touched=${touched} ready=${ready}`);
+              core.setOutput(name, String(touched && ready));
+            }

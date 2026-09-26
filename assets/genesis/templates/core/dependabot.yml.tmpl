@@ -1,0 +1,17 @@
+# Fleet Genesis Standard v1: Dependabot, weekly on Monday, grouped, at most 5 open PRs.
+# Actions are SHA-pinned (the repo requires it); Dependabot keeps the pins current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      github-actions:
+        patterns: ["*"]
+@@DEPENDABOT_OVERLAYS@@

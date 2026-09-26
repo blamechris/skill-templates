@@ -1,0 +1,23 @@
+[
+  {"name": "bug", "color": "d73a4a", "description": "Something isn't working"},
+  {"name": "enhancement", "color": "a2eeef", "description": "New feature or request"},
+  {"name": "documentation", "color": "0075ca", "description": "Improvements or additions to documentation"},
+  {"name": "security", "color": "b60205", "description": "Security hardening or vulnerability fix"},
+  {"name": "tech-debt", "color": "fbca04", "description": "Technical debt requiring refactoring or cleanup"},
+  {"name": "dependencies", "color": "0366d6", "description": "Dependency update (Dependabot or manual)"},
+  {"name": "from-review", "color": "d4c5f9", "description": "Issue identified during PR review"},
+  {"name": "complexity:low", "color": "0e8a16", "description": "Low complexity - straightforward implementation"},
+  {"name": "complexity:medium", "color": "fbca04", "description": "Medium complexity - requires multiple components"},
+  {"name": "complexity:high", "color": "d93f0b", "description": "High complexity - significant architectural work"},
+  {"name": "priority:high", "color": "b60205", "description": "Work this before anything unlabelled"},
+  {"name": "epic", "color": "7057ff", "description": "Epic - tracks a group of related sub-issues"},
+  {"name": "decomposed", "color": "bfdadc", "description": "Split into sub-issues by /decompose-issue"},
+  {"name": "blocked", "color": "e99695", "description": "Cannot proceed; the blocker is named in the issue"},
+  {"name": "ready-to-build", "color": "0e8a16", "description": "Issue is fully specified and ready for development"},
+  {"name": "needs-design", "color": "c5def5", "description": "Needs a design or spec decision before it can be built"},
+  {"name": "needs-owner-decision", "color": "5319e7", "description": "Blocked on a decision only the owner can make"},
+  {"name": "needs-dogfood", "color": "1d76db", "description": "Needs live verification on a real device or session"},
+  {"name": "visual-verify", "color": "006b75", "description": "Needs a human to look at the rendered result"},
+  {"name": "human-setup", "color": "000000", "description": "A manual setup step; Done when its genesis-verify rule passes"},
+  {"name": "from-audit", "color": "d4c5f9", "description": "Issue identified by an audit (project-audit, genesis --audit)"}
+]

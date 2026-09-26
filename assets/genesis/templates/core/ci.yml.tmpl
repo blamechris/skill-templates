@@ -1,0 +1,127 @@
+name: CI
+
+# Fleet Genesis Standard v1. `ci-gate` is the ONE required check: it needs every job in
+# this file and fails on any failure or cancellation, so adding a job never touches the
+# ruleset. There are no workflow-level path filters — a workflow skipped by `paths:`
+# leaves a required check Pending forever, while a skipped JOB reports Success. Platform
+# jobs skip through a job-level `if:` on the `changes` job's outputs instead.
+#
+# Triggers: pull_request, push to main, and manual dispatch. A push to any other branch
+# never queues a run on a runner that may not be provisioned yet.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      runner_mode:
+        description: "Where to run: default (routing below), github (hosted), macos, windows, linux"
+        type: choice
+        options: [default, github, macos, windows, linux]
+        default: default
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Runner routing, in precedence order:
+  #   1. a fork PR runs hosted, and nothing overrides this;
+  #   2. the workflow_dispatch input `runner_mode`;
+  #   3. a head-commit TITLE tag: [github] [macos] [windows] [linux] ([github] uses hosted quota);
+  #   4. vars.RUNNER_DEFAULT, a JSON label array;
+  #   5. ["self-hosted","macOS","ARM64"].
+  # There is no automatic fallback to hosted runners (a job queues until a runner exists)
+  # and no skip tag: native [skip ci] leaves ci-gate Pending, which is the safe outcome.
+  route:
+    name: route
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) && 'ubuntu-latest' || fromJSON(vars.RUNNER_DEFAULT || '["self-hosted","macOS","ARM64"]') }}
+    timeout-minutes: 5
+    outputs:
+      runner: ${{ steps.route.outputs.runner }}
+    steps:
+      - id: route
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RUNNER_DEFAULT: ${{ vars.RUNNER_DEFAULT }}
+          RUNNER_MODE: ${{ github.event.inputs.runner_mode }}
+        with:
+          script: |
+            const FALLBACK = ['self-hosted', 'macOS', 'ARM64'];
+            const MODES = {
+              github: ['ubuntu-latest'],
+              macos: ['self-hosted', 'macOS'],
+              windows: ['self-hosted', 'Windows'],
+              linux: ['self-hosted', 'Linux'],
+            };
+            const pr = context.payload.pull_request;
+            let runner, why;
+            if (pr && pr.head.repo.fork) {
+              runner = MODES.github; why = 'fork PR';
+            } else if (process.env.RUNNER_MODE && process.env.RUNNER_MODE !== 'default') {
+              runner = MODES[process.env.RUNNER_MODE]; why = `runner_mode=${process.env.RUNNER_MODE}`;
+            }
+            if (!runner) {
+              let title = '';
+              if (pr) {
+                const { data } = await github.rest.repos.getCommit({
+                  owner: context.repo.owner, repo: context.repo.repo, ref: pr.head.sha,
+                });
+                title = data.commit.message.split('\n')[0];
+              } else if (context.payload.head_commit) {
+                title = context.payload.head_commit.message.split('\n')[0];
+              }
+              const tag = (title.match(/\[(github|macos|windows|linux)\]/i) || [])[1];
+              if (tag) { runner = MODES[tag.toLowerCase()]; why = `title tag [${tag}]`; }
+            }
+            if (!runner && process.env.RUNNER_DEFAULT) {
+              runner = JSON.parse(process.env.RUNNER_DEFAULT); why = 'vars.RUNNER_DEFAULT';
+            }
+            if (!runner) { runner = FALLBACK; why = 'fallback'; }
+            core.info(`runner ${JSON.stringify(runner)} (${why})`);
+            core.setOutput('runner', JSON.stringify(runner));
+
+  # Fails when a tracked file matches .gitignore — debris committed before the ignore
+  # rule existed (a `*-output.txt`, a keystore) stays tracked until something says so.
+  hygiene:
+    name: hygiene
+    needs: route
+    runs-on: ${{ fromJSON(needs.route.outputs.runner) }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: No tracked file is ignored
+        shell: bash
+        run: |
+          ignored=$(git ls-files -ci --exclude-standard)
+          if [ -n "$ignored" ]; then
+            echo "::error::tracked files match .gitignore — untrack them or narrow the rule:"
+            printf '%s\n' "$ignored"
+            exit 1
+          fi
+@@CI_CHANGES_JOB@@
+@@CI_OVERLAY_JOBS@@
+
+  ci-gate:
+    name: ci-gate
+    needs: [@@CI_GATE_NEEDS@@]
+    if: always()
+    runs-on: ${{ fromJSON(needs.route.outputs.runner || '["self-hosted","macOS","ARM64"]') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const needs = JSON.parse(process.env.NEEDS);
+            for (const [job, v] of Object.entries(needs)) core.info(`${job}: ${v.result}`);
+            const bad = Object.entries(needs).filter(([, v]) => v.result === 'failure' || v.result === 'cancelled');
+            if (bad.length) core.setFailed(`ci-gate: ${bad.map(([j, v]) => `${j}=${v.result}`).join(', ')}`);

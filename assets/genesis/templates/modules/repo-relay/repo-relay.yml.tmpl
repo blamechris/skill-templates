@@ -1,0 +1,238 @@
+# Rendered by /project-genesis (module repo-relay) from the fleet's hardened copy,
+# blamechris/chroxy .github/workflows/repo-relay.yml at 2c352cf. Issue references below
+# are to chroxy, where each hardening step was found. The secrets are names only; the
+# owner sets their values (a human-setup issue says which to reuse or create).
+name: Repo Relay
+
+on:
+  pull_request:
+    types: [opened, closed, reopened, synchronize, edited, ready_for_review, converted_to_draft]
+  # No pull_request_review trigger (blamechris/chroxy#6749): GitHub's bot-triggered-workflow
+  # approval policy gates the run BEFORE job-level `if` conditions evaluate,
+  # so a Copilot-authored review still spawns a run held in action_required
+  # forever (the REST approve endpoint 403s on these) — the check suite
+  # never completes and green PRs read UNSTABLE. Actor filters can't reach
+  # far enough upstream to prevent it, so the trigger itself has to go.
+  # repo-relay's piggyback review detection already surfaces a missed
+  # review on the next pull_request event, so this only trades notification
+  # latency for a PR that never gets stuck.
+  issue_comment:
+    types: [created, edited, deleted]
+  issues:
+    types: [opened, closed, reopened, labeled, unlabeled, edited]
+  release:
+    types: [published, created, edited, deleted]
+
+# Serialize runs — concurrent jobs would race on the state cache
+concurrency:
+  group: repo-relay-${{ github.repository }}
+
+# npm's implicit audit + funding calls off for every install here (blamechris/chroxy#7616) —
+# see chroxy's ci.yml for the outage that motivated it.
+#
+# What this block covers is MEASURED, not assumed. It reaches both installs in
+# this job — the pre-install probe below, which is a step in this workflow, and
+# the composite action's own `npm ci --omit=dev`, which is a step in the ACTION:
+# GitHub exports workflow-level env into the job's process environment, and a
+# composite action's `run` steps inherit it. Run 33951308582 (main, before)
+# printed `added 66 packages, and audited 67 packages in 4s` and `5 high
+# severity vulnerabilities` for BOTH installs; run 33952673042 (the PR that
+# added this block) printed `added 66 packages in 2s` / `in 1s` and neither
+# line. The vanished `and audited 67 packages` clause is the observable.
+#
+# The action sets the same two variables at its own step level regardless
+# (blamechris/repo-relay#195), so a consumer WITHOUT a block like this one
+# still gets them — this one is not what makes the action fast for everybody.
+env:
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_FUND: "false"
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    # Cap hung runs: the concurrency group serializes runs, so an unbounded
+    # hang would queue later notifications behind it for up to the 6h default
+    timeout-minutes: 10
+    # Least-privilege token: piggyback review detection reads the pulls and
+    # issues APIs; an explicit block zeroes every unlisted scope
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    # Skip this workflow's own actor (prevent self-trigger cascades) and
+    # fork PRs (no secrets access). Other bots (dependabot, Copilot) relay
+    # on purpose — their activity belongs in the channel.
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    # The secrets context isn't readable in a job-level `if`, so surface
+    # "are the Discord secrets configured?" through env and gate each step
+    # on it — an unconfigured repo (or fork) skips cleanly instead of
+    # failing every PR with a red notify check
+    env:
+      DISCORD_CONFIGURED: ${{ secrets.DISCORD_BOT_TOKEN != '' && secrets.DISCORD_CHANNEL_PRS != '' }}
+    steps:
+      - name: Note missing Discord configuration
+        if: env.DISCORD_CONFIGURED != 'true'
+        run: echo "::notice::DISCORD_BOT_TOKEN / DISCORD_CHANNEL_PRS repo secrets are not set — skipping Discord notification."
+
+      # Persist SQLite state between runs. Per-run key: cache entries are
+      # immutable, so a constant key would freeze state at the first run.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: env.DISCORD_CONFIGURED == 'true'
+        with:
+          path: ~/.repo-relay
+          key: repo-relay-state-${{ github.repository }}-${{ github.run_id }}
+          restore-keys: |
+            repo-relay-state-${{ github.repository }}-
+
+      # blamechris/chroxy#7632 — run the action's OWN dependency install here first, where a
+      # failure is ours to tolerate.
+      #
+      # repo-relay is a COMPOSITE action, and its steps run in this order:
+      #   Setup Node.js -> Install dependencies (`npm ci --omit=dev`)
+      #   -> Validate inputs -> Run repo-relay (`node dist/cli.js`)
+      # `best_effort` is read by that LAST step, as REPO_RELAY_BEST_EFFORT. So a
+      # failure in `Install dependencies` skips both remaining steps and fails
+      # the composite step outright — the one failure shape best_effort
+      # structurally cannot reach. Seen on the notify job of blamechris/chroxy#7630 (run
+      # 33937387078), on a PR whose diff cannot reach this workflow at all.
+      #
+      # WHY THE NODE VERSION IS READ FROM THE ACTION (blamechris/chroxy#7634, and it is still
+      # load-bearing now that the original cause is fixed):
+      # `better-sqlite3@12.10.0` publishes prebuilt binaries per node ABI, and
+      # its linux-x64 assets are v127/v137/v141/v147 — node 22 and newer.
+      # repo-relay USED TO pin node 20 (ABI v115), so `prebuild-install` found
+      # nothing, `node-gyp rebuild` took over, and it fetched node headers from
+      # nodejs.org on every run. That fetch is what ECONNRESET'd and produced
+      # blamechris/chroxy#7632. blamechris/repo-relay#193 pinned node 22 instead, so the install is now a
+      # ~4s download-and-extract with no compiler and no nodejs.org.
+      #
+      # The parse below stays, and is the whole reason this probe still tracks
+      # what it gates. Its value is not that node 20 was wrong — it is that a
+      # probe on a DIFFERENT node than the action uses tests a different install
+      # and proves nothing about the one that runs. Measured during blamechris/chroxy#7633: a
+      # probe on the runner's default node finished in 5s against the action's
+      # 67s in the same job, because it took the prebuild path the action could
+      # not. It would have passed on the day of the outage and opened the gate.
+      # A hardcoded 22 here would be correct today and silently wrong the next
+      # time repo-relay moves; repo-relay's own `action-install` job now fails
+      # if it ever lands back on a prebuild-less ABI, and this reads whatever it
+      # lands on.
+      - name: Locate the repo-relay action checkout
+        id: relay_action
+        if: env.DISCORD_CONFIGURED == 'true'
+        # Deliberately NOT continue-on-error. Nothing here is transient: every
+        # failure below means this workflow's assumptions about the action no
+        # longer hold, and the job must say so. Only the install a step later is
+        # tolerated, which is what keeps "skipped because the network blipped"
+        # distinguishable from "skipped forever because a path moved" —
+        # chroxy's docs/false-safety-guards.md, "a precondition that is false, so the
+        # body never runs and the job is green".
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # Found by glob, never by repeating the pinned SHA below: a second copy
+          # of the pin drifts on the next version bump. $RUNNER_WORKSPACE is a
+          # long-standing runner variable rather than one of the documented
+          # GITHUB_*/RUNNER_* contracts, so the layout it implies is asserted
+          # rather than assumed: if it ever stops resolving, the checks below
+          # fail the job loudly instead of quietly skipping the notification.
+          dirs=("$RUNNER_WORKSPACE"/../_actions/blamechris/repo-relay/*/)
+          if [ "${#dirs[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one checked-out repo-relay action under _actions/, found ${#dirs[@]}. The pre-install probe cannot run, so notifications would be skipped on every event — fix the glob in this workflow."
+            exit 1
+          fi
+          dir="${dirs[0]%/}"
+          if [ ! -f "$dir/action.yml" ]; then
+            echo "::error::$dir has no action.yml — the repo-relay checkout is not what this workflow expects."
+            exit 1
+          fi
+          # A missing lockfile is a PERMANENT condition, not a transient one:
+          # `npm ci` refuses outright, and if that landed in the tolerated step
+          # below it would skip the notification on every run, forever, green.
+          # Asserted here, where failure is loud. (It cannot happen while the
+          # action is pinned by SHA — the lockfile is content-addressed — which
+          # is exactly why the check is cheap enough to keep.)
+          if [ ! -f "$dir/package-lock.json" ]; then
+            echo "::error::$dir has no package-lock.json — npm ci cannot run, and this is not a transient failure."
+            exit 1
+          fi
+          # Read the action's own pinned node version instead of duplicating it.
+          # A copy here would drift the moment repo-relay bumps, and the probe
+          # would quietly go on testing the wrong ABI while still reporting
+          # success — the failure this whole change exists to prevent.
+          node_version=$(sed -n "s/^[[:space:]]*node-version:[[:space:]]*['\"]\{0,1\}\([0-9][0-9.]*\)['\"]\{0,1\}[[:space:]]*$/\1/p" "$dir/action.yml" | head -1)
+          if [ -z "$node_version" ]; then
+            echo "::error::could not read node-version from repo-relay's action.yml — the probe would run on the wrong node and stop exercising the install it is meant to gate."
+            exit 1
+          fi
+          printf 'dir=%s\n' "$dir" >> "$GITHUB_OUTPUT"
+          printf 'node_version=%s\n' "$node_version" >> "$GITHUB_OUTPUT"
+          echo "repo-relay at $dir, node $node_version"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: env.DISCORD_CONFIGURED == 'true'
+        with:
+          node-version: ${{ steps.relay_action.outputs.node_version }}
+
+      - name: Pre-run the repo-relay dependency install
+        id: relay_deps
+        if: env.DISCORD_CONFIGURED == 'true'
+        # The ONLY tolerated step in this job, and the only one whose failure
+        # skips the notification instead of failing the build. It runs the same
+        # command, in the same directory, on the same node as the action's own
+        # `Install dependencies`, which is the entire point: a failure here
+        # predicts a failure there, and that is what makes skipping the action
+        # the right response.
+        #
+        # THE COST, honestly measured, because it changed twice. While repo-relay
+        # pinned node 20 this step cost a SECOND source build and bought no
+        # speed back: run 33947560739 measured probe 90s, the action's own
+        # install 77s, job total 183s against 88s before — `npm ci` wipes
+        # node_modules, so the compile was simply redone. That was accepted
+        # because a probe which does not exercise the failure is worth nothing
+        # at any price. Since blamechris/repo-relay#193 pinned node 22 there is no compile
+        # to redo, and the second install stopped being worth arguing about.
+        # Measured on run 33950384420, the notify job of the PR that re-pinned:
+        # this probe 4s, the whole action 5s, job total 15s against 183s. The
+        # tolerance stays because the failure it covers is structural, not
+        # because it was ever cheap.
+        continue-on-error: true
+        working-directory: ${{ steps.relay_action.outputs.dir }}
+        run: npm ci --omit=dev
+
+      - name: Note the tolerated dependency-install failure
+        if: env.DISCORD_CONFIGURED == 'true' && steps.relay_deps.outcome != 'success'
+        # A block scalar, not a plain one: in a plain YAML scalar a
+        # whitespace-preceded `#` starts a comment, which silently truncated
+        # this line mid-string and left the shell with an unterminated quote —
+        # so the step announcing a TOLERATED failure would itself have failed
+        # the job. Caught by `bash -n`, which no check in this repo ran over a
+        # workflow's `run:` blocks; the guard added with this change does.
+        run: |
+          echo "::warning::repo-relay's dependency install failed (transient infrastructure); the Discord notification for this event was skipped. This does not fail the job — see blamechris/chroxy#7632."
+
+      # best_effort replaces the old blanket continue-on-error: transient
+      # infra failures (Discord 5xx, timeouts, session budget) exit 0 with a
+      # warning annotation, while definitive config errors (revoked token,
+      # deleted channel, missing permissions) still fail loudly. Note the
+      # cache post-step saves on job success, so relay state persists across
+      # tolerated-failure runs — intended (state writes are incremental).
+      #
+      # blamechris/chroxy#7632 gates this on the pre-install rather than wrapping it in
+      # continue-on-error: a dependency install that already failed skips the
+      # action (job green, warning annotation above), while everything the
+      # action itself reports still fails the job exactly as blamechris/chroxy#6746 intended.
+      # `outcome` is the result BEFORE continue-on-error is applied — that is
+      # what leaves a tolerated step still readable as a signal — where
+      # `conclusion` would be the result after, and always 'success' here.
+      - uses: blamechris/repo-relay@0f126b57dc55fb6f31d3eec7f977d0d2c9fb77f2 # v1.3.0
+        if: env.DISCORD_CONFIGURED == 'true' && steps.relay_deps.outcome == 'success'
+        with:
+          discord_bot_token: ${{ secrets.DISCORD_BOT_TOKEN }}
+          channel_prs: ${{ secrets.DISCORD_CHANNEL_PRS }}
+          channel_issues: ${{ secrets.DISCORD_CHANNEL_ISSUES || secrets.DISCORD_CHANNEL_PRS }}
+          channel_releases: ${{ secrets.DISCORD_CHANNEL_RELEASES || secrets.DISCORD_CHANNEL_PRS }}
+          best_effort: 'true'

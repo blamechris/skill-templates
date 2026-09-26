@@ -1,0 +1,468 @@
+#!/usr/bin/env bash
+# Regression tests for assets/scripts/genesis-verify.py.
+#
+# The load-bearing property is the ROUND TRIP: the files `--plan` renders, written into a
+# repo, verify clean against the rules the same manifest declares. One renderer serves
+# plan and audit; if they ever disagree, a freshly created repo fails its own genesis.
+#
+# Around that:
+#   - every probed rule has a mutation here that turns it FAIL (checked at the end against
+#     `--list-rules`, so a new rule without a mutation fails this suite, not just review);
+#   - anything that stops verify from LOOKING — an unreadable registry, a ref that does not
+#     resolve, a failed fetch, `gh` answering 401 — exits 2, never 0 or 1;
+#   - `--self-check` (the rule<->probe parity CI runs) fails for each defect it names;
+#   - verify is read-only: the fake `gh` refuses any write flag, and --plan never calls it.
+#
+# No network: the registry is a committed copy of this tree's genesis assets, the consumer
+# repo is local, and `gh` is a fake that serves fixture files by endpoint.
+set -uo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$HERE/../.." && pwd)
+SUT="$HERE/genesis-verify.py"
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/genesis-verify-test.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT
+
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+
+pass=0; fail=0
+ok()  { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
+bad() { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
+flat() { printf '%s' "$1" | tr '\n' '|' | cut -c1-600; }
+
+commit_all() { git -C "$1" add -A && git -C "$1" commit -qm "${2:-fixture}"; }
+
+# ---------------------------------------------------------------- the registry fixture
+REG="$TMP/registry"
+mkdir -p "$REG/assets"
+cp -R "$ROOT/assets/genesis" "$REG/assets/"
+cp "$ROOT/assets/global-CLAUDE.md" "$REG/assets/"
+git -C "$REG" init -q && commit_all "$REG" registry
+
+V() { python3 "$SUT" --registry "$REG" --registry-ref HEAD --no-fetch "$@"; }
+
+# ---------------------------------------------------------------- the fake gh
+FAKEBIN="$TMP/bin"; mkdir -p "$FAKEBIN"
+cat > "$FAKEBIN/gh" <<'SH'
+#!/usr/bin/env bash
+# Serves `gh api -H <header> <endpoint>` from $FAKE_GH_DIR/<endpoint with /?&= as _>.<kind>.
+# A write flag is a test failure by construction: genesis-verify must be read-only.
+d=${FAKE_GH_DIR:?FAKE_GH_DIR unset}
+printf '%s\n' "$*" >> "$d/calls.log"
+[ "${1:-}" = api ] || { echo "fake gh: unexpected: $*" >&2; exit 97; }
+shift; ep=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -H) shift 2 ;;
+    -X|--method|-f|-F|--field|--raw-field|--input) echo "fake gh: WRITE flag $1" >&2; exit 98 ;;
+    *) ep=$1; shift ;;
+  esac
+done
+key=$(printf '%s' "$ep" | tr '/?&=' '____')
+if [ -f "$d/$key.json" ]; then cat "$d/$key.json"; exit 0; fi
+if [ -f "$d/$key.204" ]; then exit 0; fi
+if [ -f "$d/$key.404" ]; then echo '{"message":"Not Found","status":"404"}'; echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+if [ -f "$d/$key.401" ]; then echo "gh: Bad credentials (HTTP 401)" >&2; exit 1; fi
+echo "fake gh: no fixture for $ep" >&2; exit 1
+SH
+chmod +x "$FAKEBIN/gh"
+
+# ---------------------------------------------------------------- the conformant fixture
+PLAN="$TMP/plan.json"
+V --plan --json --name soundbed --stack kotlin --modules runner-mac,repo-memory,repo-relay,credits \
+  --app-id com.blamechris.soundbed --relay-token-in chroxy,archery-apprentice --date 2026-09-26 > "$PLAN" \
+  || { echo "cannot render the fixture plan"; exit 1; }
+
+BASE="$TMP/base"
+mkdir -p "$BASE" && git -C "$BASE" init -q
+python3 - "$PLAN" "$BASE" <<'PY'
+import json, os, sys
+plan, root = json.load(open(sys.argv[1])), sys.argv[2]
+def put(path, text):
+    p = os.path.join(root, path); os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "w").write(text)
+for f in plan["files"]:
+    put(f["path"], f["content"])
+posture = plan["profile"]["posture"]
+put(".claude/skill-profile.md", "\n".join([
+    "# soundbed skill profile", "",
+    "## Project Context", "- Tech: undecided — see SPEC", "- Repo: blamechris/soundbed", "- CI: ci-gate", "",
+    "## Build / Test Commands", *plan["profile"]["build_commands"], "",
+    "## Conventions", "- Branch prefix / naming: <type>/<issue>-<slug>", "",
+    "## Skill Targets", "targets: claude", "",
+    *[l for s in plan["profile"]["posture_sections"] for l in (
+        f"## {s} Customizations", "", "### Self-merge posture", "",
+        f"**{posture}.** Every merge in this repo is a human act.", "")],
+    *[l for s in ("merge", "batch-merge") for l in (
+        f"## {s} Customizations", f"- Merge strategy: {plan['profile']['merge_strategy']}", "")],
+    plan["profile"]["section"], ""]))
+skills = [s for g in plan["skills"]["install"] for s in g]
+put(".claude/skills.lock", json.dumps({"registry": "blamechris/skill-templates", "skills": {
+    s: {"hash": "0000000", "installed": "2026-09-26", "targets": ["claude"]} for s in skills}}, indent=2))
+for s in skills:
+    put(f".claude/commands/{s}.md", f"# /{s}\n")
+PY
+commit_all "$BASE" scaffold
+
+GHBASE="$TMP/gh-base"; mkdir -p "$GHBASE"
+python3 - "$GHBASE" "$REG/assets/genesis" <<'PY'
+import json, os, sys
+d, g = sys.argv[1], sys.argv[2]
+man = json.load(open(os.path.join(g, "standard-v1.json")))
+R = "repos_blamechris_soundbed"
+def put(key, obj, kind="json"):
+    open(os.path.join(d, f"{key}.{kind}"), "w").write("" if obj is None else json.dumps(obj))
+repo = {"private": True, "visibility": "private", **man["github"]["repo"], **man["github"]["features"]}
+put(R, repo)
+put(f"{R}_actions_permissions", man["github"]["actions_permissions"])
+put(f"{R}_actions_permissions_workflow", man["github"]["workflow_permissions"])
+put(f"{R}_actions_permissions_artifact-and-log-retention", {"days": 14, "maximum_allowed_days": 90})
+put(f"{R}_vulnerability-alerts", None, "204")
+put(f"{R}_automated-security-fixes", {"enabled": True, "paused": False})
+put(f"{R}_labels_per_page_100_page_1", json.load(open(os.path.join(g, "labels.json"))))
+put(f"{R}_rulesets_per_page_100_page_1", [{"id": 42, "name": "main"}])
+rs = json.load(open(os.path.join(g, "ruleset-main.json")))
+rs["id"] = 42
+# The live API returns parameters the document does not set; the probe compares a subset.
+for r in rs["rules"]:
+    if r["type"] == "pull_request":
+        r["parameters"]["require_extra_approval_for_unattributed_changes"] = False
+put(f"{R}_rulesets_42", rs)
+put(f"{R}_issues_labels_epic_state_all_per_page_100_page_1",
+    [{"number": 1, "title": man["epic_title"], "state": "open", "body": "plan"}])
+put(f"{R}_issues_labels_human-setup_state_open_per_page_100_page_1", [])
+put(f"{R}_actions_runners_per_page_100_page_1",
+    {"total_count": 1, "runners": [{"name": "mac-soundbed", "status": "online"}]})
+put(f"{R}_actions_secrets_per_page_100_page_1",
+    {"total_count": 2, "secrets": [{"name": "DISCORD_BOT_TOKEN"}, {"name": "DISCORD_CHANNEL_PRS"}]})
+PY
+
+M="$TMP/mutant"; MG="$TMP/mutant-gh"
+fresh() { rm -rf "$M" "$MG"; cp -R "$BASE" "$M"; cp -R "$GHBASE" "$MG"; }
+verify() { FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --repo "$M" --ref HEAD --gh-repo blamechris/soundbed --json "$@" 2>&1; }
+result_of() {  # <json> <rule>
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(next((r["result"] for r in d["results"] if r["rule"]==sys.argv[2]), "ABSENT"))' "$1" "$2" 2>/dev/null || echo UNPARSEABLE
+}
+edit() {  # <path in $M> <python expression over s>
+  python3 - "$M/$1" "$2" <<'PY'
+import sys
+p, expr = sys.argv[1], sys.argv[2]
+s = open(p).read()
+t = eval(expr, {"s": s, "re": __import__("re")})
+if t == s:
+    sys.exit(f"edit made no change to {p}: {expr}")
+open(p, "w").write(t)
+PY
+}
+gh_edit() {  # <fixture key> <python statement over d>
+  python3 - "$MG/$1.json" "$2" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p)); exec(sys.argv[2]); json.dump(d, open(p, "w"))
+PY
+}
+
+snap() { git -C "$M" add -A >/dev/null 2>&1; git -C "$M" commit -qm mutant >/dev/null 2>&1; }
+
+COVERED=""
+# expect <name> <rule> <RESULT> <exit>: verify the current mutant and assert the rule's row.
+expect() {
+  local name=$1 rule=$2 want=$3 wantrc=$4 out rc got
+  git -C "$M" add -A >/dev/null 2>&1; git -C "$M" commit -qm mutant >/dev/null 2>&1
+  out=$(verify); rc=$?
+  got=$(result_of "$out" "$rule")
+  if [ "$got" = "$want" ] && [ "$rc" -eq "$wantrc" ]; then
+    ok "$name"
+    [ "$want" = FAIL ] && COVERED="$COVERED $rule"
+  else
+    bad "$name" "rule $rule: $got (want $want), exit $rc (want $wantrc) — $(flat "$out")"
+  fi
+}
+
+echo "== round trip: plan -> write -> verify"
+fresh
+out=$(verify); rc=$?
+if [ "$rc" -eq 0 ]; then ok "the rendered soundbed plan verifies clean (exit 0)"; else
+  bad "the rendered soundbed plan verifies clean (exit 0)" "exit $rc — $(flat "$out")"; fi
+summary=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(" ".join(sorted({r["rule"]+"="+r["result"] for r in d["results"] if r["result"]!="PASS"})))' "$out" 2>/dev/null)
+if [ "$summary" = "module.credits.coverage=N-A overlay.kotlin.app-id=N-A" ]; then
+  ok "every probed rule PASSes except the two with nothing to probe yet"
+else
+  bad "every probed rule PASSes except the two with nothing to probe yet" "non-PASS rows: $summary"
+fi
+if grep -Eq -- '(^| )(-X|--method|-f|-F|--input)( |$)' "$MG/calls.log" || grep -qv '^api -H ' "$MG/calls.log"; then
+  bad "verify issues only gh api GETs" "$(head -3 "$MG/calls.log")"
+else
+  ok "verify issues only gh api GETs ($(wc -l < "$MG/calls.log" | tr -d ' ') calls)"
+fi
+text=$(FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --repo "$M" --ref HEAD --gh-repo blamechris/soundbed 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$text" | grep -q '| `core.ci-gate` | PASS |' && printf '%s' "$text" | grep -q 'exit 0'; then
+  ok "text mode prints the rule table and the exit"
+else
+  bad "text mode prints the rule table and the exit" "exit $rc — $(flat "$text")"
+fi
+
+echo "== core files"
+fresh; edit CLAUDE.md 's.replace("## Git workflow\n", "")';                         expect "CLAUDE.md missing a heading" core.claude-md FAIL 1
+fresh; edit CLAUDE.md 's + "\n".join(["filler"] * 80)';                              expect "CLAUDE.md over 150 lines" core.claude-md FAIL 1
+fresh; edit CLAUDE.md 's.replace("- `worktree-by-default`\n", "")';                  expect "a floor ID dropped from CLAUDE.md" core.claude-md.floor-ids FAIL 1
+fresh; edit CLAUDE.md 's.replace("- `worktree-by-default`\n", "- `worktree-by-default`\n- `invented-floor`\n")'; expect "an invented floor ID in CLAUDE.md" core.claude-md.floor-ids FAIL 1
+fresh; rm "$M/docs/CLAUDE_REFERENCE.md";                                             expect "CLAUDE_REFERENCE.md removed" core.claude-reference FAIL 1
+fresh; edit README.md 's.replace("## Quickstart\n", "")';                             expect "README.md missing Quickstart" core.readme FAIL 1
+fresh; edit MISSION.md 're.sub(r"## Why this exists\n(.*?)## What it does\n", lambda m: "## What it does\n" + m.group(1) + "## Why this exists\n", s, count=1, flags=re.S)'; expect "MISSION.md headings out of order" core.mission FAIL 1
+fresh; rm "$M/NON-GOALS.md";                                                         expect "NON-GOALS.md removed" core.non-goals FAIL 1
+fresh; edit docs/adr/0001-project-genesis.md 's.replace("- **Deciders:** blamechris\n", "")'; expect "ADR-0001 without Deciders" core.adr-0001 FAIL 1
+fresh; edit docs/adr/0001-project-genesis.md 's.replace("| App ID | com.blamechris.soundbed |", "| App ID | com.blamechris.other |")'; expect "ADR-0001 reserves a different app ID" core.app-id FAIL 1
+fresh; rm "$M/docs/records/README.md";                                               expect "docs/records/ emptied" core.docs-layout FAIL 1
+fresh; edit .gitignore 's.replace("*.jks\n", "")';                                   expect ".gitignore without *.jks" core.gitignore FAIL 1
+fresh; edit .gitignore 's.replace(".gradle/\n", "")';                                expect ".gitignore without the kotlin overlay line" core.gitignore FAIL 1
+fresh; edit .gitattributes 's.replace("*.bat text eol=crlf\n", "")';                 expect ".gitattributes without the kotlin overlay line" core.gitattributes FAIL 1
+fresh; edit .github/ISSUE_TEMPLATE/bug_report.md 's.replace("Filed from: none\n", "")'; expect "bug template without Filed from" core.issue-templates FAIL 1
+fresh; edit .github/ISSUE_TEMPLATE/human_setup.md 's.replace("## Done when\n", "")';  expect "human-setup template without Done when" core.issue-templates FAIL 1
+fresh; edit .github/pull_request_template.md 's.replace("Fixes #\n", "")';            expect "PR template without Fixes #" core.pr-template FAIL 1
+fresh; edit .claude/settings.json 's.replace("\"includeCoAuthoredBy\": false", "\"includeCoAuthoredBy\": true")'; expect "co-authored-by switched back on" core.claude-settings FAIL 1
+fresh; edit .claude/settings.json 's.replace("\"commit\": \"\"", "\"commit\": \"Generated\"")'; expect "commit attribution set" core.claude-settings FAIL 1
+
+echo "== CI"
+fresh; edit .github/workflows/ci.yml 's.replace("needs: [route, hygiene, changes, kotlin]", "needs: [route, changes, kotlin]")'; expect "ci-gate stops needing hygiene" core.ci-gate FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("    if: always()\n", "")';            expect "ci-gate without if: always()" core.ci-gate FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("on:\n  pull_request:\n", "on:\n  pull_request:\n    paths: [\"src/**\"]\n")'; expect "a workflow-level path filter" core.ci-triggers FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("  push:\n    branches: [main]\n", "  push:\n")'; expect "push not restricted to main" core.ci-triggers FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("git ls-files -ci --exclude-standard", "git ls-files --others")'; expect "hygiene job no longer checks ignored files" core.ci-hygiene FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "actions/checkout@v7", 1)'; expect "an action pinned to a tag" core.actions-pinned FAIL 1
+fresh; edit .github/dependabot.yml 's.replace("interval: weekly", "interval: daily", 1)'; expect "github-actions updates not weekly" core.dependabot FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("if: needs.changes.outputs.kotlin == \x27true\x27", "if: true")'; expect "kotlin job not gated on changes" overlay.kotlin.ci FAIL 1
+fresh; edit .github/dependabot.yml 's.split("  # Overlay: kotlin")[0]';              expect "no gradle update entry" overlay.kotlin.dependabot FAIL 1
+
+echo "== profile and skills"
+fresh; edit .claude/skill-profile.md 's.replace("- standard: v1\n", "")';            expect "intent without standard" profile.genesis-intent FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("- overlays: kotlin", "- overlays: kotlin, flutter")'; expect "intent naming a planned overlay" profile.genesis-intent FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("- app-id: com.blamechris.soundbed", "- app-id: com.blamechris.sound-bed")'; expect "intent with an invalid app-id" profile.genesis-intent FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("recon, ", "")';                    expect "a deferred skill neither listed nor installed" profile.genesis-intent FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("targets: claude\n", "")';          expect "profile without targets" profile.repo-wide FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("**Withheld.**", "**Gated.**", 1)';  expect "the two posture pins disagree" profile.posture FAIL 1
+fresh; edit .claude/skill-profile.md 're.sub(r"(## tackle-issues Customizations\n\n)### Self-merge posture\n\n\*\*Withheld\.\*\*", r"\1Posture is up to the agent.", s)'; expect "a posture pin removed" profile.posture FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("## batch-merge Customizations\n- Merge strategy: --squash --delete-branch", "## batch-merge Customizations\n- Merge strategy: --merge")'; expect "batch-merge not pinned to squash" profile.merge-strategy FAIL 1
+fresh; edit .claude/skills.lock 's.replace("\"merge-gate\"", "\"merge-gate-old\"")'; expect "an install-set skill missing from the lock" skills.installed FAIL 1
+fresh; rm "$M/.claude/commands/fix-ci.md";                                           expect "an installed skill without its command file" skills.installed FAIL 1
+fresh; rm "$M/.claude/skill-profile.md"; snap
+out=$(verify); rc=$?
+if [ "$rc" -eq 1 ] && [ "$(result_of "$out" profile.genesis-intent)" = FAIL ] && [ "$(result_of "$out" overlay.kotlin.ci)" = N-A ]; then
+  ok "no profile: intent FAILs and layer rules are N-A, not guessed"
+else bad "no profile: intent FAILs and layer rules are N-A, not guessed" "exit $rc — $(flat "$out")"; fi
+
+echo "== GitHub settings"
+fresh; gh_edit repos_blamechris_soundbed 'd["private"] = False; d["visibility"] = "public"'; expect "the repo went public" github.visibility FAIL 1
+fresh; gh_edit repos_blamechris_soundbed 'd["allow_merge_commit"] = True';               expect "merge commits allowed" github.merge-settings FAIL 1
+fresh; gh_edit repos_blamechris_soundbed 'd["allow_auto_merge"] = True';                 expect "auto-merge allowed" github.merge-settings FAIL 1
+fresh; gh_edit repos_blamechris_soundbed 'd["has_wiki"] = True';                         expect "wiki on" github.features FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_permissions 'd["sha_pinning_required"] = False'; expect "SHA pinning not required" github.actions FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_permissions_workflow 'd["default_workflow_permissions"] = "write"'; expect "token writable" github.workflow-token FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_permissions_artifact-and-log-retention 'd["days"] = 90'; expect "retention 90 days" github.retention FAIL 1
+fresh; mv "$MG/repos_blamechris_soundbed_vulnerability-alerts.204" "$MG/repos_blamechris_soundbed_vulnerability-alerts.404"; expect "Dependabot alerts off (a meaningful 404)" github.security FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_automated-security-fixes 'd["enabled"] = False'; expect "security updates off" github.security FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_labels_per_page_100_page_1 'd[:] = [l for l in d if l["name"] != "human-setup"]'; expect "a seed label missing" github.labels FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_labels_per_page_100_page_1 'd[0]["color"] = "ffffff"'; expect "a seed label recoloured" github.labels FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'next(r for r in d["rules"] if r["type"] == "pull_request")["parameters"]["allowed_merge_methods"] = ["merge", "squash", "rebase"]'; expect "ruleset allows every merge method" github.ruleset FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'd["rules"] = [r for r in d["rules"] if r["type"] != "required_status_checks"]'; expect "ruleset without required checks" github.ruleset FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'next(r for r in d["rules"] if r["type"] == "required_status_checks")["parameters"]["required_status_checks"][0]["integration_id"] = 1'; expect "ci-gate pinned to the wrong app" github.ruleset FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'd["enforcement"] = "disabled"';   expect "ruleset disabled" github.ruleset FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'd["bypass_actors"] = [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "pull_request"}]'; expect "a bypass actor (archery's shape)" github.ruleset.no-bypass FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_rulesets_per_page_100_page_1 'd[0]["name"] = "Copilot review for default branch"'
+out=$(verify); rc=$?
+if [ "$rc" -eq 1 ] && [ "$(result_of "$out" github.ruleset)" = FAIL ] && [ "$(result_of "$out" github.ruleset.no-bypass)" = FAIL ]; then
+  ok "no ruleset named main: both ruleset rules FAIL"
+else bad "no ruleset named main: both ruleset rules FAIL" "exit $rc — $(flat "$out")"; fi
+fresh; gh_edit repos_blamechris_soundbed_issues_labels_epic_state_all_per_page_100_page_1 'd[:] = []'; expect "no genesis epic" github.epic FAIL 1
+
+echo "== modules and overlay"
+fresh; gh_edit repos_blamechris_soundbed_actions_runners_per_page_100_page_1 'd["runners"] = []; d["total_count"] = 0'; expect "no runner registered" module.runner-mac FAIL 1
+fresh; edit .mcp.json 's.replace("@blamechris/repo-memory", "@someone/else")';        expect ".mcp.json without repo-memory" module.repo-memory FAIL 1
+fresh; edit .github/workflows/repo-relay.yml 're.sub(r"blamechris/repo-relay@[0-9a-f]{40}", "blamechris/repo-relay@v1", s)'; expect "repo-relay pinned to a tag" module.repo-relay.workflow FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_secrets_per_page_100_page_1 'd["secrets"] = [{"name": "DISCORD_BOT_TOKEN"}]'; expect "a relay secret not set, no human-setup issue" module.repo-relay.secrets FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_secrets_per_page_100_page_1 'd["secrets"] = []'
+gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 7, "title": "human-setup: relay", "body": "## Done when\n\nThe `genesis-verify` rule `module.repo-relay.secrets` reports PASS."}]'
+expect "relay secrets pending with an open human-setup issue" module.repo-relay.secrets PENDING-HUMAN 0
+fresh; gh_edit repos_blamechris_soundbed_actions_secrets_per_page_100_page_1 'd["secrets"] = []'
+gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 8, "title": "human-setup: runner", "body": "rule `module.runner-mac`"}]'
+expect "a human-setup issue for another rule does not excuse this one" module.repo-relay.secrets FAIL 1
+fresh; rm "$M/CREDITS.md";                                                           expect "CREDITS.md removed" module.credits.file FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("- credits-paths: none", "- credits-paths: app/src/main/res/raw")'
+mkdir -p "$M/app/src/main/res/raw" && printf 'x' > "$M/app/src/main/res/raw/rain.ogg"
+expect "a bundled asset without a CREDITS.md row" module.credits.coverage FAIL 1
+printf '| `app/src/main/res/raw/rain.ogg` | freesound #1 | CC0 | none |\n' >> "$M/CREDITS.md"
+expect "the same asset once credited" module.credits.coverage PASS 0
+fresh; mkdir -p "$M/app" && printf 'android {\n  defaultConfig {\n    applicationId = "com.blamechris.other"\n  }\n}\n' > "$M/app/build.gradle.kts"
+expect "applicationId differs from the reserved app ID" overlay.kotlin.app-id FAIL 1
+fresh; mkdir -p "$M/app" && printf 'android {\n  defaultConfig {\n    applicationId = "com.blamechris.soundbed"\n  }\n}\n' > "$M/app/build.gradle.kts"
+expect "applicationId equals the reserved app ID" overlay.kotlin.app-id PASS 0
+
+echo "== waivers"
+fresh; edit .claude/skill-profile.md 's.replace("- waivers: none", "- waivers: core.gitattributes (docs/adr/0002-no-attributes.md)")'
+edit .gitattributes 's.replace("*.bat text eol=crlf\n", "")'
+expect "a waiver without its ADR is a FAIL" core.gitattributes FAIL 1
+mkdir -p "$M/docs/adr" && printf '# ADR-0002\n' > "$M/docs/adr/0002-no-attributes.md"
+expect "a waiver with its ADR is WAIVED" core.gitattributes WAIVED 0
+fresh; edit .claude/skill-profile.md 's.replace("- waivers: none", "- waivers: github.ruleset.no-bypass (docs/adr/0001-project-genesis.md)")'
+expect "the no-bypass rule cannot be waived" github.ruleset.no-bypass FAIL 1
+
+echo "== could not verify: exit 2, never 0 or 1"
+fresh; mv "$MG/repos_blamechris_soundbed.json" "$MG/repos_blamechris_soundbed.401"
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" github.merge-settings)" = ERROR ]; then ok "gh answering 401 is ERROR / exit 2"
+else bad "gh answering 401 is ERROR / exit 2" "exit $rc — $(flat "$out")"; fi
+fresh; rm "$MG/repos_blamechris_soundbed_rulesets_42.json"
+out=$(verify); rc=$?
+[ "$rc" -eq 2 ] && ok "a ruleset the API will not return is exit 2" || bad "a ruleset the API will not return is exit 2" "exit $rc — $(flat "$out")"
+fresh; gh_edit repos_blamechris_soundbed_actions_secrets_per_page_100_page_1 'd["secrets"] = []'
+rm "$MG/repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1.json"
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" module.repo-relay.secrets)" = ERROR ]; then ok "an unreadable human-setup list is ERROR, not a guessed FAIL"
+else bad "an unreadable human-setup list is ERROR, not a guessed FAIL" "exit $rc — $(flat "$out")"; fi
+fresh
+out=$(FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" python3 "$SUT" --registry "$TMP/nope" --registry-ref HEAD --no-fetch --repo "$M" --ref HEAD --gh-repo blamechris/soundbed 2>&1); rc=$?
+[ "$rc" -eq 2 ] && ok "a missing registry is exit 2" || bad "a missing registry is exit 2" "exit $rc — $(flat "$out")"
+out=$(FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --registry-ref no-such-ref --repo "$M" --ref HEAD --gh-repo blamechris/soundbed 2>&1); rc=$?
+[ "$rc" -eq 2 ] && ok "a registry ref that does not resolve is exit 2" || bad "a registry ref that does not resolve is exit 2" "exit $rc — $(flat "$out")"
+out=$(verify --ref no-such-ref); rc=$?
+[ "$rc" -eq 2 ] && ok "a repo ref that does not resolve is exit 2" || bad "a repo ref that does not resolve is exit 2" "exit $rc — $(flat "$out")"
+git clone -q "$REG" "$TMP/reg-clone" && git -C "$TMP/reg-clone" remote set-url origin "$TMP/vanished.git"
+out=$(FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" python3 "$SUT" --registry "$TMP/reg-clone" --registry-ref origin/HEAD --repo "$M" --ref HEAD --gh-repo blamechris/soundbed 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'fetch origin failed'; then ok "a failed registry fetch is exit 2 (hard precondition)"
+else bad "a failed registry fetch is exit 2 (hard precondition)" "exit $rc — $(flat "$out")"; fi
+out=$(cd "$M" && FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --repo "$M" --ref HEAD 2>&1); rc=$?
+[ "$rc" -eq 2 ] && ok "no --gh-repo and no github origin is exit 2" || bad "no --gh-repo and no github origin is exit 2" "exit $rc — $(flat "$out")"
+
+echo "== core-only round trip (no overlays, no modules)"
+V --plan --json --name plainrepo --modules none --date 2026-09-26 > "$TMP/plain.json" || bad "core-only plan renders"
+P="$TMP/plain"; mkdir -p "$P" && git -C "$P" init -q
+python3 - "$TMP/plain.json" "$P" "$PLAN" "$BASE" <<'PY'
+import json, os, shutil, sys
+plan, root, _, base = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3], sys.argv[4]
+for f in plan["files"]:
+    p = os.path.join(root, f["path"]); os.makedirs(os.path.dirname(p), exist_ok=True); open(p, "w").write(f["content"])
+prof = open(os.path.join(base, ".claude/skill-profile.md")).read()
+prof = prof.split("## project-genesis Customizations")[0] + plan["profile"]["section"] + "\n"
+os.makedirs(os.path.join(root, ".claude/commands"), exist_ok=True)
+open(os.path.join(root, ".claude/skill-profile.md"), "w").write(prof)
+shutil.copy(os.path.join(base, ".claude/skills.lock"), os.path.join(root, ".claude/skills.lock"))
+for n in os.listdir(os.path.join(base, ".claude/commands")):
+    shutil.copy(os.path.join(base, ".claude/commands", n), os.path.join(root, ".claude/commands", n))
+PY
+commit_all "$P" plain
+PG="$TMP/plain-gh"; cp -R "$GHBASE" "$PG"
+for f in "$PG"/repos_blamechris_soundbed*; do mv "$f" "${f/repos_blamechris_soundbed/repos_blamechris_plainrepo}"; done
+out=$(FAKE_GH_DIR="$PG" PATH="$FAKEBIN:$PATH" V --repo "$P" --ref HEAD --gh-repo blamechris/plainrepo --json 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ "$(result_of "$out" module.runner-mac)" = N-A ] && [ "$(result_of "$out" overlay.kotlin.ci)" = N-A ]; then
+  ok "a core-only repo verifies clean with every layer rule N-A"
+else bad "a core-only repo verifies clean with every layer rule N-A" "exit $rc — $(flat "$out")"; fi
+if grep -q 'changes:' "$P/.github/workflows/ci.yml" || ! grep -q 'needs: \[route, hygiene\]' "$P/.github/workflows/ci.yml"; then
+  bad "a core-only ci.yml has no changes job and ci-gate needs [route, hygiene]"
+else ok "a core-only ci.yml has no changes job and ci-gate needs [route, hygiene]"; fi
+
+echo "== plan"
+if grep -q '@@' "$PLAN"; then bad "the soundbed plan leaves no placeholder" "$(grep -o '@@[A-Z_]*@@' "$PLAN" | sort -u | tr '\n' ' ')"
+else ok "the soundbed plan leaves no placeholder"; fi
+plan_field() { python3 -c "import json,sys; p=json.load(open(sys.argv[1])); print($2)" "$1"; }
+got=$(V --plan --json --name sound-bed --stack kotlin --modules none | python3 -c 'import json,sys; print(json.load(sys.stdin)["intent"]["app_id"])')
+[ "$got" = com.blamechris.soundbed ] && ok "app ID derived with separators dropped (sound-bed -> com.blamechris.soundbed)" || bad "app ID derivation" "got $got"
+got=$(V --plan --json --name plainrepo | python3 -c 'import json,sys; p=json.load(sys.stdin); print(p["intent"]["app_id"], ",".join(p["intent"]["modules"]))')
+[ "$got" = "none runner-mac,repo-memory,repo-relay" ] && ok "no app overlay: app ID none; modules default to the ratified three" || bad "plan defaults" "got $got"
+refuses() {  # <name> <args...>
+  local name=$1; shift
+  local out rc; out=$(V --plan "$@" 2>&1); rc=$?
+  if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'REFUSE'; then ok "$name"; else bad "$name" "exit $rc — $(flat "$out")"; fi
+}
+refuses "refuses an invalid app ID" --name soundbed --stack kotlin --app-id com.blamechris.sound-bed
+refuses "refuses a derived app ID that starts with a digit" --name 9lives --stack kotlin
+refuses "refuses a planned overlay" --name x --stack flutter
+refuses "refuses a planned module" --name x --modules docs-site
+refuses "refuses an unknown module" --name x --modules telepathy
+refuses "refuses a public repo (the public bundle is planned)" --name x --visibility public
+refuses "refuses a non-slug name" --name Sound_Bed
+refuses "refuses a missing name" --stack kotlin
+refuses "refuses a repeated module" --name x --modules credits,credits
+rel=$(plan_field "$PLAN" '[i for i in p["issues"] if i["kind"]=="human-setup"][0]["body"]')
+if printf '%s' "$rel" | grep -q 'already set in: `blamechris/chroxy`, `blamechris/archery-apprentice`' \
+   && printf '%s' "$rel" | grep -q '`module.repo-relay.secrets`' && ! printf '%s' "$rel" | grep -qi 'token:'; then
+  ok "the relay human-setup issue names reuse sources and its Done-when rule"
+else bad "the relay human-setup issue names reuse sources and its Done-when rule" "$(flat "$rel")"; fi
+got=$(V --plan --json --name x --relay-token-in none | python3 -c 'import json,sys; p=json.load(sys.stdin); print([i["body"] for i in p["issues"] if i["kind"]=="human-setup"][0])')
+printf '%s' "$got" | grep -q 'create a bot' && ok "--relay-token-in none says create a bot" || bad "--relay-token-in none says create a bot" "$(flat "$got")"
+got=$(plan_field "$PLAN" '" ".join(d["decision"] for d in p["decisions"] if d["defaulted"])')
+[ "$got" = "Visibility Self-merge posture Description" ] && ok "the Decisions table marks exactly the defaulted choices" || bad "the Decisions table marks exactly the defaulted choices" "got: $got"
+got=$(plan_field "$PLAN" '"|".join(i["title"] for i in p["issues"])')
+[ "$got" = "Land docs/design/SPEC.md|Credits reachable in-app for every bundled asset|human-setup: repo-relay Discord bot token and channel for blamechris/soundbed" ] \
+  && ok "issues: SPEC always, credits with the module, one human-setup per manual step" || bad "plan issues" "$got"
+if plan_field "$PLAN" '[f["path"] for f in p["files"]]' | grep -q 'skill-profile'; then
+  bad "the plan never renders the skill profile (Phase 4 composes it)"
+else ok "the plan never renders the skill profile (Phase 4 composes it)"; fi
+: > "$MG/calls.log"
+FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --plan --json --name soundbed --stack kotlin >/dev/null 2>&1
+[ -s "$MG/calls.log" ] && bad "--plan never calls GitHub" "$(head -2 "$MG/calls.log")" || ok "--plan never calls GitHub"
+
+echo "== self-check (the registry's rule<->probe parity gate)"
+out=$(V --self-check 2>&1); rc=$?
+[ "$rc" -eq 0 ] && ok "self-check passes on this tree's assets" || bad "self-check passes on this tree's assets" "$(flat "$out")"
+SC="$TMP/sc"
+sc_case() {  # <name> <needle> <python statement mutating files under $SC>
+  local name=$1 needle=$2 prog=$3 out rc
+  rm -rf "$SC"; cp -R "$REG" "$SC"
+  (cd "$SC" && python3 -c "import json, os, re
+$prog") || { bad "$name" "mutation failed"; return; }
+  commit_all "$SC" mutant >/dev/null
+  out=$(python3 "$SUT" --registry "$SC" --registry-ref HEAD --no-fetch --self-check 2>&1); rc=$?
+  if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q -- "$needle"; then ok "$name"; else bad "$name" "exit $rc — $(flat "$out")"; fi
+}
+MAN=assets/genesis/standard-v1.json
+LOADM="m = json.load(open('$MAN'))"
+SAVEM="json.dump(m, open('$MAN', 'w'), indent=2)"
+sc_case "a probe-class rule with no probe" "has no probe" "$LOADM
+m['rules'].append({'id': 'core.invented', 'layer': 'core', 'class': 'probe', 'summary': 'x'})
+$SAVEM"
+sc_case "a probe with no rule" "has no rule in the manifest" "$LOADM
+m['rules'] = [r for r in m['rules'] if r['id'] != 'core.pr-template']
+$SAVEM"
+sc_case "an advisory rule that has a probe" "classed advisory but has a probe" "$LOADM
+next(r for r in m['rules'] if r['id'] == 'core.readme')['class'] = 'advisory'
+$SAVEM"
+sc_case "a duplicated rule id" "appears more than once" "$LOADM
+m['rules'].append(dict(m['rules'][0]))
+$SAVEM"
+sc_case "an orphan template" "referenced by nothing" "open('assets/genesis/templates/core/orphan.md.tmpl', 'w').write('x')"
+sc_case "a referenced template that is missing" "which does not exist" "os.remove('assets/genesis/templates/core/NON-GOALS.md.tmpl')"
+sc_case "a template without the .tmpl suffix" "lacks the .tmpl suffix" "$LOADM
+os.rename('assets/genesis/templates/core/gitignore.tmpl', 'assets/genesis/templates/core/.gitignore')
+next(f for f in m['core']['files'] if f['path'] == '.gitignore')['template'] = 'templates/core/.gitignore'
+$SAVEM"
+sc_case "an undeclared placeholder" "undeclared placeholder @@INVENTED@@" "p = 'assets/genesis/templates/core/README.md.tmpl'
+open(p, 'a').write('@@INVENTED@@\n')"
+sc_case "an action pinned to a tag in a template" "not pinned to a full SHA" "p = 'assets/genesis/templates/core/ci.yml.tmpl'
+s = open(p).read(); open(p, 'w').write(s.replace('actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1', 'actions/checkout@v7', 1))"
+sc_case "a ruleset document with a bypass actor" "has bypass actors" "p = 'assets/genesis/ruleset-main.json'
+d = json.load(open(p)); d['bypass_actors'] = [{'actor_id': 5, 'actor_type': 'RepositoryRole', 'bypass_mode': 'always'}]
+json.dump(d, open(p, 'w'))"
+sc_case "a ruleset requiring more than ci-gate" "want exactly \['ci-gate'\]" "p = 'assets/genesis/ruleset-main.json'
+d = json.load(open(p)); next(r for r in d['rules'] if r['type'] == 'required_status_checks')['parameters']['required_status_checks'].append({'context': 'lint', 'integration_id': 15368})
+json.dump(d, open(p, 'w'))"
+sc_case "a repeated seed label" "repeats" "p = 'assets/genesis/labels.json'
+d = json.load(open(p)); d.append(dict(d[0])); json.dump(d, open(p, 'w'))"
+sc_case "a planned module that carries files" "planned module" "$LOADM
+m['modules']['docs-site']['files'] = [{'template': 'templates/core/README.md.tmpl', 'path': 'X.md'}]
+$SAVEM"
+sc_case "a human-setup entry citing a non-human rule" "not marked human" "$LOADM
+m['human_setup'][0]['rule'] = 'core.readme'
+$SAVEM"
+sc_case "a ci fragment whose job ci-gate does not need" "rendered ci.yml: ci-gate needs" "$LOADM
+m['overlays']['kotlin']['ci_job'] = 'kotlin-renamed'
+$SAVEM"
+
+echo "== every probed rule has a mutation that FAILs it"
+probed=$(V --list-rules --json | python3 -c 'import json,sys; print(" ".join(r["id"] for r in json.load(sys.stdin) if r["class"]=="probe"))')
+missing=""
+for r in $probed; do case " $COVERED " in *" $r "*) ;; *) missing="$missing $r" ;; esac; done
+[ -z "$missing" ] && ok "all $(echo $probed | wc -w | tr -d ' ') probed rules are covered by a FAIL mutation" || bad "probed rules without a FAIL mutation:$missing"
+
+echo
+echo "genesis-verify: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

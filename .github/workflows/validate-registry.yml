@@ -488,6 +488,26 @@ jobs:
         # an unfetchable origin refuses rather than reporting agreement.
         run: ./assets/scripts/fleet-check.test.sh
 
+      - name: genesis standard self-check (rule<->probe parity)
+        # Principle 2 of the Fleet Genesis Standard: every rule has a probe in
+        # genesis-verify.py or is classed advisory, so a rule nobody can check never
+        # ships as if it were checked. This fails when a `probe`-class rule in
+        # assets/genesis/standard-v1.json has no probe, when a probe has no rule, when a
+        # template is orphaned or missing, when a placeholder is undeclared or survives
+        # rendering, when a template action is not SHA-pinned (the repos genesis creates
+        # REQUIRE pins), and when the ruleset document grows a bypass actor. It reads HEAD
+        # of this checkout, which on a pull_request run is the merge commit under test.
+        run: python3 assets/scripts/genesis-verify.py --self-check --registry . --registry-ref HEAD --no-fetch
+
+      - name: genesis-verify regression tests
+        # The round trip is the property worth a CI step: the files --plan renders,
+        # written into a repo, verify clean against the same manifest's rules. Around it,
+        # every probed rule has a mutation that turns it FAIL (the suite checks that
+        # coverage against --list-rules, so a new rule without a mutation fails HERE),
+        # anything that stops verify from looking exits 2 and never 0, and the fake gh
+        # refuses write flags, so read-only is asserted rather than claimed.
+        run: ./assets/scripts/genesis-verify.test.sh
+
       - name: registry.json is freshly generated
         run: |
           # Subsumes the old "build-index runs cleanly" smoke step: it still runs

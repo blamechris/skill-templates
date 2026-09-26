@@ -1,0 +1,39 @@
+# Fleet Genesis Standard v1 — core ignores. Overlays append below their own header.
+# CI's `hygiene` job fails when `git ls-files -ci --exclude-standard` is non-empty.
+
+# Tooling
+node_modules
+.env
+.env.*
+!.env.example
+*.log
+coverage/
+tmp/
+.cache/
+.DS_Store
+.idea/
+*.swp
+
+# Key material — never committed, whatever the stack
+*.jks
+*.keystore
+*.p8
+*.p12
+*.pem
+*.key
+*.mobileprovision
+
+# Agent debris
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+scratchpad/
+.session/
+.visual-review/
+autonomous-session-*.md
+*-output.txt
+*-results.txt
+*-current.md
+docs/audit-results/
+.repo-memory/
+@@GITIGNORE_OVERLAYS@@
