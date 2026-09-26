@@ -39,7 +39,7 @@ Each wave runs the full Phase 1-6 cycle from `/autonomous-dev-flow` for each iss
 
 A marathon spans multiple *sessions*, not one endless context. Context re-reads dominate marathon cost, so wave boundaries double as session boundaries:
 
-- **Session ledger + STATE header.** Keep an append-only session ledger ({{CUSTOMIZE: ledger path, e.g. `autonomous-session-<date>.md` at repo root — gitignored, never commit}}). Its top carries a rolling **STATE header** — a compact block (~2K tokens, hard-capped, rewritten in place) holding: current wave + position, queue pointer, open blockers, awaiting-user list, the last **verified** merge (PR + SHA), completions from the last wave, and a compact per-issue attempt table (issue# → attempts, last strategy tried, status) — the fields the Phase 4 convergence check reads instead of the full history. After a compaction or on a fresh session, the STATE header is the **only mandatory read**. The full history below it is consulted on-demand — allowed, and expected, for three purposes: the **Phase 4 convergence assessment**, **Phase 5 merge accounting**, and the **Phase 6 morning summary**. What is prohibited is the routine post-compaction top-to-bottom re-read as a ritual, not these accounting passes.
+- **Session ledger + STATE header.** Keep an append-only session ledger ({{CUSTOMIZE: ledger path, e.g. `autonomous-session-<date>.md` at repo root — gitignored, never commit}}). Its top carries a rolling **STATE header** — a compact block (~2K tokens, hard-capped, rewritten in place) holding: stable run identity, delegated outcome + observable acceptance, usable state + remaining gap, authority, configured limits with their scope (wave/session/run) + cumulative consumption, current wave + position, queue pointer, open blockers, awaiting-user list, the last **verified** merge (PR + SHA), completions from the last wave, and a compact per-issue attempt table (issue# → attempts including failures before a PR exists, last strategy tried, status). Record attempts when they start and reconcile actual usage before another attempt or handoff. After a compaction or on a fresh session, the STATE header is the **only mandatory read**; preserve its consumption across session identifiers. The full history below it is consulted on-demand — allowed, and expected, for three purposes: the **Phase 4 convergence assessment**, **Phase 5 merge accounting**, and the **Phase 6 morning summary**. What is prohibited is the routine post-compaction top-to-bottom re-read as a ritual, not these accounting passes.
 - **Per-wave merge table.** At each wave boundary, append a **"Merged this wave"** table (PR, issue, review, checks, merge SHA) to the ledger history. Phases 5–6 aggregate these tables across all waves — with per-wave session restarts, "merged by this session" means the whole marathon, never just the last wave.
 - **Shed context at each wave boundary — mode-aware.** When a wave completes (after Phase 2 replenishment and the Phase 4 convergence check), write this scope's handoff seed (`$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`), refresh the durable queue ({{CUSTOMIZE: queue path — default `scratchpad/autonomous-queue.json`}}), update the STATE header, then:
   - **Owner-requested pause/restart** — end with the verified seed path and remaining work. A user watching the session is not itself a pause request.
@@ -62,7 +62,7 @@ A marathon spans multiple *sessions*, not one endless context. Context re-reads 
 - **Per-wave cost circuit breaker.** At each wave boundary, compare measured cost with the configured limit and its scope ({{CUSTOMIZE: cost source and owner-set budget, including whether it is per wave, session or run}}). Over budget → write the handoff and **stop and notify**; do not start the next wave. Preserve run limits across restarts; missing measurements are unknown, not zero, and do not justify an invented limit.
 - **Verify state directly, never from a stale reading.** A monitor/watcher ending is **not** a verdict — assert PR/CI state with a direct query before recording it. And `mergeStateStatus` is only meaningful at the **current** head — re-check it after any push before acting on a BLOCKED/CLEAN reading.
 
-`MASTER_LOG` (below) lives in the ledger; the STATE header summarizes it, and Resume Strategy re-derives ground truth from GitHub regardless.
+`MASTER_LOG` (below) lives in the ledger; the STATE header summarizes it. Resume Strategy restores run state from that record and reconciles issue/PR facts against GitHub.
 
 ### Phase 0: Marathon Setup
 
@@ -119,7 +119,7 @@ Display the marathon queue:
 
 Use the user's existing authorization; do not ask for queue approval again when this run is already authorized. If authority or scope is genuinely missing, ask only for that and continue independent authorized preparation. Routine decisions and retries are autonomous within the stated scope and caps.
 
-After establishing authorization, initialize tracking:
+For a new run, establish a stable run identity and initialize tracking. On resume, restore the existing run's ledger and STATE header using Resume Strategy; do not run this initialization over prior attempts or consumption:
 
 ```
 MASTER_LOG = []   # Tracks every attempt: {issue, wave, branch, pr, verdict, error}
@@ -129,6 +129,8 @@ WAVE_NUM = 1
 ### Phase 1: Execute Wave
 
 For each issue in the current wave's queue, run the full `/autonomous-dev-flow` Phases 1-6 cycle:
+
+For an interrupted attempt, first restore its verified branch/worktree and consumption from run state. Resume its unfinished step without creating another branch or counting the same attempt twice. The fresh-main and new-branch steps below apply to new attempts; another run's branch or unverified dirty work remains outside this run's ownership.
 
 1. **Sync Check** — `git checkout main && git pull origin main`
 2. **Issue Understanding** — Read issue, identify files, plan approach
@@ -171,8 +173,10 @@ From `MASTER_LOG`, gather issues where the latest attempt was not `Done`:
 | Done | PR merged through the Unattended Merge Gate, or review-clean and left open where rule 5 withholds merge authority (or under `merge:off`) | No — skip in future waves |
 | Retry | Tests failing or review found critical issues | Yes — re-attempt |
 | Flagged | 2 fix attempts failed in a wave | Yes — with different strategy |
-| Skipped | Specific unavailable access/authority/QA or exhausted approaches; no verified adequate fallback | No — document the evidence, continue independent work |
+| Skipped | Specific unavailable access/authority/QA or exhausted approaches; no verified adequate fallback | Re-evaluate when the recorded dependency changes; resume within remaining limits once it is satisfied. Exhausted limits remain exhausted. |
 | Decomposed | Broken into sub-issues | No — sub-issues are in queue |
+
+When an owner supplies a recorded prerequisite, re-evaluate that item from `MASTER_LOG` and restore it to the actionable queue without waiting for a new issue or a new delegation. Preserve its attempts, wave position and scoped consumption. An unchanged dependency or exhausted allowance keeps it blocked while independent work proceeds.
 
 #### 2b. Scan for New Issues
 
@@ -201,10 +205,10 @@ Note merged PRs. If a merged PR's issue is in the retry queue, remove it — the
 
 #### 2d. Clean Up Failed Branches
 
-For issues entering Wave 2+, delete the stale branch and PR from the previous attempt:
+For a failed attempt intentionally being replaced in Wave 2+, close its superseded PR and delete its stale branch only after preserving any useful work. Exclude interrupted or prerequisite-blocked attempts that will resume: retain their verified branch/PR and consumed state when the prerequisite arrives. Requeueing alone does not authorize this cleanup.
 
 ```bash
-# For each retry candidate:
+# Only for each failed attempt intentionally being replaced:
 # Close the old PR (it had issues)
 gh pr close ${OLD_PR_NUM} --comment "Closing for retry in Wave ${NEXT_WAVE} — previous attempt had: ${FAILURE_REASON}"
 
@@ -212,14 +216,15 @@ gh pr close ${OLD_PR_NUM} --comment "Closing for retry in Wave ${NEXT_WAVE} — 
 git push origin --delete ${OLD_BRANCH}
 ```
 
-This ensures each retry starts completely fresh — new branch from latest main, no stale code.
+Replacement attempts start from latest main; resumed attempts keep their verified existing work and allowance.
 
 #### 2e. Build Next Wave Queue
 
 Combine:
 1. Retry candidates (issues that failed in previous wave)
-2. New issues from replenishment scan
-3. Remaining issues not yet attempted (if queue was large)
+2. Previously blocked items whose prerequisite is now satisfied and whose allowance remains
+3. New issues from replenishment scan
+4. Remaining issues not yet attempted (if queue was large)
 
 Cap at `max` setting. Order by acceptance dependencies and remaining user value; context already spent is not a reason to prefer a retry over a necessary feature.
 
@@ -314,6 +319,8 @@ Where Critical Rule 5 grants gated self-merge, merging happens **inline during w
 
 ### Phase 6: Morning Summary
 
+Before a wait-only handoff, advance each independently actionable slice through its authorized review and delivery gates within the remaining limits. Name the actual dependency for every slice left waiting. An owner supplying a prerequisite enables the agent to resume already-delegated execution; assign the owner only the reserved action and retain the agent's next step in the handoff.
+
 Lead with the delegated outcome, current usable result, remaining acceptance gap and actual continuation state. Name the accepted next task/session if one exists, or the precise QA/access action or exhausted limit. Do not turn an optional follow-up into a user decision, and do not claim that a seed alone scheduled continuation.
 
 Output a comprehensive summary designed for the user to read when they return. This is the primary deliverable of an overnight session. It covers the **entire marathon across all waves** — build it from the ledger's per-wave "Merged this wave" tables and full history (an on-demand-allowed read; see Session Boundaries), not from what the current session segment happens to remember.
@@ -401,16 +408,12 @@ This skill resumes from **GitHub state** for issue/PR status. The ledger and han
 
 If a marathon session is interrupted (crash, timeout, user stops it), re-running with the same arguments will:
 
-1. Query GitHub for existing session branches (matching `BRANCH_PREFIX_RE`) and PRs referencing each issue
-2. Detect which wave the session was in by counting attempts per issue
-3. Skip issues that already have merged or clean open PRs
-4. Resume from the first unfinished issue in the current wave
+1. Restore the stable run identity, outcome, acceptance, authority, wave position, per-issue attempts and consumed limits from the durable STATE header. Keep failures that occurred before a PR was created.
+2. Query GitHub for existing session branches (matching `BRANCH_PREFIX_RE`) and PRs referencing each issue; reconcile repository state without reducing recorded consumption. PR counts alone do not establish attempts or wave position.
+3. Verify merged results against acceptance. Retain open PRs and re-check their current-head review, CI and remaining delivery gates; an approved open PR may still need authorized work. Avoid duplicate implementation without classifying unfinished delivery as done.
+4. Resume the next actionable item within the recorded limits, using the escalation appropriate to its actual attempt history. A new session identifier does not begin a new run allowance.
 
-**Wave detection on resume:**
-- Issues with 0 PRs → not yet attempted (Wave 1)
-- Issues with 1 closed PR + no open PR → failed Wave 1, ready for Wave 2
-- Issues with 2 closed PRs + no open PR → failed W1+W2, ready for Wave 3
-- Issues with an open, approved PR → done, skip
+**Missing or conflicting history:** recover it from available durable records. Zero PRs does not mean zero attempts; missing usage is unknown, not zero. If remaining allowance cannot be established, pause work governed by that uncertain limit and name the accounting dependency. Continue independent work only where its authority and remaining allowance are known. Do not reset limits to reconcile a mismatch.
 
 This makes the skill **idempotent** — safe to re-run without duplicating work.
 
@@ -426,17 +429,17 @@ This makes the skill **idempotent** — safe to re-run without duplicating work.
 8. **Converge, don't loop forever** — Zero completions triggers a bounded reassessment, not automatic failure. Keep the configured wave/attempt/budget caps, preserve them across restarts, and do not repeat a failing approach unchanged.
 9. **Progress table after every issue** — The user may check in at any time. The table must show wave context.
 10. **Respect the hard cap** — Max 30 issues across all waves (including sub-issues from decomposition). Refuse larger queues.
-11. **Resume from GitHub state** — GitHub is the source of truth for issue/PR status; detect wave progress from closed/open PR counts per issue. The ledger and handoff note are seeds, never a second source of truth.
+11. **Resume from durable run state and GitHub** — The ledger preserves run identity, intent, authority, attempts and consumed limits; GitHub supplies current issue/PR facts. Reconcile both as Resume Strategy requires. Missing PRs or a new session never reset consumption.
 12. **Compose existing skills** — `/full-review` is called as-is. Where Critical Rule 5 grants self-merge, the Unattended Merge Gate (`unattended-merge`) governs it; `/batch-merge` handles leftovers under `merge:off` or where rule 5 withholds merge authority. Don't reinvent their logic.
 13. **Decompose in Wave 1 only** — High-complexity decomposition happens once. Retries work on the sub-issues, not the parent.
 14. **Comment on blocked issues** — Every issue that fails all waves gets a detailed GitHub comment with what was tried and why it failed.
 15. **Pre-Skill Checkpoint** — Re-read CLAUDE.md and skill files before running `/full-review` in every wave.
 16. **Sync before every branch** — Always `git checkout main && git pull` before starting each issue in each wave.
 17. **Morning summary is mandatory** — Even if interrupted, output the best summary possible with data collected so far.
-18. **Wave boundaries are session boundaries** — Shed context at each wave boundary, mode-aware: end + restart fresh from handoff note + queue + the ledger's STATE header where the user or a configured re-launcher will relaunch; force a boundary compaction and continue where nothing would. Keep to one wave per session (no numeric context ceiling — heavy tool output goes through subagents) and respect the per-wave cost circuit breaker (see Session Boundaries and the Session Ledger).
+18. **Wave boundaries use the verified continuation contract** — Follow Session Boundaries and the Session Ledger: preserve the handoff + queue + STATE header, verify the authorized next run was accepted before ending for a restart, otherwise continue using supported host capabilities. A configured launcher, saved seed or watching owner is insufficient. Preserve actual pause requests, dependencies and limit stops; report a genuine host limitation when continuation is unavailable. Never require an unsupported compaction command.
 19. **STATE header over full re-reads** — After compaction, read only the ledger's STATE header; the full ledger history is on-demand reference, never a mandatory re-read.
 20. **Explicit-path staging** — `git status --short`, then `git add` the changed files by name. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. A marathon runs for hours in a working copy other sessions also use, so a bulk add commits their files into your PR. `-u` is not the safe one: it restages tracked files a clean/smudge filter rewrote behind your back, which is how a tracked 21KB `.docx` was committed as a git-lfs pointer.
-21. **Assert the branch before you write** — record each issue's branch as `SESSION_BRANCH` and re-check `git branch --show-current` against it immediately before the first edit and again immediately before staging. HEAD is global to the working copy, so a checkout from earlier in the wave proves nothing. Never write to a branch this session did not create.
+21. **Assert the branch before you write** — record each issue's newly created branch, or its restored branch with ownership verified from this run's durable record, as `SESSION_BRANCH`. Re-check `git branch --show-current` against it immediately before the first edit and again immediately before staging. HEAD is global to the working copy, so a checkout from earlier in the wave proves nothing. Never write to another run's branch or assume ownership from its name alone.
 
 ## Customization Points
 

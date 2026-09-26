@@ -23,6 +23,8 @@ step 7) — full-review does not repeat that call, only relies on it having run.
 
 ### Phase 2: Check-PR
 
+Carry any caller-supplied repair and budget limits into `/check-pr`, `/fix-ci` and fix-delta verification using the same durable run record. Before each correction round, check the remaining applicable allowance and record its consumption before the first edit; read-only triage does not consume a repair round. A restart or nested skill call does not create another allowance. If the allowance is exhausted or cannot be established, retain unresolved defects as `request_changes`, report the limit and return control to the caller for independent work. Do not start another fixer to evade the cap.
+
 After agent-review completes, run the `/check-pr` skill on the same PR. By now, Copilot review has typically arrived (~4 min). This skill:
 - Waits for Copilot review if still pending (Step 0 polling)
 - Processes inline comments **and general review/issue-comment summaries**, including agent-review findings that have no inline thread
@@ -62,8 +64,10 @@ suite never notices).
    many, queue refutation rounds; never let finding count widen the fan-out past the cap.
 3. Tell the verifier explicitly that **"nothing found" is a valid result** — it must not
    manufacture findings to justify the pass.
-4. A real finding loops back through Phase 2 (fix → reply → resolve → re-verify the new
-   delta); "nothing found" proceeds to the final acceptance/merge gates, not directly to merge.
+4. A real finding loops back through Phase 2 only while the shared correction allowance
+   and workflow-agent cap permit it (fix → reply → resolve → re-verify the new delta).
+   At exhaustion, keep the finding blocked and return its evidence and consumed limits.
+   "Nothing found" proceeds to the final acceptance/merge gates, not directly to merge.
 
 If Phase 2 pushed no commits, skip (nothing new to verify).
 

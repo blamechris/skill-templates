@@ -90,6 +90,8 @@ Use `PENDING_COMMENTS` to avoid duplicate inline replies. Also process unaddress
 
 ### 3. Process EVERY Pending Finding — ONE AT A TIME
 
+Honor any caller-supplied correction-round and budget allowance from the shared run record. Use the current round recorded by `/full-review`; do not count it twice or reset it here. Before beginning a new correction round, establish and record its remaining allowance before editing. At an exhausted or unknown applicable limit, report unresolved findings as `**BLOCKED**`, retain `request_changes`, and return control without starting another repair. Read-only disposition checks may continue within remaining budget.
+
 For each pending review comment (Copilot or human), you MUST do ALL of these steps **before moving to the next comment**:
 
 1. Read the comment carefully

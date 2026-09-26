@@ -558,5 +558,9 @@ When a task completes and work remains:
    requested backlog-clear run keeps its selected backlog scope.
 4. Name the specific evidence and missing QA/access/authority for a real blocker. Ask for
    user action only when needed; zero issue closures alone does not establish a blocker.
+   Before a wait-only handoff, advance independently actionable slices through their
+   authorized review and delivery gates within the remaining limits. An owner supplies
+   only the reserved prerequisite; retain and resume the agent's already-delegated
+   execution when it arrives through the supported continuation mechanism.
    Keep configured retry/budget caps and do not silently expand scope, fake-merge, or drop
    a follow-on unrecorded.
