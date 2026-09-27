@@ -124,8 +124,9 @@ A profile written *after* installs arrives too late for the pins that matter mos
 4. **A re-run writes nothing new, and never overwrites a decision.**
    - If the composed file is byte-identical to the existing one, write nothing, so a genesis resume leaves every lock's profile hash where it was.
    - REFUSE and write nothing when an existing `### Self-merge posture` pin disagrees with the plan's posture. A posture flip is the owner's edit, never a re-plan's.
-   - REFUSE and write nothing when the existing `## project-genesis Customizations` records an overlay or module that the plan's intent lacks. A re-plan may add a layer, which is `/project-genesis --add`, but never drop one.
-   - Keep any existing section for a skill outside the list, in its original order, after the composed sections.
+   - REFUSE and write nothing when the existing `## project-genesis Customizations` records an overlay or module that the plan's intent lacks. A re-plan never drops a layer.
+   - The existing section's `credits-paths:` and `waivers:` lines are the owner's to maintain, and the plan renders both as `none`. So keep an existing line whose value is not `none`, verbatim.
+   - Keep every existing section whose heading the composition does not itself produce, in its original order, after the composed sections. A heading the composition does produce, such as `## unattended-merge Customizations`, appears exactly once.
 
 ### 5. Write / report
 

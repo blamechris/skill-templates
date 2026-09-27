@@ -50,13 +50,14 @@ G="${GENESIS_SCRATCH:-${TMPDIR:-/tmp}/genesis-$NAME}"   # session scratchpad, ne
 PLAN_JSON="$G/plan.json"; VERIFY_JSON="$G/verify.json"; WRITTEN="$G/written.txt"
 GV="$G/genesis-verify.py"                     # extracted in Phase 0 from the plan's registry commit
 PLAN_REF=$(jq -r '.registry.commit // empty' "$PLAN_JSON" 2>/dev/null)
-SESSION_BRANCH=$(cat "$G/branch" 2>/dev/null)
-WT="${GENESIS_WT_ROOT:-${TMPDIR:-/tmp}}/$NAME-genesis-${SESSION_BRANCH##*/}"
+SESSION_BRANCH=$(cat "$G/branch" 2>/dev/null); EPIC=$(cat "$G/epic" 2>/dev/null)
+WT=${SESSION_BRANCH:+${GENESIS_WT_ROOT:-${TMPDIR:-/tmp}}/$NAME-genesis-${SESSION_BRANCH##*/}}
 failed() { jq -e --arg r "$1" '.results[] | select(.rule == $r) | .result == "FAIL"' "$VERIFY_JSON" >/dev/null; }
 put() { jq "$2" "$PLAN_JSON" | gh api -X PUT "repos/$R/$1" --input - --silent; }
+epic_plan() { gh issue view "${EPIC:?}" -R "$R" --json body -q .body | awk '/^```genesis-plan/{f=1;next} /^```/{f=0} f'; }
 ```
 
-Any block that writes guards its inputs first, so an unset value aborts instead of expanding to `""`: `: "${WT:?}" "${SESSION_BRANCH:?}" "${PLAN_JSON:?}"`. `$G/branch` holds the one branch name Phase 1 chose, because the worktree path is derived from it. It is a path input, not a progress marker.
+Any block that writes guards its inputs first, so an unset value aborts instead of expanding to `""`: `: "${WT:?}" "${SESSION_BRANCH:?}" "${PLAN_JSON:?}"`. `WT` stays empty until Phase 1 has chosen a branch, so that guard really fires. `$G/branch`, `$G/epic` and `$G/relay-token-in` hold values Phase 0 and Phase 1 chose, which later blocks cannot re-derive for free. They are inputs, not progress markers. Write `${VAR}` rather than `$VAR` wherever a colon follows: zsh, which is the agent's shell, reads `"$PLAN_REF:a…"` as a history modifier.
 
 Every `/skill`, `/skill-profile`, `/create-issue` and `/create-pr` step below runs with **the worktree as the repo root**. Run it as `cd "${WT:?}" && …`, and assert the branch before it writes.
 
@@ -75,28 +76,37 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
    ```bash
    mkdir -p "$G"
    EPIC_TITLE=$(git -C "$REG" show origin/main:assets/genesis/standard-v1.json | jq -r .epic_title)
+   EPIC=""
    if gh repo view "$R" >/dev/null 2>&1; then
      EPIC=$(gh issue list -R "$R" --state all --label epic --limit 200 --json number,title \
        | jq -r --arg t "$EPIC_TITLE" '.[] | select(.title == $t) | .number' | head -1)
    fi
+   if [ -n "$EPIC" ]; then
+     echo "$EPIC" > "$G/epic"                           # resume
+   else                                                 # fresh create: nothing from an earlier run may pin it
+     rm -f "$G/plan.json" "$G/verify.json" "$G/written.txt" "$G/branch" "$G/epic" "$G/relay-token-in" "$G/genesis-verify.py"
+   fi
    ```
-   - **The repo exists and has the epic: this is a resume.** The epic body carries the approved intent in a fenced `genesis-plan` block, including the registry commit and date the plan was rendered at. Set `PLAN_REF` to that commit. Re-render in step 6 with `--registry-ref "$PLAN_REF" --date <that date>` plus the recorded flags, including the recorded `--relay-token-in`; do **not** re-run step 5 on a resume. If the arguments given now differ from the recorded intent, stop and ask; never silently re-plan.
+   - **The repo exists and has the epic: this is a resume.** The epic body carries the approved intent in a fenced `genesis-plan` block (`epic_plan` prints it), including the registry commit and date the plan was rendered at. Step 6 re-renders from exactly that block, and step 5 is skipped. If the arguments given now differ from the recorded intent, stop and ask; never silently re-plan.
    - **The repo exists without the epic.** Genesis files the epic seconds after creating the repo, so this is almost always a repo genesis did not make: REFUSE, and point to `--audit` or `--add`. The one exception is a repo whose only branch is `main` and whose only commit is GitHub's own README commit. There, genesis may have stopped between those two steps. Ask the owner whether to adopt it, and continue only on an explicit yes.
    - **`~/Projects/$NAME` exists but is not a git checkout of `$R`: REFUSE.** Never delete or reuse it.
-5. **Secret reuse (names only).** Only in a fresh create, never on a resume. For `repo-relay`, find the sibling repos that already hold the bot token. The API returns secret **names** only, never values:
+5. **Secret reuse (names only).** Only in a fresh create, never on a resume. For `repo-relay`, find the sibling repos that already hold the bot token. The API returns secret **names** only, never values. Step 6 reads the result from a file, because a variable does not survive to its block:
    ```bash
-   RELAY_IN=$(for r in $(gh repo list blamechris --limit 200 --json name -q '.[].name'); do
-       [ "$r" = "$NAME" ] && continue
-       gh secret list -R "blamechris/$r" --json name -q '.[].name' 2>/dev/null | grep -qx DISCORD_BOT_TOKEN && echo "$r"
-     done | paste -sd, -)
+   for r in $(gh repo list blamechris --limit 200 --json name -q '.[].name'); do
+     [ "$r" = "$NAME" ] && continue
+     gh secret list -R "blamechris/$r" --json name -q '.[].name' 2>/dev/null | grep -qx DISCORD_BOT_TOKEN && echo "$r"
+   done | paste -sd, - > "$G/relay-token-in"
    ```
-6. **Plan.** Pin one registry commit and use it for both the manifest and the script that reads it. A newer script need not render an older manifest, so resumes and the final verify use this same pair:
+6. **Plan.** Pin one registry commit and use it for both the manifest and the script that reads it. A newer script need not render an older manifest, so resumes and the final verify use this same pair. The commit is chosen by mode, never inherited from an earlier run:
    ```bash
-   PLAN_REF=${PLAN_REF:-$(git -C "$REG" rev-parse origin/main)}
-   git -C "$REG" show "$PLAN_REF:assets/scripts/genesis-verify.py" > "$G/genesis-verify.py"
+   if [ -n "${EPIC:-}" ]; then PLAN_REF=$(epic_plan | jq -r .registry_commit)     # resume
+   else PLAN_REF=$(git -C "$REG" rev-parse origin/main); fi                   # fresh create
+   git -C "$REG" show "${PLAN_REF}:assets/scripts/genesis-verify.py" > "$GV" && test -s "$GV" \
+     || { echo "REFUSE: cannot extract genesis-verify.py at ${PLAN_REF:-<no commit>}"; exit 2; }
    ```
-   Build the arguments from the flags the owner actually gave. An absent flag must stay absent, both so the manifest supplies the default and so the Decisions table can show which choices were defaulted:
+   **On a resume**, the arguments are the epic block's recorded intent, every one of them: `--stack` (its overlays, or `none`), `--modules`, `--app-id`, `--visibility`, `--posture`, `--description`, `--date` and `--relay-token-in` (its list, or `none`). The render is then byte-identical. **On a fresh create**, build the arguments from the flags the owner actually gave. An absent flag must stay absent, both so the manifest supplies the default and so the Decisions table can show which choices were defaulted:
    ```bash
+   RELAY_IN=$(cat "$G/relay-token-in" 2>/dev/null)
    ARGS=(--plan --registry "$REG" --registry-ref "$PLAN_REF" --name "$NAME" --relay-token-in "${RELAY_IN:-none}")
    [ -n "${STACK:-}" ]       && ARGS+=(--stack "$STACK")
    [ -n "${MODULES:-}" ]     && ARGS+=(--modules "$MODULES")
@@ -104,12 +114,11 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
    [ -n "${VISIBILITY:-}" ]  && ARGS+=(--visibility "$VISIBILITY")
    [ -n "${POSTURE:-}" ]     && ARGS+=(--posture "$POSTURE")
    [ -n "${DESCRIPTION:-}" ] && ARGS+=(--description "$DESCRIPTION")
-   [ -n "${PLAN_DATE:-}" ]   && ARGS+=(--date "$PLAN_DATE")        # resume: the recorded date
-   python3 "$G/genesis-verify.py" "${ARGS[@]}" --json > "$PLAN_JSON"; RC=$?
+   python3 "$GV" "${ARGS[@]}" --json > "$PLAN_JSON"; RC=$?
    ```
    Exit `2` is a REFUSE, such as a planned layer, a missing `runner-mac`, an invalid app ID or a bad slug. Show its stderr and stop. On `0`, present the plan exactly as the script prints it:
    ```bash
-   python3 "$G/genesis-verify.py" "${ARGS[@]}"
+   python3 "$GV" "${ARGS[@]}"
    ```
    That output is the write table plus the **Decisions** table, which lists every choice with its value, recommendation, reason and whether it was defaulted. Do not hand-build either table.
 7. **Seed issues.** If `--seed-issues` was given, parse it now. Every entry needs a title, a body and a `Labels:` line whose labels all appear in the plan's `.github.labels`. Any other shape is a REFUSE, naming the entry.
@@ -128,21 +137,42 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
    DESC=$(jq -r '.intent.description // ""' "$PLAN_JSON"); [ -n "$DESC" ] && CREATE+=(--description "$DESC")
    gh repo view "$R" >/dev/null 2>&1 || "${CREATE[@]}"
    ```
-3. **File the epic now, before anything else can fail.** The epic is what makes a stopped genesis resumable, so it follows the repo immediately. First create only the `epic` label, from the plan:
-   ```bash
-   jq -r '.github.labels[] | select(.name == "epic") | [.name, .color, .description] | @tsv' "$PLAN_JSON" \
-     | while IFS=$'\t' read -r n c d; do gh label create "$n" --color "$c" --description "$d" --force -R "$R"; done
-   ```
-   Then file `.epic.title` with `.epic.labels`, using the registry `/create-issue` template and `--standalone`. Its body is the approved plan, which is the printed write table and Decisions table. After those comes a fenced block tagged `genesis-plan` holding the output of `jq '{intent, registry_commit: .registry.commit}' "$PLAN_JSON"`. That block is how a resume re-renders the same plan. Record `EPIC`.
-4. **Create the canonical checkout** only if it is absent:
+3. **Create the canonical checkout** only if it is absent:
    ```bash
    test -d "$HOME/Projects/$NAME/.git" || git clone "git@github.com:$R.git" "$HOME/Projects/$NAME"
    git -C "$HOME/Projects/$NAME" fetch --prune origin
    ```
-5. **Choose the branch and create the worktree.** Before the scaffold PR merges, work continues on `genesis/scaffold`. After it has merged (`origin/main` carries ADR-0001), a follow-up gets a fresh `genesis/followup` branch. The worktree lives outside `.claude/worktrees/`, which the harness reaps on its own schedule:
+4. **File the epic now, before anything else can fail.** The epic is what makes a stopped genesis resumable, so it follows the repo immediately. First create only the `epic` label, from the plan:
    ```bash
-   if git -C "$HOME/Projects/$NAME" cat-file -e origin/main:docs/adr/0001-project-genesis.md 2>/dev/null; then
-     B=genesis/followup
+   jq -r '.github.labels[] | select(.name == "epic") | [.name, .color, .description] | @tsv' "$PLAN_JSON" \
+     | while IFS=$'\t' read -r n c d; do gh label create "$n" --color "$c" --description "$d" --force -R "$R"; done
+   ```
+   Then follow the registry `/create-issue` template with `--standalone`, **from `~/Projects/$NAME`** (the worktree does not exist yet) and with `-R "$R"` on every `gh` call it makes, so the epic cannot land in another repo:
+   - The title is `.epic.title`.
+   - The labels are exactly `.epic.labels`. Drop the `enhancement` label the template adds by default.
+   - The body is the approved plan: the printed write table and Decisions table, then a fenced block tagged `genesis-plan` holding the output of `jq '{intent, registry_commit: .registry.commit}' "$PLAN_JSON"`. That block is how a resume re-renders the same plan.
+
+   Then write the number to `$G/epic`, and confirm the labels by reading them back:
+   ```bash
+   echo "$EPIC" > "$G/epic"
+   [ "$(gh issue view "$EPIC" -R "$R" --json labels -q '[.labels[].name] | sort | join(",")')" = \
+     "$(jq -r '.epic.labels | sort | join(",")' "$PLAN_JSON")" ] || echo "FIX: the epic's labels differ from the plan"
+   ```
+5. **Choose the branch and create the worktree.** In order:
+   - An open genesis PR is resumed on its own branch.
+   - Before the scaffold PR merges, work stays on `genesis/scaffold`.
+   - After it has merged (`origin/main` carries ADR-0001), each follow-up gets a fresh, time-stamped branch, so it always starts from the current `main`.
+
+   The worktree lives outside `.claude/worktrees/`, which the harness reaps on its own schedule:
+   ```bash
+   B=$(cat "$G/branch" 2>/dev/null)
+   OPEN=$(gh pr list -R "$R" --state open --json headRefName -q '.[].headRefName' | grep -m1 '^genesis/' || true)
+   if [ -n "$B" ] && [ -e "${GENESIS_WT_ROOT:-${TMPDIR:-/tmp}}/$NAME-genesis-${B##*/}/.git" ]; then
+     :                                   # this session's branch, with its worktree still in place
+   elif [ -n "$OPEN" ]; then
+     B=$OPEN
+   elif git -C "$HOME/Projects/$NAME" cat-file -e origin/main:docs/adr/0001-project-genesis.md 2>/dev/null; then
+     B=genesis/followup-$(date -u +%Y%m%d%H%M)
    else
      B=genesis/scaffold
    fi
@@ -156,7 +186,7 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
      git -C "$HOME/Projects/$NAME" worktree add -B "$B" "$WT" origin/main
    fi
    ```
-   `-B` resets a stale local branch left behind by an earlier, merged PR. Every earlier phase pushed its work, so nothing that exists only locally can be lost.
+   `-B` resets a stale local branch left behind by an earlier, merged PR. Every earlier phase pushed its work, so nothing that exists only locally can be lost. Once `$G/branch` names a branch with a live worktree, later runs of this step keep it.
 
 ### Phase 2: GitHub Settings, Labels, Ruleset
 
@@ -250,9 +280,9 @@ Exit `2` means the probe could not look, for example because the token lacks adm
      tr '\n' '\0' < "$WRITTEN" | xargs -0 git -C "$WT" add --
      git -C "$WT" commit -m "chore: scaffold ${NAME} to Fleet Genesis Standard v1"
    fi
-   git -C "$WT" push -u origin "$SESSION_BRANCH"
+   [ -n "$(git -C "$WT" log --oneline origin/main..HEAD)" ] && git -C "$WT" push -u origin "$SESSION_BRANCH"
    ```
-   On a resume where nothing is missing, this phase writes nothing.
+   On a resume where nothing is missing, this phase writes nothing and pushes nothing. A branch with no commits over `main` is never pushed.
 
 ### Phase 4: Profile and Skills
 
@@ -279,6 +309,8 @@ Profile first: nothing is installed until the step 2 check passes.
 2. **Issues.** File every `plan.issues` entry under the epic, then each `--seed-issues` entry. Use the installed `/create-issue --from-issue $EPIC`, and give each issue **exactly** its entry's labels. Drop the `enhancement` label the create-issue template adds by default unless the entry lists it:
    - **A work issue** is the SPEC issue, which is always filed, or the credits issue when `credits` is on. Its body is the create-issue shape: `## Context` with `Filed from: #$EPIC`, then `## Description` holding the entry's `description`, then `## Acceptance Criteria` as a checklist of its `acceptance`.
    - **A `human-setup` issue** has the body `## Context` with `Filed from: #$EPIC`, followed by the entry's `body` verbatim: What · Why a human · Exact steps · Secret names · Reuse or create · Done when. Pass the body through a file (`jq -r '.issues[N].body' "$PLAN_JSON"`), never retyped.
+
+   Read each issue's labels back (`gh issue view <n> -R "$R" --json labels`) and correct any that differ from its entry with `gh issue edit --add-label/--remove-label`.
 3. **Re-probe the human steps.** Run the Phase 2 probe block again. Every rule the manifest marks `human` must read PASS or PENDING-HUMAN, never FAIL. PENDING-HUMAN is how the probe proves the issue it matched carries the backticked rule ID in its "Done when". A FAIL here means that issue did not land as rendered: fix the issue body, not the probe.
 4. **Assert a clean tree.** Phase 5 writes no repo files. If `git -C "$WT" status --short --untracked-files=all` prints anything, stop: a module's repo file belongs in Phase 3.
 
@@ -286,12 +318,14 @@ Profile first: nothing is installed until the step 2 check passes.
 
 1. **Open the PR.** From the worktree, run the installed `/create-pr`. The body references `Refs #$EPIC`, not `Fixes`, because the epic closes only when verification passes.
 2. **Review at LOW tier.** Run an inline `/code-review` at high effort, with no subagent fan-out. The templates were reviewed at HIGH in the registry; only per-repo values are new.
-3. **Wait for CI.** `gh pr checks --watch` exits at once while no required check has been reported yet, so first wait for `ci-gate` to appear:
+3. **Wait for CI.** `gh pr checks --watch` exits at once while no required check has been reported yet, so first wait for `ci-gate` to appear. That wait is bounded to stay inside one tool call:
    ```bash
-   for _ in $(seq 60); do
-     gh pr checks "$PR" -R "$R" --required --json name -q '.[].name' 2>/dev/null | grep -qx ci-gate && break
+   PR=$(gh pr list -R "$R" --head "${SESSION_BRANCH:?}" --state open --json number -q '.[0].number'); : "${PR:?no open PR for $SESSION_BRANCH}"
+   seen=""; for _ in $(seq 40); do
+     gh pr checks "$PR" -R "$R" --required --json name -q '.[].name' 2>/dev/null | grep -qx ci-gate && { seen=1; break; }
      sleep 10
    done
+   [ -n "$seen" ] || { echo "STOP: ci-gate has not appeared after ~7 minutes; is the runner online?"; exit 1; }
    gh pr checks "$PR" -R "$R" --required --watch
    ```
    On a failure, use the installed `/fix-ci`. `ci-gate` is the only required check. If it never appears because no runner picks the jobs up, the runner from Phase 5 is not online; fix that rather than routing around it.
@@ -316,10 +350,11 @@ Profile first: nothing is installed until the step 2 check passes.
 
 ### Mode: `--audit`
 
-1. Resolve the registry as above. The machine copy of the script may be missing or stale, so extract the current one into the scratchpad:
+1. The machine copy of the script may be missing or stale, so this block resolves the registry and extracts the current script itself. A failed extraction is "could not verify", never a pass:
    ```bash
-   G="${TMPDIR:-/tmp}/genesis-audit"; mkdir -p "$G"
-   git -C "$REG" show origin/main:assets/scripts/genesis-verify.py > "$G/genesis-verify.py"
+   REG="${SKILL_REGISTRY_DIR:-$HOME/Projects/skill-templates}"; G="${TMPDIR:-/tmp}/genesis-audit"; mkdir -p "$G"
+   git -C "$REG" fetch -q origin && git -C "$REG" show origin/main:assets/scripts/genesis-verify.py > "$G/genesis-verify.py" \
+     && test -s "$G/genesis-verify.py" || { echo "could not verify: no genesis-verify.py from $REG"; exit 2; }
    python3 "$G/genesis-verify.py" --repo . --ref origin/main --registry "$REG" [--json]
    ```
    A genesis repo supplies its own intent from the profile. A repo that predates the standard has none, so pass the layers it actually has (`--stack`, `--modules`, `--app-id`). Otherwise every overlay and module rule reads N-A.
@@ -334,13 +369,13 @@ Profile first: nothing is installed until the step 2 check passes.
    - the profile's recorded intent plus the new layer;
    - `--posture` read from the profile's own `### Self-merge posture` pins, because a re-plan must never change a pin;
    - `--date` taken from ADR-0001;
-   - the current registry.
+   - the current registry, with `PLAN_REF` set explicitly to the current `origin/main` commit.
 
    Present only the delta and wait for approval.
 3. Work on a branch named `genesis/add-<layer>` and run Phases 2–6 restricted to that layer:
    - **A module:** write the files in `plan.files` whose `layer` is that module. The Phase 3 writer already leaves existing files alone.
    - **An overlay:** it also changes core files through its fragments (`ci.yml`, `.gitignore`, `.gitattributes`, `dependabot.yml`). Show the owner the diff of each against the repo's current copy, and write them only on approval, because the repo may have deliberate local edits there. Never rewrite owner prose (`README.md`, `MISSION.md`, `NON-GOALS.md`, ADRs).
-   - **The profile:** update `## project-genesis Customizations` through `/skill-profile --planned`. That call replaces the section because the new intent keeps every existing layer.
+   - **The profile:** replace only the `## project-genesis Customizations` section with the plan's `.profile.section`. Keep the section's existing `credits-paths:` and `waivers:` lines verbatim, because the owner maintains them and the plan knows neither. Touch nothing else in the profile: sections added since genesis, such as a Status line or a per-skill footgun, are the owner's. Then assert the branch and stage the profile by name.
    - **Deferred skills:** when the layer is an overlay, install the deferred skills whose trigger it meets, then run `/skill update` for any skill whose profile hash moved.
 
 ## Error Recovery
@@ -352,6 +387,7 @@ Profile first: nothing is installed until the step 2 check passes.
 | The repo exists without an epic | Not a genesis repo: use `--audit` or `--add`. The only exception is a README-only repo that genesis may have stopped on, and only with the owner's yes. |
 | A probe exits 2 or reads ERROR | The probe could not look, often because the token lacks admin on the repo. Fix access, then re-probe. Never write blind. |
 | A variable reads empty, or a helper is "not found" | The shell was new. Re-run the preamble; never let `cd ""` or a missing `failed` stand in for a result. |
+| A `git show` path comes out mangled in zsh | A `$VAR:x` modifier expanded. Write `${VAR}:path`. |
 | HEAD is not `SESSION_BRANCH` | Stop writing, re-establish the branch, then re-probe. |
 | A `main` ruleset differs from the document | Report the probe's evidence; the owner decides. Never overwrite. |
 | `skill-lint` exit ≠ 0 on an install | Fix the profile value it names, then `/skill add` again. Never hand-edit the installed file. |
