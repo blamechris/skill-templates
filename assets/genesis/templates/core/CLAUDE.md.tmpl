@@ -1,0 +1,74 @@
+# @@NAME@@ — agent contract
+
+## What this is
+
+@@DESCRIPTION@@ See [`MISSION.md`](MISSION.md) for why it exists and
+[`NON-GOALS.md`](NON-GOALS.md) for what it deliberately does not do. The load-bearing
+invariant is stated in `MISSION.md`; until the owner writes it there, there is none to cite.
+
+## Floor rules
+
+The fleet's floor rules apply here unchanged. Their text lives in `~/.claude/CLAUDE.md`
+(the registry copy is `assets/global-CLAUDE.md` in `blamechris/skill-templates`); this file
+carries only their IDs, because a third copy of the text is the drift the rule-class tokens
+exist to prevent:
+
+@@FLOOR_IDS@@
+
+## Session start
+
+Run `/session-lifecycle start`. The seed for this repo is whatever
+`python3 ~/.claude/scripts/session-seed.py path` prints from inside this checkout.
+
+## Architecture & invariants
+
+Empty until a stack decision lands (an ADR under `docs/adr/`).
+
+## Build / test / lint
+
+@@BUILD_COMMANDS@@
+
+These lines match `## Build / Test Commands` in `.claude/skill-profile.md` exactly.
+
+## Git workflow
+
+- Work in your own worktree (`git worktree add`), never in the shared checkout.
+- Branches: `<type>/<issue>-<slug>`. Commits: Conventional Commits, `type(scope): subject`.
+- Squash-merge only; the PR body carries `Fixes #N`.
+- Stage explicit paths by name — never `git add -A`, `.`, `-u`, `<dir>/`, or `commit -a`.
+- Assert the branch (`git branch --show-current`) before the first edit and before staging.
+
+## Review & merge gate
+
+The default risk tier is MEDIUM. The self-merge posture is pinned in
+`.claude/skill-profile.md` (`### Self-merge posture`) and nowhere else. Never
+`gh pr merge --admin` and never `--auto`: the `main` ruleset has no bypass actors.
+
+## CI
+
+One required check: `ci-gate`, which needs every job in `.github/workflows/ci.yml` and
+fails on any failure or cancellation. Jobs run where the `route` job sends them: a fork PR
+goes to hosted runners; otherwise the `runner_mode` dispatch input, then a tag in the title
+that lands on main (the PR title on a PR, the head commit's title on a push: `[github]`,
+`[macos]`, `[windows]`, `[linux]`), then `vars.RUNNER_DEFAULT`, then
+`["self-hosted","macOS","ARM64"]`. `[github]` is the break-glass when the runner is down.
+There is no skip tag and no automatic fallback to hosted.
+
+## Docs map
+
+- `MISSION.md`, `NON-GOALS.md` — scope firewall.
+- `docs/adr/` — decisions (`0001-project-genesis.md` records how this repo was created).
+- `docs/design/` — the implementation contract (`SPEC.md` once it lands).
+- `docs/records/` — point-in-time investigations, `<topic>-<issue>.md`.
+- `docs/CLAUDE_REFERENCE.md` — overflow from this file, read on demand.
+
+## Skills & MCP
+
+Skills come from the `blamechris/skill-templates` registry via `/skill`; what is installed
+is `.claude/skills.lock`. Per-repo tailoring lives in `.claude/skill-profile.md`.
+@@MCP_LINE@@
+
+## Reference
+
+Anything that does not fit in 150 lines goes to
+[`docs/CLAUDE_REFERENCE.md`](docs/CLAUDE_REFERENCE.md).
