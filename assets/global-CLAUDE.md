@@ -583,3 +583,22 @@ When a task completes and work remains:
    execution when it arrives through the supported continuation mechanism.
    Keep configured retry/budget caps and do not silently expand scope, fake-merge, or drop
    a follow-on unrecorded.
+
+## Waiting on CI (all projects)
+
+<!--default:ci-watcher-by-default-->
+**Never end a turn asking Chris to say "continue" because CI is still running** — a turn
+whose only remaining gate is CI must arrange its own wake-up, without asking (decided
+2026-09-27: "that should be like the default"). Two parts, because they cover different
+outcomes:
+
+1. **Where the desktop app's PR tools exist**, turn on its CI monitor for the PR
+   (`ccd_pr set_monitor` with `auto_fix: true` — standing authorization). It wakes the
+   session on CI failures, merge conflicts and review comments, and **never on green**.
+2. **Always**, arm a `run_in_background` watcher that exits when the checks settle, e.g.
+   `gh pr checks <N> --watch --interval 60`. Its exit is the wake-up for green. Then
+   re-verify the merge gates at the head — the watcher's exit is a signal, not the gate.
+
+One watcher per wait, named in the status block's 🔄 slot. This overrides the app's
+"don't poll CI yourself" default for this user: that default assumes its monitor will wake
+the session, and on green it doesn't.
