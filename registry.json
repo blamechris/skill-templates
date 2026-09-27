@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "0dfd92c",
+  "generatedFromCommit": "37866a5",
   "skillCount": 42,
   "skills": [
     {
@@ -141,7 +141,7 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 528,
       "description": "Carry delegated development through scope/design, reuse investigation, a proportional plan, model delegation, TDD, /full-review, gated synchronous merge and verified ledger updates. Both normal development and prime-directive include merge authority under Critical Rule 5. Normal development ends with a seed/status after the selected feature or work package is delivered; prime-directive continues to the next authorized item within its mission and original limits. Owner presence does not select or change that mode.",
       "guards": [
@@ -241,7 +241,7 @@
     },
     {
       "name": "batch-merge",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 132,
       "description": "Merge an authorized set of PRs sequentially through the same review, CI and delivery gates used for a single PR. Handle dependencies and branch freshness, verify each merge, and record delivery before moving on. This skill coordinates `/full-review`, `/check-pr`, `/fix-ci` and `/merge-gate`; it never calls `/merge`, which may itself call this skill.",
       "guards": [
@@ -496,7 +496,7 @@
     },
     {
       "name": "check-pr",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 498,
       "description": "Address PR review findings from inline threads and general review summaries, verify their disposition, and respond where each was raised.",
       "guards": [
@@ -593,7 +593,7 @@
     },
     {
       "name": "create-pr",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 206,
       "description": "Create a pull request with auto-detected issue closures and proper formatting.",
       "guards": [
@@ -975,7 +975,7 @@
     },
     {
       "name": "full-review",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 112,
       "description": "Run a complete review pipeline: agent-review first, then check-pr. The agent-review pass naturally fills the ~4 minute Copilot review delay, so check-pr starts with comments already waiting.",
       "guards": [
@@ -1242,7 +1242,7 @@
     },
     {
       "name": "merge-gate",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 38,
       "description": "Recover a blocked merge using current evidence and supported tools. The agent owns review, remediation and merge for delegated implementation in both ordinary and prime-directive runs. A failed merge is a reason to inspect the failed gate, not automatically a task for the user.",
       "guards": [
@@ -1278,7 +1278,7 @@
     },
     {
       "name": "merge",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 221,
       "description": "Merge authorized PRs through verified review/CI gates, record delivery, and run authorized post-merge actions. The same gated merge authority applies in ordinary and prime-directive runs.",
       "guards": [
@@ -1326,7 +1326,7 @@
     },
     {
       "name": "parallel-dev",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 449,
       "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts.",
       "guards": [
@@ -1474,7 +1474,7 @@
     },
     {
       "name": "prime-directive",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 133,
       "description": "A reload-resilient directive for unattended work toward a delegated outcome, or an explicitly requested backlog-clearing marathon. Re-invoke it after every context compaction to restore the mission, acceptance criteria, authority, per-issue loop, and never-strip guardrails before resuming. `/tackle-issues` and `/autonomous-dev-flow` provide the wave machinery.",
       "guards": [
@@ -1975,7 +1975,7 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 260,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
@@ -2082,7 +2082,7 @@
     },
     {
       "name": "skill-profile",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 145,
       "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time.",
       "guards": [
@@ -2369,7 +2369,7 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 460,
       "description": "Advance a delegated outcome through bounded issue waves, or clear an explicitly selected backlog. Convergence follows observable acceptance and genuine dependencies, not the number of easy issues closed.",
       "guards": [
@@ -2675,7 +2675,7 @@
     },
     {
       "name": "unattended-merge",
-      "hash": "0dfd92c",
+      "hash": "37866a5",
       "lines": 63,
       "description": "Define the delivery gate for delegated implementation in both ordinary and prime-directive runs. The historical skill name `unattended-merge` is retained for existing callers; user presence does not change merge authority. Once the gates pass, the agent merges, verifies delivery and records it without another routine confirmation.",
       "guards": [
