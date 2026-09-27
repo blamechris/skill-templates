@@ -37,15 +37,14 @@ Extract `parallel:N` from arguments if present, override default. Cap at 5.
 
 Apply sort order and cap to `max` (hard cap 10 — parallel sessions should be focused and well-scoped). Recommended: 3-5 issues for first use.
 
-**Filter out assigned issues** — exclude issues with assignees from the working queue. Show in queue table as informational.
+**Filter out assigned issues** — exclude work owned by other runs. Restore this run's assignments from its durable record; do not filter its unfinished work out merely because it is assigned.
 
-**Check for existing branches/PRs** for each issue — skip any that already have open PRs or merged branches (same resume logic as autonomous-dev-flow).
+**Check existing branches/PRs** against the durable run record. Verify merged work and its ledger entry. Resume this run's owned open PR at its unfinished review/repair/merge step instead of creating another PR or skipping delivery. Preserve other runs' work.
 
 **Validate the queue before starting:**
-- At least 1 issue must be open, unassigned, and without an existing PR
-- If all matching issues are assigned, report "All N matching issues are assigned — nothing to process" and stop
-- If 0 issues match, report and stop — don't start an empty session
-- Show the user the queue and get confirmation
+- At least one new unassigned issue or this run's owned unfinished attempt must be actionable.
+- If nothing is actionable, reconcile acceptance, open PRs and the ledger before reporting completion or the precise blocker; do not infer completion from an empty issue query.
+- Show the bounded queue; reuse existing authorization when it already covers these items.
 
 ```markdown
 ## Parallel Work Queue ({N} issues, {P} concurrent agents)
@@ -62,9 +61,9 @@ Mode: **Parallel** ({P} agents per batch, {B} batches)
 Start parallel dev session?
 ```
 
-Wait for user confirmation. **This is the ONLY confirmation point** — everything after runs autonomously.
+**This is the ONLY confirmation point**, and only when the proposed queue needs authority or scope not already supplied. Otherwise proceed. Do not ask again for routine review, repair or gated merge of delegated work.
 
-After confirmation, create task list tracking:
+After establishing the authorized scope, create task list tracking:
 ```
 For each issue in work queue:
   TaskCreate: "Issue #N — <title>" with status pending
@@ -88,13 +87,13 @@ For each high-complexity issue:
 
 After decomposition, if total queue exceeds 10, truncate to 10.
 
-**Skip criteria** — auto-skip these issues (comment on each with reason):
-- Empty issue body or no identifiable acceptance criteria
-- No code path (manual testing, design docs, decisions needed)
-- Requires user input not present in the description
-- Deployment/release tasks
-- Issues labeled `blocked` or `wontfix`
-- Issues requiring design decisions with multiple valid approaches not specified
+**Skip criteria** — verify the current dependency and record the specific reason, rather than skipping by task type:
+- No identifiable acceptance criteria after reading the delegated outcome and linked context — request the missing requirement while continuing independent preparation.
+- An indispensable owner-reserved decision, QA action, access or release authorization is unavailable — block only the dependent work; keep authorized design, documentation, implementation and preparation with the agent.
+- `wontfix` without authority to revisit it, or a `blocked` label whose documented dependency still applies — inspect the reason rather than assuming the label is permanent.
+- An applicable attempt, budget or host limit prevents this item — preserve consumed allowance and advance independent authorized work with known remaining allowance.
+
+Multiple valid implementation approaches are not themselves a blocker: investigate reusable code, decide within delegated authority and record a proportional plan. Re-evaluate the item when a prerequisite arrives, preserving its state and limits rather than requiring another delegation.
 
 ### Phase 1: Build Agent Prompts
 
@@ -200,13 +199,15 @@ For each successfully created PR (one at a time, sequentially):
 
 | Verdict | Meaning | Action |
 |---------|---------|--------|
-| Clean | No critical findings, all comments addressed | Edit PR body: `Refs` → `Closes`. Mark issue done |
-| Needs attention | Critical findings or unresolved comments | Keep `Refs`. Flag for user |
-| Broken | Tests failing after review fixes | Keep `Refs`. Flag for user |
+| Clean | No blocking findings, all dispositions evidenced | Edit PR body: `Refs` → `Closes` only if acceptance is met; proceed to coordinator merge gates |
+| Needs attention | Blocking findings or unresolved dispositions | Keep `Refs`; repair within remaining attempts or record the precise blocker |
+| Broken | Tests failing after review fixes | Keep `Refs`; repair within remaining attempts or record the failed gate |
 
 4. **Two fix attempts max** — if /full-review finds critical issues, fix them. If a second attempt still fails, flag and move on.
 
-5. **Update progress table** after each review.
+5. **Coordinator delivery:** implementation workers do NOT merge the PR; the coordinator owns review and delivery. For delegated implementation in either normal or prime mode, verify final-commit CI, `/full-review`, required resolved threads and repository requirements, then merge synchronously in dependency order without another confirmation. Refresh dependent PRs after their base changes. Respect explicit holds and required external approvals; never bypass gates or use `--admin`/`--auto`. Verify `MERGED` and record the merge SHA, acceptance and follow-ups in the ledger before marking the issue delivered. A clean open PR is reviewed, not delivered.
+
+6. **Update progress table** after each review/merge. When the selected package finishes, normal mode writes the verified seed and requests a fresh session; prime mode checkpoints and continues only its authorized mission within the original limits.
 
 **CRITICAL:** Reviews run sequentially, never in parallel. Each review may push commits, and reviews benefit from focus.
 
@@ -224,13 +225,13 @@ After all reviews complete, output final summary:
 
 | # | Issue | PR | Review Verdict | Status |
 |---|-------|----|---------------|--------|
-| 1 | #12 — Add retry logic | [#45](url) | Approve | Ready to merge |
-| 2 | #15 — Fix login timeout | [#46](url) | Approve | Ready to merge |
+| 1 | #12 — Add retry logic | [#45](url) | Approve | Merged; SHA recorded |
+| 2 | #15 — Fix login timeout | [#46](url) | Approve | Merged; SHA recorded |
 | 3 | #18 — Add integration tests | — | — | Failed (implementation) |
 | 4 | #20 — Update error messages | [#48](url) | Request Changes | Needs attention |
 
 ### Summary
-- **Ready to merge:** N PRs
+- **Verified merged:** N PRs
 - **Needs attention:** M PRs (details below)
 - **Failed (implementation):** K issues
 - **Decomposed:** J issues → L sub-issues created
@@ -244,9 +245,9 @@ After all reviews complete, output final summary:
 - **#18** — Add integration tests: npm test error: missing fixture. Consider running `/autonomous-dev-flow #18` for sequential diagnostics.
 
 ### Next Steps
-- Merge ready PRs: `/batch-merge #45 #46`
-- Address flagged PRs
-- Retry failed issues: `/autonomous-dev-flow #18`
+- State the actual remaining gate for open PRs; request an owner action only if required
+- Normal mode: verified seed path for the next session
+- Prime mode: next authorized item, or the actual stop condition
 ```
 
 ## Agent Prompt Template
@@ -403,22 +404,22 @@ REASON: <why it failed>
 
 ## Resume Strategy
 
-This skill uses **GitHub state** for resume — no local state files.
-
-If a session is interrupted, re-running with the same arguments will:
-1. Query GitHub for existing session branches (matching `BRANCH_PREFIX`) and PRs referencing each issue
-2. Skip issues that already have merged or open PRs
-3. Process only issues without existing PRs
-
-This makes the skill **idempotent** — safe to re-run without duplicating work.
+Resume from the durable run record: run identity, mode, selected scope, branch/worktree
+ownership, per-item stage, attempts (including failures before a PR), review/worker counts
+and consumed limits. Query GitHub to reconcile current PR heads, gates and verified merges.
+Resume owned open PRs at their unfinished stage; do not duplicate implementation or skip
+delivery. Zero PRs does not imply zero attempts. Recover missing accounting before capped
+work; unknown allowance is not zero consumption. Record attempts when they start and retain
+the same counters across compaction/restart. Re-entry is **idempotent** and does not reset
+the two repair attempts or the selected queue/fan-out limits.
 
 ## Critical Rules
 
 1. **NO attribution** — No Co-Authored-By, no "Generated with Claude", no AI mentions anywhere. Zero Attribution Policy.
 2. **TDD is mandatory** — RED → GREEN → REFACTOR for every agent. No skipping tests.
 3. **Branch from main** — Every agent branches from its worktree HEAD (which is main). Never stack branches.
-4. **One confirmation point** — The initial queue approval. Everything after is fully autonomous.
-5. **Never merge** — PRs accumulate for user review. Agents keep working.
+4. **One confirmation point** — Establish missing queue authority only; reuse existing authorization. Routine gated merges need no further approval.
+5. **Worker/coordinator ownership** — Workers never merge; the coordinator completes required review, final-commit CI, gated merge and ledger update for authorized delivery in either mode.
 6. **Reviews run sequentially** — Never run /full-review in parallel. Each review may push commits and benefits from focus.
 7. **Two fix attempts max** — If /full-review finds critical issues, fix them. Second failure → flag and move on.
 8. **Hard cap 10 issues** — Parallel sessions should be focused. Refuse larger queues.

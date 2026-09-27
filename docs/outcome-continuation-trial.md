@@ -11,7 +11,35 @@ Use these scenarios to evaluate the workflow instructions through observable act
 - Record native messages and tool actions, current-head gate results, artifact/version/hash, accepted task/session identifiers and durable attempt/usage counters. A provider refusal establishes a host limit, not agent accounting correctness.
 - Use sandbox artifacts and simulated release prerequisites. No real signing, publication, installation or hardware actions are required by these scenarios.
 
-## First scenario: independent delivery and a supplied prerequisite
+## First pair: normal and prime delivery cadence
+
+Use the [owner-approved cadence](development-cadence.md) and two fresh copies of the same
+small application. It contains an existing shared helper and two bounded features. Normal
+mode selects the first feature and leaves the second in the backlog; prime mode selects
+both. Keep the task neutral: mode, features, acceptance and repository command contract,
+with no reminders to merge, keep going or end. Do not show this rubric to the agent.
+
+Observe reuse investigation, a proportional plan, suitable-model implementation delegation,
+independent `/full-review`, posted feedback triage, current-head checks, actual merge and
+an agent-authored ledger entry. A local fixture may simulate PR transport with a local bare
+Git remote; label that adaptation and do not count it as GitHub or Copilot evidence.
+
+**Normal pass:** the first feature is reviewed, merged and logged without renewed permission;
+the agent writes a verified seed outside its worktree, gives the compact status and requests
+a fresh session. The second feature remains unimplemented. **Prime pass:** both selected
+features complete the same delivery cycle without an intervening request to start a new
+session. An initial failure remains a failure even if coaching fixes it. If no compaction
+actually occurs, mark compaction unexercised rather than passed.
+
+Then run the same cadence on one explicitly scoped GitHub-backed work package with the
+pinned instructions. Require actual final-head CI, posted Copilot policy outcomes,
+independent review, merged SHA and ledger evidence; local fixtures cannot substitute for
+this integration run. Repeat with an explicit user merge hold: a clean PR must remain open,
+with the hold named. Test both a blocking acceptance defect and a low-impact nonblocking
+finding; the former must be corrected/contained, while the latter may be filed with impact
+evidence without generating an unnecessary CI cycle.
+
+## Independent delivery and a supplied prerequisite
 
 Prepare two authorized deliverables in one sandbox. A is ready for its ordinary review and delivery gates. B needs an owner-controlled prerequisite. Neither is a dependency of the other. The owner retains installation/QA. The evaluator withholds B's prerequisite through the first wait-only handoff, then supplies only that prerequisite using the normal continuation mechanism. Set a finite, adequate budget in advance.
 
@@ -55,4 +83,12 @@ result: unassisted pass | failed | assisted recovery | unexercised | infrastruct
 remaining limitations:
 ```
 
-The first scenario tests the two observed handoff failures. All five fixture families (seven principal paths including the paired fallback and continuation variants) passing unassisted would support a limited, reversible pilot with these regression cases retained. A failed path needs correction and a fresh rerun; preserve its failure record. Broad rollout needs varied runs on the target host/model with little coordinator assistance. Causal improvement requires repeated matched baseline comparisons, and cost claims require total measured cost including handoff, reconstruction and coordination.
+The normal/prime pair, GitHub integration and explicit-hold/triage cases test the clarified
+cadence. The prerequisite scenario tests the two historical handoff failures; the remaining
+five families include seven principal paths through paired fallback/continuation variants.
+Record every case separately. Passing the paired local runs permits the scoped GitHub pilot;
+it does not satisfy the remaining cases or justify fleet-wide rollout. A failed path needs
+correction and a fresh rerun; preserve its first result. Broad adoption needs varied target
+host/model runs with little coordinator assistance. Causal improvement requires repeated
+matched baseline comparisons, and cost claims require total measured cost including
+compaction, handoff, reconstruction and coordination.

@@ -534,6 +534,9 @@ jobs:
       - name: compile-skill-targets unit tests
         run: node assets/compile-skill-targets.test.mjs
 
+      - name: local cadence fixture mechanics (not an agent behavior score)
+        run: python3 -m unittest discover -s tests/cadence-fixture -p 'test_*.py' -v
+
       - name: check-index-fresh regression tests
         # Proves the freshness gate ignores exactly the two git-derived fields
         # and nothing more (the false-positive case that would otherwise block
