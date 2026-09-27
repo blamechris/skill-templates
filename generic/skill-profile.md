@@ -9,6 +9,7 @@ This skill **writes** the profile; `/skill` **reads** it. The profile is optiona
 - `$ARGUMENTS` — optional:
   - `--check` — report how the profile would change vs the current repo state (drift), but write nothing.
   - `--print` — print the composed profile to stdout instead of writing the file.
+  - `--planned "<skill list>" [--plan <plan.json>]` — compose the profile for skills that are **about to be installed**, before the first `skill add` (see "Planned mode" below). `/project-genesis` runs this in its Phase 4 with the genesis plan. Combines with `--print` and `--check`.
   - With no argument, write/update `.claude/skill-profile.md` in place.
 
 ## Instructions
@@ -77,6 +78,36 @@ The `targets:` line drives `compile-skill-targets.mjs` (`claude` → `.claude/sk
 - **Keep it tight.** The profile is read on every install; favor specifics over prose.
 - **Targets are version-controlled.** Every agent in `targets:` emits a repo-tracked artifact (`claude` → `.claude/skills/`, `gemini` → `.gemini/commands/`, `codex` → `.codex/skills/`) — list exactly the agents this repo drives. Codex users on machines without repo-local discovery copy/sync `.codex/skills/<name>` into `~/.codex/skills`.
 
+### Planned mode (`--planned`)
+
+A profile written *after* installs arrives too late for the pins that matter most: a posture-pinned skill installed with no pin installs **gated**, and every install records the profile's hash, so a profile written afterwards shows as profile drift on every skill. Planned mode composes the profile first.
+
+1. **The skill set is the given list**, not `.claude/commands/`. Refuse any name that is not in the registry's `registry.json`. Step 2's per-skill template reading is unchanged.
+2. **With `--plan <plan.json>`** (a `genesis-verify.py --plan --json` output), every value comes from the plan. Write these sections in this order:
+   - `# <plan.intent.name> skill profile`
+   - `## Project Context`:
+     - `Tech:` names the overlays in `plan.intent.overlays`, or reads `undecided — see SPEC` when there are none.
+     - `Repo:` is `plan.intent.repo`.
+     - `Main branch:` is the default branch that `gh repo view` reports.
+     - `CI: ci-gate`.
+     - Omit `Status:` and `Hard requirements:` until `MISSION.md` states the invariant.
+   - `## Build / Test Commands`: `plan.profile.build_commands`, verbatim. The repo's `CLAUDE.md` renders the same lines.
+   - `## Conventions`:
+     - `Branch prefix / naming: <type>/<issue>-<slug>`
+     - `Commit style + scopes: Conventional Commits`
+
+     These are the values the scaffolded `CLAUDE.md` states.
+   - `## Skill Targets`: `targets: <plan.profile.targets>`
+   - `## create-issue Customizations`: `- Labels: <plan.profile.labels, comma-separated>`
+   - For each skill in `plan.profile.posture_sections`, a `## <skill> Customizations` section containing a `### Self-merge posture` block. Its first line is `**<plan.profile.posture>.**`, followed by a one-sentence rationale that states that posture and no other.
+   - For each skill in `plan.profile.merge_sections`, a `## <skill> Customizations` section containing `- Merge strategy: <plan.profile.merge_strategy>`.
+   - `plan.profile.section`, verbatim and last. It is the machine-read `## project-genesis Customizations` that `genesis-verify.py` parses.
+3. **Without `--plan`,** gather the repo facts as in step 2 for the listed skills. The self-merge posture is written only when the owner states it: **in planned mode the posture comes from the plan or the owner, never from this skill.** Report that an unpinned posture skill will install gated.
+4. **A re-run writes nothing new, and never overwrites a decision.**
+   - If the composed file is byte-identical to the existing one, write nothing.
+   - If an existing posture pin or `project-genesis` intent line disagrees with the plan, REFUSE and write nothing. A posture flip is an owner's edit, not a re-plan.
+   - Keep any existing section for a skill outside the list.
+
 ### 5. Write / report
 
 - Default: write `.claude/skill-profile.md` (create `.claude/` if needed).
@@ -89,6 +120,6 @@ State: the sections written, which installed skills got a `Customizations` secti
 
 ## Notes
 
-- **Run after `skill add`s settle.** The profile is most useful once a repo has installed the skills it uses — then the per-skill sections target real markers. Re-run after installing new skills or changing conventions.
+- **Run after `skill add`s settle** — except in planned mode, which exists to run *before* them. The profile is most useful once a repo has installed the skills it uses — then the per-skill sections target real markers. Re-run after installing new skills or changing conventions.
 - **`profileHash`.** `/skill` records the profile's hash in `.claude/skills.lock`; `skill outdated` flags skills tailored against an older profile, so refreshing the profile and running `skill update` re-tailors them. Updating the profile is how you push a convention change out to every installed skill.
 - **Idempotent.** Re-running reproduces the same profile from the same repo state; it only changes when the repo does.

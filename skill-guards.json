@@ -1554,6 +1554,71 @@
       "note": "The per-finding half of the cap: many findings queue refutation rounds rather than widening the fan-out. Bare `refuters per finding` is deliberately NOT an alternate — it also matches a wording that inverts the rule. The looser alternates require a limiting phrase before the number for the same reason: \"more than 3 refuters is fine\" must leave the guard red, not green."
     }
   ],
+  "project-genesis": [
+    {
+      "label": "profile-first",
+      "anyOf": [
+        "[Pp]rofile is written before any skill is installed"
+      ],
+      "note": "Binds the ordering clause, not the word \"profile\": \"is written before any skill is installed\" is what makes a posture pin land before the install that would otherwise go gated (#172). An inversion (\"after\") leaves it red."
+    },
+    {
+      "label": "approval-before-create",
+      "anyOf": [
+        "No GitHub object is created or changed until the owner approves"
+      ],
+      "note": "Binds the precondition clause. Phase 0's \"Nothing in this phase writes to GitHub\" is a neighbouring statement, not an alternate: it survives a rewrite that drops the approval gate itself."
+    },
+    {
+      "label": "probe-not-store",
+      "anyOf": [
+        "[Pp]rogress is probed, never stored"
+      ],
+      "note": "The lead paragraph says nothing records progress in different words on purpose, so deleting the rule line turns this red; an inversion (\"stored\") does not match."
+    },
+    {
+      "label": "human-steps-are-issues",
+      "anyOf": [
+        "[Ee]very step that needs a human becomes an? `?human-setup`? issue"
+      ],
+      "note": "Binds the whole obligation. The Phase 5 bullet that files human-setup issues is the rule's enactment and is deliberately not an alternate."
+    },
+    {
+      "label": "no-secret-values",
+      "anyOf": [
+        "never reads, prints, or writes a secret value"
+      ],
+      "note": "Binds the three verbs together; the Phase 0 \"names only\" sentence is a neighbour, not a rewording."
+    },
+    {
+      "label": "no-direct-push",
+      "anyOf": [
+        "Nothing is ever pushed to `?main`?"
+      ],
+      "note": "Binds the absolute. Push commands elsewhere name the scaffold branch; none is an alternate."
+    },
+    {
+      "label": "verify-is-done",
+      "anyOf": [
+        "done only when `?genesis-verify\\.py`? exits 0"
+      ],
+      "note": "Binds \"done only when … exits 0\". Phase 6's exit-code bullets are the enactment and stay out of the anyOf."
+    },
+    {
+      "label": "seed-via-lifecycle",
+      "anyOf": [
+        "never writes a seed or derives a scope"
+      ],
+      "note": "The seed is written by session-seed.py and nowhere else (#208, #210). Phase 6's \"Genesis itself writes no seed file\" is a different sentence, so deleting the rule line turns this red."
+    },
+    {
+      "label": "no-bypass",
+      "anyOf": [
+        "ruleset has no bypass actors"
+      ],
+      "note": "Binds the negation. \"never add a bypass actor\" in Phase 2 is a neighbour; an inversion (\"has bypass actors\") leaves the guard red."
+    }
+  ],
   "recon": [
     {
       "label": "descriptive-not-evaluative",
@@ -1865,6 +1930,13 @@
         "[Rr]e-running reproduces the same profile",
         "only changes when the repo does"
       ]
+    },
+    {
+      "label": "planned-posture-never-chosen",
+      "anyOf": [
+        "in planned mode the posture comes from the plan or the owner, never from this skill"
+      ],
+      "note": "Planned mode runs before any install, which is exactly when an invented posture would silently decide unattended merge authority. Binds the sentence that forbids it; the section list's posture bullet is the enactment, not an alternate."
     }
   ],
   "smoke-form": [
