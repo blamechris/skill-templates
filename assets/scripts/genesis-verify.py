@@ -1330,6 +1330,10 @@ def _(ctx):
         raise CannotVerify("reading Dependabot settings needs admin on the repo; this token lacks it")
     alerts = ctx.gh.get(f"repos/{ctx.intent.repo}/vulnerability-alerts", missing_ok=True)
     fixes = ctx.gh.get(f"repos/{ctx.intent.repo}/automated-security-fixes", missing_ok=True)
+    # GET returns 200 {"enabled": bool, "paused": bool} (live, 2026-09-26). A body without
+    # `enabled` (an empty 204, a changed API) says nothing either way: could not verify.
+    if fixes is not None and not isinstance((fixes or {}).get("enabled"), bool):
+        raise CannotVerify("automated-security-fixes returned no `enabled` field; cannot tell on from off")
     problems = []
     if alerts is None:
         problems.append("Dependabot alerts are off")

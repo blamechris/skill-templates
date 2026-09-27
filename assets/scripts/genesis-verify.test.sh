@@ -274,6 +274,10 @@ fresh; gh_edit repos_blamechris_soundbed_actions_permissions_fork-pr-workflows-p
 fresh; gh_edit repos_blamechris_soundbed_actions_permissions_artifact-and-log-retention 'd["days"] = 90'; expect "retention 90 days" github.retention FAIL 1
 fresh; mv "$MG/repos_blamechris_soundbed_vulnerability-alerts.204" "$MG/repos_blamechris_soundbed_vulnerability-alerts.404"; expect "Dependabot alerts off (a meaningful 404)" github.security FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_automated-security-fixes 'd["enabled"] = False'; expect "security updates off" github.security FAIL 1
+fresh; rm "$MG/repos_blamechris_soundbed_automated-security-fixes.json"; : > "$MG/repos_blamechris_soundbed_automated-security-fixes.204"
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" github.security)" = ERROR ]; then ok "an empty security-fixes body is ERROR, never read as on or off"
+else bad "an empty security-fixes body is ERROR, never read as on or off" "exit $rc — $(flat "$out")"; fi
 fresh; gh_edit repos_blamechris_soundbed_labels_per_page_100_page_1 'd[:] = [l for l in d if l["name"] != "human-setup"]'; expect "a seed label missing" github.labels FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_labels_per_page_100_page_1 'd[0]["color"] = "ffffff"'; expect "a seed label recoloured" github.labels FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'next(r for r in d["rules"] if r["type"] == "pull_request")["parameters"]["allowed_merge_methods"] = ["merge", "squash", "rebase"]'; expect "ruleset allows every merge method" github.ruleset FAIL 1
