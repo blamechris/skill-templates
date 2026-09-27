@@ -1,0 +1,1857 @@
+#!/usr/bin/env python3
+"""Render and verify a repository against the Fleet Project Genesis Standard.
+
+# Canonical copy (skill-templates). Bootstrap: cp assets/scripts/genesis-verify.py ~/.claude/scripts/
+
+Usage:
+  genesis-verify.py --plan --name NAME [--stack LIST] [--modules LIST] [--app-id ID|none]
+                    [--visibility private] [--posture withheld|gated] [--description TEXT]
+                    [--relay-token-in LIST|none] [--date YYYY-MM-DD] [--json]
+                    [--registry PATH] [--registry-ref REF] [--no-fetch]
+  genesis-verify.py --repo PATH [--ref REF] [--gh-repo OWNER/NAME] [--json]
+                    [--stack ... --modules ... --app-id ...]   (only when the profile has no intent)
+                    [--registry PATH] [--registry-ref REF] [--no-fetch]
+  genesis-verify.py --self-check [--registry PATH] [--registry-ref REF] [--no-fetch]
+  genesis-verify.py --list-rules [--json] [--registry PATH] [--registry-ref REF] [--no-fetch]
+
+This is the one piece of new logic `/project-genesis` adds; everything else it does is an
+existing tool run in order. One renderer serves both halves of the job:
+
+  --plan        renders every write genesis would make for a new repo -- the files with their
+                full contents, the GitHub settings, labels, ruleset, skills, machine steps and
+                issues -- from assets/genesis/standard-v1.json. The agent performs the writes;
+                this script performs none. `--json` is what Phase 3 writes files from.
+  verify        (--repo) probes a checkout AT A REF plus the live GitHub settings, and reports
+                one row per rule: PASS / FAIL / WAIVED / N-A / LEGACY / PENDING-HUMAN. Probes are
+                structural -- headings, keys, settings -- and the expected structure is read off
+                the SAME rendered templates the plan wrote, so the two cannot drift apart.
+  --self-check  the registry's own gate: every `probe`-class rule in the manifest has a probe
+                here and every probe here has a rule (the rule<->probe parity), every template
+                is referenced and exists, every placeholder is declared and resolves, and every
+                `uses:` in a template is pinned to a full commit SHA.
+
+Read-only by construction. The only commands it runs are `git fetch` (a hard precondition,
+as in fleet-check.py), `git rev-parse` / `ls-tree` / `show`, and `gh api` GETs. It never
+passes -X, -f or -F to gh, and the one secrets endpoint it reads returns names, never values.
+
+The registry is read from `--registry-ref` (default origin/main) with `git show`, never from
+the clone's working tree: ~/Projects/skill-templates is a shared working copy that may sit on
+another session's branch.
+
+Exit codes:
+  0  no FAIL. PENDING-HUMAN rows are allowed: a human step with an open `human-setup` issue.
+     For --plan: the plan was rendered.
+  1  findings: at least one FAIL (or, for --self-check, at least one registry defect).
+  2  could not verify -- the registry or repo is unreadable, a ref does not resolve, a fetch
+     failed, `gh` failed for any reason other than a meaningful 404 (an ERROR row), or --plan
+     refused its input. Never 0: a check that could not look must not report a pass.
+
+LEGACY is a reserved result: no v1 probe emits it. The back-port audit (standard §10.4) adds
+the detectors for known legacy shapes, such as archery's path-filtered auto-pass mirror.
+"""
+import argparse
+import datetime
+import json
+import os
+import posixpath
+import re
+import subprocess
+import sys
+
+EXIT_OK, EXIT_FINDINGS, EXIT_CANNOT_VERIFY = 0, 1, 2
+
+MANIFEST = "assets/genesis/standard-v1.json"
+GENESIS_DIR = "assets/genesis/"
+TEMPLATES_DIR = "assets/genesis/templates/"
+GLOBAL_CLAUDE = "assets/global-CLAUDE.md"
+
+FLOOR_TOKEN = re.compile(r"^\s*<!--\s*floor\s*:\s*([a-z0-9][a-z0-9._-]*)\s*-->\s*$", re.M)
+PLACEHOLDER = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
+SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$")
+# Android's applicationId rule (>= 2 segments, each starting with a letter, [A-Za-z0-9_]);
+# it is also a valid Apple bundle ID. It can never change once an app is published.
+APP_ID = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$")
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+USES = re.compile(r"^\s*(?:-\s+)?uses:\s*['\"]?([^\s'\"#]+)")
+DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# skill-lint.sh's reading of a posture pin: the block's bold lead, alone or as a list item.
+POSTURE_LEAD = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?\*\*[ \t]*(Withheld|Gated)\b", re.M)
+
+RESULTS = ("PASS", "FAIL", "WAIVED", "N-A", "LEGACY", "PENDING-HUMAN")
+ERROR = "ERROR"  # a row whose probe could not look; any ERROR row forces exit 2
+
+
+class CannotVerify(Exception):
+    """A probe could not look (gh failed, a git read failed). Becomes an ERROR row."""
+
+
+class RenderError(Exception):
+    """A template could not be rendered honestly (undeclared or unresolved placeholder)."""
+
+
+def die(msg):
+    print(f"genesis-verify: cannot verify — {msg}", file=sys.stderr)
+    print("genesis-verify: NO conformance verdict was produced (this is not a pass).", file=sys.stderr)
+    sys.exit(EXIT_CANNOT_VERIFY)
+
+
+def refuse(msg):
+    print(f"REFUSE: {msg}", file=sys.stderr)
+    print("genesis-verify: no plan was rendered.", file=sys.stderr)
+    sys.exit(EXIT_CANNOT_VERIFY)
+
+
+def git(path, *args):
+    return subprocess.run(["git", "-C", path, *args], capture_output=True)
+
+
+# ---------------------------------------------------------------- read-only git views
+
+class GitTree:
+    """A read-only view of one commit: the file list plus `git show` of any file in it."""
+
+    def __init__(self, path, ref, fetch, what):
+        if not os.path.isdir(path):
+            die(f"{what} {path!r} does not exist")
+        if git(path, "rev-parse", "--git-dir").returncode != 0:
+            die(f"{what} {path!r} is not a git repository")
+        if fetch and ref.startswith("origin/"):
+            # HARD precondition, never `|| true`: a verdict about a stale clone is a wrong
+            # answer delivered confidently, which is worse than no answer.
+            try:
+                fetched = subprocess.run(["git", "-C", path, "fetch", "origin", "--quiet"], capture_output=True,
+                                         timeout=180, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+            except subprocess.TimeoutExpired:
+                die(f"git fetch origin timed out in {path!r} — refusing to read a possibly stale {ref}")
+            if fetched.returncode != 0:
+                err = fetched.stderr.decode("utf-8", "replace").strip() or "no stderr"
+                die(f"git fetch origin failed in {path!r} ({err}) — refusing to read a "
+                    f"possibly stale {ref}")
+        rev = git(path, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        if rev.returncode != 0:
+            die(f"{what} ref {ref!r} does not resolve to a commit in {path!r}")
+        self.path, self.ref, self.what = path, ref, what
+        self.commit = rev.stdout.decode().strip()
+        # --full-tree: a --repo pointing at a subdirectory must still see the whole commit.
+        listed = git(path, "ls-tree", "-r", "--full-tree", "--name-only", "-z", self.commit)
+        if listed.returncode != 0:
+            die(f"git ls-tree {self.commit} failed in {path!r}")
+        self.files = {p for p in listed.stdout.decode("utf-8", "replace").split("\0") if p}
+        self._text = {}
+
+    def has(self, p):
+        return p in self.files
+
+    def read(self, p):
+        """File text at the commit, or None when the path is absent."""
+        if p not in self.files:
+            return None
+        if p not in self._text:
+            shown = git(self.path, "show", f"{self.commit}:{p}")
+            if shown.returncode != 0:
+                raise CannotVerify(f"git show {self.commit[:7]}:{p} failed in {self.path!r}")
+            self._text[p] = shown.stdout.decode("utf-8", "replace")
+        return self._text[p]
+
+    def under(self, prefix):
+        return sorted(p for p in self.files if p.startswith(prefix))
+
+
+class Registry(GitTree):
+    def need(self, p):
+        text = self.read(p)
+        if text is None:
+            die(f"the registry at {self.ref} ({self.commit[:7]}) has no {p}")
+        return text
+
+    def manifest(self):
+        try:
+            return json.loads(self.need(MANIFEST))
+        except json.JSONDecodeError as e:
+            die(f"{MANIFEST} at {self.ref} is not valid JSON ({e})")
+
+    def genesis_json(self, rel):
+        try:
+            return json.loads(self.need(GENESIS_DIR + rel))
+        except json.JSONDecodeError as e:
+            die(f"{GENESIS_DIR}{rel} at {self.ref} is not valid JSON ({e})")
+
+    def floor_ids(self):
+        ids = FLOOR_TOKEN.findall(self.need(GLOBAL_CLAUDE))
+        if not ids:
+            die(f"{GLOBAL_CLAUDE} at {self.ref} declares no floor rules")
+        return ids
+
+
+# ---------------------------------------------------------------- GitHub, GET only
+
+class GH:
+    """`gh api` GETs, memoized. A 404 is data only where the caller says it is."""
+
+    def __init__(self, repo):
+        self.repo, self.cache = repo, {}
+
+    def get(self, endpoint, missing_ok=False):
+        if endpoint in self.cache:
+            return self.cache[endpoint]
+        try:
+            run = subprocess.run(
+                ["gh", "api", "-H", "Accept: application/vnd.github+json", endpoint],
+                capture_output=True, text=True, timeout=60,
+            )
+        except FileNotFoundError:
+            raise CannotVerify("`gh` is not installed")
+        except subprocess.TimeoutExpired:
+            raise CannotVerify(f"gh api {endpoint} timed out")
+        if run.returncode == 0:
+            out = run.stdout.strip()
+            try:
+                value = json.loads(out) if out else {}  # a 204 has no body
+            except json.JSONDecodeError:
+                raise CannotVerify(f"gh api {endpoint} returned non-JSON output")
+        elif missing_ok and "(HTTP 404)" in run.stderr:
+            value = None
+        else:
+            err = (run.stderr.strip() or f"exit {run.returncode}").splitlines()[-1]
+            raise CannotVerify(f"gh api {endpoint}: {err[:200]}")
+        self.cache[endpoint] = value
+        return value
+
+    def paged(self, endpoint, key=None):
+        """Every item of a list endpoint. `key` names the array inside an object response."""
+        items, page, sep = [], 1, "&" if "?" in endpoint else "?"
+        while True:
+            data = self.get(f"{endpoint}{sep}per_page=100&page={page}")
+            batch = data.get(key, []) if key else data
+            if not isinstance(batch, list):
+                raise CannotVerify(f"gh api {endpoint} did not return a list")
+            items.extend(batch)
+            if len(batch) < 100:
+                return items
+            page += 1
+
+    def repo_info(self):
+        return self.get(f"repos/{self.repo}")
+
+
+# ---------------------------------------------------------------- small parsers
+
+def headings(text, level):
+    """Heading texts of exactly `level`, outside code fences, in document order."""
+    pat = re.compile(r"^" + "#" * level + r"[ \t]+(.+?)[ \t]*#*[ \t]*$")
+    out, fenced = [], False
+    for ln in text.splitlines():
+        if ln.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced:
+            m = pat.match(ln)
+            if m:
+                out.append(m.group(1).strip())
+    return out
+
+
+def order_problems(required, actual):
+    """Required headings that are missing from `actual`, or present out of order."""
+    problems, pos = [], 0
+    for h in required:
+        if h not in actual:
+            problems.append(f"missing `{h}`")
+            continue
+        try:
+            pos = actual.index(h, pos) + 1
+        except ValueError:
+            problems.append(f"`{h}` is out of order")
+    return problems
+
+
+def defence(text):
+    """Text with every fenced code block's lines blanked: a `# comment` in a bash example
+    is not a heading, for any parser that walks headings."""
+    out, fenced = [], False
+    for ln in text.splitlines():
+        if ln.lstrip().startswith("```"):
+            fenced = not fenced
+            out.append("")
+        else:
+            out.append("" if fenced else ln)
+    return "\n".join(out)
+
+
+def section(text, title, level=2):
+    """Body of the `level` heading named `title`, up to the next heading of that level or
+    higher, outside code fences; None when absent. Fenced lines come back blanked."""
+    lines, out, inside = defence(text).splitlines(), [], False
+    head = re.compile(r"^(#{1,%d})[ \t]+(.+?)[ \t]*#*[ \t]*$" % level)
+    for ln in lines:
+        m = head.match(ln)
+        if m:
+            if inside:
+                break
+            if len(m.group(1)) == level and m.group(2).strip() == title:
+                inside = True
+                continue
+        elif inside:
+            out.append(ln)
+    return "\n".join(out) if inside else None
+
+
+def ignore_lines(text):
+    return [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+
+
+def split_list(value):
+    v = (value or "").strip()
+    if not v or v.lower() == "none":
+        return []
+    return [x.strip() for x in v.split(",") if x.strip()]
+
+
+def workflow_jobs(text):
+    """{job_key: {"needs": [...], "if": str|None, "body": str}} from a workflow's `jobs:`.
+
+    Indentation-aware rather than column-fixed: the job-key indent is whatever the first key
+    under `jobs:` uses, and a job's properties are the lines indented one level deeper.
+    """
+    jobs, lines = {}, text.splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines) if re.match(r"^jobs:\s*(#.*)?$", ln))
+    except StopIteration:
+        return jobs
+    key_indent, cur = None, None
+    for ln in lines[start + 1:]:
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            if cur:
+                jobs[cur]["lines"].append(ln)
+            continue
+        indent = len(ln) - len(ln.lstrip(" "))
+        if indent == 0:
+            break
+        if key_indent is None:
+            key_indent = indent
+        m = re.match(r"^\s*(['\"]?)([A-Za-z0-9_-]+)\1:\s*(#.*)?$", ln)
+        if indent == key_indent:
+            # A line at the job-key indent that is not a plain key is kept as its own
+            # pseudo-job, so ci-gate's `needs` cannot cover it and the probe fails closed.
+            cur = m.group(2) if m else f"<unparsed: {ln.strip()[:40]}>"
+            jobs[cur] = {"lines": []}
+        elif cur:
+            jobs[cur]["lines"].append(ln)
+    for j in jobs.values():
+        body = j.pop("lines")
+        props = [ln for ln in body if ln.strip() and not ln.lstrip().startswith("#")]
+        pind = min((len(ln) - len(ln.lstrip(" ")) for ln in props), default=0)
+        j["needs"], j["if"] = [], None
+        for i, ln in enumerate(body):
+            if len(ln) - len(ln.lstrip(" ")) != pind:
+                continue
+            m = re.match(r"^\s*needs:\s*(.*?)\s*(#.*)?$", ln)
+            if m:
+                v = m.group(1)
+                if v.startswith("["):
+                    j["needs"] = [x.strip().strip("'\"") for x in v.strip("[]").split(",") if x.strip()]
+                elif v:
+                    j["needs"] = [v.strip("'\"")]
+                else:
+                    for nxt in body[i + 1:]:
+                        m2 = re.match(r"^\s*-\s*['\"]?([A-Za-z0-9_-]+)", nxt)
+                        if not m2:
+                            break
+                        j["needs"].append(m2.group(1))
+            m = re.match(r"^\s*if:\s*(.+?)\s*$", ln)
+            if m:
+                j["if"] = m.group(1)
+        j["body"] = "\n".join(body)
+    return jobs
+
+
+def on_block(text):
+    """(inline_list_or_None, [lines of the `on:` block]) of a workflow."""
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        m = re.match(r"^(?:on|\"on\"|'on'|true):\s*(.*?)\s*(#.*)?$", ln)
+        if not m:
+            continue
+        if m.group(1):
+            v = m.group(1)
+            return [x.strip() for x in v.strip("[]").split(",") if x.strip()], []
+        block = []
+        for nxt in lines[i + 1:]:
+            if nxt.strip() and not nxt.startswith((" ", "\t", "#")):
+                break
+            block.append(nxt)
+        return None, block
+    return None, None
+
+
+def push_branches(block):
+    """The `push.branches` items of an `on:` block, inline or block list; None if absent."""
+    push_i = next((i for i, ln in enumerate(block) if re.match(r"^\s+push:\s*(#.*)?$", ln)), None)
+    if push_i is None:
+        return None
+    indent = len(block[push_i]) - len(block[push_i].lstrip())
+    body = []
+    for ln in block[push_i + 1:]:
+        if ln.strip() and len(ln) - len(ln.lstrip()) <= indent:
+            break
+        body.append(ln)
+    for i, ln in enumerate(body):
+        m = re.match(r"^\s*branches:\s*(.*?)\s*(#.*)?$", ln)
+        if not m:
+            continue
+        if m.group(1).startswith("["):
+            return [x.strip().strip("'\"") for x in m.group(1).strip("[]").split(",") if x.strip()]
+        items, bi = [], len(ln) - len(ln.lstrip())
+        for nxt in body[i + 1:]:
+            mm = re.match(r"^(\s*)-\s*['\"]?([^'\"#]+?)['\"]?\s*(#.*)?$", nxt)
+            if not mm or len(mm.group(1)) < bi:
+                break
+            items.append(mm.group(2))
+        return items
+    return None
+
+
+def dependabot_ecosystems(text):
+    """{ecosystem: entry text} from dependabot.yml's `updates:` list. Items are split on the
+    list marker at the item indent, and `package-ecosystem` may be any key of an item."""
+    lines, items, item_indent, cur = text.splitlines(), [], None, None
+    try:
+        start = next(i for i, ln in enumerate(lines) if re.match(r"^updates:\s*(#.*)?$", ln))
+    except StopIteration:
+        return {}
+    for ln in lines[start + 1:]:
+        if ln.strip() and not ln.startswith((" ", "\t", "-", "#")):
+            break
+        m = re.match(r"^(\s*)-\s", ln)
+        if m and (item_indent is None or len(m.group(1)) == item_indent):
+            item_indent = len(m.group(1))
+            cur = [ln[len(m.group(0)):]]
+            items.append(cur)
+        elif cur is not None:
+            cur.append(ln)
+    out = {}
+    for it in items:
+        body = "\n".join(it)
+        m = re.search(r"(?:^|\n)\s*package-ecosystem:\s*['\"]?([A-Za-z0-9_-]+)", body)
+        if m:
+            out[m.group(1)] = body + "\n"
+    return out
+
+
+def remote_slug(path):
+    got = git(path, "remote", "get-url", "origin")
+    if got.returncode != 0:
+        return None
+    url = got.stdout.decode().strip()
+    m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+# ---------------------------------------------------------------- intent
+
+class Intent:
+    """What the owner chose. From flags at plan time; from the committed profile at verify."""
+
+    def __init__(self, **kw):
+        self.name = kw["name"]
+        self.owner = kw["owner"]
+        self.visibility = kw.get("visibility", "private")
+        self.overlays = kw.get("overlays", [])
+        self.modules = kw.get("modules", [])
+        self.app_id = kw.get("app_id", "none")
+        self.posture = kw.get("posture", "withheld")
+        self.description = kw.get("description") or ""
+        self.credits_paths = kw.get("credits_paths", [])
+        self.deferred = kw.get("deferred", None)
+        self.waivers = kw.get("waivers", {})
+        self.relay_token_in = kw.get("relay_token_in", None)
+        self.date = kw.get("date") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        self.source = kw.get("source", "flags")
+        self.problems = kw.get("problems", [])
+
+    @property
+    def repo(self):
+        return f"{self.owner}/{self.name}"
+
+    def layers(self):
+        return {"core"} | {f"overlay:{o}" for o in self.overlays} | {f"module:{m}" for m in self.modules}
+
+
+def norm_repo_path(p):
+    p = posixpath.normpath(p.strip().strip("`"))
+    return "" if p == "." else p.lstrip("/")
+
+
+def derive_app_id(name):
+    seg = re.sub(r"[^a-z0-9]", "", name.lower())
+    return f"com.blamechris.{seg}"
+
+
+def parse_profile_intent(profile_text, man):
+    """(fields dict, problems) from `## project-genesis Customizations`; (None, [why]) if absent."""
+    if profile_text is None:
+        return None, [".claude/skill-profile.md is missing"]
+    body = section(profile_text, man["profile_section"])
+    if body is None:
+        return None, [f"the profile has no `## {man['profile_section']}` section"]
+    fields = {}
+    for ln in body.splitlines():
+        m = re.match(r"^\s*(?:[-*+]\s+)?([a-z][a-z-]*)\s*:\s*(.*?)\s*$", ln)
+        if m and m.group(1) not in fields:
+            fields[m.group(1)] = m.group(2)
+    return fields, []
+
+
+INTENT_KEYS = ("standard", "visibility", "overlays", "modules", "app-id", "credits-paths",
+               "deferred-skills", "waivers")
+
+
+def intent_from_profile(fields, man, name, owner):
+    problems = [f"missing `{k}:`" for k in INTENT_KEYS if k not in fields]
+    if fields.get("standard", "v1") != man["standard"]:
+        problems.append(f"standard is {fields.get('standard')!r}, this registry renders {man['standard']!r}")
+    overlays, modules = split_list(fields.get("overlays")), split_list(fields.get("modules"))
+    for o in overlays:
+        spec = man["overlays"].get(o)
+        if spec is None:
+            problems.append(f"unknown overlay `{o}`")
+        elif spec.get("status") != "implemented":
+            problems.append(f"overlay `{o}` is planned, not implemented, in {man['standard']}")
+    for m in modules:
+        spec = man["modules"].get(m)
+        if spec is None:
+            problems.append(f"unknown module `{m}`")
+        elif spec.get("status") != "implemented":
+            problems.append(f"module `{m}` is planned, not implemented, in {man['standard']}")
+    vis = fields.get("visibility", "private")
+    if vis not in man["visibility"]:
+        problems.append(f"visibility `{vis}` is not one of {sorted(man['visibility'])}")
+    elif man["visibility"][vis].get("status") != "implemented":
+        problems.append(f"visibility `{vis}` is planned, not implemented, in {man['standard']} — "
+                        f"nothing probes its bundle")
+    for m, spec in man["modules"].items():
+        if spec.get("required") and m not in modules:
+            problems.append(f"module `{m}` is required: {spec['required']}")
+    app_id = fields.get("app-id", "none") or "none"
+    if app_id != "none" and not APP_ID.match(app_id):
+        problems.append(f"app-id `{app_id}` is not a valid Android/Apple ID")
+    deferred = split_list(fields.get("deferred-skills"))
+    known_deferred = {d["name"] for d in man["skills"]["deferred"]}
+    for d in deferred:
+        if d not in known_deferred:
+            problems.append(f"deferred skill `{d}` is not one the standard defers")
+    waivers, probed = {}, {r["id"] for r in man["rules"] if r["class"] == "probe"}
+    for w in split_list(fields.get("waivers")):
+        m = re.match(r"^([a-z0-9._-]+)\s*\(([^)]+)\)$", w)
+        if not m:
+            problems.append(f"waiver `{w}` is not `<rule-id> (<adr path>)`")
+        elif m.group(1) not in probed:
+            problems.append(f"waiver names `{m.group(1)}`, which is not a probed rule")
+        else:
+            waivers[m.group(1)] = m.group(2).strip()
+    return Intent(name=name, owner=owner, visibility=vis,
+                  overlays=[o for o in overlays if man["overlays"].get(o, {}).get("status") == "implemented"],
+                  modules=[m for m in modules if man["modules"].get(m, {}).get("status") == "implemented"],
+                  app_id=app_id, credits_paths=[norm_repo_path(p) for p in split_list(fields.get("credits-paths"))],
+                  deferred=deferred, waivers=waivers, source="profile", problems=problems)
+
+
+# ---------------------------------------------------------------- rendering
+
+def render_text(text, values, where):
+    """Substitute @@KEY@@ tokens. A line made only of tokens that render empty is dropped,
+    so an absent overlay leaves no blank scar. Undeclared or surviving tokens are errors:
+    a rendered file never ships a placeholder (Principle 3, real values only)."""
+    out = []
+    for line in text.splitlines(keepends=True):
+        names = PLACEHOLDER.findall(line)
+        for n in names:
+            if n not in values:
+                raise RenderError(f"{where}: undeclared placeholder @@{n}@@")
+        rendered = PLACEHOLDER.sub(lambda m: values[m.group(1)], line)
+        if names and not PLACEHOLDER.sub("", line).strip() and not rendered.strip():
+            continue
+        out.append(rendered)
+    result = "".join(out)
+    if PLACEHOLDER.search(result):
+        raise RenderError(f"{where}: a placeholder survived rendering")
+    return result
+
+
+def build_values(man, reg, intent):
+    overlays = [(o, man["overlays"][o]) for o in intent.overlays]
+    vis = man["visibility"].get(intent.visibility, {})
+
+    def frag(kind):
+        # A fragment block opens with a blank line and fragments are separated by one; the
+        # placeholder's own line supplies the final newline.
+        parts = [reg.need(GENESIS_DIR + spec["fragments"][kind]).strip("\n")
+                 for _, spec in overlays if (spec.get("fragments") or {}).get(kind)]
+        return "\n" + "\n\n".join(parts) if parts else ""
+
+    groups = {o: {"ignore": spec["path_group"]["ignore"], "ready": spec["path_group"].get("ready")}
+              for o, spec in overlays if spec.get("path_group")}
+    commands = [f"- {c}" for c in man["core"]["commands"]]
+    commands += [f"- {spec['build_note']}" for _, spec in overlays if spec.get("build_note")]
+    desc = intent.description.strip() or f"{intent.name} has no description yet."
+    values = {
+        "NAME": intent.name,
+        "OWNER": intent.owner,
+        "REPO": intent.repo,
+        "DESCRIPTION": desc,
+        "DATE": intent.date,
+        "VISIBILITY": intent.visibility,
+        "OVERLAYS": ", ".join(intent.overlays) or "none",
+        "MODULES": ", ".join(intent.modules) or "none",
+        "APP_ID": intent.app_id,
+        "POSTURE": "Gated" if intent.posture == "gated" else "Withheld",
+        "FLOOR_IDS": "\n".join(f"- `{i}`" for i in reg.floor_ids()),
+        "BUILD_COMMANDS": "\n".join(commands),
+        "MCP_LINE": ("The `repo-memory` MCP server is configured in `.mcp.json`: prefer "
+                     "`get_file_summary` over reading a whole file you will not edit."
+                     if "repo-memory" in intent.modules else "No MCP servers are configured."),
+        "LICENSE_LINE": vis.get("license_line", ""),
+        "CREDITS_POSTURE": ("\n**Licence posture (credits module).** Bundled third-party media is "
+                            "listed in `CREDITS.md`, one row per asset with its source, licence and "
+                            "exact credit string. CC BY credits must be reachable in the app; CC BY-SA "
+                            "and NC assets are a risk in a closed-source binary and need an ADR before "
+                            "they are bundled." if "credits" in intent.modules else ""),
+        "REGISTRY_COMMIT": reg.commit[:7],
+        "GITIGNORE_OVERLAYS": frag("gitignore"),
+        "GITATTRIBUTES_OVERLAYS": frag("gitattributes"),
+        "DEPENDABOT_OVERLAYS": frag("dependabot"),
+        "CI_OVERLAY_JOBS": frag("ci_job"),
+        "CI_GATE_NEEDS": ", ".join(["route", "hygiene"] + (["changes"] if groups else [])
+                                   + [spec["ci_job"] for _, spec in overlays if spec.get("ci_job")]),
+        "CI_CHANGES_OUTPUTS": "\n".join(f"      {g}: ${{{{ steps.groups.outputs.{g} }}}}" for g in groups),
+        "CI_CHANGES_GROUPS": json.dumps(groups, separators=(", ", ": ")),
+        "CI_CHANGES_JOB": "",
+    }
+    if groups:
+        tmpl = reg.need(GENESIS_DIR + man["core"]["fragments"]["ci_changes"])
+        values["CI_CHANGES_JOB"] = "\n" + render_text(tmpl, values, "ci-changes fragment").strip("\n")
+    # Fragments may themselves carry placeholders; render them against the same values.
+    for k in ("GITIGNORE_OVERLAYS", "GITATTRIBUTES_OVERLAYS", "DEPENDABOT_OVERLAYS", "CI_OVERLAY_JOBS"):
+        values[k] = render_text(values[k], values, f"{k} fragments").rstrip("\n") if values[k] else ""
+    declared = set(man["placeholders"])
+    if set(values) != declared:
+        raise RenderError(f"renderer values {sorted(set(values) ^ declared)} disagree with the "
+                          f"manifest's declared placeholders")
+    return values
+
+
+def file_specs(man, intent):
+    specs = [dict(f, layer="core") for f in man["core"]["files"]]
+    for m in intent.modules:
+        specs += [dict(f, layer=f"module:{m}") for f in man["modules"][m].get("files", [])]
+    return specs
+
+
+def render_files(man, reg, intent):
+    values = build_values(man, reg, intent)
+    files = []
+    for spec in file_specs(man, intent):
+        content = render_text(reg.need(GENESIS_DIR + spec["template"]), values, spec["template"])
+        files.append({"path": spec["path"], "template": spec["template"], "layer": spec["layer"],
+                      "phase": 3, "content": content})
+    return files, values
+
+
+# ---------------------------------------------------------------- plan
+
+def human_setup_issue(man, intent, entry, values):
+    title = render_text(entry["title"], values, "human_setup title")
+    if entry["rule"] == "module.repo-relay.secrets":
+        spec = man["modules"]["repo-relay"]
+        req, opt = spec["secrets"], spec["optional_secrets"]
+        if intent.relay_token_in is None:
+            reuse = ("Unknown: Phase 0's sibling-secret probe was not passed to the plan "
+                     "(`--relay-token-in`). Run it before creating a new bot.")
+        elif intent.relay_token_in:
+            reuse = ("Reuse the existing bot token. `DISCORD_BOT_TOKEN` is already set in: "
+                     + ", ".join(f"`{intent.owner}/{r}`" for r in intent.relay_token_in) + ".")
+        else:
+            reuse = "No sibling repo holds `DISCORD_BOT_TOKEN`: create a bot."
+        steps = [f"`gh secret set {s} -R {intent.repo}`" for s in req]
+        body = "\n".join([
+            "## What", "",
+            f"Give `{intent.repo}`'s `repo-relay` workflow a Discord bot token and a channel, so "
+            "pull request, issue and release events reach Discord.", "",
+            "## Why a human", "",
+            "Secret values are typed by the owner. Genesis lists secret names only and never "
+            "reads, prints or writes a value.", "",
+            "## Exact steps", "",
+            *[f"{i}. {s}" for i, s in enumerate(steps, 1)],
+            f"{len(steps) + 1}. Optional: " + ", ".join(f"`{s}`" for s in opt)
+            + " (each falls back to the PRs channel).", "",
+            "## Secret names", "",
+            "Required: " + ", ".join(f"`{s}`" for s in req) + ". Optional: "
+            + ", ".join(f"`{s}`" for s in opt) + ".", "",
+            "## Reuse or create", "", reuse, "",
+            "## Done when", "",
+            f"The `genesis-verify` rule `{entry['rule']}` reports PASS.",
+        ])
+    else:
+        raise RenderError(f"no human-setup body renderer for rule {entry['rule']}")
+    return {"kind": "human-setup", "title": title, "labels": ["human-setup"], "rule": entry["rule"], "body": body}
+
+
+def applies(when, intent):
+    return when == "always" or when in intent.layers()
+
+
+def build_plan(man, reg, intent, explicit):
+    files, values = render_files(man, reg, intent)
+    labels = reg.genesis_json(man["github"]["labels"])
+    ruleset = reg.genesis_json(man["github"]["ruleset"])
+    deferred = [d["name"] for d in man["skills"]["deferred"]]
+    issues = []
+    for entry in man["issues"]:
+        if applies(entry["when"], intent):
+            issues.append({"kind": entry["kind"], "title": render_text(entry["title"], values, "issue title"),
+                           "labels": entry["labels"],
+                           "description": render_text(entry["description"], values, "issue description"),
+                           "acceptance": entry["acceptance"]})
+    for entry in man["human_setup"]:
+        if applies(entry["when"], intent):
+            issues.append(human_setup_issue(man, intent, entry, values))
+    machine = []
+    for m in intent.modules:
+        for step in man["modules"][m].get("machine", []):
+            machine.append({"module": m, "phase": step["phase"],
+                            "command": render_text(step["command"], values, f"{m} machine step")})
+    profile_section = "\n".join([
+        f"## {man['profile_section']}", "",
+        "Machine-read by `genesis-verify.py` and `/project-genesis --audit` / `--add`. Written from the",
+        "approved genesis plan; change it through `/project-genesis --add`, never by hand-editing the layers.",
+        "",
+        f"- standard: {man['standard']}",
+        f"- visibility: {intent.visibility}",
+        f"- overlays: {', '.join(intent.overlays) or 'none'}",
+        f"- modules: {', '.join(intent.modules) or 'none'}",
+        f"- app-id: {intent.app_id}",
+        f"- credits-paths: {', '.join(intent.credits_paths) or 'none'}",
+        f"- deferred-skills: {', '.join(deferred)}",
+        "- waivers: none",
+    ])
+    decisions = decisions_table(man, intent, explicit)
+    writes = [
+        {"kind": "machine", "target": "~/.claude/scripts/genesis-verify.py",
+         "action": "bootstrap copy, only if it differs from the registry copy"},
+        {"kind": "github", "target": intent.repo, "action": f"create, {intent.visibility}, --add-readme"},
+        {"kind": "github", "target": "repo settings",
+         "action": "squash only (PR title + body), auto-merge off, delete branch on merge, update branch on; "
+                   "wiki, projects, discussions off"},
+        {"kind": "github", "target": "actions",
+         "action": f"all actions allowed, SHA pinning required; token read-only and cannot approve; "
+                   f"no workflows from fork PRs; retention {man['github']['retention_days']} days"},
+        {"kind": "github", "target": "security", "action": "Dependabot alerts and security updates on"},
+        {"kind": "github", "target": "labels",
+         "action": f"create/update {len(labels)}; delete unused defaults "
+                   + ", ".join(man["github"]["remove_default_labels"])},
+        {"kind": "github", "target": f"ruleset `{ruleset['name']}`", "action": f"create from {man['github']['ruleset']}"},
+        {"kind": "issue", "target": man["epic_title"], "action": "file the epic (label epic); its body freezes this plan"},
+    ]
+    writes += [{"kind": "file", "target": f["path"], "action": "add in the scaffold PR (Phase 3)"} for f in files]
+    writes += [{"kind": "skills", "target": f"group {i}", "action": "/skill add " + ", ".join(g) + " (Phase 4)"}
+               for i, g in enumerate(man["skills"]["install"], 1)]
+    writes += [{"kind": "machine", "target": s["module"], "action": f"{s['command']} (Phase {s['phase']})"}
+               for s in machine]
+    writes += [{"kind": "issue", "target": i["title"], "action": "file under the epic ("
+                + ", ".join(i["labels"]) + ")"} for i in issues]
+    return {
+        "standard": man["standard"],
+        "registry": {"path": reg.path, "ref": reg.ref, "commit": reg.commit},
+        "intent": {"name": intent.name, "repo": intent.repo, "visibility": intent.visibility,
+                   "overlays": intent.overlays, "modules": intent.modules, "app_id": intent.app_id,
+                   "posture": intent.posture, "description": intent.description,
+                   "credits_paths": intent.credits_paths, "deferred_skills": deferred,
+                   "relay_token_in": intent.relay_token_in, "date": intent.date},
+        "decisions": decisions,
+        "github": {"repo": man["github"]["repo"], "features": man["github"]["features"],
+                   "actions_permissions": man["github"]["actions_permissions"],
+                   "workflow_permissions": man["github"]["workflow_permissions"],
+                   "fork_pr_workflows_private": man["github"]["fork_pr_workflows_private"],
+                   "retention_days": man["github"]["retention_days"],
+                   "vulnerability_alerts": man["github"]["vulnerability_alerts"],
+                   "automated_security_fixes": man["github"]["automated_security_fixes"],
+                   "labels": labels, "remove_default_labels": man["github"]["remove_default_labels"],
+                   "ruleset": ruleset},
+        "epic": {"title": man["epic_title"], "labels": ["epic"]},
+        "files": files,
+        "profile": {"section": profile_section,
+                    "posture": values["POSTURE"],
+                    "posture_sections": man["skills"]["posture_sections"],
+                    "merge_strategy": man["skills"]["merge_strategy"],
+                    "merge_sections": man["skills"]["merge_sections"],
+                    "build_commands": values["BUILD_COMMANDS"].splitlines(),
+                    "labels": [l["name"] for l in labels],
+                    "targets": "claude"},
+        "skills": {"install": man["skills"]["install"], "deferred": man["skills"]["deferred"]},
+        "machine": machine,
+        "issues": issues,
+        "writes": writes,
+    }
+
+
+def decisions_table(man, intent, explicit):
+    app_overlays = [o for o in intent.overlays if man["overlays"][o].get("app")]
+    rec_modules = [m for m, s in man["modules"].items() if s.get("default") and s.get("status") == "implemented"]
+    rows = [
+        ("Name / scope", intent.name, "—", "Final before anything exists: the seed scope, runner "
+         "directory and app ID all key off it.", "name"),
+        ("Visibility", intent.visibility, "private", "Going public is an owner decision recorded in "
+         "an ADR; genesis never flips visibility.", "visibility"),
+        ("Stack overlays", ", ".join(intent.overlays) or "none", "none until an owner decision names "
+         "one", "Genesis never chooses a stack (Principle 7).", "stack"),
+        ("Modules", ", ".join(intent.modules) or "none", ", ".join(rec_modules)
+         + " (+ credits when media is bundled)", "Module defaults ratified 2026-09-26 (decision 8).", "modules"),
+        ("App ID", intent.app_id, derive_app_id(intent.name) if app_overlays else "none",
+         "Permanent once an app is published under it.", "app_id"),
+        ("Self-merge posture", intent.posture, "withheld", "Flip to gated by a profile edit after the "
+         "first reviewed PRs.", "posture"),
+        ("Description", intent.description or "unset", "one line", "The GitHub description and the "
+         "README lead; unset renders an honest \"no description yet\".", "description"),
+    ]
+    if "repo-relay" in intent.modules:
+        v = ("unknown" if intent.relay_token_in is None else
+             ("reuse (" + ", ".join(intent.relay_token_in) + ")") if intent.relay_token_in else "create")
+        rows.append(("repo-relay bot token", v, "reuse when a sibling repo holds it",
+                     "Names only are probed; the owner sets values.", "relay_token_in"))
+    return [{"decision": d, "value": v, "recommendation": r, "why": w, "defaulted": k not in explicit}
+            for d, v, r, w, k in rows]
+
+
+def print_plan(plan):
+    it = plan["intent"]
+    print(f"## Genesis plan — {it['repo']} (Standard {plan['standard']})\n")
+    print(f"Registry: `{plan['registry']['path']}` @ {plan['registry']['ref']} "
+          f"({plan['registry']['commit'][:7]})\n")
+    print("| # | Kind | Target | Action |\n|---|------|--------|--------|")
+    for i, w in enumerate(plan["writes"], 1):
+        print(f"| {i} | {w['kind']} | {w['target']} | {w['action']} |")
+    print("\n### Decisions\n\n| Decision | Value | Recommendation | Why |\n|---|---|---|---|")
+    for d in plan["decisions"]:
+        value = d["value"] + (" *(default)*" if d["defaulted"] else "")
+        print(f"| {d['decision']} | {value} | {d['recommendation']} | {d['why']} |")
+
+
+# ---------------------------------------------------------------- probes
+
+PROBES = {}
+
+
+def probe(rule_id):
+    def deco(fn):
+        PROBES[rule_id] = fn
+        return fn
+    return deco
+
+
+class Ctx:
+    def __init__(self, man, reg, tree, intent, gh):
+        self.man, self.reg, self.tree, self.intent, self.gh = man, reg, tree, intent, gh
+        self._expected = None
+        self._ruleset = None
+
+    def expected(self, path):
+        if self._expected is None:
+            files, _ = render_files(self.man, self.reg, self.intent)
+            self._expected = {f["path"]: f["content"] for f in files}
+        return self._expected[path]
+
+    def ruleset(self):
+        """(doc, live detail or None)."""
+        if self._ruleset is None:
+            doc = self.reg.genesis_json(self.man["github"]["ruleset"])
+            live = None
+            for rs in self.gh.paged(f"repos/{self.intent.repo}/rulesets"):
+                if rs.get("name") == doc["name"]:
+                    live = self.gh.get(f"repos/{self.intent.repo}/rulesets/{rs['id']}")
+                    break
+            self._ruleset = (doc, live)
+        return self._ruleset
+
+
+def fail(msg):
+    return "FAIL", msg
+
+
+def ok(msg):
+    return "PASS", msg
+
+
+def md_file(ctx, path):
+    return ctx.tree.read(path)
+
+
+def h2_probe(ctx, path, ordered=True):
+    text = md_file(ctx, path)
+    if text is None:
+        return fail(f"{path} is missing")
+    req = headings(ctx.expected(path), 2)
+    act = headings(text, 2)
+    problems = order_problems(req, act) if ordered else [f"missing `{h}`" for h in req if h not in act]
+    if problems:
+        return fail(f"{path}: " + "; ".join(problems))
+    return ok(f"{path}: {len(req)} headings" + (" in order" if ordered else ""))
+
+
+def h1_probe(ctx, path):
+    text = md_file(ctx, path)
+    if text is None:
+        return fail(f"{path} is missing")
+    if not headings(text, 1):
+        return fail(f"{path} has no H1")
+    return ok(f"{path} present")
+
+
+@probe("core.claude-md")
+def _(ctx):
+    text = md_file(ctx, "CLAUDE.md")
+    if text is None:
+        return fail("CLAUDE.md is missing")
+    n = len(text.splitlines())
+    res, ev = h2_probe(ctx, "CLAUDE.md")
+    if n > 150:
+        return fail(f"CLAUDE.md is {n} lines (limit 150)" + ("" if res == "PASS" else f"; {ev}"))
+    return (res, f"{ev}, {n} lines") if res == "PASS" else (res, ev)
+
+
+@probe("core.claude-md.floor-ids")
+def _(ctx):
+    text = md_file(ctx, "CLAUDE.md")
+    if text is None:
+        return fail("CLAUDE.md is missing")
+    body = section(text, "Floor rules")
+    if body is None:
+        return fail("CLAUDE.md has no `## Floor rules` section")
+    listed = re.findall(r"^\s*[-*+]\s+`([^`]+)`\s*$", body, re.M)
+    want = ctx.reg.floor_ids()
+    dups = sorted({i for i in listed if listed.count(i) > 1})
+    extra, missing = sorted(set(listed) - set(want)), sorted(set(want) - set(listed))
+    if dups or extra or missing:
+        return fail("Floor rules differ from the registry's: "
+                    + "; ".join(x for x in (f"missing {missing}" if missing else "",
+                                           f"not a floor rule {extra}" if extra else "",
+                                           f"duplicated {dups}" if dups else "") if x))
+    return ok(f"the {len(want)} registry floor IDs")
+
+
+@probe("core.claude-reference")
+def _(ctx):
+    return h1_probe(ctx, "docs/CLAUDE_REFERENCE.md")
+
+
+@probe("core.readme")
+def _(ctx):
+    text = md_file(ctx, "README.md")
+    if text is None:
+        return fail("README.md is missing")
+    if not headings(text, 1):
+        return fail("README.md has no H1")
+    return h2_probe(ctx, "README.md", ordered=False)
+
+
+@probe("core.mission")
+def _(ctx):
+    return h2_probe(ctx, "MISSION.md")
+
+
+@probe("core.non-goals")
+def _(ctx):
+    return h1_probe(ctx, "NON-GOALS.md")
+
+
+ADR0001 = "docs/adr/0001-project-genesis.md"
+
+
+@probe("core.adr-0001")
+def _(ctx):
+    text = md_file(ctx, ADR0001)
+    if text is None:
+        return fail(f"{ADR0001} is missing")
+    fields = [f for f in ("Status", "Date", "Deciders", "Supersedes")
+              if not re.search(r"^\s*[-*+]?\s*\*\*" + f + r":\*\*", text, re.M)]
+    res, ev = h2_probe(ctx, ADR0001)
+    if fields:
+        return fail(f"{ADR0001} lacks field(s) {fields}" + ("" if res == "PASS" else f"; {ev}"))
+    return res, ev
+
+
+@probe("core.app-id")
+def _(ctx):
+    want = ctx.intent.app_id
+    if want != "none" and not APP_ID.match(want):
+        return fail(f"intent app-id `{want}` is not a valid Android/Apple ID")
+    text = md_file(ctx, ADR0001)
+    if text is None:
+        return fail(f"{ADR0001} is missing, so the app ID is not reserved anywhere")
+    m = re.search(r"^\|\s*App ID\s*\|\s*`?([^|`]*?)`?\s*\|", text, re.M)
+    if not m:
+        return fail(f"{ADR0001} has no `| App ID |` row")
+    if m.group(1) != want:
+        return fail(f"ADR-0001 reserves `{m.group(1)}`, the intent says `{want}`")
+    return ok(f"`{want}` reserved in ADR-0001")
+
+
+@probe("core.docs-layout")
+def _(ctx):
+    missing = [d for d in ("docs/records/", "docs/design/") if not ctx.tree.under(d)]
+    return fail(f"no files under {missing}") if missing else ok("docs/records/ and docs/design/ present")
+
+
+def lines_probe(ctx, path):
+    text = ctx.tree.read(path)
+    if text is None:
+        return fail(f"{path} is missing")
+    have = set(ignore_lines(text))
+    missing = [ln for ln in ignore_lines(ctx.expected(path)) if ln not in have]
+    if missing:
+        return fail(f"{path} lacks {len(missing)} line(s): " + ", ".join(f"`{m}`" for m in missing[:6])
+                    + (" …" if len(missing) > 6 else ""))
+    return ok(f"{path}: all {len(ignore_lines(ctx.expected(path)))} standard lines")
+
+
+@probe("core.gitignore")
+def _(ctx):
+    return lines_probe(ctx, ".gitignore")
+
+
+@probe("core.gitattributes")
+def _(ctx):
+    return lines_probe(ctx, ".gitattributes")
+
+
+@probe("core.issue-templates")
+def _(ctx):
+    problems = []
+    for name in ("bug_report.md", "feature_request.md", "human_setup.md"):
+        path = f".github/ISSUE_TEMPLATE/{name}"
+        text = ctx.tree.read(path)
+        if text is None:
+            problems.append(f"{name} missing")
+            continue
+        if not re.search(r"^Filed from:", text, re.M):
+            problems.append(f"{name} has no `Filed from:` line")
+        miss = [h for h in headings(ctx.expected(path), 2) if h not in headings(text, 2)]
+        if miss:
+            problems.append(f"{name} lacks {miss}")
+    cfg = ctx.tree.read(".github/ISSUE_TEMPLATE/config.yml")
+    if cfg is None:
+        problems.append("config.yml missing")
+    elif not re.search(r"^blank_issues_enabled:\s*true\s*$", cfg, re.M):
+        problems.append("config.yml does not keep blank issues enabled")
+    return fail("; ".join(problems)) if problems else ok("bug, feature, human-setup and config present")
+
+
+@probe("core.pr-template")
+def _(ctx):
+    path = ".github/pull_request_template.md"
+    text = ctx.tree.read(path)
+    if text is None:
+        return fail(f"{path} is missing")
+    miss = [h for h in headings(ctx.expected(path), 2) if h not in headings(text, 2)]
+    if "Fixes #" not in text:
+        miss.append("`Fixes #`")
+    return fail(f"{path} lacks {miss}") if miss else ok("Summary, Fixes #, Test Plan")
+
+
+CI = ".github/workflows/ci.yml"
+
+
+def ci_jobs(ctx):
+    text = ctx.tree.read(CI)
+    return (None, None) if text is None else (text, workflow_jobs(text))
+
+
+@probe("core.ci-gate")
+def _(ctx):
+    text, jobs = ci_jobs(ctx)
+    if text is None:
+        return fail(f"{CI} is missing")
+    gate = jobs.get("ci-gate")
+    if gate is None:
+        return fail(f"{CI} has no `ci-gate` job")
+    problems = []
+    cond = re.sub(r"^\$\{\{\s*(.*?)\s*\}\}$", r"\1", (gate["if"] or "").strip().strip("'\""))
+    if cond != "always()":
+        # `always() && …` can skip the gate, and a skipped job reports Success.
+        problems.append(f"ci-gate runs `if: {gate['if']}`, not exactly `if: always()`")
+    uncovered = sorted(set(jobs) - {"ci-gate"} - set(gate["needs"]))
+    if uncovered:
+        problems.append(f"ci-gate does not need {uncovered}")
+    code = "\n".join(ln for ln in gate["body"].splitlines() if not ln.strip().startswith(("#", "//")))
+    if "failure" not in code or "cancelled" not in code:
+        problems.append("ci-gate does not fail on both `failure` and `cancelled`")
+    return fail("; ".join(problems)) if problems else ok(f"ci-gate needs all {len(jobs) - 1} jobs")
+
+
+@probe("core.ci-triggers")
+def _(ctx):
+    text = ctx.tree.read(CI)
+    if text is None:
+        return fail(f"{CI} is missing")
+    inline, block = on_block(text)
+    if block is None:
+        return fail(f"{CI} has no `on:`")
+    if inline is not None:
+        return fail(f"`on: {inline}` — push must be restricted to main")
+    events = {m.group(1) for ln in block for m in [re.match(r"^\s{1,4}([a-z_]+):", ln)] if m}
+    problems = [f"no `{e}` trigger" for e in ("pull_request", "push", "workflow_dispatch") if e not in events]
+    if any(re.match(r"^\s*paths(-ignore)?:", ln) for ln in block):
+        problems.append("a workflow-level path filter leaves ci-gate Pending on skipped runs")
+    if "push" in events and push_branches(block) != ["main"]:
+        problems.append(f"push is not restricted to exactly `main` (branches: {push_branches(block)})")
+    return fail("; ".join(problems)) if problems else ok("pull_request, push→main, workflow_dispatch; no path filter")
+
+
+@probe("core.ci-hygiene")
+def _(ctx):
+    text, jobs = ci_jobs(ctx)
+    if text is None:
+        return fail(f"{CI} is missing")
+    hits = [k for k, j in jobs.items() if re.search(r"\bgit\b[^\n]*\bls-files -ci --exclude-standard", j["body"])]
+    return ok(f"job `{hits[0]}`") if hits else fail("no job runs `git ls-files -ci --exclude-standard`")
+
+
+@probe("core.actions-pinned")
+def _(ctx):
+    wfs = [p for p in ctx.tree.under(".github/workflows/") if p.endswith((".yml", ".yaml"))]
+    if not wfs:
+        return fail("no workflows under .github/workflows/")
+    loose = []
+    for p in wfs:
+        for ln in ctx.tree.read(p).splitlines():
+            m = USES.match(ln)
+            if not m or m.group(1).startswith(("./", "docker://")):
+                continue
+            ref = m.group(1).rsplit("@", 1)
+            if len(ref) != 2 or not SHA40.match(ref[1]):
+                loose.append(f"{os.path.basename(p)}: {m.group(1)}")
+    if loose:
+        return fail("not SHA-pinned: " + ", ".join(loose[:5]) + (" …" if len(loose) > 5 else ""))
+    return ok(f"{len(wfs)} workflow(s), every action SHA-pinned")
+
+
+DEPENDABOT = ".github/dependabot.yml"
+
+
+@probe("core.dependabot")
+def _(ctx):
+    text = ctx.tree.read(DEPENDABOT)
+    if text is None:
+        return fail(f"{DEPENDABOT} is missing")
+    eco = dependabot_ecosystems(text)
+    gha = eco.get("github-actions")
+    if gha is None:
+        return fail("no github-actions update entry")
+    problems = []
+    if not re.search(r"interval:\s*['\"]?weekly", gha):
+        problems.append("github-actions is not weekly")
+    if "dependencies" not in gha:
+        problems.append("github-actions is not labelled `dependencies`")
+    return fail("; ".join(problems)) if problems else ok("github-actions weekly, labelled dependencies")
+
+
+@probe("core.claude-settings")
+def _(ctx):
+    text = ctx.tree.read(".claude/settings.json")
+    if text is None:
+        return fail(".claude/settings.json is missing")
+    try:
+        s = json.loads(text)
+    except json.JSONDecodeError:
+        return fail(".claude/settings.json is not valid JSON")
+    if not isinstance(s, dict):
+        return fail(".claude/settings.json is not a JSON object")
+    att = s.get("attribution")
+    problems = []
+    if not isinstance(att, dict) or att.get("commit") != "" or att.get("pr") != "":
+        problems.append('`attribution` is not {"commit": "", "pr": ""}')
+    if s.get("includeCoAuthoredBy") is not False:
+        problems.append("`includeCoAuthoredBy` is not false")
+    return fail("; ".join(problems)) if problems else ok("attribution off")
+
+
+PROFILE = ".claude/skill-profile.md"
+
+
+@probe("profile.genesis-intent")
+def _(ctx):
+    if ctx.intent.source != "profile":
+        return fail(f"no committed intent ({ctx.intent.problems[0] if ctx.intent.problems else 'absent'})")
+    problems = list(ctx.intent.problems)
+    lock = skills_lock(ctx)
+    installed = set(lock) if isinstance(lock, dict) else set()
+    listed = set(ctx.intent.deferred or [])
+    unaccounted = [d["name"] for d in ctx.man["skills"]["deferred"]
+                   if d["name"] not in listed and d["name"] not in installed]
+    if unaccounted:
+        problems.append(f"deferred skills neither listed nor installed: {unaccounted}")
+    if problems:
+        return fail("; ".join(problems))
+    return ok(f"standard {ctx.man['standard']}; overlays {ctx.intent.overlays or 'none'}; "
+              f"modules {ctx.intent.modules or 'none'}")
+
+
+@probe("profile.repo-wide")
+def _(ctx):
+    text = ctx.tree.read(PROFILE)
+    if text is None:
+        return fail(f"{PROFILE} is missing")
+    have = headings(text, 2)
+    miss = [h for h in ("Project Context", "Build / Test Commands", "Conventions") if h not in have]
+    if not re.search(r"^\s*targets:\s*\S", text, re.M):
+        miss.append("a `targets:` line")
+    return fail(f"profile lacks {miss}") if miss else ok("repo-wide sections and targets present")
+
+
+@probe("profile.posture")
+def _(ctx):
+    text = ctx.tree.read(PROFILE)
+    if text is None:
+        return fail(f"{PROFILE} is missing")
+    got, problems = {}, []
+    for s in ctx.man["skills"]["posture_sections"]:
+        body = section(text, f"{s} Customizations")
+        if body is None:
+            problems.append(f"no `## {s} Customizations`")
+            continue
+        blk = re.search(r"^#{3,4}[ \t]+Self-merge posture[ \t]*$(.*?)(?=^#{1,6}[ \t]|\Z)", body, re.M | re.S)
+        lead = POSTURE_LEAD.search(blk.group(1)) if blk else None
+        if not lead:
+            problems.append(f"`{s}` has no `### Self-merge posture` bold lead")
+        else:
+            got[s] = lead.group(1)
+    if not problems and len(set(got.values())) > 1:
+        problems.append(f"the posture pins disagree: {got}")
+    return fail("; ".join(problems)) if problems else ok(f"{next(iter(got.values()))} in "
+                                                        + " and ".join(got))
+
+
+@probe("profile.merge-strategy")
+def _(ctx):
+    text = ctx.tree.read(PROFILE)
+    if text is None:
+        return fail(f"{PROFILE} is missing")
+    problems = []
+    for s in ("merge", "batch-merge"):
+        body = section(text, f"{s} Customizations")
+        if body is None or "--squash" not in body:
+            problems.append(f"`{s}` does not pin `--squash`")
+    return fail("; ".join(problems)) if problems else ok("merge and batch-merge pin --squash")
+
+
+def skills_lock(ctx):
+    text = ctx.tree.read(".claude/skills.lock")
+    if text is None:
+        return None
+    try:
+        return json.loads(text).get("skills", {})
+    except (json.JSONDecodeError, AttributeError):
+        return "invalid"
+
+
+@probe("skills.installed")
+def _(ctx):
+    lock = skills_lock(ctx)
+    if lock is None:
+        return fail(".claude/skills.lock is missing")
+    if lock == "invalid":
+        return fail(".claude/skills.lock is not valid JSON")
+    want = [s for g in ctx.man["skills"]["install"] for s in g]
+    missing = [s for s in want if s not in lock]
+    no_cmd = [s for s in want if s in lock and not ctx.tree.has(f".claude/commands/{s}.md")]
+    problems = ([f"not in skills.lock: {missing}"] if missing else []) + \
+               ([f"no .claude/commands file: {no_cmd}"] if no_cmd else [])
+    return fail("; ".join(problems)) if problems else ok(f"all {len(want)} install-set skills")
+
+
+def settings_probe(ctx, want, got, what):
+    if not isinstance(got, dict):
+        raise CannotVerify(f"{what}: the API returned {type(got).__name__}, not an object")
+    absent = [k for k in want if k not in got or got[k] is None]
+    if absent:
+        # GitHub omits these for a caller without admin rights; that is not a violation.
+        raise CannotVerify(f"{what}: the API did not return {absent} (does this token have admin on the repo?)")
+    diff = [f"{k}={got.get(k)!r} (want {v!r})" for k, v in want.items() if got.get(k) != v]
+    return fail(f"{what}: " + ", ".join(diff)) if diff else ok(f"{what} as standard")
+
+
+@probe("github.visibility")
+def _(ctx):
+    info = ctx.gh.repo_info()
+    live = "private" if info.get("private") else info.get("visibility", "public")
+    if live != ctx.intent.visibility:
+        return fail(f"the repo is {live}; the intent says {ctx.intent.visibility}")
+    return ok(live)
+
+
+@probe("github.merge-settings")
+def _(ctx):
+    return settings_probe(ctx, ctx.man["github"]["repo"], ctx.gh.repo_info(), "merge settings")
+
+
+@probe("github.features")
+def _(ctx):
+    return settings_probe(ctx, ctx.man["github"]["features"], ctx.gh.repo_info(), "features")
+
+
+@probe("github.actions")
+def _(ctx):
+    got = ctx.gh.get(f"repos/{ctx.intent.repo}/actions/permissions")
+    return settings_probe(ctx, ctx.man["github"]["actions_permissions"], got, "actions permissions")
+
+
+@probe("github.workflow-token")
+def _(ctx):
+    got = ctx.gh.get(f"repos/{ctx.intent.repo}/actions/permissions/workflow")
+    return settings_probe(ctx, ctx.man["github"]["workflow_permissions"], got, "workflow token")
+
+
+@probe("github.fork-pr-workflows")
+def _(ctx):
+    got = ctx.gh.get(f"repos/{ctx.intent.repo}/actions/permissions/fork-pr-workflows-private-repos")
+    return settings_probe(ctx, ctx.man["github"]["fork_pr_workflows_private"], got, "fork-PR workflows")
+
+
+@probe("github.retention")
+def _(ctx):
+    got = ctx.gh.get(f"repos/{ctx.intent.repo}/actions/permissions/artifact-and-log-retention")
+    want = ctx.man["github"]["retention_days"]
+    return ok(f"{want} days") if got.get("days") == want else fail(f"retention is {got.get('days')} days (want {want})")
+
+
+@probe("github.security")
+def _(ctx):
+    if not ((ctx.gh.repo_info().get("permissions") or {}).get("admin")):
+        # Both endpoints 404 for a non-admin caller, which would read as "off".
+        raise CannotVerify("reading Dependabot settings needs admin on the repo; this token lacks it")
+    alerts = ctx.gh.get(f"repos/{ctx.intent.repo}/vulnerability-alerts", missing_ok=True)
+    fixes = ctx.gh.get(f"repos/{ctx.intent.repo}/automated-security-fixes", missing_ok=True)
+    # GET returns 200 {"enabled": bool, "paused": bool} (live, 2026-09-26). A body without
+    # `enabled` (an empty 204, a changed API) says nothing either way: could not verify.
+    if fixes is not None and not isinstance((fixes or {}).get("enabled"), bool):
+        raise CannotVerify("automated-security-fixes returned no `enabled` field; cannot tell on from off")
+    problems = []
+    if alerts is None:
+        problems.append("Dependabot alerts are off")
+    if not (fixes or {}).get("enabled"):
+        problems.append("Dependabot security updates are off")
+    return fail("; ".join(problems)) if problems else ok("alerts and security updates on")
+
+
+@probe("github.labels")
+def _(ctx):
+    want = ctx.reg.genesis_json(ctx.man["github"]["labels"])
+    live = {l["name"]: l.get("color", "").lower() for l in ctx.gh.paged(f"repos/{ctx.intent.repo}/labels")}
+    missing = [l["name"] for l in want if l["name"] not in live]
+    recolored = [l["name"] for l in want if l["name"] in live and live[l["name"]] != l["color"].lower()]
+    problems = ([f"missing {missing}"] if missing else []) + ([f"wrong colour {recolored}"] if recolored else [])
+    return fail("; ".join(problems)) if problems else ok(f"all {len(want)} seed labels")
+
+
+def rule_param_problems(doc_rule, live_rule):
+    problems = []
+    for k, v in (doc_rule.get("parameters") or {}).items():
+        lv = (live_rule.get("parameters") or {}).get(k)
+        if k == "required_status_checks":
+            norm = lambda xs: sorted((str(c.get("context")), c.get("integration_id") or -1) for c in (xs or []))
+            if norm(lv) != norm(v):
+                problems.append(f"{doc_rule['type']}.{k}={norm(lv)} (want {norm(v)})")
+        elif isinstance(v, list):
+            if sorted(lv or []) != sorted(v):
+                problems.append(f"{doc_rule['type']}.{k}={lv} (want {v})")
+        elif lv != v:
+            problems.append(f"{doc_rule['type']}.{k}={lv!r} (want {v!r})")
+    return problems
+
+
+@probe("github.ruleset")
+def _(ctx):
+    doc, live = ctx.ruleset()
+    if live is None:
+        return fail(f"no ruleset named `{doc['name']}`")
+    problems = [f"{k}={live.get(k)!r} (want {doc[k]!r})" for k in ("target", "enforcement") if live.get(k) != doc[k]]
+    ref_name = (live.get("conditions") or {}).get("ref_name") or {}
+    inc, exc = ref_name.get("include") or [], ref_name.get("exclude") or []
+    if not set(doc["conditions"]["ref_name"]["include"]) <= set(inc):
+        problems.append(f"ref_name.include={inc} (want {doc['conditions']['ref_name']['include']})")
+    if set(exc) != set(doc["conditions"]["ref_name"]["exclude"]):
+        problems.append(f"ref_name.exclude={exc} (want {doc['conditions']['ref_name']['exclude']})")
+    by_type = {r.get("type"): r for r in live.get("rules") or []}
+    for r in doc["rules"]:
+        if r["type"] not in by_type:
+            problems.append(f"no `{r['type']}` rule")
+        else:
+            problems += rule_param_problems(r, by_type[r["type"]])
+    if problems:
+        return fail("; ".join(problems))
+    return ok(f"ruleset `{doc['name']}` (id {live.get('id')}) carries all {len(doc['rules'])} rules")
+
+
+@probe("github.ruleset.no-bypass")
+def _(ctx):
+    doc, live = ctx.ruleset()
+    if live is None:
+        return fail(f"no ruleset named `{doc['name']}`")
+    bypass = live.get("bypass_actors") or []
+    if bypass:
+        return fail(f"{len(bypass)} bypass actor(s): " + ", ".join(
+            f"{b.get('actor_type')}:{b.get('actor_id')}" for b in bypass))
+    return ok("no bypass actors")
+
+
+@probe("github.epic")
+def _(ctx):
+    title = ctx.man["epic_title"]
+    hits = [i for i in ctx.gh.paged(f"repos/{ctx.intent.repo}/issues?labels=epic&state=all")
+            if i.get("title") == title]
+    return ok(f"#{hits[0]['number']} ({hits[0].get('state')})") if hits else fail(f"no `epic` issue titled `{title}`")
+
+
+@probe("module.runner-mac")
+def _(ctx):
+    runners = ctx.gh.paged(f"repos/{ctx.intent.repo}/actions/runners", key="runners")
+    if not runners:
+        return fail("no self-hosted runner is registered on the repo")
+    return ok(", ".join(f"{r.get('name')} ({r.get('status')})" for r in runners[:3]))
+
+
+@probe("module.repo-memory")
+def _(ctx):
+    text = ctx.tree.read(".mcp.json")
+    if text is None:
+        return fail(".mcp.json is missing")
+    try:
+        srv = (json.loads(text).get("mcpServers") or {}).get("repo-memory")
+    except (json.JSONDecodeError, AttributeError):
+        return fail(".mcp.json is not valid JSON")
+    if not isinstance(srv, dict) or srv.get("command") != "npx" or "@blamechris/repo-memory" not in (srv.get("args") or []):
+        return fail(".mcp.json has no `repo-memory` stdio server running `npx … @blamechris/repo-memory`")
+    return ok("repo-memory declared")
+
+
+RELAY = ".github/workflows/repo-relay.yml"
+
+
+@probe("module.repo-relay.workflow")
+def _(ctx):
+    text = ctx.tree.read(RELAY)
+    if text is None:
+        return fail(f"{RELAY} is missing")
+    uses = [m.group(1) for ln in text.splitlines() for m in [USES.match(ln)] if m
+            and m.group(1).startswith("blamechris/repo-relay@")]
+    if not uses:
+        return fail(f"{RELAY} does not use blamechris/repo-relay")
+    if not all(SHA40.match(u.split("@", 1)[1]) for u in uses):
+        return fail(f"{RELAY} does not pin blamechris/repo-relay to a SHA")
+    return ok(uses[0])
+
+
+@probe("module.repo-relay.secrets")
+def _(ctx):
+    names = {s.get("name") for s in ctx.gh.paged(f"repos/{ctx.intent.repo}/actions/secrets", key="secrets")}
+    missing = [s for s in ctx.man["modules"]["repo-relay"]["secrets"] if s not in names]
+    return fail(f"secret(s) not set: {missing}") if missing else ok("required secret names present")
+
+
+@probe("module.credits.file")
+def _(ctx):
+    text = ctx.tree.read("CREDITS.md")
+    if text is None:
+        return fail("CREDITS.md is missing")
+    head = re.search(r"^\|\s*Path\s*\|\s*Source\s*\|\s*Licen[cs]e\s*\|\s*Credit string\s*\|", text, re.M)
+    return ok("CREDITS.md table present") if head else fail("CREDITS.md has no Path/Source/Licence/Credit string table")
+
+
+@probe("module.credits.coverage")
+def _(ctx):
+    if not ctx.intent.credits_paths:
+        return "N-A", "no `credits-paths:` declared yet"
+    text = ctx.tree.read("CREDITS.md") or ""
+    rows = {norm_repo_path(m.group(1)) for m in re.finditer(r"^\|\s*([^|]+?)\s*\|", text, re.M)}
+    assets, empty = [], []
+    for d in ctx.intent.credits_paths:
+        hit = [d] if ctx.tree.has(d) else ctx.tree.under(d + "/") if d else []
+        (assets.extend(hit) if hit else empty.append(d))
+    if empty:
+        return fail(f"credits-paths {empty} match no tracked file — a typo, or declared before any asset landed")
+    missing = [p for p in assets if p not in rows]
+    if missing:
+        return fail(f"{len(missing)} asset(s) without a CREDITS.md row: " + ", ".join(missing[:5])
+                    + (" …" if len(missing) > 5 else ""))
+    return ok(f"{len(assets)} asset(s), every one credited")
+
+
+@probe("overlay.kotlin.ci")
+def _(ctx):
+    text, jobs = ci_jobs(ctx)
+    if text is None:
+        return fail(f"{CI} is missing")
+    job, changes = jobs.get("kotlin"), jobs.get("changes")
+    problems = []
+    if job is None:
+        problems.append("no `kotlin` job")
+    else:
+        if "./gradlew check" not in job["body"]:
+            problems.append("the kotlin job does not run `./gradlew check`")
+        if not job["if"] or "needs.changes.outputs.kotlin" not in job["if"]:
+            problems.append("the kotlin job is not gated on `needs.changes.outputs.kotlin`")
+    if changes is None or not re.search(r"^\s*kotlin:\s*\$\{\{\s*steps\.", changes["body"], re.M):
+        problems.append("no `changes` job output `kotlin`")
+    return fail("; ".join(problems)) if problems else ok("kotlin job gated on changes.kotlin")
+
+
+@probe("overlay.kotlin.dependabot")
+def _(ctx):
+    text = ctx.tree.read(DEPENDABOT)
+    if text is None:
+        return fail(f"{DEPENDABOT} is missing")
+    return ok("gradle ecosystem") if "gradle" in dependabot_ecosystems(text) else fail("no gradle update entry")
+
+
+@probe("overlay.kotlin.app-id")
+def _(ctx):
+    found = {}
+    for p in ctx.tree.files:
+        if os.path.basename(p) in ("build.gradle", "build.gradle.kts"):
+            for m in re.finditer(r"\bapplicationId\s*=?\s*[\"']([^\"']+)[\"']", ctx.tree.read(p) or ""):
+                found.setdefault(m.group(1), []).append(p)
+    if not found:
+        return "N-A", "no applicationId in any Gradle build file yet"
+    want = ctx.intent.app_id
+    wrong = {k: v for k, v in found.items() if k != want}
+    if wrong:
+        return fail(f"applicationId {sorted(wrong)} differs from the intent's `{want}`")
+    return ok(f"applicationId `{want}`")
+
+
+# ---------------------------------------------------------------- verify
+
+def open_human_setup(ctx):
+    items = ctx.gh.paged(f"repos/{ctx.intent.repo}/issues?labels=human-setup&state=open")
+    return [i for i in items if "pull_request" not in i]
+
+
+def run_verify(man, reg, tree, intent, gh):
+    ctx = Ctx(man, reg, tree, intent, gh)
+    layers = intent.layers()
+    rows = []
+    human_issues = None
+    for rule in man["rules"]:
+        rid, layer = rule["id"], rule["layer"]
+        if rule["class"] == "advisory":
+            continue
+        if layer not in layers:
+            rows.append({"rule": rid, "layer": layer, "result": "N-A", "evidence": f"{layer} is not in the intent"})
+            continue
+        if rid in intent.waivers:
+            adr = intent.waivers[rid]
+            if rule.get("waivable") is False:
+                rows.append({"rule": rid, "layer": layer, "result": "FAIL",
+                             "evidence": f"waived by {adr}, but this rule is not waivable"})
+            elif not norm_repo_path(adr).startswith("docs/adr/") or not tree.has(norm_repo_path(adr)):
+                rows.append({"rule": rid, "layer": layer, "result": "FAIL",
+                             "evidence": f"the waiver cites {adr}, which is not an ADR under docs/adr/ at {tree.ref}"})
+            elif rid not in (tree.read(norm_repo_path(adr)) or ""):
+                rows.append({"rule": rid, "layer": layer, "result": "FAIL",
+                             "evidence": f"the waiver's ADR {adr} never names `{rid}`"})
+            else:
+                rows.append({"rule": rid, "layer": layer, "result": "WAIVED", "evidence": adr})
+            continue
+        try:
+            result, evidence = PROBES[rid](ctx)
+            if result == "FAIL" and rule.get("human"):
+                # PENDING-HUMAN only when an OPEN human-setup issue names this rule: an
+                # unfiled human step is a FAIL, and an unreadable issue list is an ERROR.
+                if human_issues is None:
+                    human_issues = open_human_setup(ctx)
+                tagged = [i for i in human_issues if f"`{rid}`" in (i.get("body") or "")]
+                if tagged:
+                    result, evidence = "PENDING-HUMAN", f"{evidence} — #{tagged[0]['number']} is open"
+        except CannotVerify as e:
+            result, evidence = ERROR, str(e)
+        except RenderError as e:
+            result, evidence = ERROR, f"cannot render the expected file: {e}"
+        except Exception as e:  # a probe bug or an API shape it did not expect: it could not look
+            result, evidence = ERROR, f"probe crashed ({type(e).__name__}: {e})"
+        rows.append({"rule": rid, "layer": layer, "result": result, "evidence": evidence})
+    return rows
+
+
+def verify_exit(rows):
+    if any(r["result"] == ERROR for r in rows):
+        return EXIT_CANNOT_VERIFY
+    if any(r["result"] == "FAIL" for r in rows):
+        return EXIT_FINDINGS
+    return EXIT_OK
+
+
+def print_rows(head, rows, code):
+    print(head + "\n")
+    print("| Rule | Result | Evidence |\n|---|---|---|")
+    for r in rows:
+        print(f"| `{r['rule']}` | {r['result']} | {r['evidence'].replace('|', '/')} |")
+    counts = {}
+    for r in rows:
+        counts[r["result"]] = counts.get(r["result"], 0) + 1
+    order = list(RESULTS) + [ERROR]
+    print("\n" + " · ".join(f"{counts[k]} {k}" for k in order if k in counts) + f" · exit {code}")
+    if code == EXIT_CANNOT_VERIFY:
+        print("Could not verify (ERROR rows): this is not a pass.")
+
+
+def intent_for_verify(args, man, tree):
+    slug = args.gh_repo or remote_slug(tree.path)
+    if not slug or "/" not in slug:
+        die("cannot tell which GitHub repo this is — pass --gh-repo OWNER/NAME")
+    owner, name = slug.split("/", 1)
+    fields, why = parse_profile_intent(tree.read(PROFILE), man)
+    if fields is not None:
+        return intent_from_profile(fields, man, name, owner)
+    kw = intent_kwargs_from_flags(args, man, name, owner, verify=True)  # dies, never refuses
+    return Intent(source="flags", problems=why, **kw)
+
+
+# ---------------------------------------------------------------- self-check
+
+def self_check(man, reg):
+    problems = []
+    ids = [r["id"] for r in man["rules"]]
+    for dup in sorted({i for i in ids if ids.count(i) > 1}):
+        problems.append(f"rule id `{dup}` appears more than once")
+    layers = {"core"} | {f"overlay:{o}" for o in man["overlays"]} | {f"module:{m}" for m in man["modules"]}
+    for r in man["rules"]:
+        if r.get("class") not in ("probe", "advisory"):
+            problems.append(f"rule `{r['id']}` has class {r.get('class')!r} (want probe or advisory)")
+        if r.get("layer") not in layers:
+            problems.append(f"rule `{r['id']}` names unknown layer {r.get('layer')!r}")
+    probed = {r["id"] for r in man["rules"] if r.get("class") == "probe"}
+    advisory = {r["id"] for r in man["rules"] if r.get("class") == "advisory"}
+    for rid in sorted(probed - set(PROBES)):
+        problems.append(f"rule `{rid}` is classed probe but has no probe (Principle 2)")
+    for rid in sorted(set(PROBES) - probed - advisory):
+        problems.append(f"probe `{rid}` has no rule in the manifest")
+    for rid in sorted(set(PROBES) & advisory):
+        problems.append(f"rule `{rid}` is classed advisory but has a probe — class it probe")
+    for kind, table in (("overlay", man["overlays"]), ("module", man["modules"])):
+        for name, spec in table.items():
+            layer_rules = [r["id"] for r in man["rules"] if r["layer"] == f"{kind}:{name}"]
+            if spec.get("status") == "implemented" and kind == "overlay" and not layer_rules:
+                problems.append(f"implemented {kind} `{name}` has no rules")
+            if spec.get("status") != "implemented" and (layer_rules or spec.get("files") or spec.get("fragments")):
+                problems.append(f"planned {kind} `{name}` carries rules, files or fragments")
+    for h in man["human_setup"]:
+        if h["rule"] not in probed:
+            problems.append(f"human_setup entry cites `{h['rule']}`, which is not a probed rule")
+        elif not next(r for r in man["rules"] if r["id"] == h["rule"]).get("human"):
+            problems.append(f"human_setup rule `{h['rule']}` is not marked human: true")
+
+    referenced = {f["template"] for f in man["core"]["files"]} | set(man["core"]["fragments"].values())
+    for spec in man["overlays"].values():
+        referenced |= set((spec.get("fragments") or {}).values())
+    for spec in man["modules"].values():
+        referenced |= {f["template"] for f in spec.get("files") or []}
+    on_disk = {p[len(GENESIS_DIR):] for p in reg.under(TEMPLATES_DIR)}
+    for t in sorted(referenced - on_disk):
+        problems.append(f"the manifest references {t}, which does not exist")
+    for t in sorted(on_disk - referenced):
+        problems.append(f"{GENESIS_DIR}{t} is referenced by nothing in the manifest")
+    for t in sorted(on_disk):
+        if not t.endswith(".tmpl"):
+            problems.append(f"{GENESIS_DIR}{t} lacks the .tmpl suffix (a live .gitignore or "
+                            f"CLAUDE.md in the registry tree would act on the registry itself)")
+    declared = set(man["placeholders"])
+    for t in sorted(on_disk):
+        text = reg.read(GENESIS_DIR + t) or ""
+        for n in sorted(set(PLACEHOLDER.findall(text)) - declared):
+            problems.append(f"{t} uses undeclared placeholder @@{n}@@")
+        for i, ln in enumerate(text.splitlines(), 1):
+            m = USES.match(ln)
+            if m and not m.group(1).startswith(("./", "docker://")):
+                parts = m.group(1).rsplit("@", 1)
+                if len(parts) != 2 or not SHA40.match(parts[1]):
+                    problems.append(f"{t}:{i} `uses: {m.group(1)}` is not pinned to a full SHA")
+
+    labels = reg.genesis_json(man["github"]["labels"])
+    names = [l.get("name") for l in labels]
+    for dup in sorted({n for n in names if names.count(n) > 1}):
+        problems.append(f"labels.json repeats `{dup}`")
+    for l in labels:
+        if not re.match(r"^[0-9a-fA-F]{6}$", l.get("color", "")):
+            problems.append(f"label `{l.get('name')}` has colour {l.get('color')!r}")
+        if not l.get("description") or len(l["description"]) > 100:
+            problems.append(f"label `{l.get('name')}` needs a description of at most 100 characters")
+    ruleset = reg.genesis_json(man["github"]["ruleset"])
+    if ruleset.get("bypass_actors") != []:
+        problems.append("ruleset-main.json has bypass actors (Critical Rule: no bypass)")
+    checks = [c for r in ruleset.get("rules", []) if r.get("type") == "required_status_checks"
+              for c in r.get("parameters", {}).get("required_status_checks", [])]
+    if [c.get("context") for c in checks] != ["ci-gate"]:
+        problems.append(f"ruleset-main.json requires {[c.get('context') for c in checks]}, want exactly ['ci-gate']")
+
+    if referenced - on_disk:
+        problems.append("rendering skipped: fix the missing template(s) first")
+        return problems
+    # Render every implemented layer at once: an unresolved or undeclared placeholder in any
+    # combination the standard allows shows up here, before any repo is created with it.
+    full = Intent(name="self-check", owner=man["owner"],
+                  overlays=[o for o, s in man["overlays"].items() if s.get("status") == "implemented"],
+                  modules=[m for m, s in man["modules"].items() if s.get("status") == "implemented"],
+                  app_id="com.blamechris.selfcheck", relay_token_in=[])
+    for intent in (full, Intent(name="self-check", owner=man["owner"], app_id="none")):
+        try:
+            plan = build_plan(man, reg, intent, explicit=set())
+        except RenderError as e:
+            problems.append(f"render ({'all layers' if intent is full else 'core only'}): {e}")
+            continue
+        jobs = workflow_jobs(next(f["content"] for f in plan["files"] if f["path"] == CI))
+        gate = jobs.get("ci-gate", {"needs": []})
+        if set(jobs) - {"ci-gate"} != set(gate["needs"]):
+            problems.append(f"rendered ci.yml: ci-gate needs {gate['needs']}, jobs are {sorted(jobs)}")
+    return problems
+
+
+# ---------------------------------------------------------------- CLI
+
+def intent_kwargs_from_flags(args, man, name, owner, verify=False):
+    """Plan-mode intent from flags. In verify mode (a repo whose profile records no intent)
+    an absent flag means the layer was not chosen, never the plan default, and bad input is
+    a could-not-verify rather than a refused plan."""
+    stop = die if verify else refuse
+
+    def listed(value, table, what, flag):
+        out = split_list(value)
+        for x in out:
+            if x not in table:
+                stop(f"unknown {what} `{x}` (the standard knows: {', '.join(sorted(table))})")
+            if table[x].get("status") != "implemented":
+                stop(f"{what} `{x}` is declared by Standard {man['standard']} but not implemented in "
+                     f"its templates — nothing honest can be rendered for it yet")
+        if len(set(out)) != len(out):
+            stop(f"{flag} repeats an entry")
+        return out
+
+    overlays = listed(None if args.stack in (None, "none") else args.stack, man["overlays"], "overlay", "--stack")
+    default_modules = "" if verify else ",".join(m for m, s in man["modules"].items() if s.get("default"))
+    modules = listed(default_modules if args.modules is None else args.modules, man["modules"], "module",
+                     "--modules")
+    for m, spec in man["modules"].items():
+        if spec.get("required") and m not in modules and not verify:
+            stop(f"module `{m}` is required: {spec['required']}")
+    vis = args.visibility or "private"
+    if vis not in man["visibility"]:
+        stop(f"unknown visibility `{vis}`")
+    if man["visibility"][vis].get("status") != "implemented":
+        stop(f"visibility `{vis}`: {man['visibility'][vis].get('note', 'planned in this standard')}")
+    if args.app_id is None:
+        app_id = derive_app_id(name) if any(man["overlays"][o].get("app") for o in overlays) else "none"
+    else:
+        app_id = args.app_id
+    if app_id != "none" and not APP_ID.match(app_id):
+        stop(f"invalid app id `{app_id}`: it needs two or more dot-separated segments, each "
+               f"starting with a letter and using only [A-Za-z0-9_] (pass --app-id)")
+    relay = None if args.relay_token_in is None else split_list(args.relay_token_in)
+    return dict(name=name, owner=owner, visibility=vis, overlays=overlays, modules=modules,
+                app_id=app_id, posture=args.posture or "withheld", description=args.description,
+                relay_token_in=relay, date=args.date,
+                deferred=None if verify else [d["name"] for d in man["skills"]["deferred"]])
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Render and verify against the Fleet Genesis Standard.")
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--plan", action="store_true", help="render every write for a new repo")
+    mode.add_argument("--repo", help="verify this checkout (at --ref) and its GitHub settings")
+    mode.add_argument("--self-check", action="store_true", help="registry gate: rule<->probe parity etc.")
+    mode.add_argument("--list-rules", action="store_true", help="print the manifest's rules")
+    ap.add_argument("--registry", default=os.environ.get("SKILL_REGISTRY_DIR")
+                    or os.path.expanduser("~/Projects/skill-templates"))
+    ap.add_argument("--registry-ref", default="origin/main")
+    ap.add_argument("--no-fetch", action="store_true", help="skip `git fetch` (tests, offline registry refs)")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--name")
+    ap.add_argument("--stack")
+    ap.add_argument("--modules")
+    ap.add_argument("--app-id")
+    ap.add_argument("--visibility")
+    ap.add_argument("--posture", choices=["withheld", "gated"])
+    ap.add_argument("--description")
+    ap.add_argument("--relay-token-in", help="sibling repos holding DISCORD_BOT_TOKEN (Phase 0), or none")
+    ap.add_argument("--date")
+    ap.add_argument("--ref", default="origin/main")
+    ap.add_argument("--gh-repo", help="OWNER/NAME; default: the checkout's origin remote")
+    args = ap.parse_args()
+
+    reg = Registry(args.registry, args.registry_ref, not args.no_fetch, "registry")
+    man = reg.manifest()
+
+    if args.list_rules:
+        if args.json:
+            print(json.dumps(man["rules"], indent=2))
+        else:
+            for r in man["rules"]:
+                print(f"{r['id']:32} {r['class']:9} {r['layer']:20} {r['summary']}")
+        return EXIT_OK
+
+    if args.self_check:
+        problems = self_check(man, reg)
+        for p in problems:
+            print(f"::error::genesis self-check: {p}")
+        if not problems:
+            n = sum(1 for r in man["rules"] if r["class"] == "probe")
+            print(f"OK: {n} probed rules <-> {len(PROBES)} probes; templates, placeholders, pins, "
+                  f"labels and ruleset consistent (registry {reg.commit[:7]}).")
+        return EXIT_FINDINGS if problems else EXIT_OK
+
+    if args.plan:
+        if not args.name:
+            refuse("--plan needs --name")
+        if not SLUG.match(args.name):
+            refuse(f"`{args.name}` is not a repo slug: lower-case letters, digits and inner hyphens")
+        if args.date and not DATE.match(args.date):
+            refuse("--date must be YYYY-MM-DD")
+        explicit = {k for k in ("visibility", "stack", "modules", "app_id", "posture", "description",
+                                "relay_token_in") if getattr(args, k) is not None} | {"name"}
+        intent = Intent(source="flags", **intent_kwargs_from_flags(args, man, args.name, man["owner"]))
+        try:
+            plan = build_plan(man, reg, intent, explicit)
+        except RenderError as e:
+            die(f"the registry's templates do not render: {e}")
+        if args.json:
+            print(json.dumps(plan, indent=2))
+        else:
+            print_plan(plan)
+        return EXIT_OK
+
+    tree = GitTree(args.repo, args.ref, not args.no_fetch, "repo")
+    intent = intent_for_verify(args, man, tree)
+    rows = run_verify(man, reg, tree, intent, GH(intent.repo))
+    code = verify_exit(rows)
+    if args.json:
+        print(json.dumps({"repo": intent.repo, "ref": tree.ref, "commit": tree.commit,
+                          "registry": {"ref": reg.ref, "commit": reg.commit},
+                          "standard": man["standard"], "intent_source": intent.source,
+                          "results": rows, "exit": code}, indent=2))
+    else:
+        print_rows(f"genesis-verify — {intent.repo} @ {tree.ref} ({tree.commit[:7]}) · Standard "
+                   f"{man['standard']} (registry {reg.commit[:7]}) · intent from {intent.source}",
+                   rows, code)
+    return code
+
+
+def entry():
+    try:
+        return main()
+    except CannotVerify as e:
+        die(str(e))
+    except RenderError as e:
+        die(f"the registry's templates do not render: {e}")
+    except Exception as e:  # exit 1 means findings; a crash is never a finding
+        die(f"internal error {type(e).__name__}: {e}")
+
+
+if __name__ == "__main__":
+    sys.exit(entry())

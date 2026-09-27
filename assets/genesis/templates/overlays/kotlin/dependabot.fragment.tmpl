@@ -1,0 +1,16 @@
+  # Overlay: kotlin. Version updates only: Gradle security updates need dependency
+  # submission. Until the Gradle project exists, Dependabot reports "no build file" here.
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    labels: [dependencies]
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      gradle:
+        patterns: ["*"]

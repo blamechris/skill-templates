@@ -1,0 +1,276 @@
+{
+  "standard": "v1",
+  "owner": "blamechris",
+  "epic_title": "genesis: Fleet Genesis Standard v1",
+  "profile_section": "project-genesis Customizations",
+  "placeholders": [
+    "NAME", "OWNER", "REPO", "DESCRIPTION", "DATE", "VISIBILITY", "OVERLAYS", "MODULES",
+    "APP_ID", "POSTURE", "FLOOR_IDS", "BUILD_COMMANDS", "MCP_LINE", "LICENSE_LINE",
+    "CREDITS_POSTURE", "REGISTRY_COMMIT", "GITIGNORE_OVERLAYS", "GITATTRIBUTES_OVERLAYS",
+    "DEPENDABOT_OVERLAYS", "CI_CHANGES_JOB", "CI_OVERLAY_JOBS", "CI_GATE_NEEDS",
+    "CI_CHANGES_OUTPUTS", "CI_CHANGES_GROUPS"
+  ],
+  "visibility": {
+    "private": {"status": "implemented", "license_line": "All rights reserved. This repository is private."},
+    "public": {"status": "planned", "note": "The public bundle (LICENSE, SECURITY.md, fork-PR hardening) is not in v1's templates."}
+  },
+  "core": {
+    "files": [
+      {"template": "templates/core/CLAUDE.md.tmpl", "path": "CLAUDE.md"},
+      {"template": "templates/core/CLAUDE_REFERENCE.md.tmpl", "path": "docs/CLAUDE_REFERENCE.md"},
+      {"template": "templates/core/README.md.tmpl", "path": "README.md"},
+      {"template": "templates/core/MISSION.md.tmpl", "path": "MISSION.md"},
+      {"template": "templates/core/NON-GOALS.md.tmpl", "path": "NON-GOALS.md"},
+      {"template": "templates/core/adr-0001-project-genesis.md.tmpl", "path": "docs/adr/0001-project-genesis.md"},
+      {"template": "templates/core/records-README.md.tmpl", "path": "docs/records/README.md"},
+      {"template": "templates/core/design-README.md.tmpl", "path": "docs/design/README.md"},
+      {"template": "templates/core/gitignore.tmpl", "path": ".gitignore"},
+      {"template": "templates/core/gitattributes.tmpl", "path": ".gitattributes"},
+      {"template": "templates/core/issue-bug_report.md.tmpl", "path": ".github/ISSUE_TEMPLATE/bug_report.md"},
+      {"template": "templates/core/issue-feature_request.md.tmpl", "path": ".github/ISSUE_TEMPLATE/feature_request.md"},
+      {"template": "templates/core/issue-human_setup.md.tmpl", "path": ".github/ISSUE_TEMPLATE/human_setup.md"},
+      {"template": "templates/core/issue-config.yml.tmpl", "path": ".github/ISSUE_TEMPLATE/config.yml"},
+      {"template": "templates/core/pull_request_template.md.tmpl", "path": ".github/pull_request_template.md"},
+      {"template": "templates/core/ci.yml.tmpl", "path": ".github/workflows/ci.yml"},
+      {"template": "templates/core/dependabot.yml.tmpl", "path": ".github/dependabot.yml"},
+      {"template": "templates/core/claude-settings.json.tmpl", "path": ".claude/settings.json"}
+    ],
+    "fragments": {
+      "ci_changes": "templates/core/ci-changes.fragment.tmpl"
+    },
+    "commands": [
+      "Build (the gate): no build target yet",
+      "Test: no test target yet",
+      "Lint/typecheck: no lint target yet"
+    ]
+  },
+  "overlays": {
+    "kotlin": {
+      "status": "implemented",
+      "app": true,
+      "fragments": {
+        "ci_job": "templates/overlays/kotlin/ci-job.fragment.tmpl",
+        "gitignore": "templates/overlays/kotlin/gitignore.fragment.tmpl",
+        "gitattributes": "templates/overlays/kotlin/gitattributes.fragment.tmpl",
+        "dependabot": "templates/overlays/kotlin/dependabot.fragment.tmpl"
+      },
+      "ci_job": "kotlin",
+      "path_group": {
+        "ignore": [
+          "^docs/",
+          "\\.md$",
+          "^\\.github/ISSUE_TEMPLATE/",
+          "^\\.github/pull_request_template\\.md$",
+          "^\\.github/dependabot\\.yml$",
+          "^\\.claude/",
+          "^\\.mcp\\.json$",
+          "^\\.gitattributes$"
+        ],
+        "ready": "gradlew"
+      },
+      "dependabot_ecosystem": "gradle",
+      "build_note": "The `kotlin` overlay's CI job runs `./gradlew check` once `gradlew` exists; until then it skips.",
+      "note": "Release signing (the upload keystore) belongs to the store-play module, which is planned; a debug build needs no keystore."
+    },
+    "web-ts": {"status": "planned", "app": false},
+    "expo-rn": {"status": "planned", "app": true},
+    "flutter": {"status": "planned", "app": true},
+    "swift": {"status": "planned", "app": true},
+    "unity": {"status": "planned", "app": true},
+    "godot": {"status": "planned", "app": true}
+  },
+  "modules": {
+    "runner-mac": {
+      "status": "implemented",
+      "default": true,
+      "required": "every CI job routes to a self-hosted macOS runner by default, and runner-mac is the only implemented module that provides one; without it the scaffold PR's ci-gate can never run",
+      "files": [],
+      "machine": [
+        {"phase": 5, "command": "~/github-runners/provision-runner.sh @@NAME@@"},
+        {"phase": 5, "command": "~/github-runners/fleet-status.sh --md"}
+      ]
+    },
+    "repo-memory": {
+      "status": "implemented",
+      "default": true,
+      "files": [
+        {"template": "templates/modules/repo-memory/mcp.json.tmpl", "path": ".mcp.json"}
+      ],
+      "machine": [
+        {"phase": 6, "command": "cd ~/Projects/@@NAME@@ && npx -y @blamechris/repo-memory index --quiet"}
+      ]
+    },
+    "repo-relay": {
+      "status": "implemented",
+      "default": true,
+      "files": [
+        {"template": "templates/modules/repo-relay/repo-relay.yml.tmpl", "path": ".github/workflows/repo-relay.yml"}
+      ],
+      "secrets": ["DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_PRS"],
+      "optional_secrets": ["DISCORD_CHANNEL_ISSUES", "DISCORD_CHANNEL_RELEASES"],
+      "machine": []
+    },
+    "credits": {
+      "status": "implemented",
+      "default": false,
+      "files": [
+        {"template": "templates/modules/credits/CREDITS.md.tmpl", "path": "CREDITS.md"}
+      ],
+      "machine": []
+    },
+    "runner-win": {"status": "planned", "default": false},
+    "docs-site": {"status": "planned", "default": false},
+    "store-play": {"status": "planned", "default": false},
+    "store-appstore": {"status": "planned", "default": false},
+    "store-msstore": {"status": "planned", "default": false},
+    "store-lg": {"status": "planned", "default": false},
+    "agents-md": {"status": "planned", "default": false},
+    "notify-color": {"status": "planned", "default": false}
+  },
+  "github": {
+    "repo": {
+      "allow_squash_merge": true,
+      "allow_merge_commit": false,
+      "allow_rebase_merge": false,
+      "allow_auto_merge": false,
+      "delete_branch_on_merge": true,
+      "allow_update_branch": true,
+      "squash_merge_commit_title": "PR_TITLE",
+      "squash_merge_commit_message": "PR_BODY"
+    },
+    "features": {
+      "has_issues": true,
+      "has_wiki": false,
+      "has_projects": false,
+      "has_discussions": false
+    },
+    "actions_permissions": {
+      "enabled": true,
+      "allowed_actions": "all",
+      "sha_pinning_required": true
+    },
+    "workflow_permissions": {
+      "default_workflow_permissions": "read",
+      "can_approve_pull_request_reviews": false
+    },
+    "fork_pr_workflows_private": {
+      "run_workflows_from_fork_pull_requests": false,
+      "send_write_tokens_to_workflows": false,
+      "send_secrets_and_variables": false
+    },
+    "retention_days": 14,
+    "vulnerability_alerts": true,
+    "automated_security_fixes": true,
+    "labels": "labels.json",
+    "remove_default_labels": ["duplicate", "good first issue", "help wanted", "invalid", "question", "wontfix"],
+    "ruleset": "ruleset-main.json"
+  },
+  "skills": {
+    "install": [
+      ["skill", "skill-profile", "project-genesis"],
+      ["session-lifecycle", "catchup", "learn", "visual-brief", "create-issue", "prime-directive", "tiered-delegation"],
+      ["create-pr", "check-pr", "fix-ci", "agent-review", "full-review", "merge", "merge-gate", "batch-merge"],
+      ["start-working", "decompose-issue", "tackle-issues", "autonomous-dev-flow"]
+    ],
+    "deferred": [
+      {"name": "recon", "trigger": "an overlay lands"},
+      {"name": "project-audit", "trigger": "an overlay lands"},
+      {"name": "swarm-audit", "trigger": "an overlay lands"},
+      {"name": "parallel-dev", "trigger": "a build exists"},
+      {"name": "smoke-test", "trigger": "a build exists"},
+      {"name": "doctor", "trigger": "a build exists"},
+      {"name": "deps", "trigger": "a build exists"},
+      {"name": "release", "trigger": "a build exists"},
+      {"name": "test-plan", "trigger": "a build exists"},
+      {"name": "unattended-merge", "trigger": "the self-merge posture flips to Gated"}
+    ],
+    "posture_sections": ["autonomous-dev-flow", "tackle-issues"],
+    "merge_strategy": "--squash --delete-branch",
+    "merge_sections": ["merge", "batch-merge", "unattended-merge"]
+  },
+  "issues": [
+    {
+      "kind": "work",
+      "when": "always",
+      "title": "Land docs/design/SPEC.md",
+      "labels": ["needs-design"],
+      "description": "The owner's implementation contract for @@NAME@@ lands as `docs/design/SPEC.md`, in its own PR. Genesis scaffolds `docs/design/` but never writes the spec: its prose is the owner's.",
+      "acceptance": [
+        "`docs/design/SPEC.md` is merged to `main`",
+        "`MISSION.md` states the load-bearing invariant the spec relies on"
+      ]
+    },
+    {
+      "kind": "work",
+      "when": "module:credits",
+      "title": "Credits reachable in-app for every bundled asset",
+      "labels": ["needs-design"],
+      "description": "`CREDITS.md` lists every bundled third-party asset (path, source, licence, exact credit string). CC BY credits must also be reachable in the app. Declare the asset directories as `credits-paths:` in `.claude/skill-profile.md` when the first asset lands, so `genesis-verify` can check that every file has a row.",
+      "acceptance": [
+        "`credits-paths:` names every directory that holds bundled third-party media",
+        "The app shows every CC BY credit string from `CREDITS.md`",
+        "`genesis-verify` rule `module.credits.coverage` reports PASS"
+      ]
+    }
+  ],
+  "human_setup": [
+    {
+      "when": "module:repo-relay",
+      "rule": "module.repo-relay.secrets",
+      "title": "human-setup: repo-relay Discord bot token and channel for @@REPO@@"
+    }
+  ],
+  "rules": [
+    {"id": "core.claude-md", "layer": "core", "class": "probe", "ref": "§3.1", "summary": "CLAUDE.md is at most 150 lines and has the template's H2 headings, in order"},
+    {"id": "core.claude-md.floor-ids", "layer": "core", "class": "probe", "ref": "§3.1", "waivable": false, "summary": "CLAUDE.md's Floor rules section lists exactly the registry's floor rule IDs"},
+    {"id": "core.claude-reference", "layer": "core", "class": "probe", "ref": "§2.1", "summary": "docs/CLAUDE_REFERENCE.md exists with an H1"},
+    {"id": "core.readme", "layer": "core", "class": "probe", "ref": "§3.2", "summary": "README.md has an H1 and the template's H2 headings"},
+    {"id": "core.mission", "layer": "core", "class": "probe", "ref": "§3.3", "summary": "MISSION.md has the template's H2 headings, in order"},
+    {"id": "core.non-goals", "layer": "core", "class": "probe", "ref": "§3.3", "summary": "NON-GOALS.md exists with an H1"},
+    {"id": "core.adr-0001", "layer": "core", "class": "probe", "ref": "§3.4", "summary": "ADR-0001 has the Status/Date/Deciders/Supersedes fields and the template's H2 headings"},
+    {"id": "core.app-id", "layer": "core", "class": "probe", "ref": "§3.8", "summary": "ADR-0001's App ID row equals the intent's app-id, and the app-id is a valid Android/Apple ID"},
+    {"id": "core.docs-layout", "layer": "core", "class": "probe", "ref": "§3.4", "summary": "docs/records/ and docs/design/ exist"},
+    {"id": "core.gitignore", "layer": "core", "class": "probe", "ref": "§3.5", "summary": ".gitignore holds every core and enabled-overlay ignore line"},
+    {"id": "core.gitattributes", "layer": "core", "class": "probe", "ref": "§2.1", "summary": ".gitattributes holds every core and enabled-overlay attribute line"},
+    {"id": "core.issue-templates", "layer": "core", "class": "probe", "ref": "§3.6", "summary": "bug, feature and human-setup issue templates carry `Filed from:` and their sections; config.yml keeps blank issues"},
+    {"id": "core.pr-template", "layer": "core", "class": "probe", "ref": "§3.6", "summary": "The PR template has Summary, `Fixes #` and Test Plan"},
+    {"id": "core.ci-gate", "layer": "core", "class": "probe", "ref": "§4.4", "summary": "ci.yml has a ci-gate job that runs `if: always()` and needs every other job"},
+    {"id": "core.ci-triggers", "layer": "core", "class": "probe", "ref": "§4.4", "summary": "ci.yml triggers on pull_request, push to main and workflow_dispatch, with no workflow-level path filter"},
+    {"id": "core.ci-hygiene", "layer": "core", "class": "probe", "ref": "§3.5", "summary": "A CI job fails when `git ls-files -ci --exclude-standard` is non-empty"},
+    {"id": "core.actions-pinned", "layer": "core", "class": "probe", "ref": "§4.7", "summary": "Every `uses:` in .github/workflows is pinned to a full commit SHA"},
+    {"id": "core.dependabot", "layer": "core", "class": "probe", "ref": "§5.4", "summary": "dependabot.yml updates github-actions weekly, labelled dependencies"},
+    {"id": "core.claude-settings", "layer": "core", "class": "probe", "ref": "§3.8", "waivable": false, "summary": ".claude/settings.json turns attribution off (empty commit/pr attribution, includeCoAuthoredBy false)"},
+    {"id": "profile.genesis-intent", "layer": "core", "class": "probe", "ref": "§3.7", "waivable": false, "summary": "The profile's `## project-genesis Customizations` records standard v1 and every intent key with a valid value"},
+    {"id": "profile.repo-wide", "layer": "core", "class": "probe", "ref": "§3.7", "summary": "The profile has Project Context, Build / Test Commands, Conventions and a `targets:` line"},
+    {"id": "profile.posture", "layer": "core", "class": "probe", "ref": "§3.7", "summary": "autonomous-dev-flow and tackle-issues each pin a `### Self-merge posture` bold lead, and the two agree"},
+    {"id": "profile.merge-strategy", "layer": "core", "class": "probe", "ref": "§4.2", "summary": "The merge and batch-merge Customizations pin `--squash`"},
+    {"id": "skills.installed", "layer": "core", "class": "probe", "ref": "§7", "summary": "skills.lock records every skill in the install set, each with its .claude/commands file"},
+    {"id": "github.visibility", "layer": "core", "class": "probe", "ref": "§4.1", "waivable": false, "summary": "The repo's visibility equals the intent's visibility"},
+    {"id": "github.merge-settings", "layer": "core", "class": "probe", "ref": "§4.2", "summary": "Squash only (PR title and body), auto-merge off, delete branch on merge, update branch on"},
+    {"id": "github.features", "layer": "core", "class": "probe", "ref": "§4.2", "summary": "Issues on; wiki, projects and discussions off"},
+    {"id": "github.actions", "layer": "core", "class": "probe", "ref": "§4.7", "summary": "Actions enabled, all actions allowed, SHA pinning required"},
+    {"id": "github.workflow-token", "layer": "core", "class": "probe", "ref": "§4.7", "summary": "GITHUB_TOKEN is read-only and cannot approve pull requests"},
+    {"id": "github.fork-pr-workflows", "layer": "core", "class": "probe", "ref": "§4.1", "summary": "A private repo runs no workflows from fork PRs, so no fork code reaches the self-hosted runner"},
+    {"id": "github.retention", "layer": "core", "class": "probe", "ref": "§4.7", "summary": "Artifact and log retention is 14 days"},
+    {"id": "github.security", "layer": "core", "class": "probe", "ref": "§4.7", "summary": "Dependabot alerts and security updates are on"},
+    {"id": "github.labels", "layer": "core", "class": "probe", "ref": "§4.5", "summary": "Every seed label exists with its colour"},
+    {"id": "github.ruleset", "layer": "core", "class": "probe", "ref": "§4.3", "summary": "An active ruleset `main` on the default branch carries every rule and parameter in ruleset-main.json"},
+    {"id": "github.ruleset.no-bypass", "layer": "core", "class": "probe", "ref": "§4.3", "waivable": false, "summary": "The `main` ruleset has no bypass actors"},
+    {"id": "github.epic", "layer": "core", "class": "probe", "ref": "§8.3", "summary": "The genesis epic issue exists"},
+    {"id": "module.runner-mac", "layer": "module:runner-mac", "class": "probe", "ref": "§5.2", "summary": "At least one self-hosted runner is registered on the repo"},
+    {"id": "module.repo-memory", "layer": "module:repo-memory", "class": "probe", "ref": "§3.8", "summary": ".mcp.json declares the repo-memory stdio server"},
+    {"id": "module.repo-relay.workflow", "layer": "module:repo-relay", "class": "probe", "ref": "§2.3", "summary": ".github/workflows/repo-relay.yml runs blamechris/repo-relay pinned to a SHA"},
+    {"id": "module.repo-relay.secrets", "layer": "module:repo-relay", "class": "probe", "ref": "§6", "human": true, "summary": "The repo-relay secrets exist (names only; values are never read)"},
+    {"id": "module.credits.file", "layer": "module:credits", "class": "probe", "ref": "§2.3", "summary": "CREDITS.md exists with its Path/Source/Licence/Credit string table"},
+    {"id": "module.credits.coverage", "layer": "module:credits", "class": "probe", "ref": "§2.3", "summary": "Every file under a `credits-paths:` directory has a CREDITS.md row"},
+    {"id": "overlay.kotlin.ci", "layer": "overlay:kotlin", "class": "probe", "ref": "§5.3", "summary": "ci.yml has the kotlin job running `./gradlew check`, gated on the changes job's kotlin output"},
+    {"id": "overlay.kotlin.dependabot", "layer": "overlay:kotlin", "class": "probe", "ref": "§5.3", "summary": "dependabot.yml updates the gradle ecosystem"},
+    {"id": "overlay.kotlin.app-id", "layer": "overlay:kotlin", "class": "probe", "ref": "§3.8", "summary": "Every applicationId in a Gradle build file equals the intent's app-id"},
+    {"id": "advisory.skills.profile-hash", "layer": "core", "class": "advisory", "ref": "§7", "summary": "Each skills.lock profileHash matches the current profile. Advisory until generic/skill.md names the hash algorithm (skill-templates#230)"},
+    {"id": "advisory.tree-hygiene", "layer": "core", "class": "advisory", "ref": "§3.5", "summary": "No tracked file matches .gitignore. Enforced on every PR by the CI hygiene job (core.ci-hygiene), not re-derived at a ref"},
+    {"id": "advisory.secret-scanning", "layer": "core", "class": "advisory", "ref": "§4.7", "summary": "Secret scanning is on where the plan offers it (INFERRED unavailable on personal private repos)"},
+    {"id": "advisory.owner-prose", "layer": "core", "class": "advisory", "ref": "§3.3", "summary": "MISSION, NON-GOALS and SPEC prose is the owner's. Probes check structure, never prose"},
+    {"id": "advisory.repo-memory.index", "layer": "module:repo-memory", "class": "advisory", "ref": "§6", "summary": "The repo-memory index is prewarmed on the machine (machine state; not visible from the repo)"},
+    {"id": "advisory.priorities-line", "layer": "core", "class": "advisory", "ref": "§6", "summary": "The owner adds the suggested ~/Projects/PRIORITIES.md line; genesis never writes it"}
+  ]
+}

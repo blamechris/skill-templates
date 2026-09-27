@@ -1,0 +1,21 @@
+# Fleet Genesis Standard v1: Dependabot, weekly on Monday, grouped, at most 5 open PRs.
+# Actions are SHA-pinned (the repo requires it); Dependabot keeps the pins current. A 7-day
+# cooldown keeps a brand-new release off the self-hosted runner until it has been public for a
+# week; it does not delay security updates.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    labels: [dependencies]
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      github-actions:
+        patterns: ["*"]
+@@DEPENDABOT_OVERLAYS@@
