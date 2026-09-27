@@ -83,6 +83,7 @@ feature run using the same rules; record current-head CI, posted Copilot finding
 review, merge and ledger evidence. Then exercise an explicit merge hold and a blocking finding
 alongside a nonblocking follow-up, followed by the continuation/prerequisite scenarios.
 
-Do not infer broad adoption readiness from harness tests or a passing local adapter. Keep the
-workflow PR draft until its declared behavioral acceptance is observed, rather than asking
-the owner to merge an untested workflow change merely because static CI is green.
+Publishing the reviewed workflow rules permits the scoped pilot; it does not establish
+behavioral acceptance. Record native Claude results after publication and keep unobserved
+paths explicit. Do not infer broad adoption readiness from static CI, harness tests or a
+passing local adapter. Expand rollout only as the acceptance evidence supports it.
