@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "4a39c94",
-  "skillCount": 41,
+  "generatedFromCommit": "af0639a",
+  "skillCount": 42,
   "skills": [
     {
       "name": "agent-review",
@@ -1723,6 +1723,91 @@
       ]
     },
     {
+      "name": "project-genesis",
+      "hash": "af0639a",
+      "lines": 421,
+      "description": "Start a new fleet repo to the Fleet Project Genesis Standard v1, or audit or extend an existing one against it. Genesis creates the GitHub repo, applies the settings, ruleset and labels, scaffolds the core files plus any stack overlays and modules, writes the skill profile and installs the registry skill set, provisions the runner, files every manual step as a `human-setup` issue, and opens one scaffold PR for the owner to merge. It **orders existing tools and re-implements none of them**: `fleet-check.py`, `/skill`, `/skill-profile`, `/create-issue`, `/create-pr`, `provision-runner.sh` and `/session-lifecycle` each do their own job. The only new logic is `genesis-verify.py`, which renders the plan and decides when genesis is done.",
+      "guards": [
+        {
+          "label": "zero-attribution-rule",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*NO attribution\\*\\* — the Zero Attribution Policy applies to every commit, PR and issue genesis creates\\.$"
+          ],
+          "note": "The fleet's attribution rule, as Critical Rule 1 states it. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "profile-first",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*The profile is written before any skill is installed\\.\\*\\* Without a pinned posture, a skill installs gated\\. Phase 4 step 2 checks the pin before the first `/skill add`\\.$"
+          ],
+          "note": "Binds the ordering clause: a posture pin must land before the install that would otherwise go gated (#172). The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "approval-before-create",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*No GitHub object is created or changed until the owner approves the Phase 0 plan\\.\\*\\* Phase 0 is read-only, and `--dry-run` stops there\\.$"
+          ],
+          "note": "Binds both the gate and what is approved (the Phase 0 plan); Phase 0's \"writes nothing\" sentence is a neighbour, not an alternate. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "probe-not-store",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*Progress is probed, never stored\\.\\*\\* There is no state file, no `--resume`, and no progress note in the vault or a worktree\\. Intent lives in the epic body before the merge and in the committed profile after it\\.$"
+          ],
+          "note": "The lead paragraph states the same idea in different words on purpose, so deleting the rule line turns this red. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "human-steps-are-issues",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*Every step that needs a human becomes a `human-setup` issue\\.\\*\\* Each carries a \"Done when\" rule ID, and none stays as a chat checklist\\.$"
+          ],
+          "note": "The Phase 5 bullet that files human-setup issues is the enactment and is deliberately not an alternate. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "no-secret-values",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*Genesis never reads, prints, or writes a secret value\\.\\*\\* It lists secret names only, and the owner types every `gh secret set`\\.$"
+          ],
+          "note": "Binds the three verbs together; Phase 0's \"names only\" sentence is a neighbour. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "no-direct-push",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*Nothing is ever pushed to `main`\\.\\*\\* All genesis content lands through the scaffold PR\\. The only exception is GitHub's own `--add-readme` commit\\.$"
+          ],
+          "note": "Binds the absolute; the push commands elsewhere name genesis branches and are not alternates. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "verify-is-done",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*Genesis is done only when `genesis-verify\\.py` exits 0 on `origin/main`\\.\\*\\* An exit of 2 is never a pass\\.$"
+          ],
+          "note": "Binds the exit code and the ref together, so \"exits 0 or 2\" or a feature-branch ref breaks the match. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "seed-via-lifecycle",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*Genesis never writes a seed or derives a scope; `/session-lifecycle end` does, through `session-seed\\.py`\\.\\*\\*$"
+          ],
+          "note": "The seed is written by session-seed.py and nowhere else (#208, #210). Phase 6's \"writes no seed file\" is a different sentence. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "no-bypass",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*The ruleset has no bypass actors\\.\\*\\* Genesis never uses `--admin` or `--auto` and never disables a ruleset; the break-glass is the `\\[github\\]` routing tag\\.$"
+          ],
+          "note": "Binds the negation; Phase 2's \"never add a bypass actor\" is a neighbour. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        },
+        {
+          "label": "explicit-path-staging",
+          "anyOf": [
+            "(?m)^\\d+\\. \\*\\*Stage explicit paths only\\.\\*\\* Assert the branch before the first write and again before staging\\. Never `git add -A`, `git add \\.`, `git add -u`, `git add <dir>/`, or `git commit -a`\\.$"
+          ],
+          "note": "The fleet's explicit-path staging rule, as Critical Rule 11 states it. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+        }
+      ]
+    },
+    {
       "name": "recon",
       "hash": "af9c1e4",
       "lines": 284,
@@ -2001,8 +2086,8 @@
     },
     {
       "name": "skill-profile",
-      "hash": "ea888eb",
-      "lines": 94,
+      "hash": "af0639a",
+      "lines": 145,
       "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time.",
       "guards": [
         {
@@ -2037,6 +2122,13 @@
             "[Rr]e-running reproduces the same profile",
             "only changes when the repo does"
           ]
+        },
+        {
+          "label": "planned-posture-never-chosen",
+          "anyOf": [
+            "in planned mode the posture comes from the plan or the owner, never from this skill"
+          ],
+          "note": "Planned mode runs before any install, which is exactly when an invented posture would silently decide unattended merge authority. Binds the sentence that forbids it; the section list's posture bullet is the enactment, not an alternate."
         }
       ]
     },

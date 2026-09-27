@@ -120,6 +120,10 @@ the skill's exact name plus the literal ` Customizations` suffix.>
   machine.
   The compiler notices `~/.pi` and prints the flag to add; it never adds the target itself.
 
+## Profiles composed before the first install (`/skill-profile --planned`)
+
+A repo created by `/project-genesis` gets its profile **before** any `skill add`: `/skill-profile --planned "<set>" --plan <plan.json>` composes it from the genesis plan, so the posture pins and merge-strategy lines are in place when the posture-pinned skills install. Such a profile also carries sections for skills that are pinned but not yet installed (`unattended-merge` while the posture is withheld), and a machine-read `## project-genesis Customizations` section that `genesis-verify.py` parses. It holds `standard`, `visibility`, `overlays`, `modules`, `app-id`, `credits-paths`, `deferred-skills` (names only) and `waivers`. That section is written from the plan and changed only through `/project-genesis --add`. A plain `/skill-profile` refresh keeps it, and the posture pins, verbatim.
+
 ## History: migration from `customizations/<repo>.md`
 
 Migration is **complete** (#70, #75) — every managed repo now carries its own
