@@ -1556,67 +1556,83 @@
   ],
   "project-genesis": [
     {
+      "label": "zero-attribution-rule",
+      "anyOf": [
+        "\\*\\*[Nn][Oo] attribution",
+        "[Zz]ero [Aa]ttribution [Pp]olicy"
+      ],
+      "note": "The fleet's shared attribution guard, as merge and fix-ci carry it. Both alternates live on Critical Rule 1 only."
+    },
+    {
       "label": "profile-first",
       "anyOf": [
-        "[Pp]rofile is written before any skill is installed"
+        "(?m)^\\d+\\. \\*\\*The profile is written before any skill is installed\\.\\*\\*"
       ],
-      "note": "Binds the ordering clause, not the word \"profile\": \"is written before any skill is installed\" is what makes a posture pin land before the install that would otherwise go gated (#172). An inversion (\"after\") leaves it red."
+      "note": "Binds the ordering clause: a posture pin must land before the install that would otherwise go gated (#172). Anchored to the numbered bold Critical Rule line ((?m)^N. **…**), so a leading negation or a qualifier inside the bold breaks the match (#226); the skill has no customization markers, so the installed copy carries the sentence verbatim."
     },
     {
       "label": "approval-before-create",
       "anyOf": [
-        "No GitHub object is created or changed until the owner approves"
+        "(?m)^\\d+\\. \\*\\*No GitHub object is created or changed until the owner approves the Phase 0 plan\\.\\*\\*"
       ],
-      "note": "Binds the precondition clause. Phase 0's \"Nothing in this phase writes to GitHub\" is a neighbouring statement, not an alternate: it survives a rewrite that drops the approval gate itself."
+      "note": "Binds both the gate and what is approved (the Phase 0 plan); Phase 0's \"writes nothing\" sentence is a neighbour, not an alternate. Anchored to the numbered bold Critical Rule line ((?m)^N. **…**), so a leading negation or a qualifier inside the bold breaks the match (#226); the skill has no customization markers, so the installed copy carries the sentence verbatim."
     },
     {
       "label": "probe-not-store",
       "anyOf": [
-        "[Pp]rogress is probed, never stored"
+        "(?m)^\\d+\\. \\*\\*Progress is probed, never stored\\.\\*\\*"
       ],
-      "note": "The lead paragraph says nothing records progress in different words on purpose, so deleting the rule line turns this red; an inversion (\"stored\") does not match."
+      "note": "The lead paragraph states the same idea in different words on purpose, so deleting the rule line turns this red. Anchored to the numbered bold Critical Rule line ((?m)^N. **…**), so a leading negation or a qualifier inside the bold breaks the match (#226); the skill has no customization markers, so the installed copy carries the sentence verbatim."
     },
     {
       "label": "human-steps-are-issues",
       "anyOf": [
-        "[Ee]very step that needs a human becomes an? `?human-setup`? issue"
+        "(?m)^\\d+\\. \\*\\*Every step that needs a human becomes a `human-setup` issue\\.\\*\\*"
       ],
-      "note": "Binds the whole obligation. The Phase 5 bullet that files human-setup issues is the rule's enactment and is deliberately not an alternate."
+      "note": "The Phase 5 bullet that files human-setup issues is the enactment and is deliberately not an alternate. Anchored to the numbered bold Critical Rule line ((?m)^N. **…**), so a leading negation or a qualifier inside the bold breaks the match (#226); the skill has no customization markers, so the installed copy carries the sentence verbatim."
     },
     {
       "label": "no-secret-values",
       "anyOf": [
-        "never reads, prints, or writes a secret value"
+        "(?m)^\\d+\\. \\*\\*Genesis never reads, prints, or writes a secret value\\.\\*\\*"
       ],
-      "note": "Binds the three verbs together; the Phase 0 \"names only\" sentence is a neighbour, not a rewording."
+      "note": "Binds the three verbs together; Phase 0's \"names only\" sentence is a neighbour. Anchored to the numbered bold Critical Rule line ((?m)^N. **…**), so a leading negation or a qualifier inside the bold breaks the match (#226); the skill has no customization markers, so the installed copy carries the sentence verbatim."
     },
     {
       "label": "no-direct-push",
       "anyOf": [
-        "Nothing is ever pushed to `?main`?"
+        "(?m)^\\d+\\. \\*\\*Nothing is ever pushed to `main`\\.\\*\\*"
       ],
-      "note": "Binds the absolute. Push commands elsewhere name the scaffold branch; none is an alternate."
+      "note": "Binds the absolute; the push commands elsewhere name genesis branches and are not alternates. Anchored to the numbered bold Critical Rule line ((?m)^N. **…**), so a leading negation or a qualifier inside the bold breaks the match (#226); the skill has no customization markers, so the installed copy carries the sentence verbatim."
     },
     {
       "label": "verify-is-done",
       "anyOf": [
-        "done only when `?genesis-verify\\.py`? exits 0"
+        "(?m)^\\d+\\. \\*\\*Genesis is done only when `genesis-verify\\.py` exits 0 on `origin/main`\\.\\*\\*"
       ],
-      "note": "Binds \"done only when … exits 0\". Phase 6's exit-code bullets are the enactment and stay out of the anyOf."
+      "note": "Binds the exit code and the ref together, so \"exits 0 or 2\" or a feature-branch ref breaks the match. Anchored to the numbered bold Critical Rule line ((?m)^N. **…**), so a leading negation or a qualifier inside the bold breaks the match (#226); the skill has no customization markers, so the installed copy carries the sentence verbatim."
     },
     {
       "label": "seed-via-lifecycle",
       "anyOf": [
-        "never writes a seed or derives a scope"
+        "(?m)^\\d+\\. \\*\\*Genesis never writes a seed or derives a scope; `/session-lifecycle end` does, through `session-seed\\.py`\\.\\*\\*"
       ],
-      "note": "The seed is written by session-seed.py and nowhere else (#208, #210). Phase 6's \"Genesis itself writes no seed file\" is a different sentence, so deleting the rule line turns this red."
+      "note": "The seed is written by session-seed.py and nowhere else (#208, #210). Phase 6's \"writes no seed file\" is a different sentence. Anchored to the numbered bold Critical Rule line ((?m)^N. **…**), so a leading negation or a qualifier inside the bold breaks the match (#226); the skill has no customization markers, so the installed copy carries the sentence verbatim."
     },
     {
       "label": "no-bypass",
       "anyOf": [
-        "ruleset has no bypass actors"
+        "(?m)^\\d+\\. \\*\\*The ruleset has no bypass actors\\.\\*\\*"
       ],
-      "note": "Binds the negation. \"never add a bypass actor\" in Phase 2 is a neighbour; an inversion (\"has bypass actors\") leaves the guard red."
+      "note": "Binds the negation; Phase 2's \"never add a bypass actor\" is a neighbour. Anchored to the numbered bold Critical Rule line ((?m)^N. **…**), so a leading negation or a qualifier inside the bold breaks the match (#226); the skill has no customization markers, so the installed copy carries the sentence verbatim."
+    },
+    {
+      "label": "explicit-path-staging",
+      "anyOf": [
+        "[Nn]ever[^\\n]{0,80}git add -A[^\\n]{0,120}git add -u",
+        "[Nn]ever[^\\n]{0,80}git add -u[^\\n]{0,120}git add -A"
+      ],
+      "note": "The fleet's shared staging guard, as autonomous-dev-flow and create-pr carry it. Only Critical Rule 11 spells out both commands."
     }
   ],
   "recon": [

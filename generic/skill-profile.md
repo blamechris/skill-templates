@@ -25,7 +25,7 @@ Discover, don't assume. Pull from the repo itself:
 
 - **Tech / build system** — from the manifest (`package.json` / `Cargo.toml` / `go.mod` / `pyproject.toml` / …) and `CLAUDE.md`.
 - **Repo + branch** — `gh repo view --json nameWithOwner,defaultBranchRef` (or `git remote`).
-- **CI / required checks** — `.github/workflows/*` and, if available, `gh api repos/{owner}/{repo}/branches/{main}/protection`. If there are none, record "none — build is the gate".
+- **CI / required checks** — `.github/workflows/*`, the repo's rulesets (`gh api repos/{owner}/{repo}/rulesets`, then each ruleset's `required_status_checks`), and classic protection (`gh api repos/{owner}/{repo}/branches/{main}/protection`), which 404s on a ruleset-only repo. If there are none, record "none — build is the gate".
 - **Build / test / lint commands** — the manifest's scripts and `CLAUDE.md`. Capture the *exact* commands.
 - **Conventions** — branch naming, commit style + scope list, source-file globs — from `CLAUDE.md` and recent `git log`.
 - **Hard requirements / invariants** — non-negotiables from `CLAUDE.md` (e.g. "never return stale data", "ESM only", a zero-attribution policy).
@@ -72,6 +72,7 @@ The `targets:` line drives `compile-skill-targets.mjs` (`claude` → `.claude/sk
 ### 4. Rules (match the registry's profile contract)
 
 - **Use real values, never invent.** No label set, test command, or persona for a spot? Omit it — at install time the agent drops the corresponding marker rather than fabricate a value. Placeholder *shapes* (`scope`, `path/to/file:<line>`) are fine; fabricated specifics are not.
+- **Decisions are kept, not re-inferred.** A refresh keeps every `### Self-merge posture` block, the `## project-genesis Customizations` section, and any section for a skill that is pinned but not yet installed (a merge strategy for `unattended-merge`, say) verbatim. They record owner decisions that the repo's files cannot re-derive.
 - **One section per skill that needs it**, headed `## <skill-name> Customizations` (exact skill name + literal ` Customizations`). Skills with no repo-specific needs get no section — they just use the generic template.
 - **No secrets.** The profile is committed. Keys, tokens, OTP secrets never go here (a publish footgun like "OTP is interactive, don't retry" is fine — a *value* is not).
 - **Capture hard-won footguns.** If a skill has bitten this repo before (a release OTP quirk, a native-module/runtime constraint, a lint-vs-typecheck gap), record it in that skill's section — that is the highest-value content a profile carries.
@@ -83,30 +84,48 @@ The `targets:` line drives `compile-skill-targets.mjs` (`claude` → `.claude/sk
 A profile written *after* installs arrives too late for the pins that matter most: a posture-pinned skill installed with no pin installs **gated**, and every install records the profile's hash, so a profile written afterwards shows as profile drift on every skill. Planned mode composes the profile first.
 
 1. **The skill set is the given list**, not `.claude/commands/`. Refuse any name that is not in the registry's `registry.json`. Step 2's per-skill template reading is unchanged.
-2. **With `--plan <plan.json>`** (a `genesis-verify.py --plan --json` output), every value comes from the plan. Write these sections in this order:
-   - `# <plan.intent.name> skill profile`
-   - `## Project Context`:
-     - `Tech:` names the overlays in `plan.intent.overlays`, or reads `undecided — see SPEC` when there are none.
-     - `Repo:` is `plan.intent.repo`.
-     - `Main branch:` is the default branch that `gh repo view` reports.
-     - `CI: ci-gate`.
-     - Omit `Status:` and `Hard requirements:` until `MISSION.md` states the invariant.
-   - `## Build / Test Commands`: `plan.profile.build_commands`, verbatim. The repo's `CLAUDE.md` renders the same lines.
-   - `## Conventions`:
-     - `Branch prefix / naming: <type>/<issue>-<slug>`
-     - `Commit style + scopes: Conventional Commits`
+2. **With `--plan <plan.json>`** (the output of `genesis-verify.py --plan --json`), compose exactly the text below, in this order. Put one blank line between sections and end the file with a newline. Every value is read from the plan or from `gh`, and none is typed, so the same plan always composes the same bytes:
+   ```markdown
+   # <.intent.name> skill profile
 
-     These are the values the scaffolded `CLAUDE.md` states.
-   - `## Skill Targets`: `targets: <plan.profile.targets>`
-   - `## create-issue Customizations`: `- Labels: <plan.profile.labels, comma-separated>`
-   - For each skill in `plan.profile.posture_sections`, a `## <skill> Customizations` section containing a `### Self-merge posture` block. Its first line is `**<plan.profile.posture>.**`, followed by a one-sentence rationale that states that posture and no other.
-   - For each skill in `plan.profile.merge_sections`, a `## <skill> Customizations` section containing `- Merge strategy: <plan.profile.merge_strategy>`.
-   - `plan.profile.section`, verbatim and last. It is the machine-read `## project-genesis Customizations` that `genesis-verify.py` parses.
+   ## Project Context
+   - Tech: <.intent.overlays joined ", ", or "undecided"> — see SPEC
+   - Repo: <.intent.repo>
+   - Main branch: <gh repo view --json defaultBranchRef -q .defaultBranchRef.name>
+   - CI: <the required_status_checks contexts in .github.ruleset, joined ", ">
+
+   ## Build / Test Commands
+   <.profile.build_commands, one per line>
+
+   ## Conventions
+   <the bullets of the rendered CLAUDE.md's "## Git workflow" section (the .files entry for CLAUDE.md), verbatim>
+
+   ## Skill Targets
+   targets: <.profile.targets>
+
+   ## create-issue Customizations
+   - Labels: <.profile.labels joined ", ">
+
+   ## <each skill in .profile.posture_sections> Customizations
+
+   ### Self-merge posture
+
+   <the posture line below for .profile.posture>
+
+   ## <each skill in .profile.merge_sections> Customizations
+   - Merge strategy: <.profile.merge_strategy>
+
+   <.profile.section, verbatim>
+   ```
+   The posture line is fixed text, one per posture:
+   - `**Withheld.** Every merge in this repo is a human act: PRs accumulate for the owner however clean the review and checks are. Set by /project-genesis; flip it by editing both pins.`
+   - `**Gated.** An autonomous session may merge its own PR once every Unattended Merge Gate condition is met. Set by /project-genesis; flip it by editing both pins.`
 3. **Without `--plan`,** gather the repo facts as in step 2 for the listed skills. The self-merge posture is written only when the owner states it: **in planned mode the posture comes from the plan or the owner, never from this skill.** Report that an unpinned posture skill will install gated.
 4. **A re-run writes nothing new, and never overwrites a decision.**
-   - If the composed file is byte-identical to the existing one, write nothing.
-   - If an existing posture pin or `project-genesis` intent line disagrees with the plan, REFUSE and write nothing. A posture flip is an owner's edit, not a re-plan.
-   - Keep any existing section for a skill outside the list.
+   - If the composed file is byte-identical to the existing one, write nothing, so a genesis resume leaves every lock's profile hash where it was.
+   - REFUSE and write nothing when an existing `### Self-merge posture` pin disagrees with the plan's posture. A posture flip is the owner's edit, never a re-plan's.
+   - REFUSE and write nothing when the existing `## project-genesis Customizations` records an overlay or module that the plan's intent lacks. A re-plan may add a layer, which is `/project-genesis --add`, but never drop one.
+   - Keep any existing section for a skill outside the list, in its original order, after the composed sections.
 
 ### 5. Write / report
 

@@ -208,8 +208,8 @@ old push-deploy.
 
 <!--default:project-genesis-->
 **New repositories start with `/project-genesis`.** There is no repo yet to `skill add`
-it into, so it runs from the registry copy (`generic/project-genesis.md`) until it installs
-itself, and it lands the doctrine files, the skill profile and the skills before any
+it into, so it runs from the registry's `origin/main` copy of `generic/project-genesis.md`
+until it installs itself, and it lands the doctrine files, the skill profile and the skills before any
 feature code. A repo that predates the standard gets `--audit` only — it reports
 conformance and fixes nothing — and bringing one up to the standard is a per-repo opt-in
 by its owner, never automatic. The reason is drift between fleet repos: bootstrapped by
