@@ -184,8 +184,7 @@ session boundaries from CLAUDE.md after delivery.
                 "loaded_in_native_session": "UNOBSERVED",
                 "model_and_host": "Record actual Desktop model/effort/session at launch",
                 "behavior_result": "NOT RUN"}
-    run(["git", "add", "CLAUDE.md", ".claude/commands", ".claude/skills",
-         ".claude/skill-profile.md"], workspace)
+    run(["git", "add", "--", *[str(p.relative_to(workspace)) for p in installed]], workspace)
     run(["git", "commit", "-m", "chore(trial): install pinned local cadence instructions"], workspace)
     run(["git", "push", "origin", "main"], workspace)
     manifest["prepared_head"] = run(["git", "rev-parse", "HEAD"], workspace)
