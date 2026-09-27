@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "4a39c94",
-  "skillCount": 41,
+  "generatedFromCommit": "b73ccee",
+  "skillCount": 42,
   "skills": [
     {
       "name": "agent-review",
@@ -1723,6 +1723,77 @@
       ]
     },
     {
+      "name": "project-genesis",
+      "hash": "b73ccee",
+      "lines": 337,
+      "description": "Start a new fleet repo to the Fleet Project Genesis Standard v1, or audit or extend an existing one against it. Genesis creates the GitHub repo, applies the settings, ruleset and labels, scaffolds the core files plus any stack overlays and modules, writes the skill profile and installs the registry skill set, provisions the runner, files every manual step as a `human-setup` issue, and opens one scaffold PR for the owner to merge. It **orders existing tools and re-implements none of them**: `fleet-check.py`, `/skill`, `/skill-profile`, `/create-issue`, `/create-pr`, `provision-runner.sh` and `/session-lifecycle` each do their own job. The only new logic is `genesis-verify.py`, which renders the plan and decides when genesis is done.",
+      "guards": [
+        {
+          "label": "profile-first",
+          "anyOf": [
+            "[Pp]rofile is written before any skill is installed"
+          ],
+          "note": "Binds the ordering clause, not the word \"profile\": \"is written before any skill is installed\" is what makes a posture pin land before the install that would otherwise go gated (#172). An inversion (\"after\") leaves it red."
+        },
+        {
+          "label": "approval-before-create",
+          "anyOf": [
+            "No GitHub object is created or changed until the owner approves"
+          ],
+          "note": "Binds the precondition clause. Phase 0's \"Nothing in this phase writes to GitHub\" is a neighbouring statement, not an alternate: it survives a rewrite that drops the approval gate itself."
+        },
+        {
+          "label": "probe-not-store",
+          "anyOf": [
+            "[Pp]rogress is probed, never stored"
+          ],
+          "note": "The lead paragraph says nothing records progress in different words on purpose, so deleting the rule line turns this red; an inversion (\"stored\") does not match."
+        },
+        {
+          "label": "human-steps-are-issues",
+          "anyOf": [
+            "[Ee]very step that needs a human becomes an? `?human-setup`? issue"
+          ],
+          "note": "Binds the whole obligation. The Phase 5 bullet that files human-setup issues is the rule's enactment and is deliberately not an alternate."
+        },
+        {
+          "label": "no-secret-values",
+          "anyOf": [
+            "never reads, prints, or writes a secret value"
+          ],
+          "note": "Binds the three verbs together; the Phase 0 \"names only\" sentence is a neighbour, not a rewording."
+        },
+        {
+          "label": "no-direct-push",
+          "anyOf": [
+            "Nothing is ever pushed to `?main`?"
+          ],
+          "note": "Binds the absolute. Push commands elsewhere name the scaffold branch; none is an alternate."
+        },
+        {
+          "label": "verify-is-done",
+          "anyOf": [
+            "done only when `?genesis-verify\\.py`? exits 0"
+          ],
+          "note": "Binds \"done only when … exits 0\". Phase 6's exit-code bullets are the enactment and stay out of the anyOf."
+        },
+        {
+          "label": "seed-via-lifecycle",
+          "anyOf": [
+            "never writes a seed or derives a scope"
+          ],
+          "note": "The seed is written by session-seed.py and nowhere else (#208, #210). Phase 6's \"Genesis itself writes no seed file\" is a different sentence, so deleting the rule line turns this red."
+        },
+        {
+          "label": "no-bypass",
+          "anyOf": [
+            "ruleset has no bypass actors"
+          ],
+          "note": "Binds the negation. \"never add a bypass actor\" in Phase 2 is a neighbour; an inversion (\"has bypass actors\") leaves the guard red."
+        }
+      ]
+    },
+    {
       "name": "recon",
       "hash": "af9c1e4",
       "lines": 284,
@@ -2001,8 +2072,8 @@
     },
     {
       "name": "skill-profile",
-      "hash": "ea888eb",
-      "lines": 94,
+      "hash": "b73ccee",
+      "lines": 125,
       "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time.",
       "guards": [
         {
@@ -2037,6 +2108,13 @@
             "[Rr]e-running reproduces the same profile",
             "only changes when the repo does"
           ]
+        },
+        {
+          "label": "planned-posture-never-chosen",
+          "anyOf": [
+            "in planned mode the posture comes from the plan or the owner, never from this skill"
+          ],
+          "note": "Planned mode runs before any install, which is exactly when an invented posture would silently decide unattended merge authority. Binds the sentence that forbids it; the section list's posture bullet is the enactment, not an alternate."
         }
       ]
     },
