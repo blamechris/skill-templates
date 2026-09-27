@@ -1,69 +1,63 @@
-# Unattended Merge Gate
+# Gated Merge Authority
 
 ## Purpose
 
-Defines when an autonomous session (e.g. `/autonomous-dev-flow`, `/tackle-issues`) may merge its **own** PR without a human pause, and what record it must leave behind. This replaces the old blanket "never merge — PRs accumulate for user review" rule for unattended sessions: a PR that has genuinely cleared every gate may merge so dependent work isn't deadlocked overnight, but nothing merges on faith and every merge is visible in the session report.
+Define the delivery gate for delegated implementation in both ordinary and prime-directive runs. The historical skill name `unattended-merge` is retained for existing callers; user presence does not change merge authority. Once the gates pass, the agent merges, verifies delivery and records it without another routine confirmation.
+
+This authority covers PRs created or explicitly taken over for the delegated work. It does not authorize merging unrelated existing PRs. Honor an explicit user hold, required human approval or unavailable permission; these are specific prerequisites, not a general confirm-before-merge convention.
 
 ## The Gate — ALL conditions required
 
-A session-created PR may be merged by the session itself ONLY when every one of these holds:
+A PR within the delegated scope may be merged by the agent ONLY when every condition holds:
 
-1. **`/full-review` completed with a clean verdict** — the full review pipeline (agent review + check-PR comment triage) ran on this PR and all critical findings were fixed in-PR. A skipped or partial review fails the gate.
-2. **ALL CI checks pass on the final commit** — if a post-review fix was pushed, wait for the fresh run; a green run on a stale commit fails the gate.
-3. **ZERO unresolved review threads** — every Copilot/agent/human thread is resolved with a reply or fix.
-4. **Branch protection is satisfied without overrides** — never `--admin`, never bypass rules, never edit protection settings to get a merge through.
-5. **The merge is synchronous and verified** — NEVER `gh pr merge --auto` and never GitHub's auto-merge queue. Verify gates 1–4, then merge, then confirm the PR reports `MERGED`. Queuing a merge to fire later defeats the gate: conditions are checked at queue time, not merge time.
-6. **A report entry is mandatory** — every self-merged PR MUST appear as its own entry in the end-of-session report (see format below). A merge the user can't see in the report is a policy violation even if gates 1–5 passed.
+1. **`/full-review` completed with a clean verdict covering the final head** — independent review plus Copilot/other posted feedback triage, including general summaries, has run. A skipped or partial review fails the gate. Blocking correctness, security, data-integrity or promised-acceptance defects must be fixed, removed or verified contained. Documented low-impact nonblocking findings may become follow-up issues with evidence and rationale; their size or an issue URL alone does not establish eligibility.
+2. **ALL CI checks pass on the final commit** — if a fix or branch update was pushed, verify the new run. A green result on a stale commit fails the gate.
+3. **ZERO unresolved review threads** — every thread has a supported fix, false-positive explanation or eligible follow-up disposition, then is resolved. Resolving a conversation does not fix a blocking defect.
+4. **Authority and branch protection are satisfied without overrides** — honor explicit user holds and required human approvals; never `--admin`, never bypass rules, never edit protection settings to get a merge through.
+5. **The merge is synchronous and verified** — NEVER `gh pr merge --auto` and never GitHub auto-merge. Verify gates 1–4, merge against that checked head, then confirm the PR reports `MERGED` and capture its merge SHA.
+6. **A ledger and report entry are mandatory** — immediately record the PR, accepted review, final-head checks and merge SHA in the session ledger. Every self-merged PR MUST appear in the end-of-session report. The final report is a summary of verified deliveries.
 
-**If ANY gate fails: do NOT merge.** Flag the PR for the user with the failed gate named, leave it open, and keep working. A failed gate is never retried by loosening it.
+**If ANY gate fails: do NOT merge.** Diagnose the failed gate through `/merge-gate` and recover within scope and remaining repair limits. Ask only for a verified owner-reserved prerequisite; otherwise keep handling the work and advance independent authorized slices. Never retry by loosening a gate.
 
 ## Merge command
 
+Verify that repository policy permits a synchronous merge before invoking it. If a merge queue is required, report that policy dependency; do not silently enqueue or use `--admin` to bypass it.
+
 ```bash
-gh pr merge ${PR_NUM} --squash --delete-branch   # {{CUSTOMIZE: merge strategy per repo convention — squash/merge/rebase}}
+# CHECKED_HEAD is the full head SHA whose review, CI and thread gates just passed.
+gh pr merge ${PR_NUM} --squash --delete-branch --match-head-commit "${CHECKED_HEAD}"   # {{CUSTOMIZE: merge strategy per repo convention — squash/merge/rebase}}
 # Verify — do not trust the exit code alone:
-gh pr view ${PR_NUM} --json state --jq .state    # must print MERGED
+gh pr view ${PR_NUM} --json state,mergeCommit,mergedAt
 ```
 
-After a verified merge, run any repo post-merge steps. `{{CUSTOMIZE: post-merge steps — e.g., release tag updates (repo-relay: retag v1), deploy hooks, or "none"}}`
+If the head moved, recheck its review and CI evidence before another merge attempt. After a verified merge, run authorized repo post-merge steps: {{CUSTOMIZE: post-merge steps, or "none"; distinguish routine build/recording from separately reserved deployment, signing or release actions}}.
 
 ## Report entry format
 
-The end-of-session report (final summary / Morning Summary) must contain one entry per self-merged PR:
+Keep one ledger entry per verified merge, summarized in the end-of-session report:
 
-```markdown
-### Merged by this session
+| PR | Outcome | Review | Checks at head | Merge SHA |
+|----|---------|--------|----------------|-----------|
+| [#45](url) | Retry behavior delivered | Clean, 0 unresolved | all green at `head-sha` | `merge-sha` |
 
-| PR | Issue | Review | Checks | Merge SHA |
-|----|-------|--------|--------|-----------|
-| [#45](url) | #12 — Add retry logic | Approve, 0 unresolved | all green | `abc1234` |
-```
-
-PRs that passed review but failed a later gate (e.g. CI red at merge time) go under **Needs Attention** with the failed gate named — never silently dropped.
+Open PRs retain their exact failed gate in the ledger and status. A ready dependency is merged in order and the dependent PR is then rechecked; merge order alone is not an owner decision.
 
 ## CLAUDE.md Snippet
 
-Add to the repo's PR Workflow / merge section:
-
 ```markdown
-**Unattended merge authority:** During autonomous sessions, a session-created PR may be
-self-merged ONLY after /full-review passes with a clean verdict, ALL CI checks are green
-on the final commit, and ALL review threads are resolved. NEVER use `gh pr merge --auto`
-or GitHub auto-merge — verify the gates, then merge synchronously. Every self-merged PR
-MUST appear as an entry in the end-of-session report. If any gate fails, flag the PR and
-leave it for the user. Outside autonomous sessions, the default remains: present a
-summary and wait for explicit user confirmation before merging.
+**Gated merge authority:** Delegated implementation includes review, merge and ledger
+recording in ordinary and prime-directive runs. Once `/full-review` is clean, ALL CI
+checks are green on the final commit and ALL review threads have supported resolved
+dispositions, merge synchronously and verify `MERGED` and the merge SHA. No repeated
+merge confirmation, `gh pr merge --auto`, `--admin` or protection overrides. Honor an
+explicit user hold, required human approval or unavailable permission and report the
+actual prerequisite. This grant does not cover unrelated existing PRs. Record every
+merge in the ledger and end-of-session report.
 ```
 
 ## Integration points
 
-- **`/autonomous-dev-flow`** — Phase 5 (Full Review) merges through this gate instead of accumulating; Phase 6 report gains the Merged-by-session entries.
-- **`/tackle-issues`** — merges happen inline during waves through this gate (a merged PR unblocks dependent queue items); `merge:off` disables self-merging, falling back to accumulate + `/batch-merge`. The Morning Summary carries the merge entries.
-- **Interactive sessions** — this gate does NOT grant merge authority when the user is present; the existing confirm-before-merge convention applies.
-
-## Why This Works
-
-- **The review bar never moves** — the gate reuses the same /full-review + CI + thread-resolution bar a human merge requires; only the human pause between "green" and "merge" is removed, and only for unattended runs.
-- **No fire-and-forget** — banning auto-merge means conditions are verified at merge time by the agent that is accountable for them.
-- **Auditability** — the report entry per merge means the user reviews the same information they would have pre-merge, just after the fact.
-- **Deadlock-free marathons** — dependent issues (Phase N+1 needs Phase N merged) no longer stall an overnight queue.
+- **Ordinary development:** complete the scoped delivery through merge and ledger, then produce the uniform status and verified seed for a new session under `/session-lifecycle`.
+- **Prime-directive runs:** use the same delivery gate, update durable run state, then continue the authorized mission through supported host continuation/compaction. Preserve consumed limits.
+- **`/autonomous-dev-flow` and `/tackle-issues`:** merge inline through this gate. An explicit `merge:off` hold leaves reviewed PRs open and recorded; it does not weaken review requirements.
+- **`/merge`:** performs the same gates for explicitly selected PRs. A review-only request does not authorize merge.

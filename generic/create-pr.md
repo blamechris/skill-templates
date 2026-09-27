@@ -22,6 +22,7 @@ fi
 
 # The branch this PR is for. Record it now; step 5 re-asserts it before pushing.
 SESSION_BRANCH="${BRANCH}"
+PR_HEAD=$(git rev-parse HEAD)
 
 git status
 git log main..HEAD --oneline
@@ -114,42 +115,47 @@ ${CLOSES_LINES}
 
 For batch-fix PRs: `fix: batch from-review fixes (#N, #M, #P)` or similar.
 
-### 4. Confirm With User
+Write the exact drafted Markdown body to a task-specific scratch file using the file-writing tool. Also write a task-specific JSON request with `repo`, `branch`, `head`, `base`, `title` and `body_file` (absolute path). Preserve the repository, branch and full head SHA observed in step 1; do not replace them with a later checkout. This durable request carries the verified inputs between tool calls without assuming shell variables survive. Review its title, body and issue closures in step 4.
 
-Before creating the PR, show the user:
+### 4. Validate Scope and Authorization
+
+Before creating the PR, verify:
 
 1. **Title** (proposed)
 2. **Body** (proposed, including Closes tags)
 3. **Issues to close** (list with titles)
 4. **Branch** and **base** (main)
 
-Ask: "Ready to create this PR?" — wait for confirmation.
-
-**CRITICAL: Do NOT auto-create the PR without user confirmation.** The user may want to adjust the title, add context, or remove a Closes tag.
+Creating the PR is part of delegated implementation and an explicit `/create-pr` request. Proceed within that scope without another routine confirmation. A planning-only request or an explicit user publication hold requires the concrete title/body to be presented before requesting the missing authorization. Never add unrelated work or close an issue whose acceptance this PR does not satisfy.
 
 ### 5. Push and Create PR
 
+Run the following with the actual scratch request path from step 3. It re-asserts the recorded branch and head immediately before pushing, pushes that exact commit, and passes the body file unchanged to GitHub. If either assertion fails, reconcile ownership and redraft from the intended branch before trying again; never silently adopt the new checkout.
+
 ```bash
-# Re-assert the branch: the PR body was drafted from the diff of SESSION_BRANCH,
-# and HEAD may have moved while you were drafting.
-# SESSION_BRANCH was set in step 1 — this step runs AFTER a user-confirmation gate,
-# so it is necessarily a fresh shell: re-declare it here or the test below compares
-# against an empty string and trips on every run.
-SESSION_BRANCH="${SESSION_BRANCH:?re-declare the branch you started on before pushing}"
-NOW=$(git branch --show-current)
-[ "${NOW}" = "${SESSION_BRANCH}" ] || {
-  echo "STOP: on '${NOW}', expected '${SESSION_BRANCH}' — HEAD moved. Do not push." >&2
-  exit 1
-}
+python3 - /absolute/path/to/pr-request.json <<'PYTHON'
+import json
+from pathlib import Path
+import subprocess
+import sys
 
-# Push branch
-git push -u origin ${BRANCH}
-
-# Create PR with heredoc for body
-gh pr create --title "${PR_TITLE}" --body "$(cat <<'EOF'
-${PR_BODY}
-EOF
-)"
+request = json.loads(Path(sys.argv[1]).read_text())
+required = ("repo", "branch", "head", "base", "title", "body_file")
+if any(not isinstance(request.get(key), str) or not request[key].strip() for key in required):
+    raise SystemExit("STOP: incomplete PR request")
+body = Path(request["body_file"])
+if not body.is_absolute() or not body.is_file() or not body.read_text().strip():
+    raise SystemExit("STOP: missing or empty PR body file")
+branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
+head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+if branch != request["branch"] or head != request["head"]:
+    raise SystemExit("STOP: branch or HEAD changed since the PR draft; reconcile before pushing")
+subprocess.run(["git", "push", "-u", "origin",
+                request["head"] + ":refs/heads/" + request["branch"]], check=True)
+subprocess.run(["gh", "pr", "create", "--repo", request["repo"],
+                "--head", request["branch"], "--base", request["base"],
+                "--title", request["title"], "--body-file", str(body)], check=True)
+PYTHON
 ```
 
 ### 6. Verify Issue Links
@@ -184,7 +190,7 @@ Then below the table:
 
 1. **NO attribution** — No Co-Authored-By, no "Generated with Claude", no AI mentions. Zero Attribution Policy.
 2. **Auto-detect issues** — Always scan commits, branch name, and from-review issues. Never skip detection.
-3. **Confirm before creating** — Show the user the full PR content and wait for approval.
+3. **Reuse publication authority** — Delegated implementation and an explicit `/create-pr` request include PR creation; verify scope and proceed without another routine confirmation. Honor explicit publication holds and request only genuinely missing authority with the concrete title/body ready.
 4. **Closes tags go in the body** — Use `Closes #N` on its own line in the PR body. GitHub only auto-closes from the body, not the title.
 5. **Verify after creation** — Check that `closingIssuesReferences` matches expected issues.
 6. **Target main** — Always create PRs against `main` unless the user specifies otherwise.

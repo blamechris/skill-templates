@@ -1,6 +1,6 @@
 # /check-pr
 
-Address all PR review comments systematically and respond inline.
+Address PR review findings from inline threads and general review summaries, verify their disposition, and respond where each was raised.
 
 ## Arguments
 
@@ -12,7 +12,7 @@ Address all PR review comments systematically and respond inline.
 
 Copilot review typically takes **3-5 minutes** after PR creation to even begin. If you run `/check-pr` immediately after creating the PR, the review won't exist yet.
 
-**IMPORTANT:** Do NOT skip this step. If no Copilot review exists and the PR was created recently (within 5 min), you MUST wait — otherwise you'll process zero comments and miss the entire review.
+Check the repository's Copilot requirement and current review state. Process every posted review. If a required review is pending, wait through the host's supported mechanism; it remains a merge gate. If an optional review is unavailable, record that fact and continue the independent review and existing feedback rather than waiting indefinitely. The bounded polling example below applies only where the host permits it; use native review/status controls otherwise.
 
 ```bash
 PR_NUM=${1:-$(gh pr view --json number -q .number)}
@@ -56,11 +56,13 @@ fi
 gh api repos/${REPO}/pulls/${PR_NUM}/comments --paginate
 
 # Fetch all reviews
-gh api repos/${REPO}/pulls/${PR_NUM}/reviews
+gh api repos/${REPO}/pulls/${PR_NUM}/reviews --paginate
 
 # Fetch issue-level comments (to check if previous check-pr already ran)
-gh api repos/${REPO}/issues/${PR_NUM}/comments
+gh api repos/${REPO}/issues/${PR_NUM}/comments --paginate
 ```
+
+Read the bodies of general reviews and issue comments, including agent-review summaries and linked findings. A review with no inline thread can still contain a blocking defect. Deduplicate the same finding across sources and retain its permalink and disposition evidence.
 
 ### 2. Skip Already-Replied Comments (Idempotency)
 
@@ -84,29 +86,35 @@ PENDING_COMMENTS=$(echo "$ALL_COMMENTS" \
     '[.[] | select(.in_reply_to_id == null) | select([.id] | inside($replied) | not)]')
 ```
 
-Only process comments in `PENDING_COMMENTS`. If all comments already have replies, report "All comments already addressed" and exit.
+Use `PENDING_COMMENTS` to avoid duplicate inline replies. Also process unaddressed findings in general reviews and issue comments. An existing reply, resolved thread, or linked issue is not proof a finding is fixed: re-check its disposition against the current head before carrying forward a clean verdict. Exit as already addressed only when both inline and general findings have supported dispositions.
 
-### 3. Process EVERY Pending Comment — ONE AT A TIME
+### 3. Process EVERY Pending Finding — ONE AT A TIME
+
+Honor any caller-supplied correction-round and budget allowance from the shared run record. Use the current round recorded by `/full-review`; do not count it twice or reset it here. Before beginning a new correction round, establish and record its remaining allowance before editing. At an exhausted or unknown applicable limit, report unresolved blocking findings as `**BLOCKED**`, retain `request_changes`, and return control without starting another repair. Eligible nonblocking findings can still be documented as follow-ups. Read-only disposition checks may continue within remaining budget.
 
 For each pending review comment (Copilot or human), you MUST do ALL of these steps **before moving to the next comment**:
 
 1. Read the comment carefully
-2. Classify it into exactly ONE of the three valid outcomes below
+2. Establish one of the three completed dispositions below, or leave a verified unresolved blocker pending
 3. Take the required action AND post a reply
 
-**CRITICAL: The inline reply (`gh api ... /comments/${COMMENT_ID}/replies`) is the PRIMARY output of this skill.** The summary comment is secondary. If you only post a summary without inline replies, the skill has FAILED — conversation threads will remain unresolved and block merging.
+Reply inline to each inline finding (`gh api ... /comments/${COMMENT_ID}/replies`). For a finding in a general review or issue comment, post its disposition on the PR with the source permalink. A combined summary does not replace those replies.
 
-**Default stance: FIX IT NOW** — Only defer if the suggestion is a false positive or requires scope expansion (tracked via follow-up issue).
+**Triage by impact before choosing a disposition.** Verify uncertain claims and distinguish blocking correctness, security, data-integrity or promised-acceptance defects from low-impact nonblocking findings and optional improvements. Record whether the finding is new, worsened or pre-existing; provenance informs the analysis but does not alone decide severity.
 
-**CRITICAL: There are ONLY THREE valid outcomes for each comment. Every comment MUST result in one of these:**
+**Blocking findings must be fixed, removed or verified contained before merge.** An authorized fallback must preserve safety, correctness, required runtime/cost constraints and essential capability; record its evidence and track the underlying problem. If no acceptable remedy is possible within scope and limits, keep the PR blocked and advance independent authorized work. A time estimate, file boundary or issue URL is not an exemption.
+
+**Documented low-impact nonblocking findings may be deferred**, including minor findings introduced by this PR, when evidence shows the agreed feature remains acceptable and no blocking correctness, security or data-integrity risk is left open. Create or link a scoped issue and explain the impact and deferral rationale. Do not require another CI cycle solely for an eligible follow-up. Small size alone does not make a finding nonblocking.
+
+**There are THREE valid completed dispositions. Use one only when its evidence supports closing the finding:**
 
 1. **FIX** — Make the code change, commit, reply with commit hash + before/after code
 2. **FALSE POSITIVE** — Reply explaining why the suggestion is incorrect, with evidence
-3. **FOLLOW-UP ISSUE** — Create a GitHub issue, reply with the issue URL
+3. **FOLLOW-UP ISSUE** — Track a verified low-impact nonblocking finding, optional improvement, or underlying problem already contained by the verified fallback above; reply with the issue URL, impact and evidence that the current PR remains acceptable
 
-**There is NO "acknowledge and move on" option.** If a suggestion is valid but out of scope, you MUST create a follow-up issue. Never reply with "good idea, maybe later" without an issue link.
+**There is NO "acknowledge and move on" option.** A valid deferred finding needs a scoped issue and supported rationale; a blocking finding needs a fix, removal or verified containment. Never use "out of scope" or an issue link to clear a blocking finding.
 
-**REPLY FORMAT IS NON-NEGOTIABLE.** Every reply MUST start with the bold label (`**FIX**`, `**FALSE POSITIVE**`, or `**FOLLOW-UP ISSUE**`) on its own line. Replies without this label are malformed and will be rejected.
+**REPLY FORMAT:** A completed disposition starts with `**FIX**`, `**FALSE POSITIVE**`, or `**FOLLOW-UP ISSUE**` on its own line. If a blocking finding remains unresolved, reply `**BLOCKED**` with the failing behavior, attempted remedies and remaining dependency; keep the thread open and the verdict `request_changes`. BLOCKED is pending work, not a fourth completed disposition.
 
 ### Reply Format Examples
 
@@ -151,13 +159,13 @@ Study these examples. Your replies must match this structure exactly.
 >
 > Created https://github.com/owner/repo/issues/123 to track this.
 >
-> **Reason for deferral:** Switching from absolute `expiresAt` to relative `remainingMs` requires changing the WS protocol contract and both server broadcast paths — out of scope for this countdown UI PR.
+> **Reason for deferral:** This optional protocol simplification predates the PR. The current countdown handles reconnects and expiry correctly in the linked tests; the PR introduces no dependency on the proposed change.
 
 ---
 
-#### Outcome 1: FIX IMMEDIATELY (default)
+#### Outcome 1: FIX
 
-When the comment identifies a real issue, fix it immediately.
+When the verified finding blocks delivery, fix it within the shared repair allowance. Eligible nonblocking findings may use Outcome 3.
 
 **Required in reply:** commit hash AND before/after code diff. Both are mandatory.
 
@@ -206,12 +214,12 @@ gh api repos/${REPO}/pulls/${PR_NUM}/comments/${COMMENT_ID}/replies \
 
 #### Outcome 3: FOLLOW-UP ISSUE (GitHub issue creation MANDATORY)
 
-When a suggestion is valid but out of scope for this PR. You MUST create a GitHub issue — never reply with just "good idea" or "noted for later" without an issue URL.
+Use only for the eligible cases defined in step 3. Create or link a matching GitHub issue, explain the finding's impact, provenance and reason for deferral, and cite containment/acceptance evidence. A blocking defect remains blocked until fixed, removed or verified contained.
 
-**Required in reply:** the created issue URL. No exceptions.
+**Required in reply:** issue URL, impact and evidence that deferral leaves no blocking defect or promised acceptance gap. For a general-review finding use its actual source permalink instead of the inline `COMMENT_URL` construction below.
 
 ```bash
-# 1. ALWAYS create the issue — this is NOT optional
+# 1. Create the scoped issue unless a matching issue already tracks this finding
 # {{CUSTOMIZE: Add repo-specific labels below}}
 # COMMENT_ID — the id of the comment THIS iteration of step 3's loop is
 # processing (from step 1's fetched `.../pulls/${PR_NUM}/comments`, same
@@ -252,7 +260,7 @@ gh api repos/${REPO}/pulls/${PR_NUM}/comments/${COMMENT_ID}/replies \
 
 Created ${ISSUE_URL} to track this.
 
-**Reason for deferral:** Brief explanation why not in this PR"
+**Reason for deferral:** Verified low-impact nonblocking finding; state impact, evidence that current acceptance holds, and any verified containment and its limits"
 ```
 
 ---
@@ -263,7 +271,7 @@ Created ${ISSUE_URL} to track this.
 - "Follow-up." or "Deferred." without a `**FOLLOW-UP ISSUE**` label and issue URL
 - "Intentional design decision" without evidence — use FALSE POSITIVE with evidence instead
 - "Noted" / "Acknowledged" without a FIX or ISSUE URL
-- Any reply that doesn't start with `**FIX**`, `**FALSE POSITIVE**`, or `**FOLLOW-UP ISSUE**`
+- Any reply without a completed-disposition label or an explicit `**BLOCKED**` pending state
 - Empty Reference cells in the summary table
 
 ### 4. Push All Fixes
@@ -310,6 +318,8 @@ If `REPLIED_COUNT < ROOT_COUNT`, you have UNREPLIED comments. Go back to step 3 
 
 **This step is MANDATORY whenever branch protection requires conversation resolution before merge.** Posting an inline reply does NOT auto-resolve the thread on GitHub — the REST `/replies` endpoint only adds a comment, leaving the thread state as `isResolved: false`. If you skip this step, the PR sits blocked at merge time even when every comment has a reply, every check is green, and the summary comment claims success. The user has to click "Resolve conversation" once per unresolved thread to unblock the merge. Don't make them.
 
+Resolve only threads whose step-3 disposition is supported at the current head. Export `ELIGIBLE_THREAD_IDS` as the newline-separated GraphQL IDs of those threads from the triage record; do not copy the unresolved list wholesale. Unresolved blocking findings stay open and keep the verdict blocked. Findings in general summaries must satisfy the same gate even though they have no thread to resolve.
+
 GraphQL is required here — REST doesn't expose thread state. Threads are GraphQL-only objects (`PRRT_*` IDs); the `resolveReviewThread` mutation needs the GraphQL node ID, not the REST `databaseId`.
 
 ```bash
@@ -331,7 +341,7 @@ THREAD_IDS=$(gh api graphql --paginate -f query="
     }
   }" --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .id')
 
-# Resolve each unresolved thread via Python — pass the Base64-ish thread ID
+# Resolve only eligible unresolved threads via Python — pass the Base64-ish thread ID
 # (PRRT_*) as a GraphQL *variable* (-f id=...) so it never gets interpolated
 # into the query string or the shell (merge.md Critical Rule 4). The
 # --paginate THREAD_IDS fetch above stays in bash (it only emits IDs). gh
@@ -339,9 +349,13 @@ THREAD_IDS=$(gh api graphql --paginate -f query="
 # validate the parsed response's isResolved rather than the exit code;
 # surface each failure per-thread.
 echo "$THREAD_IDS" | python3 -c "
-import sys, subprocess, json
+import sys, subprocess, json, os
+eligible = set(os.environ.get('ELIGIBLE_THREAD_IDS', '').split())
 q = 'mutation(\$id: ID!) { resolveReviewThread(input: {threadId: \$id}) { thread { isResolved } } }'
 for tid in sys.stdin.read().split():
+    if tid not in eligible:
+        print('  LEFT OPEN: no verified disposition for ' + tid)
+        continue
     r = subprocess.run(['gh', 'api', 'graphql', '-f', 'query=' + q, '-f', 'id=' + tid], capture_output=True, text=True)
     ok = False
     if r.returncode == 0:
@@ -356,7 +370,8 @@ for tid in sys.stdin.read().split():
 # Verify zero unresolved threads remain. --paginate emits one length per page,
 # which we sum with awk so the count is correct on PRs with >100 threads. If
 # this stays nonzero, either the resolve loop failed on specific threads or new
-# threads landed mid-flight — re-run step 6b.
+# threads landed mid-flight or a finding remains blocking. Re-triage; never
+# resolve a blocking finding merely to make this count zero.
 UNRESOLVED=$(gh api graphql --paginate -f query="
   query(\$endCursor: String) {
     repository(owner: \"${REPO%/*}\", name: \"${REPO#*/}\") {
@@ -380,12 +395,12 @@ echo "Unresolved threads: ${UNRESOLVED}"
 
 **Edge cases:**
 - A thread you marked FALSE POSITIVE: still resolve it. The reply records the rationale; if a reviewer disagrees, they can re-open the thread.
-- A FOLLOW-UP ISSUE thread: still resolve it. The issue link in the reply is the paper trail; the conversation in the PR has served its purpose.
+- A FOLLOW-UP ISSUE thread: resolve only after confirming step 3's eligibility and evidence. The issue link alone does not establish that the delivered change is acceptable.
 - A FIX thread: resolve it after the fix commit lands and the reply with the commit SHA is posted.
 
 ### 7. Post Summary Comment
 
-After addressing ALL comments, post a summary on the PR. **Every row MUST have a commit hash or issue URL — no empty cells.**
+After triaging ALL inline and general findings, post a summary on the PR. Every row needs disposition evidence: fix commit, false-positive evidence, eligible follow-up URL with rationale, or an explicit unresolved blocker. Do not mark a blocker addressed merely to complete the table.
 
 ```bash
 gh pr comment ${PR_NUM} --body "$(cat <<'EOF'
@@ -429,8 +444,7 @@ Output a **summary table** followed by details. The table is the PRIMARY output 
 
 **Capture the results when this run is the review of record** — i.e. check-pr ran standalone
 rather than after `/agent-review` (which already records its own `review-result` per its step
-7). Map the summary table above onto the schema (`verdict: comment` unless every FIX/FOLLOW-UP
-row was resolved, in which case `approve`; one finding per FIX/FALSE POSITIVE/FOLLOW-UP row)
+7). Map the summary table above onto the schema (`request_changes` while a blocking defect or acceptance gap remains; `approve` only when every inline and general finding has a verified acceptable disposition; otherwise `comment`; one finding per distinct finding)
 and record it the same way: `python3 ~/.claude/scripts/review-result.py record --agent <id>
 --skill check-pr --pr ${PR_NUM}`.
 
@@ -442,16 +456,16 @@ Then below the table, list:
 
 ## Critical Rules
 
-1. **EVERY pending comment gets a reply** — No silent dismissals. The `gh api .../replies` call is the MOST IMPORTANT output. A summary comment WITHOUT inline replies is a FAILURE.
+1. **EVERY pending finding gets a reply** — No silent dismissals. Reply inline for inline findings and with a source permalink for general-review findings. Read both before deciding the PR is clean.
 2. **Reply IMMEDIATELY after each comment** — Process one comment at a time: read → fix/defer → post inline reply → next. Do NOT batch all fixes and try to reply later.
-3. **Exactly 3 valid outcomes** — FIX, FALSE POSITIVE, or FOLLOW-UP ISSUE. Nothing else.
+3. **Three completed dispositions** — FIX, FALSE POSITIVE, or FOLLOW-UP ISSUE. Unresolved blocking findings stay BLOCKED with open threads and a `request_changes` verdict.
 4. **FIX requires commit hash + code diff** — Both mandatory in reply
 5. **FALSE POSITIVE requires evidence** — No bare dismissals
-6. **FOLLOW-UP requires issue URL** — Never say "good idea" without creating an issue
+6. **FOLLOW-UP requires issue URL and eligibility** — Classify by impact and record evidence for nonblocking deferral; blocking correctness/security/data-integrity defects and missing promised acceptance require a fix, removal or verified fallback before merge. Estimates and issue links do not discharge that gate.
 7. **Summary table has no empty cells** — Every row has a reference
 8. **Verify before summarizing** — Run the verification step (step 6) and confirm all threads have replies BEFORE posting the summary comment. If any are missing, go back and post them.
-9. **Resolve every thread (step 6b)** — Posting a reply does NOT mark the thread resolved on GitHub. After replying to every thread, call the GraphQL `resolveReviewThread` mutation for each. Branch protection that requires conversation resolution will block merge otherwise — silently, from the user's perspective. Skip this only with explicit per-repo evidence that unresolved threads are acceptable.
-10. **Idempotent** — Safe to re-run; already-replied comments are skipped (author-filtered). Already-resolved threads are also skipped in step 6b.
+9. **Resolve eligible threads (step 6b)** — Posting a reply does NOT resolve a thread. Resolve supported dispositions explicitly; leave unresolved blocking findings open. All threads must satisfy the repository's merge gate before merge.
+10. **Idempotent** — Avoid duplicate replies (author-filtered), but re-validate carried-forward dispositions at the current head. Resolution status alone never proves a fix.
 11. **No attribution** — Follow Zero Attribution Policy (no Co-Authored-By, no "Generated with Claude", no AI mentions anywhere)
 
 ## Example Workflow
@@ -466,12 +480,12 @@ Then below the table, list:
 5. Comment B: "This variable seems unused"
    → Outcome: FALSE POSITIVE
    → Reply with **FALSE POSITIVE** + evidence: "Used on line 78 in _process()"
-6. Comment C: "Add retry logic for network calls"
+6. Comment C: "Optional diagnostics for an unchanged background task"
    → Outcome: FOLLOW-UP ISSUE
-   → Create issue #99 with labels, reply with **FOLLOW-UP ISSUE** + URL
+   → Verify its low impact and that it is not an acceptance dependency; create #99 and reply with evidence + URL
 7. Push fixes
 8. Verify all threads have replies (step 6)
-9. Resolve all conversation threads via GraphQL (step 6b)
+9. Resolve verified eligible threads via GraphQL (step 6b); remaining blocking findings keep the PR blocked
 10. Post summary table (all Reference cells filled)
 11. Report to user
 ```

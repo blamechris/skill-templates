@@ -116,7 +116,7 @@ anywhere in `generic/` or `assets/`.
 This applies to the main agent AND to any subagent reporting back (a subagent's final message should likewise end with its own status block). The point is consistency: the user tracks progress at a glance from the last lines, without re-reading the whole message. In the desktop/mobile app a block of short bullets scans; the old one-`·`-separated-line format does not and is **retired** — don't emit it. Don't pad the block — it's a status, not a recap.
 
 <!--default:next-line-->
-**After the status block, add one final line:** `**Next:** <one sentence — the single thing Chris should do now>` (merge X / answer the DECISION / start a fresh session / nothing — all clear). It is the executive summary of the whole message; if he reads only this line, he knows what to do. Never omit it, never make it two sentences. It follows the four bullets, outside the block.
+**After the status block, add one final line:** `**Next:** <one sentence stating what happens next and who acts>`. In normal development, after delivering the selected feature/work package, instruct Chris to start a fresh session with the verified absolute seed path. In prime-directive mode, name the agent's next authorized item or accepted continuation and say “no user action needed” when true. A routine gated merge is the agent's action in both modes. For a real dependency, ask only for the required QA, access, authority or decision and say what it unblocks. If a budget/retry or host limit stopped execution, name it and the restart needed. Never imply that a saved seed scheduled a run. Keep this to one sentence after the four bullets; lead the message with the usable outcome and put detailed evidence in the linked ledger/report.
 
 <!--default:exec-brief-->
 **End of a long / multi-task session → an HTML executive brief, not a wall of text.** When a session shipped real work (several PRs/issues, an epic, a marathon), close it by generating a self-contained HTML report via the `visual-brief` skill into the Obsidian vault (`$CLAUDE_BRIEF_DIR`) and opening it. Shape it for a busy reader — a "two-minute" CEO view:
@@ -216,32 +216,42 @@ by its owner, never automatic. The reason is drift between fleet repos: bootstra
 hand, each started from a different subset of the doctrine and skills, and every later
 session in that repo inherits the gap.
 
+## Delivery cadence (all projects)
+
+<!--default:delivery-cadence-->
+For delegated implementation, complete this proportional cycle: scope/design and observable acceptance → investigate existing shared code and analogous flows (SOLID/DRY, reuse before adding logic) → record the implementation plan → delegate to the suitable available implementation model using the tiering policy → run `/full-review`, including posted Copilot feedback and an independent subagent review → address blocking findings and record justified nonblocking follow-ups → verify final-commit CI, review dispositions and repository requirements → merge → verify `MERGED` into the target branch and update the ledger with the merge SHA and remaining issues. The coordinator owns delivery when workers finish. Record unavailable delegation/review capabilities honestly; do not invent a reviewer or skip a required gate.
+
+<!--default:gated-delivery-authority-->
+Delegating implementation grants routine gated merge authority for that work in **both normal and prime-directive modes**. Do not request the same authorization again because the user is present. This grant excludes review-only/planning-only requests, unrelated PRs and explicit user merge holds; actual required external approvals and permission restrictions still apply. Merge prerequisite PRs within the delegated scope in dependency order, then refresh and verify dependent PRs before merging. A failed gate calls for diagnosis and authorized repair, not automatically a user merge task. Never bypass protections or use `--admin`/`--auto`; verify the gates and merge synchronously. Record a precise owner prerequisite only when the agent cannot supply it within its authority.
+
 ## Session boundaries (all projects)
 
 <!--default:restart-triggers-->
-Context re-reads dominate cost (70% in the 2026-07 audit): every request re-reads
-the whole context at cache-read rates, so a restart that halves context pays for
-itself within ~10 requests. Rules:
+Record the mode and selected work package at startup and preserve them in the ledger/seed.
+Normal development is the default; `/prime-directive` or an explicit autonomous continuing
+mission selects prime mode. A user watching the app does not change the selected mode.
 
-- **Restart into a fresh session** — seeded from this scope's seed,
-  `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (paste its absolute path as the opening message)
-  plus any queue/ledger STATE header it points to, never the full history — at: each
-  marathon wave boundary; a second compaction; or when switching work class (new epic,
-  security-critical work, high fan-in refactors, visual-verify features). Outside a repo,
-  `/next` ranks the fleet from those same seeds.
-- **Continue** only when the next task genuinely needs the context already loaded.
-- **One wave per session — there is no in-wave token ceiling to hold.** A single
-  wave's context legitimately crosses 150K mid-flight (measured 2026-08-19: the
-  median one-PR wave passes it by request ~40), so a numeric ceiling can only be
-  violated and trains sessions to ignore rules. The real levers: restart at the
-  wave boundary, and route heavy tool output — full-file reads, test logs, recon
-  dumps — through subagents instead of the main thread.
-- **Applies to orchestrator/chat sessions too**, not just repo marathons: a wave ends →
-  write the handoff → end the session (recommend it explicitly when attended). For
-  autonomous continuity, create a one-time scheduled task at the boundary that fires a
-  fresh session seeded from the handoff — **naming that absolute path explicitly** — the
-  wave, not the session, is the unit of continuity (skill-templates#181). The path is
-  stable across waves, which is what makes a relaunch task safe to write in advance.
+- **Normal development:** complete the selected feature/work package through its delivery
+  cycle, including merge verification and ledger update, then write this scope's seed,
+  `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, and instruct the user to start a fresh session with
+  its absolute path. Do not start a new feature merely because it appears in the backlog.
+  A package can contain dependent PRs: a ready first PR does not complete the package.
+- **Prime-directive:** each delivered item/wave is a checkpoint. Refresh the ledger STATE
+  header, then continue the next authorized item within the same mission and limits using
+  supported host continuation/auto-compaction. There is no forced end at each wave, second
+  compaction, or arbitrary token count. After compaction reload the directive and durable
+  state before resuming; do not rely on the summary to preserve authority or consumption.
+- **A needed fresh context during unfinished work:** save state first. If an authorized
+  orchestrator can relaunch, submit the absolute seed path and verify an accepted
+  task/session identifier before ending. Otherwise continue on the supported current host;
+  if it cannot continue, name that limit and the precise restart action. A configured
+  launcher or written seed alone is not execution. Never invent a command or schedule.
+- **Both modes:** an explicit user pause, exhausted configured budget/retry allowance, or
+  genuine dependency may stop affected work. Advance other authorized independent work
+  before a wait-only handoff. Preserve acceptance, authority and consumed run limits across
+  compactions/restarts. Route heavy output to workers when useful. A lower auto-compaction
+  window is a host configuration experiment, not a workflow stopping rule; measure total
+  cost including compaction, handoff and reconstruction before claiming savings.
 - **Ending a session = two artifacts, every time:** ① the session's row appended to
   the usage benchmark (`~/Obsidian/no-it-all/briefs/usage-benchmark.md`) — generate it
   with `python3 ~/.claude/scripts/usage-benchmark-row.py` and replace only the
@@ -519,8 +529,8 @@ limit, and a third written number would be the third of the same kind.
 **Review intensity is risk-tiered** (decided 2026-08-14, spend audit; refuter
 panels buy precision, not recall — the catches live in the finder pass and the
 test gates). Depth scales with blast radius:
-- **LOW** (docs, pack/art data, guard additions, mechanical renames): inline
-  `/code-review` at high effort — no subagent fan-out.
+- **LOW** (docs, pack/art data, guard additions, mechanical renames): one focused
+  independent review agent through `/full-review`; no dimension/refuter panel.
 - **MEDIUM** (feature code with test coverage): 1 review agent; adversarially
   verify **critical** findings only.
 - **HIGH** (doctrine, serialization/save-compat, CI/infra, security,
@@ -550,9 +560,26 @@ parsing those notes returns 7,587 PRs for a single week.
 <!--default:follow-on-protocol-->
 When a task completes and work remains:
 
-1. In-scope and ≤15 min → fold into the current PR.
-2. Anything else → file a scoped issue (`/create-issue` where installed) and queue
-   it (autonomous-queue in marathons, else the tracker).
-3. Blocked → comment-and-skip with a reason bucket (needs-dogfood/device,
-   needs-owner-decision, visual-verify).
-4. Never expand scope silently, never fake-merge, never drop a follow-on unrecorded.
+1. A blocking defect in correctness, security, data integrity or promised acceptance
+   behavior must be fixed, removed or verified contained before merge. Neither an issue
+   URL nor a repair-time estimate excuses it. Classify findings by impact with evidence:
+   a low-impact nonblocking finding may become a tracked follow-up when acceptance and
+   safety remain satisfied, without manufacturing another CI cycle. Review general
+   summaries as well as inline threads; resolution status is not proof of correction.
+2. An authorized fallback is sufficient only when verified to preserve safety, correctness,
+   required runtime/cost constraints and essential capability. Record its evidence, file
+   the underlying problem and continue without an owner pause. Otherwise block only the
+   affected item and continue independent authorized work.
+3. For optional improvements and pre-existing unrelated defects, in-scope and ≤15 min may
+   fold into the current PR; otherwise file a scoped issue (`/create-issue` where installed).
+   Prioritize by the delegated outcome and observable acceptance. New cleanup does not
+   enter the active queue merely because it is easy or came from a review. An explicitly
+   requested backlog-clear run keeps its selected backlog scope.
+4. Name the specific evidence and missing QA/access/authority for a real blocker. Ask for
+   user action only when needed; zero issue closures alone does not establish a blocker.
+   Before a wait-only handoff, advance independently actionable slices through their
+   authorized review and delivery gates within the remaining limits. An owner supplies
+   only the reserved prerequisite; retain and resume the agent's already-delegated
+   execution when it arrives through the supported continuation mechanism.
+   Keep configured retry/budget caps and do not silently expand scope, fake-merge, or drop
+   a follow-on unrecorded.

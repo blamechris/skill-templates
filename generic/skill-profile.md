@@ -119,7 +119,7 @@ A profile written *after* installs arrives too late for the pins that matter mos
    ```
    The posture line is fixed text, one per posture:
    - `**Withheld.** Every merge in this repo is a human act: PRs accumulate for the owner however clean the review and checks are. Set by /project-genesis; flip it by editing both pins.`
-   - `**Gated.** An autonomous session may merge its own PR once every Unattended Merge Gate condition is met. Set by /project-genesis; flip it by editing both pins.`
+   - `**Gated.** Delegated implementation in normal and prime-directive modes includes merging its in-scope PRs once every Unattended Merge Gate condition is met, then verifying and recording delivery. Honor explicit user holds and actual repository/host restrictions. Set by /project-genesis; flip it by editing both pins.`
 3. **Without `--plan`,** gather the repo facts as in step 2 for the listed skills. The self-merge posture is written only when the owner states it: **in planned mode the posture comes from the plan or the owner, never from this skill.** Report that an unpinned posture skill will install gated.
 4. **A re-run writes nothing new, and never overwrites a decision.**
    - If the composed file is byte-identical to the existing one, write nothing, so a genesis resume leaves every lock's profile hash where it was.

@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "af0639a",
+  "generatedFromCommit": "0dfd92c",
   "skillCount": 42,
   "skills": [
     {
@@ -141,9 +141,9 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "600c374",
-      "lines": 520,
-      "description": "Orchestrate long-running autonomous dev sessions — work through GitHub issues sequentially with TDD, create PRs, run /full-review, then merge or flag according to this repo's self-merge posture, and continue to the next issue. PRs that don't merge accumulate for asynchronous user review while work continues.",
+      "hash": "0dfd92c",
+      "lines": 528,
+      "description": "Carry delegated development through scope/design, reuse investigation, a proportional plan, model delegation, TDD, /full-review, gated synchronous merge and verified ledger updates. Both normal development and prime-directive include merge authority under Critical Rule 5. Normal development ends with a seed/status after the selected feature or work package is delivered; prime-directive continues to the next authorized item within its mission and original limits. Owner presence does not select or change that mode.",
       "guards": [
         {
           "label": "unattended-merge-gate",
@@ -241,9 +241,9 @@
     },
     {
       "name": "batch-merge",
-      "hash": "8c8e472",
-      "lines": 319,
-      "description": "Sequentially merge a set of reviewed PRs, handling branch protection's \"must be up-to-date\" requirement by updating each branch after the previous merge.",
+      "hash": "0dfd92c",
+      "lines": 132,
+      "description": "Merge an authorized set of PRs sequentially through the same review, CI and delivery gates used for a single PR. Handle dependencies and branch freshness, verify each merge, and record delivery before moving on. This skill coordinates `/full-review`, `/check-pr`, `/fix-ci` and `/merge-gate`; it never calls `/merge`, which may itself call this skill.",
       "guards": [
         {
           "label": "copilot-gate",
@@ -496,9 +496,9 @@
     },
     {
       "name": "check-pr",
-      "hash": "81d191b",
-      "lines": 484,
-      "description": "Address all PR review comments systematically and respond inline.",
+      "hash": "0dfd92c",
+      "lines": 498,
+      "description": "Address PR review findings from inline threads and general review summaries, verify their disposition, and respond where each was raised.",
       "guards": [
         {
           "label": "idempotency",
@@ -593,8 +593,8 @@
     },
     {
       "name": "create-pr",
-      "hash": "af9c1e4",
-      "lines": 200,
+      "hash": "0dfd92c",
+      "lines": 206,
       "description": "Create a pull request with auto-detected issue closures and proper formatting.",
       "guards": [
         {
@@ -975,8 +975,8 @@
     },
     {
       "name": "full-review",
-      "hash": "81d191b",
-      "lines": 103,
+      "hash": "0dfd92c",
+      "lines": 112,
       "description": "Run a complete review pipeline: agent-review first, then check-pr. The agent-review pass naturally fills the ~4 minute Copilot review delay, so check-pr starts with comments already waiting.",
       "guards": [
         {
@@ -1242,49 +1242,45 @@
     },
     {
       "name": "merge-gate",
-      "hash": "98b6ad5",
-      "lines": 68,
-      "description": "Short-circuit token-expensive diagnostic reasoning when `gh pr merge` fails due to branch protection. The most common blocker is unresolved review threads, which **only a human can resolve** via GitHub UI. This pattern turns a multi-step investigation into a 2-line handoff.",
+      "hash": "0dfd92c",
+      "lines": 38,
+      "description": "Recover a blocked merge using current evidence and supported tools. The agent owns review, remediation and merge for delegated implementation in both ordinary and prime-directive runs. A failed merge is a reason to inspect the failed gate, not automatically a task for the user.",
       "guards": [
         {
-          "label": "no-diagnostic-investigation",
+          "label": "current-head-recovery",
           "anyOf": [
-            "[Dd]o (?:NOT|not) investigate",
-            "investigate, reason about, or run diagnostic"
-          ]
-        },
-        {
-          "label": "verbatim-handoff-message",
-          "anyOf": [
-            "[Mm]erge blocked",
-            "/pull/\\{N\\}/files"
-          ]
-        },
-        {
-          "label": "wait-for-user-confirmation",
-          "anyOf": [
-            "[Ww]ait for (?:the )?user",
-            "[Ww]ait for .{0,24}confirmation",
-            "[Pp]ause until the user"
-          ]
-        },
-        {
-          "label": "escalate-only-on-second-failure",
-          "anyOf": [
-            "fails a second time",
-            "[Ii]f it fails again, (?:THEN|then)",
-            "[Oo]n(?:ly on)? the second failure[^\\n]{0,40}(?:THEN |then )?check",
-            "[Ss]econd failure[^\\n]{0,40}(?:THEN|then) check"
+            "Re-read the gate at the CURRENT head"
           ],
-          "note": "A tenth vacuity of the same class as the nine scripts/guard-audit.py reported, and one the audit CANNOT report: the dropped `[Ss]econd failure` alternate matched the \"Graceful fallback — second failure triggers real investigation\" bullet under `## Why This Works`, which is the skill's own DOCUMENTATION of the rule and classifies as prose. Deleting the rule itself (step 4 of the snippet) left the guard green off that bullet. Every alternate now requires the escalation the rule actually orders — check `gh pr checks` — which the Why-This-Works bullet does not name."
+          "note": "Replaces the obsolete no-diagnosis policy: a stale merge reading cannot justify a user handoff or a merge."
+        },
+        {
+          "label": "identify-actual-requirement",
+          "anyOf": [
+            "Identify the actual failed requirement"
+          ],
+          "note": "Recover the real failed requirement rather than assuming only the owner can resolve threads."
+        },
+        {
+          "label": "gated-retry",
+          "anyOf": [
+            "Recheck every merge gate before retrying"
+          ],
+          "note": "Recovery never waives review, current-head CI, thread dispositions or protection."
+        },
+        {
+          "label": "reserved-prerequisite-only",
+          "anyOf": [
+            "Escalate only the genuine prerequisite"
+          ],
+          "note": "Routine delegated merge stays with the agent in both modes; only actual owner prerequisites are handed off."
         }
       ]
     },
     {
       "name": "merge",
-      "hash": "98b6ad5",
-      "lines": 280,
-      "description": "Merge PRs, verify post-merge version bump, and run post-merge actions (build, deploy, etc.).",
+      "hash": "0dfd92c",
+      "lines": 221,
+      "description": "Merge authorized PRs through verified review/CI gates, record delivery, and run authorized post-merge actions. The same gated merge authority applies in ordinary and prime-directive runs.",
       "guards": [
         {
           "label": "review-gate",
@@ -1330,8 +1326,8 @@
     },
     {
       "name": "parallel-dev",
-      "hash": "a0b98e6",
-      "lines": 448,
+      "hash": "0dfd92c",
+      "lines": 449,
       "description": "Orchestrate parallel autonomous dev sessions — dispatch multiple agents into isolated worktrees to implement GitHub issues with TDD simultaneously, then run sequential reviews. Each agent works independently in its own worktree, eliminating branch conflicts.",
       "guards": [
         {
@@ -1478,9 +1474,9 @@
     },
     {
       "name": "prime-directive",
-      "hash": "a0b98e6",
-      "lines": 128,
-      "description": "A reload-resilient north star for an unattended, multi-wave backlog-clearing marathon — a compact, self-contained constitution you re-invoke after every context compaction to re-establish the mission, the authority you were granted, the per-issue loop, and the never-strip guardrails before resuming. Where `/tackle-issues` and `/autonomous-dev-flow` are the machinery, this is the constitution that keeps a long autonomous run from drifting as its context is summarized and rebuilt.",
+      "hash": "0dfd92c",
+      "lines": 133,
+      "description": "A reload-resilient directive for unattended work toward a delegated outcome, or an explicitly requested backlog-clearing marathon. Re-invoke it after every context compaction to restore the mission, acceptance criteria, authority, per-issue loop, and never-strip guardrails before resuming. `/tackle-issues` and `/autonomous-dev-flow` provide the wave machinery.",
       "guards": [
         {
           "label": "reload-contract",
@@ -1724,7 +1720,7 @@
     },
     {
       "name": "project-genesis",
-      "hash": "af0639a",
+      "hash": "d9c1913",
       "lines": 421,
       "description": "Start a new fleet repo to the Fleet Project Genesis Standard v1, or audit or extend an existing one against it. Genesis creates the GitHub repo, applies the settings, ruleset and labels, scaffolds the core files plus any stack overlays and modules, writes the skill profile and installs the registry skill set, provisions the runner, files every manual step as a `human-setup` issue, and opens one scaffold PR for the owner to merge. It **orders existing tools and re-implements none of them**: `fleet-check.py`, `/skill`, `/skill-profile`, `/create-issue`, `/create-pr`, `provision-runner.sh` and `/session-lifecycle` each do their own job. The only new logic is `genesis-verify.py`, which renders the plan and decides when genesis is done.",
       "guards": [
@@ -1979,8 +1975,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "d2999e7",
-      "lines": 254,
+      "hash": "0dfd92c",
+      "lines": 260,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
@@ -2086,7 +2082,7 @@
     },
     {
       "name": "skill-profile",
-      "hash": "af0639a",
+      "hash": "0dfd92c",
       "lines": 145,
       "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time.",
       "guards": [
@@ -2373,9 +2369,9 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "a0b98e6",
-      "lines": 455,
-      "description": "Run an unattended marathon session that works through GitHub issues across multiple waves until convergence — all issues are resolved, or all remaining issues are genuinely blocked. Designed to maximize overnight/extended usage windows.",
+      "hash": "0dfd92c",
+      "lines": 460,
+      "description": "Advance a delegated outcome through bounded issue waves, or clear an explicitly selected backlog. Convergence follows observable acceptance and genuine dependencies, not the number of easy issues closed.",
       "guards": [
         {
           "label": "wave-model",
@@ -2679,9 +2675,9 @@
     },
     {
       "name": "unattended-merge",
-      "hash": "d3cd6f5",
-      "lines": 69,
-      "description": "Defines when an autonomous session (e.g. `/autonomous-dev-flow`, `/tackle-issues`) may merge its **own** PR without a human pause, and what record it must leave behind. This replaces the old blanket \"never merge — PRs accumulate for user review\" rule for unattended sessions: a PR that has genuinely cleared every gate may merge so dependent work isn't deadlocked overnight, but nothing merges on faith and every merge is visible in the session report.",
+      "hash": "0dfd92c",
+      "lines": 63,
+      "description": "Define the delivery gate for delegated implementation in both ordinary and prime-directive runs. The historical skill name `unattended-merge` is retained for existing callers; user presence does not change merge authority. Once the gates pass, the agent merges, verifies delivery and records it without another routine confirmation.",
       "guards": [
         {
           "label": "full-review-gate",

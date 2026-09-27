@@ -1146,36 +1146,32 @@
   ],
   "merge-gate": [
     {
-      "label": "no-diagnostic-investigation",
+      "label": "current-head-recovery",
       "anyOf": [
-        "[Dd]o (?:NOT|not) investigate",
-        "investigate, reason about, or run diagnostic"
-      ]
-    },
-    {
-      "label": "verbatim-handoff-message",
-      "anyOf": [
-        "[Mm]erge blocked",
-        "/pull/\\{N\\}/files"
-      ]
-    },
-    {
-      "label": "wait-for-user-confirmation",
-      "anyOf": [
-        "[Ww]ait for (?:the )?user",
-        "[Ww]ait for .{0,24}confirmation",
-        "[Pp]ause until the user"
-      ]
-    },
-    {
-      "label": "escalate-only-on-second-failure",
-      "anyOf": [
-        "fails a second time",
-        "[Ii]f it fails again, (?:THEN|then)",
-        "[Oo]n(?:ly on)? the second failure[^\\n]{0,40}(?:THEN |then )?check",
-        "[Ss]econd failure[^\\n]{0,40}(?:THEN|then) check"
+        "Re-read the gate at the CURRENT head"
       ],
-      "note": "A tenth vacuity of the same class as the nine scripts/guard-audit.py reported, and one the audit CANNOT report: the dropped `[Ss]econd failure` alternate matched the \"Graceful fallback — second failure triggers real investigation\" bullet under `## Why This Works`, which is the skill's own DOCUMENTATION of the rule and classifies as prose. Deleting the rule itself (step 4 of the snippet) left the guard green off that bullet. Every alternate now requires the escalation the rule actually orders — check `gh pr checks` — which the Why-This-Works bullet does not name."
+      "note": "Replaces the obsolete no-diagnosis policy: a stale merge reading cannot justify a user handoff or a merge."
+    },
+    {
+      "label": "identify-actual-requirement",
+      "anyOf": [
+        "Identify the actual failed requirement"
+      ],
+      "note": "Recover the real failed requirement rather than assuming only the owner can resolve threads."
+    },
+    {
+      "label": "gated-retry",
+      "anyOf": [
+        "Recheck every merge gate before retrying"
+      ],
+      "note": "Recovery never waives review, current-head CI, thread dispositions or protection."
+    },
+    {
+      "label": "reserved-prerequisite-only",
+      "anyOf": [
+        "Escalate only the genuine prerequisite"
+      ],
+      "note": "Routine delegated merge stays with the agent in both modes; only actual owner prerequisites are handed off."
     }
   ],
   "parallel-dev": [
