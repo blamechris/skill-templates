@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "37866a5",
+  "generatedFromCommit": "759df1c",
   "skillCount": 42,
   "skills": [
     {
@@ -1720,8 +1720,8 @@
     },
     {
       "name": "project-genesis",
-      "hash": "d9c1913",
-      "lines": 421,
+      "hash": "759df1c",
+      "lines": 441,
       "description": "Start a new fleet repo to the Fleet Project Genesis Standard v1, or audit or extend an existing one against it. Genesis creates the GitHub repo, applies the settings, ruleset and labels, scaffolds the core files plus any stack overlays and modules, writes the skill profile and installs the registry skill set, provisions the runner, files every manual step as a `human-setup` issue, and opens one scaffold PR for the owner to merge. It **orders existing tools and re-implements none of them**: `fleet-check.py`, `/skill`, `/skill-profile`, `/create-issue`, `/create-pr`, `provision-runner.sh` and `/session-lifecycle` each do their own job. The only new logic is `genesis-verify.py`, which renders the plan and decides when genesis is done.",
       "guards": [
         {
