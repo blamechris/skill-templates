@@ -822,6 +822,13 @@ if V --plan --json --name x --seed-issues "$TMP/seed-nested.md" 2>/dev/null \
   ok "a ~~~ inside a \`\`\` fence is content: one entry, the fenced # line kept, the fenced ## Context allowed"
 else bad "a ~~~ inside a \`\`\` fence is content"; fi
 
+printf '# Title\nLabels: enhancement\nAcceptance: x\n\n````markdown\n```bash\n# not a title\n## Acceptance Criteria\n```\n````\n\nTrailing prose.\n' \
+  > "$TMP/seed-longfence.md"
+if V --plan --json --name x --seed-issues "$TMP/seed-longfence.md" 2>/dev/null \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin); b=p["seed_issues"][0]["body"]; sys.exit(0 if len(p["seed_issues"]) == 1 and "# not a title" in b and "Trailing prose." in b else 1)'; then
+  ok "a \`\`\`\` fence quoting a \`\`\` example closes only on \`\`\`\`: one entry, nothing refused"
+else bad "a \`\`\`\` fence quoting a \`\`\` example closes only on \`\`\`\`"; fi
+
 out=$(V --repo "$M" --seed-issues "$SEED" 2>&1); rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q -- "--seed-issues is a --plan flag"; then
   ok "--seed-issues outside --plan is refused, not silently ignored"

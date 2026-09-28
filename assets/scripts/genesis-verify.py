@@ -668,20 +668,24 @@ LABEL_LINE = re.compile(r"^Label:\s*(.*)$")
 HEADER_LINE = re.compile(r"^(Labels|Parent|Acceptance):\s*(.*?)\s*$")
 
 
+FENCE_LINE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+
+
 def _fences(lines):
     """(mask, unclosed): per line, True on a fence delimiter or inside a fence; and the index
-    of a fence that never closes, else None. A ``` fence closes only on ``` and a ~~~ fence
-    only on ~~~, so an example of one inside the other stays content. headings()/defence()
-    make no such distinction; the probes run them on templates that only ever fence with ```.
-    The delimiter line itself is masked, so it is never mistaken for a title, header or
-    preamble line either."""
+    of a fence that never closes, else None. As in CommonMark, a fence closes only on a bare
+    run of its own character at least as long as the one that opened it, so a ```` fence can
+    quote a ``` example and ``` can quote ~~~. headings()/defence() make no such distinction;
+    the probes run them on templates that only ever fence with a bare ```. The delimiter line
+    itself is masked, so it is never mistaken for a title, header or preamble line either."""
     mask, opener, opened_at = [], None, None
     for i, ln in enumerate(lines):
-        s = ln.lstrip()
-        if opener is None and s.startswith(("```", "~~~")):
-            opener, opened_at = s[:3], i
+        m = FENCE_LINE.match(ln)
+        if opener is None and m:
+            opener, opened_at = m.group(1), i
             mask.append(True)
-        elif opener is not None and s.startswith(opener):
+        elif (opener is not None and m and m.group(1)[0] == opener[0]
+              and len(m.group(1)) >= len(opener) and not m.group(2).strip()):
             opener = None
             mask.append(True)
         else:
