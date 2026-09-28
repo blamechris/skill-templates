@@ -428,6 +428,472 @@ else ok "the plan never renders the skill profile (Phase 4 composes it)"; fi
 FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --plan --json --name soundbed --stack kotlin >/dev/null 2>&1
 [ -s "$MG/calls.log" ] && bad "--plan never calls GitHub" "$(head -2 "$MG/calls.log")" || ok "--plan never calls GitHub"
 
+echo "== seed issues"
+SEED="$TMP/seed.md"
+cat > "$SEED" <<'SEEDEOF'
+Label: area:core | 1d76db | The shared KMP core module
+Label: area:playback | #0E8A16 | Media3 playback service
+
+# Epic 0: M1 coexistence experiment
+Labels: epic
+Acceptance: Tests A/B/C have run across the §4 matrix
+Acceptance: ADR-0003 records the M1 verdict
+
+Tests A/B/C per §4; exits on the matrix plus the ADR-0003 verdict.
+
+# Scaffold `:app` on AGP 9
+Labels: enhancement, complexity:medium, area:core
+Parent: Epic 0: M1 coexistence experiment
+Acceptance: `:app` builds on AGP 9
+
+Body. `##` headings are allowed here now.
+
+## Notes
+
+Some notes here.
+
+```bash
+# a comment inside a fence is not an entry
+```
+
+# human-setup: Android SDK on the runner Mac
+Labels: human-setup
+
+## What
+
+Install the SDK.
+
+## Why a human
+
+Only a human can accept the license.
+
+## Exact steps
+
+1. Download it.
+
+## Secret names
+
+None.
+
+## Reuse or create
+
+N/A.
+
+## Done when
+
+The SDK is installed.
+SEEDEOF
+
+SEEDPLAN="$TMP/seed-plan.json"
+: > "$MG/calls.log"
+if FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --plan --json --name soundbed --stack kotlin --modules runner-mac \
+  --app-id com.blamechris.soundbed --seed-issues "$SEED" --date 2026-09-26 > "$SEEDPLAN" 2>"$TMP/seed-plan.err"; then
+  ok "a well-formed seed-issues file renders exit 0"
+else bad "a well-formed seed-issues file renders exit 0" "$(flat "$(cat "$TMP/seed-plan.err")")"; fi
+
+check=$(python3 - "$SEEDPLAN" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1]))
+si = p["seed_issues"]
+problems = []
+if len(si) != 3:
+    problems.append(f"expected 3 seed issues, got {len(si)}")
+else:
+    if [e["kind"] for e in si] != ["work", "work", "human-setup"]:
+        problems.append(f"kinds {[e['kind'] for e in si]}")
+    if si[0]["labels"] != ["epic"] or si[0]["parent"] is not None:
+        problems.append(f"epic entry {si[0]['labels']} parent={si[0]['parent']}")
+    if si[1]["labels"] != ["enhancement", "complexity:medium", "area:core"]:
+        problems.append(f"child labels {si[1]['labels']}")
+    if si[1]["parent"] != "Epic 0: M1 coexistence experiment":
+        problems.append(f"child parent {si[1]['parent']}")
+    if si[2]["labels"] != ["human-setup"] or si[2]["parent"] is not None:
+        problems.append(f"human-setup entry {si[2]['labels']} parent={si[2]['parent']}")
+print("OK" if not problems else "FAIL: " + "; ".join(problems))
+PY
+)
+[ "$check" = OK ] && ok "plan.seed_issues has 3 entries with the right kinds, labels and parents" \
+  || bad "plan.seed_issues has 3 entries with the right kinds, labels and parents" "$check"
+
+check=$(python3 - "$SEEDPLAN" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1]))
+body = p["seed_issues"][1]["body"]
+problems = []
+if not body.startswith("## Description"):
+    problems.append("does not start with ## Description")
+if not body.rstrip().splitlines()[-1].startswith("- [ ] "):
+    problems.append("does not end with - [ ] criteria")
+if "# a comment inside a fence is not an entry" not in body:
+    problems.append("the fenced line is missing from the body")
+print("OK" if not problems else "FAIL: " + "; ".join(problems))
+PY
+)
+[ "$check" = OK ] && ok "the child's body starts \`## Description\`, ends with acceptance criteria, and keeps the fenced \`# not a title\` line" \
+  || bad "the child's body starts with Description and ends with acceptance criteria" "$check"
+
+check=$(python3 - "$SEEDPLAN" <<'PY'
+import json, re, sys
+p = json.load(open(sys.argv[1]))
+body = p["seed_issues"][2]["body"]
+got = re.findall(r"^## (.+)$", body, re.M)
+want = ["What", "Why a human", "Exact steps", "Secret names", "Reuse or create", "Done when"]
+print("OK" if got == want and "Filed from" not in body else f"FAIL: headings {got}")
+PY
+)
+[ "$check" = OK ] && ok "the human-setup body is verbatim" || bad "the human-setup body is verbatim" "$check"
+
+check=$(python3 - "$SEEDPLAN" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1]))
+labels, tail = p["github"]["labels"], p["github"]["labels"][-2:]
+problems = []
+if [l["name"] for l in tail] != ["area:core", "area:playback"]:
+    problems.append(f"tail names {[l['name'] for l in tail]}")
+if [l["color"] for l in tail] != ["1d76db", "0e8a16"]:
+    problems.append(f"tail colours {[l['color'] for l in tail]}")
+if p["github"]["owner_labels"] != ["area:core", "area:playback"]:
+    problems.append(f"owner_labels {p['github']['owner_labels']}")
+if not {"area:core", "area:playback"} <= set(p["profile"]["labels"]):
+    problems.append("profile.labels is missing an owner label")
+print("OK" if not problems else "FAIL: " + "; ".join(problems))
+PY
+)
+[ "$check" = OK ] && ok "github.labels ends with the owner labels (colour normalised), owner_labels lists them, profile.labels includes them" \
+  || bad "github.labels/owner_labels/profile.labels carry the owner labels" "$check"
+
+want_sha=$(shasum -a 256 "$SEED" | awk '{print $1}')
+got_sha=$(plan_field "$SEEDPLAN" 'p["intent"]["seed_issues"]["sha256"]')
+got_path=$(plan_field "$SEEDPLAN" 'p["intent"]["seed_issues"]["path"]')
+if [ "$got_sha" = "$want_sha" ] && [ "${got_path#/}" != "$got_path" ]; then
+  ok "intent.seed_issues.sha256 matches shasum -a 256 of the file; path is absolute"
+else
+  bad "intent.seed_issues.sha256 matches shasum -a 256 of the file; path is absolute" "sha $got_sha want $want_sha; path $got_path"
+fi
+
+text=$(FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --plan --name soundbed --stack kotlin --modules runner-mac \
+  --app-id com.blamechris.soundbed --seed-issues "$SEED" --date 2026-09-26 2>&1); rc=$?
+if [ "$rc" -eq 0 ] \
+   && printf '%s' "$text" | grep -qF 'Epic 0: M1 coexistence experiment' \
+   && printf '%s' "$text" | grep -qF 'Scaffold `:app` on AGP 9' \
+   && printf '%s' "$text" | grep -qF 'human-setup: Android SDK on the runner Mac' \
+   && printf '%s' "$text" | grep -q '^Seed issues: ' \
+   && printf '%s' "$text" | grep -q 'owner: area:core, area:playback'; then
+  ok "text-mode --plan prints each seed title, the Seed issues line, and owner labels in the labels row"
+else
+  bad "text-mode --plan prints each seed title, the Seed issues line, and owner labels in the labels row" "exit $rc — $(flat "$text")"
+fi
+
+P2="$TMP/seed-plan2.json"
+FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --plan --json --name soundbed --stack kotlin --modules runner-mac \
+  --app-id com.blamechris.soundbed --seed-issues "$SEED" --date 2026-09-26 > "$P2" 2>/dev/null
+if cmp -s "$SEEDPLAN" "$P2"; then ok "two --json renders with identical args are byte-identical"
+else bad "two --json renders with identical args are byte-identical" "cmp differs"; fi
+
+got=$(V --plan --json --name plainrepo --modules runner-mac --date 2026-09-26 | python3 -c \
+  'import json,sys; p=json.load(sys.stdin); print(p["intent"]["seed_issues"], p["seed_issues"], p["github"]["owner_labels"])')
+[ "$got" = "None [] []" ] && ok "without --seed-issues: intent.seed_issues is null, seed_issues is [], owner_labels is []" \
+  || bad "without --seed-issues: intent.seed_issues is null, seed_issues is [], owner_labels is []" "got: $got"
+
+: > "$MG/calls.log"
+FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --plan --json --name soundbed --stack kotlin --seed-issues "$SEED" >/dev/null 2>&1
+[ -s "$MG/calls.log" ] && bad "--plan with --seed-issues never calls GitHub" "$(head -2 "$MG/calls.log")" \
+  || ok "--plan with --seed-issues never calls GitHub"
+
+seed_refuses() {  # <name> <needle> <seed-file>
+  local name=$1 needle=$2 file=$3 out rc
+  out=$(V --plan --name x --seed-issues "$file" 2>&1); rc=$?
+  if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q -- "$needle"; then ok "$name"; else bad "$name" "exit $rc — $(flat "$out")"; fi
+}
+
+seed_refuses "a missing seed-issues file" "cannot read" "$TMP/seed-nope.md"
+
+cat > "$TMP/seed-old.md" <<'SEEDEOF'
+## Old style title
+Labels: bug
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "an old-format file (## title entries)" "an issue starts with" "$TMP/seed-old.md"
+
+cat > "$TMP/seed-strayp.md" <<'SEEDEOF'
+not a label line
+
+# Title
+Labels: bug
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "stray preamble text" "the preamble holds only" "$TMP/seed-strayp.md"
+
+cat > "$TMP/seed-unklabel.md" <<'SEEDEOF'
+# Title
+Labels: made-up-label
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "a label not declared anywhere" "unknown label" "$TMP/seed-unklabel.md"
+
+cat > "$TMP/seed-redefine.md" <<'SEEDEOF'
+Label: bug | ffffff | redefine
+
+# Title
+Labels: bug
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "an undeclared owner label redefining bug" "redefines a standard label" "$TMP/seed-redefine.md"
+
+cat > "$TMP/seed-defaultlabel.md" <<'SEEDEOF'
+Label: question | ffffff | not allowed
+
+# Title
+Labels: bug
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "an owner label named after a default genesis deletes" "is a GitHub default genesis deletes" "$TMP/seed-defaultlabel.md"
+
+cat > "$TMP/seed-badcolor.md" <<'SEEDEOF'
+Label: area:x | not-a-colour | desc
+
+# Title
+Labels: bug
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "a bad owner colour" "invalid colour" "$TMP/seed-badcolor.md"
+
+cat > "$TMP/seed-dupowner.md" <<'SEEDEOF'
+Label: area:x | ffffff | one
+Label: Area:X | 000000 | two
+
+# Title
+Labels: bug
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "a duplicate owner label (case-insensitive)" "declared more than once" "$TMP/seed-dupowner.md"
+
+cat > "$TMP/seed-nolabels.md" <<'SEEDEOF'
+# Title
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "a missing Labels: line" "has no" "$TMP/seed-nolabels.md"
+
+cat > "$TMP/seed-replabels.md" <<'SEEDEOF'
+# Title
+Labels: bug
+Labels: enhancement
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "a repeated Labels: line" "repeats" "$TMP/seed-replabels.md"
+
+cat > "$TMP/seed-unkkey.md" <<'SEEDEOF'
+# Title
+Labels: bug
+Foo: bar
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "an unknown header key" "invalid line" "$TMP/seed-unkkey.md"
+
+cat > "$TMP/seed-emptybody.md" <<'SEEDEOF'
+# Title
+Labels: bug
+Acceptance: x
+
+SEEDEOF
+seed_refuses "an empty body" "empty body" "$TMP/seed-emptybody.md"
+
+cat > "$TMP/seed-noaccept.md" <<'SEEDEOF'
+# Title
+Labels: bug
+
+Body.
+SEEDEOF
+seed_refuses "a work entry without Acceptance:" "requires acceptance criteria" "$TMP/seed-noaccept.md"
+
+cat > "$TMP/seed-forbidden.md" <<'SEEDEOF'
+# Title
+Labels: bug
+Acceptance: x
+
+## Acceptance Criteria
+
+Body.
+SEEDEOF
+seed_refuses "a work body with ## Acceptance Criteria" "must not contain heading" "$TMP/seed-forbidden.md"
+
+cat > "$TMP/seed-hsaccept.md" <<'SEEDEOF'
+# Title
+Labels: human-setup
+Acceptance: x
+
+## What
+## Why a human
+## Exact steps
+## Secret names
+## Reuse or create
+## Done when
+SEEDEOF
+seed_refuses "a human-setup entry with Acceptance:" "states its criteria under" "$TMP/seed-hsaccept.md"
+
+cat > "$TMP/seed-hsmissing.md" <<'SEEDEOF'
+# Title
+Labels: human-setup
+
+## What
+## Why a human
+## Exact steps
+## Secret names
+## Reuse or create
+SEEDEOF
+seed_refuses "a human-setup entry missing ## Done when" "missing" "$TMP/seed-hsmissing.md"
+
+cat > "$TMP/seed-hsorder.md" <<'SEEDEOF'
+# Title
+Labels: human-setup
+
+## What
+## Exact steps
+## Why a human
+## Secret names
+## Reuse or create
+## Done when
+SEEDEOF
+seed_refuses "human-setup sections out of order" "out of order" "$TMP/seed-hsorder.md"
+
+# A `~~~` fence masks headings exactly as a ``` fence does (PR #325 review): a `## Done when`
+# that exists only inside one is not a section, and a reserved heading inside one is body text.
+cat > "$TMP/seed-hstilde.md" <<'SEEDEOF'
+# Title
+Labels: human-setup
+
+## What
+## Why a human
+## Exact steps
+## Secret names
+## Reuse or create
+~~~
+## Done when
+~~~
+SEEDEOF
+seed_refuses "a human-setup ## Done when only inside a ~~~ fence is missing" "missing" "$TMP/seed-hstilde.md"
+
+cat > "$TMP/seed-worktilde.md" <<'SEEDEOF'
+# Title
+Labels: enhancement
+Acceptance: x
+
+An example issue body, quoted:
+
+~~~markdown
+## Acceptance Criteria
+~~~
+SEEDEOF
+if V --plan --json --name x --seed-issues "$TMP/seed-worktilde.md" >/dev/null 2>&1; then
+  ok "a reserved heading inside a ~~~ fence is body text, not a refusal"
+else bad "a reserved heading inside a ~~~ fence is body text, not a refusal"; fi
+
+# Silent-loss shapes (PR #325 review): each would drop an entry or a `Parent:` without a word.
+printf '# Parent epic\nLabels: epic\nAcceptance: done\n\nParent body.\n\n# Child\nLabels: bug\nAcceptance: works\n   \nParent: Parent epic\n\nChild body.\n' \
+  > "$TMP/seed-splithdr.md"
+seed_refuses "a header line below a whitespace-only line" "sits below a blank line" "$TMP/seed-splithdr.md"
+printf '# First\nLabels: bug\nAcceptance: x\n\n```bash\necho never closed\n\n# Second\nLabels: bug\nAcceptance: y\n\nSecond body.\n' \
+  > "$TMP/seed-openfence.md"
+seed_refuses "an unclosed fence that would swallow the next entry" "never closes" "$TMP/seed-openfence.md"
+printf '# Title\nLabels: enhancement\nAcceptance: x\n\n```markdown\n~~~\n# not a title\n## Context\n~~~\n```\n' \
+  > "$TMP/seed-nested.md"
+if V --plan --json --name x --seed-issues "$TMP/seed-nested.md" 2>/dev/null \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin); sys.exit(0 if len(p["seed_issues"]) == 1 and "# not a title" in p["seed_issues"][0]["body"] else 1)'; then
+  ok "a ~~~ inside a \`\`\` fence is content: one entry, the fenced # line kept, the fenced ## Context allowed"
+else bad "a ~~~ inside a \`\`\` fence is content"; fi
+
+printf '# Title\nLabels: enhancement\nAcceptance: x\n\n````markdown\n```bash\n# not a title\n## Acceptance Criteria\n```\n````\n\nTrailing prose.\n' \
+  > "$TMP/seed-longfence.md"
+if V --plan --json --name x --seed-issues "$TMP/seed-longfence.md" 2>/dev/null \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin); b=p["seed_issues"][0]["body"]; sys.exit(0 if len(p["seed_issues"]) == 1 and "# not a title" in b and "Trailing prose." in b else 1)'; then
+  ok "a \`\`\`\` fence quoting a \`\`\` example closes only on \`\`\`\`: one entry, nothing refused"
+else bad "a \`\`\`\` fence quoting a \`\`\` example closes only on \`\`\`\`"; fi
+
+printf '# First\nLabels: bug\nAcceptance: x\n\n``` shown as `inline` code, not a fence\n\n# Second\nLabels: bug\nAcceptance: y\n\n```\nreal fence\n```\n' \
+  > "$TMP/seed-inlineticks.md"
+if V --plan --json --name x --seed-issues "$TMP/seed-inlineticks.md" 2>/dev/null \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin); sys.exit(0 if [e["title"] for e in p["seed_issues"]] == ["First", "Second"] else 1)'; then
+  ok "a backtick run with a backtick in its info string is inline code, not a fence that swallows the next entry"
+else bad "a backtick run with a backtick in its info string is inline code, not a fence"; fi
+
+out=$(V --repo "$M" --seed-issues "$SEED" 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q -- "--seed-issues is a --plan flag"; then
+  ok "--seed-issues outside --plan is refused, not silently ignored"
+else bad "--seed-issues outside --plan is refused, not silently ignored" "exit $rc — $(flat "$out")"; fi
+
+cat > "$TMP/seed-laterparent.md" <<'SEEDEOF'
+# A
+Labels: bug
+Parent: B
+Acceptance: x
+
+Body.
+
+# B
+Labels: bug
+Acceptance: y
+
+Body.
+SEEDEOF
+seed_refuses "Parent: naming a later entry" "not an earlier entry" "$TMP/seed-laterparent.md"
+
+cat > "$TMP/seed-unkparent.md" <<'SEEDEOF'
+# A
+Labels: bug
+Parent: NoSuchThing
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "Parent: naming an unknown title" "not an earlier entry" "$TMP/seed-unkparent.md"
+
+cat > "$TMP/seed-duptitle.md" <<'SEEDEOF'
+# A
+Labels: bug
+Acceptance: x
+
+Body.
+
+# A
+Labels: bug
+Acceptance: y
+
+Body2.
+SEEDEOF
+seed_refuses "duplicate titles" "more than one entry" "$TMP/seed-duptitle.md"
+
+cat > "$TMP/seed-spectitle.md" <<'SEEDEOF'
+# Land docs/design/SPEC.md
+Labels: bug
+Acceptance: x
+
+Body.
+SEEDEOF
+seed_refuses "a title equal to a title genesis already plans to file" "already plans to file" "$TMP/seed-spectitle.md"
+
+printf '' > "$TMP/seed-empty.md"
+seed_refuses "an empty file (no entries, no owner labels)" "empty" "$TMP/seed-empty.md"
+
 echo "== self-check (the registry's rule<->probe parity gate)"
 out=$(V --self-check 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "self-check passes on this tree's assets" || bad "self-check passes on this tree's assets" "$(flat "$out")"
@@ -483,6 +949,8 @@ $SAVEM"
 sc_case "a ci fragment whose job ci-gate does not need" "rendered ci.yml: ci-gate needs" "$LOADM
 m['overlays']['kotlin']['ci_job'] = 'kotlin-renamed'
 $SAVEM"
+sc_case "a renamed section in the human-setup issue template" "differ from HUMAN_SETUP_SECTIONS" "p = 'assets/genesis/templates/core/issue-human_setup.md.tmpl'
+s = open(p).read(); open(p, 'w').write(s.replace('## Done when', '## Done wrong'))"
 
 echo "== branches the round trip cannot reach"
 fresh; gh_edit repos_blamechris_soundbed_actions_secrets_per_page_100_page_1 'd["secrets"] = []'
