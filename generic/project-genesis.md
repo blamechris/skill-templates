@@ -14,7 +14,7 @@ Every phase is **probe → act only on what is missing → re-probe**. Nothing r
     - `--visibility private` — the only visibility v1 implements. `public` is `planned` and refused.
     - `--posture withheld|gated` — default `withheld`.
     - `--description "<one line>"` — the GitHub description and the README lead.
-    - `--seed-issues <path>` — an owner-supplied Markdown file: one `## <title>` per issue, then its body, then a `Labels: a, b` line.
+    - `--seed-issues <path>` — an owner-supplied Markdown file of repo labels and issues to file at genesis. `genesis-verify.py --plan` parses, checks and renders it; its docstring holds the grammar. In short: an optional preamble of `Label: <name> | <colour> | <description>` lines, then one `# <title>` per issue, a header block of one `Labels:` line plus optional `Parent: <earlier title>` and `Acceptance: <criterion>` lines, a blank line, and the body, which may use `##` headings. Keep the file at a stable path outside the scratchpad: the plan records its path and SHA-256 digest, and a resume re-reads it.
     - `--dry-run` — Phase 0 only: print the plan and write nothing outside the session scratchpad.
   - `--audit [--json] [--file-issues]` — conformance of the current repo. Read-only unless `--file-issues` is given.
   - `--add overlay:<x>|module:<y>` — apply one layer to the current, already-conformant repo.
@@ -55,6 +55,7 @@ WT=${SESSION_BRANCH:+${GENESIS_WT_ROOT:-${TMPDIR:-/tmp}}/$NAME-genesis-${SESSION
 failed() { jq -e --arg r "$1" '.results[] | select(.rule == $r) | .result == "FAIL"' "$VERIFY_JSON" >/dev/null; }
 put() { jq "$2" "$PLAN_JSON" | gh api -X PUT "repos/$R/$1" --input - --silent; }
 epic_plan() { gh issue view "${EPIC:?}" -R "$R" --json body -q .body | awk '/^```genesis-plan/{f=1;next} /^```/{f=0} f'; }
+num_of() { gh issue list -R "$R" --state all --limit 500 --json number,title | jq -r --arg t "$1" '.[] | select(.title == $t) | .number' | head -1; }
 ```
 
 Any block that writes guards its inputs first, so an unset value aborts instead of expanding to `""`: `: "${WT:?}" "${SESSION_BRANCH:?}" "${PLAN_JSON:?}"`. `WT` stays empty until Phase 1 has chosen a branch, so that guard really fires. `$G/branch`, `$G/epic` and `$G/relay-token-in` hold values Phase 0 and Phase 1 chose, which later blocks cannot re-derive for free. They are inputs, not progress markers. Write `${VAR}` rather than `$VAR` wherever a colon follows: zsh, which is the agent's shell, reads `"$PLAN_REF:a…"` as a history modifier.
@@ -104,7 +105,7 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
    git -C "$REG" show "${PLAN_REF}:assets/scripts/genesis-verify.py" > "$GV" && test -s "$GV" \
      || { echo "REFUSE: cannot extract genesis-verify.py at ${PLAN_REF:-<no commit>}"; exit 2; }
    ```
-   **On a resume**, the arguments are the epic block's recorded intent, every one of them: `--stack` (its overlays, or `none`), `--modules`, `--app-id`, `--visibility`, `--posture`, `--description`, `--date` and `--relay-token-in` (its list, or `none`). The render is then byte-identical. **On a fresh create**, build the arguments from the flags the owner actually gave. An absent flag must stay absent, both so the manifest supplies the default and so the Decisions table can show which choices were defaulted:
+   **On a resume**, the arguments are the epic block's recorded intent, every one of them: `--stack` (its overlays, or `none`), `--modules`, `--app-id`, `--visibility`, `--posture`, `--description`, `--date`, `--relay-token-in` (its list, or `none`) and, when `seed_issues` is not null, `--seed-issues` with its `path`. The render is then byte-identical. **On a fresh create**, build the arguments from the flags the owner actually gave. An absent flag must stay absent, both so the manifest supplies the default and so the Decisions table can show which choices were defaulted:
    ```bash
    RELAY_IN=$(cat "$G/relay-token-in" 2>/dev/null)
    ARGS=(--plan --registry "$REG" --registry-ref "$PLAN_REF" --name "$NAME" --relay-token-in "${RELAY_IN:-none}")
@@ -114,14 +115,20 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
    [ -n "${VISIBILITY:-}" ]  && ARGS+=(--visibility "$VISIBILITY")
    [ -n "${POSTURE:-}" ]     && ARGS+=(--posture "$POSTURE")
    [ -n "${DESCRIPTION:-}" ] && ARGS+=(--description "$DESCRIPTION")
+   [ -n "${SEED_ISSUES:-}" ] && ARGS+=(--seed-issues "$SEED_ISSUES")
    python3 "$GV" "${ARGS[@]}" --json > "$PLAN_JSON"; RC=$?
    ```
-   Exit `2` is a REFUSE, such as a planned layer, a missing `runner-mac`, an invalid app ID or a bad slug. Show its stderr and stop. On `0`, present the plan exactly as the script prints it:
+   Exit `2` is a REFUSE, such as a planned layer, a missing `runner-mac`, an invalid app ID, a bad slug or a malformed seed-issues file. Show its stderr and stop. **On a resume**, then confirm the re-render is the approved one. The seed-issues digest is part of the intent, so a seed file edited since approval stops here too:
+   ```bash
+   [ -z "${EPIC:-}" ] || [ "$(jq -S .intent "$PLAN_JSON")" = "$(epic_plan | jq -S .intent)" ] \
+     || { echo "STOP: the re-rendered intent differs from the epic's genesis-plan block"; exit 1; }
+   ```
+   A difference is the owner's to resolve; never re-plan silently. On `0`, present the plan exactly as the script prints it:
    ```bash
    python3 "$GV" "${ARGS[@]}"
    ```
    That output is the write table plus the **Decisions** table, which lists every choice with its value, recommendation, reason and whether it was defaulted. Do not hand-build either table.
-7. **Seed issues.** If `--seed-issues` was given, parse it now. Every entry needs a title, a body and a `Labels:` line whose labels all appear in the plan's `.github.labels`. Any other shape is a REFUSE, naming the entry.
+7. **Seed issues.** The plan in step 6 has already parsed and checked the `--seed-issues` file, so nothing is parsed here. A malformed entry is a REFUSE that names the entry: a label that is neither standard nor declared by a `Label:` line, a missing `Labels:` line, a work entry with no `Acceptance:` line, a `Parent:` that does not name an earlier entry, or a `human-setup` entry whose body lacks the six sections in order (What · Why a human · Exact steps · Secret names · Reuse or create · Done when). Fix the file, not the plan. Owner labels and seed issues appear in the write table, and `intent.seed_issues` records the file's path and digest, so the epic freezes them with the rest of the plan. The file must stay at that path, unchanged, until Phase 5 has filed every entry.
 
 **Wait point 1.** Stop and wait for the owner's explicit approval of this plan. `--dry-run` ends here.
 
@@ -220,9 +227,13 @@ Exit `2` means the probe could not look, for example because the token lacks adm
      [ "$(jq .github.automated_security_fixes "$PLAN_JSON")" = true ] && gh api -X PUT "repos/$R/automated-security-fixes" --silent
    fi
    ```
-3. **Labels.** When `github.labels` FAILs, create or update the seed labels from the plan:
+3. **Labels.** The probe covers only the standard's seed labels, so an owner label from the seed-issues file is checked by name here. When `github.labels` FAILs or an owner label is missing, create or update every label in the plan:
    ```bash
-   failed github.labels && jq -r '.github.labels[] | [.name, .color, .description] | @tsv' "$PLAN_JSON" \
+   LIVE=$(gh label list -R "$R" --limit 500 --json name -q '.[].name')
+   OWNER_MISSING=$(jq -r '.github.owner_labels[]' "$PLAN_JSON" | while IFS= read -r n; do
+     printf '%s\n' "$LIVE" | grep -qxF -- "$n" || echo "$n"; done)
+   { failed github.labels || [ -n "$OWNER_MISSING" ]; } \
+     && jq -r '.github.labels[] | [.name, .color, .description] | @tsv' "$PLAN_JSON" \
      | while IFS=$'\t' read -r n c d; do gh label create "$n" --color "$c" --description "$d" --force -R "$R"; done
    ```
    Then remove the GitHub defaults listed in `.github.remove_default_labels`. Delete one **only when no issue and no PR carries it**:
@@ -240,7 +251,7 @@ Exit `2` means the probe could not look, for example because the token lacks adm
      || jq '.github.ruleset' "$PLAN_JSON" | gh api -X POST "repos/$R/rulesets" --input - --silent
    ```
    If a `main` ruleset exists and either rule still FAILs, stop and show the owner the probe's evidence. Never overwrite it, never disable it, and never add a bypass actor.
-5. **Re-probe.** Re-run the probe block above. Every `github.*` row must now PASS. If one still fails, stop and report its evidence.
+5. **Re-probe.** Re-run the probe block above. Every `github.*` row must now PASS, and step 3's `OWNER_MISSING` must now be empty. If either still fails, stop and report its evidence.
 
 ### Phase 3: Scaffold
 
@@ -306,9 +317,17 @@ Profile first: nothing is installed until the step 2 check passes.
 ### Phase 5: Machine, Modules and Issues (no repo writes)
 
 1. **Machine steps.** Run every `plan.machine` entry with `phase` 5, in order. Today that is `provision-runner.sh <name>` then `fleet-status.sh --md`, from `runner-mac`.
-2. **Issues.** File every `plan.issues` entry under the epic, then each `--seed-issues` entry. Use the installed `/create-issue --from-issue $EPIC`, and give each issue **exactly** its entry's labels. Drop the `enhancement` label the create-issue template adds by default unless the entry lists it:
-   - **A work issue** is the SPEC issue, which is always filed, or the credits issue when `credits` is on. Its body is the create-issue shape: `## Context` with `Filed from: #$EPIC`, then `## Description` holding the entry's `description`, then `## Acceptance Criteria` as a checklist of its `acceptance`.
-   - **A `human-setup` issue** has the body `## Context` with `Filed from: #$EPIC`, followed by the entry's `body` verbatim: What · Why a human · Exact steps · Secret names · Reuse or create · Done when. Pass the body through a file (`jq -r '.issues[N].body' "$PLAN_JSON"`), never retyped.
+2. **Issues.** File every `plan.issues` entry, then every `plan.seed_issues` entry, in plan order. A title is the resume key: **file an entry only when `num_of "<its title>"` prints nothing**, so a re-run files only what is missing. Use the installed `/create-issue`, and give each issue **exactly** its entry's labels. Drop the `enhancement` label the create-issue template adds by default unless the entry lists it. Pass every body through a file (`jq -r '.issues[N].body'`, `jq -r '.seed_issues[N].body'`), never retyped:
+   - **A work issue** from `plan.issues` is the SPEC issue, which is always filed, or the credits issue when `credits` is on. File it with `--from-issue $EPIC`. Its body is the create-issue shape: `## Context` with `Filed from: #$EPIC`, then `## Description` holding the entry's `description`, then `## Acceptance Criteria` as a checklist of its `acceptance`.
+   - **A `human-setup` issue** from `plan.issues` is filed with `--from-issue $EPIC`. Its body is `## Context` with `Filed from: #$EPIC`, followed by the entry's `body` verbatim: What · Why a human · Exact steps · Secret names · Reuse or create · Done when.
+   - **A seed issue** is filed with `--from-issue <parent>`. The parent is `$EPIC` when the entry's `parent` is null, and otherwise `num_of "<parent>"`. The plan only accepts a parent that appears earlier in the file, so it is already filed; if `num_of` prints nothing, stop. The body is `## Context` with `Filed from: #<parent>`, then the entry's `body` verbatim. The plan has already rendered a work entry's `## Description` and `## Acceptance Criteria` and checked a `human-setup` entry's six sections, so add nothing to either.
+
+   A seed issue whose `parent` is set is also a **sub-issue** of that parent. Link it only when it has no parent yet, so a re-run changes nothing:
+   ```bash
+   : "${CHILD:?}" "${PARENT:?}"
+   [ -n "$(gh api "repos/$R/issues/$CHILD" -q '.parent_issue_url // empty')" ] \
+     || gh api -X POST "repos/$R/issues/$PARENT/sub_issues" -F sub_issue_id="$(gh api "repos/$R/issues/$CHILD" -q .id)" --silent
+   ```
 
    Read each issue's labels back (`gh issue view <n> -R "$R" --json labels`) and correct any that differ from its entry with `gh issue edit --add-label/--remove-label`.
 3. **Re-probe the human steps.** Run the Phase 2 probe block again. Every rule the manifest marks `human` must read PASS or PENDING-HUMAN, never FAIL. PENDING-HUMAN is how the probe proves the issue it matched carries the backticked rule ID in its "Done when". A FAIL here means that issue did not land as rendered: fix the issue body, not the probe.
@@ -383,7 +402,8 @@ Profile first: nothing is installed until the step 2 check passes.
 | Error | Recovery |
 |---|---|
 | `fleet-check.py` exits 1 or 2 | Stop. Reconcile floor drift, or restore registry visibility, before starting. |
-| `--plan` exits 2 (REFUSE) | Show its stderr. A planned layer, a missing `runner-mac` or an invalid app ID is the owner's decision to change, not genesis's. |
+| `--plan` exits 2 (REFUSE) | Show its stderr. A planned layer, a missing `runner-mac` or an invalid app ID is the owner's decision to change, not genesis's. A seed-issues REFUSE names the entry: the owner fixes the file. |
+| The seed-issues file moved, or changed since approval | Moved: the plan REFUSEs, because it cannot read the recorded path. Changed: the resume's intent check stops. Restore the approved file at its recorded path. A different seed set is the owner's decision, never a silent re-plan. |
 | The repo exists without an epic | Not a genesis repo: use `--audit` or `--add`. The only exception is a README-only repo that genesis may have stopped on, and only with the owner's yes. |
 | A probe exits 2 or reads ERROR | The probe could not look, often because the token lacks admin on the repo. Fix access, then re-probe. Never write blind. |
 | A variable reads empty, or a helper is "not found" | The shell was new. Re-run the preamble; never let `cd ""` or a missing `failed` stand in for a result. |

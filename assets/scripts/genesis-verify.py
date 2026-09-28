@@ -6,7 +6,7 @@
 Usage:
   genesis-verify.py --plan --name NAME [--stack LIST] [--modules LIST] [--app-id ID|none]
                     [--visibility private] [--posture withheld|gated] [--description TEXT]
-                    [--relay-token-in LIST|none] [--date YYYY-MM-DD] [--json]
+                    [--relay-token-in LIST|none] [--seed-issues PATH] [--date YYYY-MM-DD] [--json]
                     [--registry PATH] [--registry-ref REF] [--no-fetch]
   genesis-verify.py --repo PATH [--ref REF] [--gh-repo OWNER/NAME] [--json]
                     [--stack ... --modules ... --app-id ...]   (only when the profile has no intent)
@@ -51,6 +51,7 @@ the detectors for known legacy shapes, such as archery's path-filtered auto-pass
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import posixpath
@@ -76,6 +77,9 @@ USES = re.compile(r"^\s*(?:-\s+)?uses:\s*['\"]?([^\s'\"#]+)")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # skill-lint.sh's reading of a posture pin: the block's bold lead, alone or as a list item.
 POSTURE_LEAD = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?\*\*[ \t]*(Withheld|Gated)\b", re.M)
+# A human-setup issue's `##` sections, in order (the ISSUE_TEMPLATE and human_setup_issue()'s
+# render must both match this — self_check asserts both against the one constant).
+HUMAN_SETUP_SECTIONS = ("What", "Why a human", "Exact steps", "Secret names", "Reuse or create", "Done when")
 
 RESULTS = ("PASS", "FAIL", "WAIVED", "N-A", "LEGACY", "PENDING-HUMAN")
 ERROR = "ERROR"  # a row whose probe could not look; any ERROR row forces exit 2
@@ -657,6 +661,227 @@ def render_files(man, reg, intent):
     return files, values
 
 
+# ---------------------------------------------------------------- seed issues
+
+TITLE_LINE = re.compile(r"^# (.+?)\s*$")
+LABEL_LINE = re.compile(r"^Label:\s*(.*)$")
+HEADER_LINE = re.compile(r"^(Labels|Parent|Acceptance):\s*(.*?)\s*$")
+
+
+def _fence_mask(lines):
+    """Per-line bool: is this line a fence delimiter or inside one? (```/~~~ toggle, same
+    convention as headings()/defence() — the delimiter line itself counts as masked, so it is
+    never mistaken for a title/header/preamble line either.)"""
+    mask, fenced = [], False
+    for ln in lines:
+        if ln.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            mask.append(True)
+        else:
+            mask.append(fenced)
+    return mask
+
+
+def _add_owner_label(rest, line_no, standard_labels, remove_default_ci, owner_labels, owner_names_ci):
+    """Parse one preamble `Label: name | colour | description` line (rule 11)."""
+    parts = [p.strip() for p in rest.split("|", 2)]
+    if len(parts) != 3 or not all(parts):
+        refuse(f"seed issues line {line_no}: `Label:` needs `name | colour | description` "
+               f"(three non-empty parts separated by `|`)")
+    name, colour, desc = parts
+    if len(name) > 50:
+        refuse(f"seed issues line {line_no}: owner label `{name}` is longer than 50 characters")
+    if "," in name:
+        refuse(f"seed issues line {line_no}: owner label `{name}` cannot contain a comma")
+    cm = re.match(r"^#?([0-9a-fA-F]{6})$", colour)
+    if not cm:
+        refuse(f"seed issues line {line_no}: owner label `{name}` has an invalid colour `{colour}` "
+               f"(want 6 hex digits, an optional leading `#`)")
+    if len(desc) > 100:
+        refuse(f"seed issues line {line_no}: owner label `{name}` description is longer than 100 characters")
+    if name.lower() in {s.lower() for s in standard_labels}:
+        refuse(f"seed issues line {line_no}: owner label `{name}` redefines a standard label "
+               f"(genesis never redefines a standard label)")
+    if name.lower() in remove_default_ci:
+        refuse(f"seed issues: owner label `{name}` is a GitHub default genesis deletes; pick another name")
+    if name.lower() in owner_names_ci:
+        refuse(f"seed issues line {line_no}: owner label `{name}` is declared more than once")
+    owner_names_ci.add(name.lower())
+    owner_labels.append({"name": name, "color": cm.group(1).lower(), "description": desc})
+
+
+def parse_seed_issues(path, man, reg):
+    """Parse a --seed-issues file (grammar v2) into owner labels + entries.
+
+    An optional preamble of blank lines and `Label: name | colour | description` lines (owner
+    labels), then zero or more entries:
+
+        # <title>
+        Labels: <comma list>
+        Parent: <an earlier entry's title>       (optional)
+        Acceptance: <criterion>                  (any number; required for a work entry)
+
+        <body, up to the next `# <title>` or EOF>
+
+    The header block (`Labels:`/`Parent:`/`Acceptance:` lines) sits directly under the title —
+    no blank line before it — and ends at the first blank line; the body is everything after
+    that blank line, leading/trailing blank lines stripped. Parsing is fence-aware throughout:
+    a line whose lstrip starts with ``` or ~~~ toggles a fence, and a line inside a fence is
+    never a title, preamble or header line (so a fenced `# not a title` stays body text).
+
+    An entry is `human-setup` when `human-setup` is among its labels, else `work`:
+      - work: at least one `Acceptance:` line; its body may not contain a `## Context`,
+        `## Description` or `## Acceptance Criteria` heading — the plan renders those.
+      - human-setup: no `Acceptance:` line; its body's `##` headings must include every one of
+        HUMAN_SETUP_SECTIONS, in that order (other `##` headings may sit between them), and
+        may not contain `## Context` (Phase 5 adds it).
+
+    Every label must exactly equal a standard label (assets/genesis/labels.json) or an owner
+    label declared by a preamble `Label:` line. `Parent:`, when present, must exactly equal an
+    EARLIER entry's title in the same file — self, later or unknown REFUSEs. Titles must be
+    unique and may not equal the epic title or any title genesis already plans to file; that
+    last check needs the plan's own rendered issue titles, so it happens in build_plan, not
+    here. A file with zero entries and zero owner labels is refused as empty.
+
+    Every violation exits through refuse() (exit 2, "no plan was rendered"). Returns
+    {"path": <abs path>, "sha256": <hex of the raw file bytes>, "owner_labels": [...],
+     "entries": [{"kind", "title", "labels", "parent", "acceptance", "body"}, ...]} — all in
+    file order.
+    """
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        refuse(f"seed issues: cannot read `{path}` ({e.strerror or e})")
+    abspath = os.path.realpath(path)
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        refuse(f"seed issues: `{path}` is not valid UTF-8 ({e})")
+
+    standard_labels = {l["name"] for l in reg.genesis_json(man["github"]["labels"])}
+    remove_default_ci = {n.lower() for n in man["github"]["remove_default_labels"]}
+
+    lines = text.splitlines()
+    n = len(lines)
+    mask = _fence_mask(lines)
+
+    owner_labels, owner_names_ci = [], set()
+    entries, titles_seen = [], set()
+
+    i = 0
+    # -------- preamble: blank and Label: lines only, up to the first entry title
+    while i < n and not (TITLE_LINE.match(lines[i]) and not mask[i]):
+        ln = lines[i]
+        if ln.strip() == "":
+            i += 1
+            continue
+        m = LABEL_LINE.match(ln)
+        if not m:
+            refuse(f"seed issues line {i + 1}: the preamble holds only `Label:` lines "
+                   f"(an issue starts with `# <title>`)")
+        _add_owner_label(m.group(1), i + 1, standard_labels, remove_default_ci, owner_labels, owner_names_ci)
+        i += 1
+
+    # -------- entries
+    while i < n:
+        m = TITLE_LINE.match(lines[i])
+        title, title_line = m.group(1).strip(), i + 1
+        if not title:
+            refuse(f"seed issues line {title_line}: an issue title cannot be blank")
+        if len(title) > 256:
+            refuse(f"seed issues line {title_line}: `{title[:60]}…` is longer than 256 characters")
+        i += 1
+
+        header = []
+        while i < n and lines[i].strip() != "":
+            header.append((i, lines[i]))
+            i += 1
+        if i < n:
+            i += 1  # skip the blank line terminating the header block
+
+        body_start = i
+        while i < n and not (TITLE_LINE.match(lines[i]) and not mask[i]):
+            i += 1
+        body_lines = lines[body_start:i]
+        while body_lines and body_lines[0].strip() == "":
+            body_lines.pop(0)
+        while body_lines and body_lines[-1].strip() == "":
+            body_lines.pop()
+        body = "\n".join(body_lines)
+
+        labels_val, parent_val, acceptance = None, None, []
+        for ln_idx, ln_text in header:
+            hm = HEADER_LINE.match(ln_text)
+            if not hm:
+                refuse(f"seed issues line {ln_idx + 1}: `{title}`'s header has an invalid line "
+                       f"`{ln_text.strip()}` (want `Labels:`, `Parent:` or `Acceptance:`)")
+            key, val = hm.group(1), hm.group(2)
+            if key == "Labels":
+                if labels_val is not None:
+                    refuse(f"seed issues: `{title}` repeats `Labels:`")
+                labels_val = val
+            elif key == "Parent":
+                if parent_val is not None:
+                    refuse(f"seed issues: `{title}` has more than one `Parent:`")
+                parent_val = val
+            else:
+                if not val:
+                    refuse(f"seed issues: `{title}` has an empty `Acceptance:` line")
+                acceptance.append(val)
+        if labels_val is None:
+            refuse(f"seed issues: `{title}` has no `Labels:` line")
+        names = split_list(labels_val)
+        if not names:
+            refuse(f"seed issues: `{title}` has no `Labels:` line")
+        if len(set(names)) != len(names):
+            refuse(f"seed issues: `{title}` repeats a label")
+        allowed = standard_labels | {ol["name"] for ol in owner_labels}
+        unknown = [x for x in names if x not in allowed]
+        if unknown:
+            refuse(f"seed issues: `{title}` uses unknown label(s) {unknown} — owner labels must "
+                   f"be declared with `Label:` lines")
+
+        if not body.strip():
+            refuse(f"seed issues: `{title}` has an empty body")
+
+        kind = "human-setup" if "human-setup" in names else "work"
+        if kind == "work":
+            if not acceptance:
+                refuse(f"seed issues: `{title}`: /create-issue requires acceptance criteria")
+            forbidden = sorted({"Context", "Description", "Acceptance Criteria"} & set(headings(body, 2)))
+            if forbidden:
+                refuse(f"seed issues: `{title}` body must not contain heading(s) {forbidden} — "
+                       f"the plan renders those")
+        else:
+            if acceptance:
+                refuse(f"seed issues: `{title}`: a human-setup entry states its criteria under "
+                       f"`## Done when`")
+            got = headings(body, 2)
+            probs = order_problems(list(HUMAN_SETUP_SECTIONS), got)
+            if probs:
+                refuse(f"seed issues: `{title}`: {'; '.join(probs)}")
+            if "Context" in got:
+                refuse(f"seed issues: `{title}` body must not contain `## Context` (Phase 5 adds it)")
+
+        parent = None
+        if parent_val:
+            if parent_val not in titles_seen:
+                refuse(f"seed issues: `{title}`'s `Parent:` names `{parent_val}`, which is not an "
+                       f"earlier entry in this file")
+            parent = parent_val
+
+        entries.append({"kind": kind, "title": title, "labels": names, "parent": parent,
+                        "acceptance": acceptance if kind == "work" else [], "body": body})
+        titles_seen.add(title)
+
+    if not entries and not owner_labels:
+        refuse("seed issues: the file has no entries and no owner labels (empty)")
+
+    return {"path": abspath, "sha256": digest, "owner_labels": owner_labels, "entries": entries}
+
+
 # ---------------------------------------------------------------- plan
 
 def human_setup_issue(man, intent, entry, values):
@@ -700,9 +925,38 @@ def applies(when, intent):
     return when == "always" or when in intent.layers()
 
 
-def build_plan(man, reg, intent, explicit):
+def seed_issue_body(entry):
+    """The rendered body for one seed-issue plan entry — the part after Phase 5's `## Context` /
+    `Filed from:` block, which build_plan does not know here and so does not add."""
+    if entry["kind"] == "human-setup":
+        return entry["body"]
+    return ("## Description\n\n" + entry["body"] + "\n\n## Acceptance Criteria\n\n"
+            + "\n".join("- [ ] " + a for a in entry["acceptance"]))
+
+
+def check_seed_title_collisions(seed, issues, epic_title):
+    """Rule 10: seed titles are the resume key — unique in the file, and never a title genesis
+    already plans to file some other way (the epic, or a plan['issues'] entry)."""
+    plan_titles = {i["title"] for i in issues}
+    seen = set()
+    for e in seed["entries"]:
+        t = e["title"]
+        if t == epic_title:
+            refuse(f"seed issues: `{t}` equals the epic title")
+        if t in plan_titles:
+            refuse(f"seed issues: `{t}` equals a title genesis already plans to file")
+        if t in seen:
+            refuse(f"seed issues: `{t}` is used by more than one entry")
+        seen.add(t)
+
+
+def build_plan(man, reg, intent, explicit, seed=None):
     files, values = render_files(man, reg, intent)
     labels = reg.genesis_json(man["github"]["labels"])
+    n_standard_labels = len(labels)
+    owner_labels = seed["owner_labels"] if seed else []
+    if owner_labels:
+        labels = labels + owner_labels
     ruleset = reg.genesis_json(man["github"]["ruleset"])
     deferred = [d["name"] for d in man["skills"]["deferred"]]
     issues = []
@@ -715,6 +969,11 @@ def build_plan(man, reg, intent, explicit):
     for entry in man["human_setup"]:
         if applies(entry["when"], intent):
             issues.append(human_setup_issue(man, intent, entry, values))
+    if seed is not None:
+        check_seed_title_collisions(seed, issues, man["epic_title"])
+    seed_issues = [{"kind": e["kind"], "title": e["title"], "labels": e["labels"], "parent": e["parent"],
+                    "acceptance": e["acceptance"], "body": seed_issue_body(e)}
+                   for e in (seed["entries"] if seed else [])]
     machine = []
     for m in intent.modules:
         for step in man["modules"][m].get("machine", []):
@@ -747,8 +1006,10 @@ def build_plan(man, reg, intent, explicit):
                    f"no workflows from fork PRs; retention {man['github']['retention_days']} days"},
         {"kind": "github", "target": "security", "action": "Dependabot alerts and security updates on"},
         {"kind": "github", "target": "labels",
-         "action": f"create/update {len(labels)}; delete unused defaults "
-                   + ", ".join(man["github"]["remove_default_labels"])},
+         "action": f"create/update {len(labels)}"
+                   + (f" ({n_standard_labels} standard; owner: " + ", ".join(l["name"] for l in owner_labels) + ")"
+                      if owner_labels else "")
+                   + "; delete unused defaults " + ", ".join(man["github"]["remove_default_labels"])},
         {"kind": "github", "target": f"ruleset `{ruleset['name']}`", "action": f"create from {man['github']['ruleset']}"},
         {"kind": "issue", "target": man["epic_title"], "action": "file the epic (label epic); its body freezes this plan"},
     ]
@@ -759,6 +1020,15 @@ def build_plan(man, reg, intent, explicit):
                for s in machine]
     writes += [{"kind": "issue", "target": i["title"], "action": "file under the epic ("
                 + ", ".join(i["labels"]) + ")"} for i in issues]
+    for e in seed_issues:
+        labels_str = ", ".join(e["labels"])
+        action = (f"file as a sub-issue of “{e['parent']}” ({labels_str}) — seed issue" if e["parent"]
+                  else f"file from the epic ({labels_str}) — seed issue")
+        writes.append({"kind": "issue", "target": e["title"], "action": action})
+    seed_intent = None if seed is None else {
+        "path": seed["path"], "sha256": seed["sha256"], "issues": len(seed["entries"]),
+        "owner_labels": [l["name"] for l in owner_labels],
+    }
     return {
         "standard": man["standard"],
         "registry": {"path": reg.path, "ref": reg.ref, "commit": reg.commit},
@@ -766,7 +1036,8 @@ def build_plan(man, reg, intent, explicit):
                    "overlays": intent.overlays, "modules": intent.modules, "app_id": intent.app_id,
                    "posture": intent.posture, "description": intent.description,
                    "credits_paths": intent.credits_paths, "deferred_skills": deferred,
-                   "relay_token_in": intent.relay_token_in, "date": intent.date},
+                   "relay_token_in": intent.relay_token_in, "date": intent.date,
+                   "seed_issues": seed_intent},
         "decisions": decisions,
         "github": {"repo": man["github"]["repo"], "features": man["github"]["features"],
                    "actions_permissions": man["github"]["actions_permissions"],
@@ -776,6 +1047,7 @@ def build_plan(man, reg, intent, explicit):
                    "vulnerability_alerts": man["github"]["vulnerability_alerts"],
                    "automated_security_fixes": man["github"]["automated_security_fixes"],
                    "labels": labels, "remove_default_labels": man["github"]["remove_default_labels"],
+                   "owner_labels": [l["name"] for l in owner_labels],
                    "ruleset": ruleset},
         "epic": {"title": man["epic_title"], "labels": ["epic"]},
         "files": files,
@@ -790,6 +1062,7 @@ def build_plan(man, reg, intent, explicit):
         "skills": {"install": man["skills"]["install"], "deferred": man["skills"]["deferred"]},
         "machine": machine,
         "issues": issues,
+        "seed_issues": seed_issues,
         "writes": writes,
     }
 
@@ -822,6 +1095,12 @@ def decisions_table(man, intent, explicit):
             for d, v, r, w, k in rows]
 
 
+def _cell(v):
+    """A markdown table cell: owner-supplied text (a seed issue title, an owner label name) may
+    itself contain `|`, which would otherwise be read as a column break."""
+    return str(v).replace("|", "\\|")
+
+
 def print_plan(plan):
     it = plan["intent"]
     print(f"## Genesis plan — {it['repo']} (Standard {plan['standard']})\n")
@@ -829,11 +1108,15 @@ def print_plan(plan):
           f"({plan['registry']['commit'][:7]})\n")
     print("| # | Kind | Target | Action |\n|---|------|--------|--------|")
     for i, w in enumerate(plan["writes"], 1):
-        print(f"| {i} | {w['kind']} | {w['target']} | {w['action']} |")
+        print(f"| {i} | {_cell(w['kind'])} | {_cell(w['target'])} | {_cell(w['action'])} |")
     print("\n### Decisions\n\n| Decision | Value | Recommendation | Why |\n|---|---|---|---|")
     for d in plan["decisions"]:
         value = d["value"] + (" *(default)*" if d["defaulted"] else "")
-        print(f"| {d['decision']} | {value} | {d['recommendation']} | {d['why']} |")
+        print(f"| {_cell(d['decision'])} | {_cell(value)} | {_cell(d['recommendation'])} | {_cell(d['why'])} |")
+    si = it.get("seed_issues")
+    if si:
+        print(f"\nSeed issues: {si['path']} · sha256 {si['sha256'][:12]} · {si['issues']} issue(s), "
+              f"{len(si['owner_labels'])} owner label(s).")
 
 
 # ---------------------------------------------------------------- probes
@@ -1649,6 +1932,17 @@ def self_check(man, reg):
         elif not next(r for r in man["rules"] if r["id"] == h["rule"]).get("human"):
             problems.append(f"human_setup rule `{h['rule']}` is not marked human: true")
 
+    hs_tmpl = next((f for f in man["core"]["files"] if f["path"] == ".github/ISSUE_TEMPLATE/human_setup.md"), None)
+    if hs_tmpl is None:
+        problems.append("no core file declares path `.github/ISSUE_TEMPLATE/human_setup.md`")
+    else:
+        hs_text = reg.read(GENESIS_DIR + hs_tmpl["template"])
+        if hs_text is not None:
+            got = headings(hs_text, 2)
+            want = ["Context"] + list(HUMAN_SETUP_SECTIONS)
+            if got != want:
+                problems.append(f"the human-setup issue template's sections {got} differ from HUMAN_SETUP_SECTIONS")
+
     referenced = {f["template"] for f in man["core"]["files"]} | set(man["core"]["fragments"].values())
     for spec in man["overlays"].values():
         referenced |= set((spec.get("fragments") or {}).values())
@@ -1711,6 +2005,14 @@ def self_check(man, reg):
         gate = jobs.get("ci-gate", {"needs": []})
         if set(jobs) - {"ci-gate"} != set(gate["needs"]):
             problems.append(f"rendered ci.yml: ci-gate needs {gate['needs']}, jobs are {sorted(jobs)}")
+        if intent is full:
+            for i in plan["issues"]:
+                if i["kind"] != "human-setup":
+                    continue
+                got = headings(i["body"], 2)
+                if got != list(HUMAN_SETUP_SECTIONS):
+                    problems.append(f"human_setup_issue()'s rendered sections {got} for "
+                                    f"`{i['title']}` differ from HUMAN_SETUP_SECTIONS")
     return problems
 
 
@@ -1780,6 +2082,7 @@ def main():
     ap.add_argument("--posture", choices=["withheld", "gated"])
     ap.add_argument("--description")
     ap.add_argument("--relay-token-in", help="sibling repos holding DISCORD_BOT_TOKEN (Phase 0), or none")
+    ap.add_argument("--seed-issues", help="path to a v2 seed-issues file (plan mode only)")
     ap.add_argument("--date")
     ap.add_argument("--ref", default="origin/main")
     ap.add_argument("--gh-repo", help="OWNER/NAME; default: the checkout's origin remote")
@@ -1815,9 +2118,12 @@ def main():
             refuse("--date must be YYYY-MM-DD")
         explicit = {k for k in ("visibility", "stack", "modules", "app_id", "posture", "description",
                                 "relay_token_in") if getattr(args, k) is not None} | {"name"}
+        if args.seed_issues:
+            explicit.add("seed_issues")
+        seed = parse_seed_issues(args.seed_issues, man, reg) if args.seed_issues else None
         intent = Intent(source="flags", **intent_kwargs_from_flags(args, man, args.name, man["owner"]))
         try:
-            plan = build_plan(man, reg, intent, explicit)
+            plan = build_plan(man, reg, intent, explicit, seed=seed)
         except RenderError as e:
             die(f"the registry's templates do not render: {e}")
         if args.json:
