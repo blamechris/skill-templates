@@ -105,17 +105,30 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
    git -C "$REG" show "${PLAN_REF}:assets/scripts/genesis-verify.py" > "$GV" && test -s "$GV" \
      || { echo "REFUSE: cannot extract genesis-verify.py at ${PLAN_REF:-<no commit>}"; exit 2; }
    ```
-   **On a resume**, the arguments are the epic block's recorded intent, every one of them: `--stack` (its overlays, or `none`), `--modules`, `--app-id`, `--visibility`, `--posture`, `--description`, `--date`, `--relay-token-in` (its list, or `none`) and, when `seed_issues` is not null, `--seed-issues` with its `path`. The render is then byte-identical. **On a fresh create**, build the arguments from the flags the owner actually gave. An absent flag must stay absent, both so the manifest supplies the default and so the Decisions table can show which choices were defaulted:
+   **On a resume**, every argument is read from the epic block's recorded intent, never retyped and never taken from the flags given now: `--stack`, `--modules`, `--app-id`, `--visibility`, `--posture`, `--date`, and `--description`, `--relay-token-in` and `--seed-issues` when the intent records them. `--date` matters most, because an absent one renders today's date. The render is then byte-identical. **On a fresh create**, build the arguments from the flags the owner actually gave. An absent flag must stay absent, both so the manifest supplies the default and so the Decisions table can show which choices were defaulted. `$STACK`, `$MODULES` and the rest hold those flags; set only the ones given:
    ```bash
-   RELAY_IN=$(cat "$G/relay-token-in" 2>/dev/null)
-   ARGS=(--plan --registry "$REG" --registry-ref "$PLAN_REF" --name "$NAME" --relay-token-in "${RELAY_IN:-none}")
-   [ -n "${STACK:-}" ]       && ARGS+=(--stack "$STACK")
-   [ -n "${MODULES:-}" ]     && ARGS+=(--modules "$MODULES")
-   [ -n "${APP_ID:-}" ]      && ARGS+=(--app-id "$APP_ID")
-   [ -n "${VISIBILITY:-}" ]  && ARGS+=(--visibility "$VISIBILITY")
-   [ -n "${POSTURE:-}" ]     && ARGS+=(--posture "$POSTURE")
-   [ -n "${DESCRIPTION:-}" ] && ARGS+=(--description "$DESCRIPTION")
-   [ -n "${SEED_ISSUES:-}" ] && ARGS+=(--seed-issues "$SEED_ISSUES")
+   if [ -n "${EPIC:-}" ]; then                                            # resume
+     I=$(epic_plan | jq -c .intent); : "${I:?the epic has no genesis-plan block}"
+     ARGS=(--plan --registry "$REG" --registry-ref "$PLAN_REF" --name "$NAME"
+       --stack "$(jq -r '.overlays | if length == 0 then "none" else join(",") end' <<<"$I")"
+       --modules "$(jq -r '.modules | join(",")' <<<"$I")"
+       --app-id "$(jq -r .app_id <<<"$I")" --visibility "$(jq -r .visibility <<<"$I")"
+       --posture "$(jq -r .posture <<<"$I")" --date "$(jq -r .date <<<"$I")")
+     D=$(jq -r '.description // ""' <<<"$I");       [ -n "$D" ]  && ARGS+=(--description "$D")
+     RT=$(jq -r 'if .relay_token_in == null then "" elif (.relay_token_in | length) == 0 then "none"
+                 else .relay_token_in | join(",") end' <<<"$I"); [ -n "$RT" ] && ARGS+=(--relay-token-in "$RT")
+     SP=$(jq -r '.seed_issues.path // ""' <<<"$I"); [ -n "$SP" ] && ARGS+=(--seed-issues "$SP")
+   else                                                                   # fresh create
+     RELAY_IN=$(cat "$G/relay-token-in" 2>/dev/null)
+     ARGS=(--plan --registry "$REG" --registry-ref "$PLAN_REF" --name "$NAME" --relay-token-in "${RELAY_IN:-none}")
+     [ -n "${STACK:-}" ]       && ARGS+=(--stack "$STACK")
+     [ -n "${MODULES:-}" ]     && ARGS+=(--modules "$MODULES")
+     [ -n "${APP_ID:-}" ]      && ARGS+=(--app-id "$APP_ID")
+     [ -n "${VISIBILITY:-}" ]  && ARGS+=(--visibility "$VISIBILITY")
+     [ -n "${POSTURE:-}" ]     && ARGS+=(--posture "$POSTURE")
+     [ -n "${DESCRIPTION:-}" ] && ARGS+=(--description "$DESCRIPTION")
+     [ -n "${SEED_ISSUES:-}" ] && ARGS+=(--seed-issues "$SEED_ISSUES")
+   fi
    python3 "$GV" "${ARGS[@]}" --json > "$PLAN_JSON"; RC=$?
    ```
    Exit `2` is a REFUSE, such as a planned layer, a missing `runner-mac`, an invalid app ID, a bad slug or a malformed seed-issues file. Show its stderr and stop. **On a resume**, then confirm the re-render is the approved one. The seed-issues digest is part of the intent, so a seed file edited since approval stops here too:
@@ -128,7 +141,7 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
    python3 "$GV" "${ARGS[@]}"
    ```
    That output is the write table plus the **Decisions** table, which lists every choice with its value, recommendation, reason and whether it was defaulted. Do not hand-build either table.
-7. **Seed issues.** The plan in step 6 has already parsed and checked the `--seed-issues` file, so nothing is parsed here. A malformed entry is a REFUSE that names the entry: a label that is neither standard nor declared by a `Label:` line, a missing `Labels:` line, a work entry with no `Acceptance:` line, a `Parent:` that does not name an earlier entry, or a `human-setup` entry whose body lacks the six sections in order (What · Why a human · Exact steps · Secret names · Reuse or create · Done when). Fix the file, not the plan. Owner labels and seed issues appear in the write table, and `intent.seed_issues` records the file's path and digest, so the epic freezes them with the rest of the plan. The file must stay at that path, unchanged, until Phase 5 has filed every entry.
+7. **Seed issues.** The plan in step 6 has already parsed and checked the `--seed-issues` file, so nothing is parsed here. A malformed entry is a REFUSE that names the entry. The script's docstring lists every cause; the common ones are a label that is neither standard nor declared by a `Label:` line, a missing `Labels:` line, a work entry with no `Acceptance:` line, a `Parent:` that does not name an earlier entry, or a `human-setup` entry whose body lacks the six sections in order (What · Why a human · Exact steps · Secret names · Reuse or create · Done when). Fix the file, not the plan. Owner labels and seed issues appear in the write table, and `intent.seed_issues` records the file's path and digest, so the epic freezes them with the rest of the plan. The file must stay at that path, unchanged, until Phase 5 has filed every entry.
 
 **Wait point 1.** Stop and wait for the owner's explicit approval of this plan. `--dry-run` ends here.
 
@@ -320,7 +333,7 @@ Profile first: nothing is installed until the step 2 check passes.
 2. **Issues.** File every `plan.issues` entry, then every `plan.seed_issues` entry, in plan order. A title is the resume key: **file an entry only when `num_of "<its title>"` prints nothing**, so a re-run files only what is missing. Use the installed `/create-issue`, and give each issue **exactly** its entry's labels. Drop the `enhancement` label the create-issue template adds by default unless the entry lists it. Pass every body through a file (`jq -r '.issues[N].body'`, `jq -r '.seed_issues[N].body'`), never retyped:
    - **A work issue** from `plan.issues` is the SPEC issue, which is always filed, or the credits issue when `credits` is on. File it with `--from-issue $EPIC`. Its body is the create-issue shape: `## Context` with `Filed from: #$EPIC`, then `## Description` holding the entry's `description`, then `## Acceptance Criteria` as a checklist of its `acceptance`.
    - **A `human-setup` issue** from `plan.issues` is filed with `--from-issue $EPIC`. Its body is `## Context` with `Filed from: #$EPIC`, followed by the entry's `body` verbatim: What · Why a human · Exact steps · Secret names · Reuse or create · Done when.
-   - **A seed issue** is filed with `--from-issue <parent>`. The parent is `$EPIC` when the entry's `parent` is null, and otherwise `num_of "<parent>"`. The plan only accepts a parent that appears earlier in the file, so it is already filed; if `num_of` prints nothing, stop. The body is `## Context` with `Filed from: #<parent>`, then the entry's `body` verbatim. The plan has already rendered a work entry's `## Description` and `## Acceptance Criteria` and checked a `human-setup` entry's six sections, so add nothing to either.
+   - **A seed issue** is filed with `--from-issue <parent>`. The parent is `$EPIC` when the entry's `parent` is null, and otherwise `num_of "<parent>"`. The plan only accepts a parent that appears earlier in the file, so it is already filed; if `num_of` prints nothing, stop. The body is `## Context` with `Filed from: #<parent>`, then the entry's `body` verbatim. The plan has already rendered a work entry's `## Description` and `## Acceptance Criteria` and checked a `human-setup` entry's six sections, so add nothing to either. A seed `human-setup` entry is the owner's own step: its "Done when" need not name a `genesis-verify` rule. Critical Rule 5's rule ID applies to the manifest's human steps, the ones step 3 re-probes.
 
    A seed issue whose `parent` is set is also a **sub-issue** of that parent. Link it only when it has no parent yet, so a re-run changes nothing:
    ```bash

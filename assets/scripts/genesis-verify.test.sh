@@ -776,6 +776,57 @@ Labels: human-setup
 SEEDEOF
 seed_refuses "human-setup sections out of order" "out of order" "$TMP/seed-hsorder.md"
 
+# A `~~~` fence masks headings exactly as a ``` fence does (PR #325 review): a `## Done when`
+# that exists only inside one is not a section, and a reserved heading inside one is body text.
+cat > "$TMP/seed-hstilde.md" <<'SEEDEOF'
+# Title
+Labels: human-setup
+
+## What
+## Why a human
+## Exact steps
+## Secret names
+## Reuse or create
+~~~
+## Done when
+~~~
+SEEDEOF
+seed_refuses "a human-setup ## Done when only inside a ~~~ fence is missing" "missing" "$TMP/seed-hstilde.md"
+
+cat > "$TMP/seed-worktilde.md" <<'SEEDEOF'
+# Title
+Labels: enhancement
+Acceptance: x
+
+An example issue body, quoted:
+
+~~~markdown
+## Acceptance Criteria
+~~~
+SEEDEOF
+if V --plan --json --name x --seed-issues "$TMP/seed-worktilde.md" >/dev/null 2>&1; then
+  ok "a reserved heading inside a ~~~ fence is body text, not a refusal"
+else bad "a reserved heading inside a ~~~ fence is body text, not a refusal"; fi
+
+# Silent-loss shapes (PR #325 review): each would drop an entry or a `Parent:` without a word.
+printf '# Parent epic\nLabels: epic\nAcceptance: done\n\nParent body.\n\n# Child\nLabels: bug\nAcceptance: works\n   \nParent: Parent epic\n\nChild body.\n' \
+  > "$TMP/seed-splithdr.md"
+seed_refuses "a header line below a whitespace-only line" "sits below a blank line" "$TMP/seed-splithdr.md"
+printf '# First\nLabels: bug\nAcceptance: x\n\n```bash\necho never closed\n\n# Second\nLabels: bug\nAcceptance: y\n\nSecond body.\n' \
+  > "$TMP/seed-openfence.md"
+seed_refuses "an unclosed fence that would swallow the next entry" "never closes" "$TMP/seed-openfence.md"
+printf '# Title\nLabels: enhancement\nAcceptance: x\n\n```markdown\n~~~\n# not a title\n## Context\n~~~\n```\n' \
+  > "$TMP/seed-nested.md"
+if V --plan --json --name x --seed-issues "$TMP/seed-nested.md" 2>/dev/null \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin); sys.exit(0 if len(p["seed_issues"]) == 1 and "# not a title" in p["seed_issues"][0]["body"] else 1)'; then
+  ok "a ~~~ inside a \`\`\` fence is content: one entry, the fenced # line kept, the fenced ## Context allowed"
+else bad "a ~~~ inside a \`\`\` fence is content"; fi
+
+out=$(V --repo "$M" --seed-issues "$SEED" 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q -- "--seed-issues is a --plan flag"; then
+  ok "--seed-issues outside --plan is refused, not silently ignored"
+else bad "--seed-issues outside --plan is refused, not silently ignored" "exit $rc — $(flat "$out")"; fi
+
 cat > "$TMP/seed-laterparent.md" <<'SEEDEOF'
 # A
 Labels: bug

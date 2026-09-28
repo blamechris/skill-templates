@@ -668,18 +668,33 @@ LABEL_LINE = re.compile(r"^Label:\s*(.*)$")
 HEADER_LINE = re.compile(r"^(Labels|Parent|Acceptance):\s*(.*?)\s*$")
 
 
-def _fence_mask(lines):
-    """Per-line bool: is this line a fence delimiter or inside one? (```/~~~ toggle, same
-    convention as headings()/defence() — the delimiter line itself counts as masked, so it is
-    never mistaken for a title/header/preamble line either.)"""
-    mask, fenced = [], False
-    for ln in lines:
-        if ln.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
+def _fences(lines):
+    """(mask, unclosed): per line, True on a fence delimiter or inside a fence; and the index
+    of a fence that never closes, else None. A ``` fence closes only on ``` and a ~~~ fence
+    only on ~~~, so an example of one inside the other stays content. headings()/defence()
+    make no such distinction; the probes run them on templates that only ever fence with ```.
+    The delimiter line itself is masked, so it is never mistaken for a title, header or
+    preamble line either."""
+    mask, opener, opened_at = [], None, None
+    for i, ln in enumerate(lines):
+        s = ln.lstrip()
+        if opener is None and s.startswith(("```", "~~~")):
+            opener, opened_at = s[:3], i
+            mask.append(True)
+        elif opener is not None and s.startswith(opener):
+            opener = None
             mask.append(True)
         else:
-            mask.append(fenced)
-    return mask
+            mask.append(opener is not None)
+    return mask, (opened_at if opener is not None else None)
+
+
+def _seed_h2(body):
+    """A seed body's `##` heading texts outside ``` and ~~~ fences, in order."""
+    pat = re.compile(r"^##[ \t]+(.+?)[ \t]*#*[ \t]*$")
+    lines = body.split("\n")
+    return [m.group(1).strip() for ln, fenced in zip(lines, _fences(lines)[0])
+            if not fenced for m in [pat.match(ln)] if m]
 
 
 def _add_owner_label(rest, line_no, standard_labels, remove_default_ci, owner_labels, owner_names_ci):
@@ -763,9 +778,14 @@ def parse_seed_issues(path, man, reg):
     standard_labels = {l["name"] for l in reg.genesis_json(man["github"]["labels"])}
     remove_default_ci = {n.lower() for n in man["github"]["remove_default_labels"]}
 
-    lines = text.splitlines()
+    # Split on newlines only: splitlines() also breaks on U+2028, form feeds and the like,
+    # which a paste from rich text can carry inside a title.
+    lines = text.replace("\r\n", "\n").split("\n")
     n = len(lines)
-    mask = _fence_mask(lines)
+    mask, unclosed = _fences(lines)
+    if unclosed is not None:
+        refuse(f"seed issues line {unclosed + 1}: a code fence opened here never closes, so every "
+               f"entry after it would be read as its body")
 
     owner_labels, owner_names_ci = [], set()
     entries, titles_seen = [], set()
@@ -807,6 +827,12 @@ def parse_seed_issues(path, man, reg):
         body_lines = lines[body_start:i]
         while body_lines and body_lines[0].strip() == "":
             body_lines.pop(0)
+        # A header line below a blank (or whitespace-only) line would otherwise become body
+        # prose, and a lost `Parent:` files the issue from the epic without a word.
+        if body_lines and HEADER_LINE.match(body_lines[0]):
+            refuse(f"seed issues: `{title}`: `{body_lines[0].strip()}` sits below a blank line; "
+                   f"the `Labels:`, `Parent:` and `Acceptance:` lines follow the title with no "
+                   f"blank line between them")
         while body_lines and body_lines[-1].strip() == "":
             body_lines.pop()
         body = "\n".join(body_lines)
@@ -850,7 +876,7 @@ def parse_seed_issues(path, man, reg):
         if kind == "work":
             if not acceptance:
                 refuse(f"seed issues: `{title}`: /create-issue requires acceptance criteria")
-            forbidden = sorted({"Context", "Description", "Acceptance Criteria"} & set(headings(body, 2)))
+            forbidden = sorted({"Context", "Description", "Acceptance Criteria"} & set(_seed_h2(body)))
             if forbidden:
                 refuse(f"seed issues: `{title}` body must not contain heading(s) {forbidden} — "
                        f"the plan renders those")
@@ -858,7 +884,7 @@ def parse_seed_issues(path, man, reg):
             if acceptance:
                 refuse(f"seed issues: `{title}`: a human-setup entry states its criteria under "
                        f"`## Done when`")
-            got = headings(body, 2)
+            got = _seed_h2(body)
             probs = order_problems(list(HUMAN_SETUP_SECTIONS), got)
             if probs:
                 refuse(f"seed issues: `{title}`: {'; '.join(probs)}")
@@ -2087,6 +2113,8 @@ def main():
     ap.add_argument("--ref", default="origin/main")
     ap.add_argument("--gh-repo", help="OWNER/NAME; default: the checkout's origin remote")
     args = ap.parse_args()
+    if args.seed_issues is not None and not args.plan:
+        ap.error("--seed-issues is a --plan flag; verify reads no seed file")
 
     reg = Registry(args.registry, args.registry_ref, not args.no_fetch, "registry")
     man = reg.manifest()
@@ -2117,10 +2145,9 @@ def main():
         if args.date and not DATE.match(args.date):
             refuse("--date must be YYYY-MM-DD")
         explicit = {k for k in ("visibility", "stack", "modules", "app_id", "posture", "description",
-                                "relay_token_in") if getattr(args, k) is not None} | {"name"}
-        if args.seed_issues:
-            explicit.add("seed_issues")
-        seed = parse_seed_issues(args.seed_issues, man, reg) if args.seed_issues else None
+                                "relay_token_in", "seed_issues") if getattr(args, k) is not None} | {"name"}
+        # An empty path is refused as unreadable, never read as "no seed file".
+        seed = None if args.seed_issues is None else parse_seed_issues(args.seed_issues, man, reg)
         intent = Intent(source="flags", **intent_kwargs_from_flags(args, man, args.name, man["owner"]))
         try:
             plan = build_plan(man, reg, intent, explicit, seed=seed)
