@@ -681,7 +681,8 @@ def _fences(lines):
     mask, opener, opened_at = [], None, None
     for i, ln in enumerate(lines):
         m = FENCE_LINE.match(ln)
-        if opener is None and m:
+        # A backtick run whose info string holds a backtick is inline code, not a fence.
+        if opener is None and m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
             opener, opened_at = m.group(1), i
             mask.append(True)
         elif (opener is not None and m and m.group(1)[0] == opener[0]

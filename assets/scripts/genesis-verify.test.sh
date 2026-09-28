@@ -829,6 +829,13 @@ if V --plan --json --name x --seed-issues "$TMP/seed-longfence.md" 2>/dev/null \
   ok "a \`\`\`\` fence quoting a \`\`\` example closes only on \`\`\`\`: one entry, nothing refused"
 else bad "a \`\`\`\` fence quoting a \`\`\` example closes only on \`\`\`\`"; fi
 
+printf '# First\nLabels: bug\nAcceptance: x\n\n``` shown as `inline` code, not a fence\n\n# Second\nLabels: bug\nAcceptance: y\n\n```\nreal fence\n```\n' \
+  > "$TMP/seed-inlineticks.md"
+if V --plan --json --name x --seed-issues "$TMP/seed-inlineticks.md" 2>/dev/null \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin); sys.exit(0 if [e["title"] for e in p["seed_issues"]] == ["First", "Second"] else 1)'; then
+  ok "a backtick run with a backtick in its info string is inline code, not a fence that swallows the next entry"
+else bad "a backtick run with a backtick in its info string is inline code, not a fence"; fi
+
 out=$(V --repo "$M" --seed-issues "$SEED" 2>&1); rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q -- "--seed-issues is a --plan flag"; then
   ok "--seed-issues outside --plan is refused, not silently ignored"
