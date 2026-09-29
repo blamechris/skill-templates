@@ -325,7 +325,7 @@ Profile first: nothing is installed until the step 2 check passes.
    [ "$(grep -A3 '^### Self-merge posture' "${WT:?}/.claude/skill-profile.md" | grep -c "\*\*$POSTURE\.\*\*")" -ge 2 ] \
      || { echo "STOP: the posture pin is missing"; exit 1; }
    ```
-3. **Install**, group by group from `plan.skills.install`. Run `/skill add <name>` for each; `/skill` runs `skill-lint.sh` and compiles targets, and a lint exit other than 0 stops the phase. Leave the skills in `plan.skills.deferred` uninstalled. The profile's `deferred-skills:` line records them **by name only**, while their triggers live in the manifest.
+3. **Install**, group by group from `plan.skills.install`. The plan has already moved every deferred skill whose `when` this run meets into a final install group — `overlay:any` when the run lands an overlay, `posture:gated` for a gated posture — so a `--stack kotlin` create installs recon, project-audit and swarm-audit rather than deferring them in a repo that already has the overlay. Run `/skill add <name>` for each group; `/skill` runs `skill-lint.sh` and compiles targets, and a lint exit other than 0 stops the phase. Leave the skills in `plan.skills.deferred` uninstalled. The profile's `deferred-skills:` line records them **by name only**, while their triggers live in the manifest.
 4. **Done-check.** `/skill outdated` must report no version drift and no profile drift for any installed skill.
 5. **Assert the branch, then stage explicit paths.** Run `git -C "$WT" status --short --untracked-files=all`, which lists files rather than directories. Stage every path it shows under `.claude/` (plus `.gemini/` or `.codex/` if they are targets) and `scripts/compile-skill-targets.mjs`, **each by name**. Never a directory, never `-A`, `.`, `-u` or `commit -a`. Then commit `chore(skills): install registry skill set` and push.
 
@@ -410,7 +410,7 @@ Profile first: nothing is installed until the step 2 check passes.
    - **A module:** write the files in `plan.files` whose `layer` is that module. The Phase 3 writer already leaves existing files alone.
    - **An overlay:** it also changes core files through its fragments (`ci.yml`, `.gitignore`, `.gitattributes`, `dependabot.yml`). Show the owner the diff of each against the repo's current copy, and write them only on approval, because the repo may have deliberate local edits there. Never rewrite owner prose (`README.md`, `MISSION.md`, `NON-GOALS.md`, ADRs).
    - **The profile:** replace only the `## project-genesis Customizations` section with the plan's `.profile.section`. Keep the section's existing `credits-paths:` and `waivers:` lines verbatim, because the owner maintains them and the plan knows neither. Touch nothing else in the profile: sections added since genesis, such as a Status line or a per-skill footgun, are the owner's. Then assert the branch and stage the profile by name.
-   - **Deferred skills:** when the layer is an overlay, install the deferred skills whose trigger it meets, then run `/skill update` for any skill whose profile hash moved.
+   - **Deferred skills:** the re-rendered plan's `skills.install` already carries every deferred skill whose trigger the new layer meets. Install each one `skills.lock` lacks, then run `/skill update` for any skill whose profile hash moved.
 
 ## Error Recovery
 

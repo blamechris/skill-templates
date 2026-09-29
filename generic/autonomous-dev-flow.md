@@ -326,9 +326,9 @@ PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
 If the PR modified **UI or frontend files**, run the project's smoke test to catch visual regressions before review. This prevents wasting review cycles on PRs that break the UI.
 
 ```bash
-# {{CUSTOMIZE: Condition for when to run smoke test — e.g., check if PR touches dashboard/frontend files}}
+# {{CUSTOMIZE: Condition for when to run smoke test — e.g., check if PR touches dashboard/frontend files. If the repo has no UI files yet, replace this whole block with `NEEDS_SMOKE_TEST=false  # no UI files yet; re-tailor when the first lands`. Never fill the pattern below with a placeholder: `<ui-file-pattern>` is a literal regex that never matches, so the smoke test would silently never run.}}
 CHANGED_FILES=$(git diff --name-only main...HEAD)
-if echo "$CHANGED_FILES" | grep -qE '{{CUSTOMIZE: UI file pattern — e.g., dashboard|frontend|components|\.tsx$|\.css$}}'; then
+if echo "$CHANGED_FILES" | grep -qE '{{CUSTOMIZE: UI file pattern — e.g., dashboard|frontend|components|\.tsx$|\.css$ — or, with no UI files yet, replace the whole block as the marker above says}}'; then
   NEEDS_SMOKE_TEST=true
 fi
 ```
@@ -520,7 +520,7 @@ Lines and sections marked with `{{CUSTOMIZE}}` need repo-specific adaptation:
 - **Lint/typecheck commands** (e.g., `npm run lint && npm run typecheck`, `mypy .`)
 - **PR test plan items** (e.g., "App type-checks clean", "Manual smoke test")
 - **Commit scope conventions** (e.g., `server`, `app`, `core`, `ui`)
-- **Smoke test condition** — file patterns that trigger the smoke test (e.g., `dashboard|\.tsx$|\.css$`)
+- **Smoke test condition** — file patterns that trigger the smoke test (e.g., `dashboard|\.tsx$|\.css$`). With no UI files yet, the block becomes `NEEDS_SMOKE_TEST=false` rather than a placeholder pattern that never matches
 - **Smoke test UI rebuild command** (e.g., `npm run dashboard:build`)
 - **Smoke test invocation** — how to run the `/smoke-test` skill or script
 - **Cost source + scoped budget** — where measured cost is read and the owner-set limit's scope: wave, session or run (Session Boundaries)

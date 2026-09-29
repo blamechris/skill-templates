@@ -258,13 +258,15 @@ echo "== profile and skills"
 fresh; edit .claude/skill-profile.md 's.replace("- standard: v1\n", "")';            expect "intent without standard" profile.genesis-intent FAIL 1
 fresh; edit .claude/skill-profile.md 's.replace("- overlays: kotlin", "- overlays: kotlin, flutter")'; expect "intent naming a planned overlay" profile.genesis-intent FAIL 1
 fresh; edit .claude/skill-profile.md 's.replace("- app-id: com.blamechris.soundbed", "- app-id: com.blamechris.sound-bed")'; expect "intent with an invalid app-id" profile.genesis-intent FAIL 1
-fresh; edit .claude/skill-profile.md 's.replace("recon, ", "")';                    expect "a deferred skill neither listed nor installed" profile.genesis-intent FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("parallel-dev, ", "")';             expect "a deferred skill neither listed nor installed" profile.genesis-intent FAIL 1
 fresh; edit .claude/skill-profile.md 's.replace("targets: claude\n", "")';          expect "profile without targets" profile.repo-wide FAIL 1
 fresh; edit .claude/skill-profile.md 's.replace("**Withheld.**", "**Gated.**", 1)';  expect "the two posture pins disagree" profile.posture FAIL 1
 fresh; edit .claude/skill-profile.md 're.sub(r"(## tackle-issues Customizations\n\n)### Self-merge posture\n\n\*\*Withheld\.\*\*", r"\1Posture is up to the agent.", s)'; expect "a posture pin removed" profile.posture FAIL 1
 fresh; edit .claude/skill-profile.md 's.replace("## batch-merge Customizations\n- Merge strategy: --squash --delete-branch", "## batch-merge Customizations\n- Merge strategy: --merge")'; expect "batch-merge not pinned to squash" profile.merge-strategy FAIL 1
 fresh; edit .claude/skills.lock 's.replace("\"merge-gate\"", "\"merge-gate-old\"")'; expect "an install-set skill missing from the lock" skills.installed FAIL 1
 fresh; rm "$M/.claude/commands/fix-ci.md";                                           expect "an installed skill without its command file" skills.installed FAIL 1
+fresh; edit .claude/skills.lock 's.replace("\"swarm-audit\"", "\"swarm-audit-old\"")'; expect "a deferred skill the overlay promoted, missing from the lock" skills.installed FAIL 1
+fresh; edit .claude/skill-profile.md 's.replace("**Withheld.**", "**Gated.**")';     expect "a gated posture requires unattended-merge in the lock" skills.installed FAIL 1
 fresh; rm "$M/.claude/skill-profile.md"; snap
 out=$(verify); rc=$?
 if [ "$rc" -eq 1 ] && [ "$(result_of "$out" profile.genesis-intent)" = FAIL ] && [ "$(result_of "$out" overlay.kotlin.ci)" = N-A ]; then
@@ -489,6 +491,40 @@ else ok "the plan never renders the skill profile (Phase 4 composes it)"; fi
 : > "$MG/calls.log"
 FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --plan --json --name soundbed --stack kotlin >/dev/null 2>&1
 [ -s "$MG/calls.log" ] && bad "--plan never calls GitHub" "$(head -2 "$MG/calls.log")" || ok "--plan never calls GitHub"
+
+echo "== deferred skills promoted by trigger"
+got=$(plan_field "$PLAN" '",".join(p["skills"]["install"][-1])')
+[ "$got" = "recon,project-audit,swarm-audit" ] && ok "a --stack kotlin plan's last install group is the overlay-promoted deferred skills" \
+  || bad "a --stack kotlin plan's last install group is the overlay-promoted deferred skills" "got: $got"
+got=$(plan_field "$PLAN" '",".join(p["intent"]["deferred_skills"])')
+[ "$got" = "parallel-dev,smoke-test,doctor,deps,release,test-plan,unattended-merge" ] \
+  && ok "deferred_skills excludes the skills the overlay promoted" \
+  || bad "deferred_skills excludes the skills the overlay promoted" "got: $got"
+got=$(plan_field "$PLAN" 'p["profile"]["section"]')
+printf '%s' "$got" | grep -q -- '- deferred-skills: parallel-dev, smoke-test, doctor, deps, release, test-plan, unattended-merge' \
+  && ok "the profile's deferred-skills line names only the still-deferred skills" \
+  || bad "the profile's deferred-skills line names only the still-deferred skills" "$(flat "$got")"
+got=$(V --plan --json --name plainrepo | python3 -c \
+  'import json,sys; p=json.load(sys.stdin); man=json.load(open(sys.argv[1]))
+print(p["skills"]["install"] == man["skills"]["install"], len(p["skills"]["deferred"]))' "$REG/assets/genesis/standard-v1.json")
+[ "$got" = "True 10" ] && ok "no stack, withheld posture: install groups are exactly the manifest's four; all ten skills stay deferred" \
+  || bad "no stack, withheld posture: install groups are exactly the manifest's four; all ten skills stay deferred" "got: $got"
+got=$(V --plan --json --name plainrepo --posture gated | python3 -c \
+  'import json,sys; p=json.load(sys.stdin); print(",".join(p["skills"]["install"][-1]), len(p["skills"]["install"]))')
+[ "$got" = "unattended-merge 5" ] && ok "a gated posture promotes only unattended-merge, in its own final group" \
+  || bad "a gated posture promotes only unattended-merge, in its own final group" "got: $got"
+got_rec=$(plan_field "$PLAN" 'next(d for d in p["decisions"] if d["decision"] == "Stack overlays")["recommendation"]')
+got_why=$(plan_field "$PLAN" 'next(d for d in p["decisions"] if d["decision"] == "Stack overlays")["why"]')
+if [ "$got_rec" = "kotlin" ] && printf '%s' "$got_why" | grep -q -- '--stack'; then
+  ok "an explicit --stack: the Decisions Stack row recommends the chosen overlay and why names --stack"
+else
+  bad "an explicit --stack: the Decisions Stack row recommends the chosen overlay and why names --stack" "recommendation=$got_rec why=$got_why"
+fi
+got=$(V --plan --json --name plainrepo | python3 -c \
+  'import json,sys; p=json.load(sys.stdin); print(next(d for d in p["decisions"] if d["decision"] == "Stack overlays")["recommendation"])')
+[ "$got" = "none until an owner decision names one" ] \
+  && ok "a defaulted stack: the Decisions Stack row keeps the no-decision recommendation" \
+  || bad "a defaulted stack: the Decisions Stack row keeps the no-decision recommendation" "got: $got"
 
 echo "== seed issues"
 SEED="$TMP/seed.md"
@@ -1019,6 +1055,9 @@ m['overlays']['kotlin']['ci_job'] = 'kotlin-renamed'
 $SAVEM"
 sc_case "a renamed section in the human-setup issue template" "differ from HUMAN_SETUP_SECTIONS" "p = 'assets/genesis/templates/core/issue-human_setup.md.tmpl'
 s = open(p).read(); open(p, 'w').write(s.replace('## Done when', '## Done wrong'))"
+sc_case "a deferred skill with an unknown when" "has unknown" "$LOADM
+next(d for d in m['skills']['deferred'] if d['name'] == 'recon')['when'] = 'overlay:telepathy'
+$SAVEM"
 
 echo "== branches the round trip cannot reach"
 fresh; gh_edit repos_blamechris_soundbed_actions_secrets_per_page_100_page_1 'd["secrets"] = []'

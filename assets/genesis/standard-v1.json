@@ -173,16 +173,16 @@
       ["start-working", "decompose-issue", "tackle-issues", "autonomous-dev-flow"]
     ],
     "deferred": [
-      {"name": "recon", "trigger": "an overlay lands"},
-      {"name": "project-audit", "trigger": "an overlay lands"},
-      {"name": "swarm-audit", "trigger": "an overlay lands"},
+      {"name": "recon", "trigger": "an overlay lands", "when": "overlay:any"},
+      {"name": "project-audit", "trigger": "an overlay lands", "when": "overlay:any"},
+      {"name": "swarm-audit", "trigger": "an overlay lands", "when": "overlay:any"},
       {"name": "parallel-dev", "trigger": "a build exists"},
       {"name": "smoke-test", "trigger": "a build exists"},
       {"name": "doctor", "trigger": "a build exists"},
       {"name": "deps", "trigger": "a build exists"},
       {"name": "release", "trigger": "a build exists"},
       {"name": "test-plan", "trigger": "a build exists"},
-      {"name": "unattended-merge", "trigger": "the self-merge posture flips to Gated"}
+      {"name": "unattended-merge", "trigger": "the self-merge posture flips to Gated", "when": "posture:gated"}
     ],
     "posture_sections": ["autonomous-dev-flow", "tackle-issues"],
     "merge_strategy": "--squash --delete-branch",
@@ -249,7 +249,7 @@
     {"id": "profile.repo-wide", "layer": "core", "class": "probe", "ref": "§3.7", "summary": "The profile has Project Context, Build / Test Commands, Conventions and a `targets:` line"},
     {"id": "profile.posture", "layer": "core", "class": "probe", "ref": "§3.7", "summary": "autonomous-dev-flow and tackle-issues each pin a `### Self-merge posture` bold lead, and the two agree"},
     {"id": "profile.merge-strategy", "layer": "core", "class": "probe", "ref": "§4.2", "summary": "The merge and batch-merge Customizations pin `--squash`"},
-    {"id": "skills.installed", "layer": "core", "class": "probe", "ref": "§7", "summary": "skills.lock records every skill in the install set, each with its .claude/commands file"},
+    {"id": "skills.installed", "layer": "core", "class": "probe", "ref": "§7", "summary": "skills.lock records every skill in the install set (plus each deferred skill whose `when` the intent meets), each with its .claude/commands file"},
     {"id": "github.visibility", "layer": "core", "class": "probe", "ref": "§4.1", "waivable": false, "summary": "The repo's visibility equals the intent's visibility"},
     {"id": "github.merge-settings", "layer": "core", "class": "probe", "ref": "§4.2", "summary": "Squash only (PR title and body), auto-merge off, delete branch on merge, update branch on"},
     {"id": "github.features", "layer": "core", "class": "probe", "ref": "§4.2", "summary": "Issues on; wiki, projects and discussions off"},

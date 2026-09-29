@@ -511,7 +511,7 @@ INTENT_KEYS = ("standard", "visibility", "overlays", "modules", "app-id", "credi
                "deferred-skills", "waivers")
 
 
-def intent_from_profile(fields, man, name, owner):
+def intent_from_profile(fields, man, name, owner, posture="withheld"):
     problems = [f"missing `{k}:`" for k in INTENT_KEYS if k not in fields]
     if fields.get("standard", "v1") != man["standard"]:
         problems.append(f"standard is {fields.get('standard')!r}, this registry renders {man['standard']!r}")
@@ -558,7 +558,7 @@ def intent_from_profile(fields, man, name, owner):
                   overlays=[o for o in overlays if man["overlays"].get(o, {}).get("status") == "implemented"],
                   modules=[m for m in modules if man["modules"].get(m, {}).get("status") == "implemented"],
                   app_id=app_id, credits_paths=[norm_repo_path(p) for p in split_list(fields.get("credits-paths"))],
-                  deferred=deferred, waivers=waivers, source="profile", problems=problems)
+                  posture=posture, deferred=deferred, waivers=waivers, source="profile", problems=problems)
 
 
 # ---------------------------------------------------------------- rendering
@@ -990,6 +990,31 @@ def applies(when, intent):
     return when == "always" or when in intent.layers()
 
 
+def trigger_met(when, intent):
+    """A deferred skill whose `when` this intent meets installs in the same run instead of
+    staying deferred. No `when` means genesis cannot create the condition itself (a build)."""
+    if when is None:
+        return False
+    if when == "overlay:any":
+        return bool(intent.overlays)
+    if when.startswith("posture:"):
+        return intent.posture == when.split(":", 1)[1]
+    return applies(when, intent)
+
+
+def skill_sets(man, intent):
+    """(install_groups, deferred_entries): the manifest's install groups, plus one final group of
+    every deferred skill whose `when` this intent meets (manifest order). deferred_entries holds
+    the manifest's deferred entries that were not promoted. Single source for build_plan and the
+    skills.installed probe, so a promoted skill can never appear in one but not the other."""
+    install_groups = [list(g) for g in man["skills"]["install"]]
+    promoted = [d for d in man["skills"]["deferred"] if trigger_met(d.get("when"), intent)]
+    if promoted:
+        install_groups = install_groups + [[d["name"] for d in promoted]]
+    deferred_entries = [d for d in man["skills"]["deferred"] if not trigger_met(d.get("when"), intent)]
+    return install_groups, deferred_entries
+
+
 def seed_issue_body(entry):
     """The rendered body for one seed-issue plan entry — the part after Phase 5's `## Context` /
     `Filed from:` block, which build_plan does not know here and so does not add."""
@@ -1023,7 +1048,8 @@ def build_plan(man, reg, intent, explicit, seed=None):
     if owner_labels:
         labels = labels + owner_labels
     ruleset = reg.genesis_json(man["github"]["ruleset"])
-    deferred = [d["name"] for d in man["skills"]["deferred"]]
+    install_groups, deferred_entries = skill_sets(man, intent)
+    deferred = [d["name"] for d in deferred_entries]
     issues = []
     for entry in man["issues"]:
         if applies(entry["when"], intent):
@@ -1055,7 +1081,7 @@ def build_plan(man, reg, intent, explicit, seed=None):
         f"- modules: {', '.join(intent.modules) or 'none'}",
         f"- app-id: {intent.app_id}",
         f"- credits-paths: {', '.join(intent.credits_paths) or 'none'}",
-        f"- deferred-skills: {', '.join(deferred)}",
+        f"- deferred-skills: {', '.join(deferred) or 'none'}",
         "- waivers: none",
     ])
     decisions = decisions_table(man, intent, explicit)
@@ -1079,8 +1105,12 @@ def build_plan(man, reg, intent, explicit, seed=None):
         {"kind": "issue", "target": man["epic_title"], "action": "file the epic (label epic); its body freezes this plan"},
     ]
     writes += [{"kind": "file", "target": f["path"], "action": "add in the scaffold PR (Phase 3)"} for f in files]
-    writes += [{"kind": "skills", "target": f"group {i}", "action": "/skill add " + ", ".join(g) + " (Phase 4)"}
-               for i, g in enumerate(man["skills"]["install"], 1)]
+    n_manifest_groups = len(man["skills"]["install"])
+    writes += [{"kind": "skills", "target": f"group {i}",
+                "action": "/skill add " + ", ".join(g)
+                          + (" (Phase 4; deferred skills whose trigger this run meets)"
+                             if i > n_manifest_groups else " (Phase 4)")}
+               for i, g in enumerate(install_groups, 1)]
     writes += [{"kind": "machine", "target": s["module"], "action": f"{s['command']} (Phase {s['phase']})"}
                for s in machine]
     writes += [{"kind": "issue", "target": i["title"], "action": "file under the epic ("
@@ -1124,7 +1154,7 @@ def build_plan(man, reg, intent, explicit, seed=None):
                     "build_commands": values["BUILD_COMMANDS"].splitlines(),
                     "labels": [l["name"] for l in labels],
                     "targets": "claude"},
-        "skills": {"install": man["skills"]["install"], "deferred": man["skills"]["deferred"]},
+        "skills": {"install": install_groups, "deferred": deferred_entries},
         "machine": machine,
         "issues": issues,
         "seed_issues": seed_issues,
@@ -1135,13 +1165,19 @@ def build_plan(man, reg, intent, explicit, seed=None):
 def decisions_table(man, intent, explicit):
     app_overlays = [o for o in intent.overlays if man["overlays"][o].get("app")]
     rec_modules = [m for m, s in man["modules"].items() if s.get("default") and s.get("status") == "implemented"]
+    stack_value = ", ".join(intent.overlays) or "none"
+    if "stack" in explicit:
+        stack_rec = stack_value
+        stack_why = "Named by the owner with `--stack`; genesis never chooses a stack (Principle 7)."
+    else:
+        stack_rec = "none until an owner decision names one"
+        stack_why = "Genesis never chooses a stack (Principle 7)."
     rows = [
         ("Name / scope", intent.name, "—", "Final before anything exists: the seed scope, runner "
          "directory and app ID all key off it.", "name"),
         ("Visibility", intent.visibility, "private", "Going public is an owner decision recorded in "
          "an ADR; genesis never flips visibility.", "visibility"),
-        ("Stack overlays", ", ".join(intent.overlays) or "none", "none until an owner decision names "
-         "one", "Genesis never chooses a stack (Principle 7).", "stack"),
+        ("Stack overlays", stack_value, stack_rec, stack_why, "stack"),
         ("Modules", ", ".join(intent.modules) or "none", ", ".join(rec_modules)
          + " (+ credits when media is bundled)", "Module defaults ratified 2026-09-26 (decision 8).", "modules"),
         ("App ID", intent.app_id, derive_app_id(intent.name) if app_overlays else "none",
@@ -1555,13 +1591,12 @@ def _(ctx):
     return fail(f"profile lacks {miss}") if miss else ok("repo-wide sections and targets present")
 
 
-@probe("profile.posture")
-def _(ctx):
-    text = ctx.tree.read(PROFILE)
-    if text is None:
-        return fail(f"{PROFILE} is missing")
+def posture_pins(text, man):
+    """(got, problems): got maps posture section name -> "Withheld"/"Gated" pin, for every
+    section the standard pins posture in. problems names each missing section, missing pin
+    or disagreement — the same failures the profile.posture probe reports."""
     got, problems = {}, []
-    for s in ctx.man["skills"]["posture_sections"]:
+    for s in man["skills"]["posture_sections"]:
         body = section(text, f"{s} Customizations")
         if body is None:
             problems.append(f"no `## {s} Customizations`")
@@ -1574,6 +1609,15 @@ def _(ctx):
             got[s] = lead.group(1)
     if not problems and len(set(got.values())) > 1:
         problems.append(f"the posture pins disagree: {got}")
+    return got, problems
+
+
+@probe("profile.posture")
+def _(ctx):
+    text = ctx.tree.read(PROFILE)
+    if text is None:
+        return fail(f"{PROFILE} is missing")
+    got, problems = posture_pins(text, ctx.man)
     return fail("; ".join(problems)) if problems else ok(f"{next(iter(got.values()))} in "
                                                         + " and ".join(got))
 
@@ -1608,7 +1652,7 @@ def _(ctx):
         return fail(".claude/skills.lock is missing")
     if lock == "invalid":
         return fail(".claude/skills.lock is not valid JSON")
-    want = [s for g in ctx.man["skills"]["install"] for s in g]
+    want = [s for g in skill_sets(ctx.man, ctx.intent)[0] for s in g]
     missing = [s for s in want if s not in lock]
     no_cmd = [s for s in want if s in lock and not ctx.tree.has(f".claude/commands/{s}.md")]
     problems = ([f"not in skills.lock: {missing}"] if missing else []) + \
@@ -2003,9 +2047,15 @@ def intent_for_verify(args, man, tree):
     if not slug or "/" not in slug:
         die("cannot tell which GitHub repo this is — pass --gh-repo OWNER/NAME")
     owner, name = slug.split("/", 1)
-    fields, why = parse_profile_intent(tree.read(PROFILE), man)
+    text = tree.read(PROFILE)
+    fields, why = parse_profile_intent(text, man)
     if fields is not None:
-        return intent_from_profile(fields, man, name, owner)
+        # intent_from_profile never reads the posture pins; a profile with no pins, or
+        # disagreeing ones, keeps the Intent default of "withheld" (profile.posture then FAILs).
+        got, pin_problems = posture_pins(text, man)
+        posture = (next(iter(got.values())).lower() if got and not pin_problems
+                   and len(set(got.values())) == 1 else "withheld")
+        return intent_from_profile(fields, man, name, owner, posture=posture)
     kw = intent_kwargs_from_flags(args, man, name, owner, verify=True)  # dies, never refuses
     return Intent(source="flags", problems=why, **kw)
 
@@ -2043,6 +2093,16 @@ def self_check(man, reg):
             problems.append(f"human_setup entry cites `{h['rule']}`, which is not a probed rule")
         elif not next(r for r in man["rules"] if r["id"] == h["rule"]).get("human"):
             problems.append(f"human_setup rule `{h['rule']}` is not marked human: true")
+
+    known_when = {"overlay:any", "posture:withheld", "posture:gated"}
+    for d in man["skills"]["deferred"]:
+        when = d.get("when")
+        if when is None or when in known_when:
+            continue
+        kind, _, rest = when.partition(":")
+        table = man["overlays"] if kind == "overlay" else man["modules"] if kind == "module" else None
+        if table is None or rest not in table:
+            problems.append(f"deferred skill `{d['name']}` has unknown `when` {when!r}")
 
     hs_tmpl = next((f for f in man["core"]["files"] if f["path"] == ".github/ISSUE_TEMPLATE/human_setup.md"), None)
     if hs_tmpl is None:
@@ -2168,10 +2228,12 @@ def intent_kwargs_from_flags(args, man, name, owner, verify=False):
         stop(f"invalid app id `{app_id}`: it needs two or more dot-separated segments, each "
                f"starting with a letter and using only [A-Za-z0-9_] (pass --app-id)")
     relay = None if args.relay_token_in is None else split_list(args.relay_token_in)
+    # deferred is None here in both modes: nothing at plan time reads intent.deferred (build_plan
+    # derives the plan's deferred list from skill_sets()), and only verify's profile.genesis-intent
+    # reads it, where it comes from the committed profile instead.
     return dict(name=name, owner=owner, visibility=vis, overlays=overlays, modules=modules,
                 app_id=app_id, posture=args.posture or "withheld", description=args.description,
-                relay_token_in=relay, date=args.date,
-                deferred=None if verify else [d["name"] for d in man["skills"]["deferred"]])
+                relay_token_in=relay, date=args.date, deferred=None)
 
 
 def main():
