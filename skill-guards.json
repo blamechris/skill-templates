@@ -1563,7 +1563,16 @@
       "anyOf": [
         "(?m)^\\d+\\. \\*\\*The profile is written before any skill is installed\\.\\*\\* Without a pinned posture, a skill installs gated\\. Phase 4 step 2 checks the pin before the first `/skill add`\\.$"
       ],
-      "note": "Binds the ordering clause: a posture pin must land before the install that would otherwise go gated (#172). The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+      "note": "Binds the ordering clause: a posture pin must land before the install that would otherwise go gated (#172). The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit.",
+      "gate": {
+        "targets": [
+          {"label": "unclassified", "mode": "a skill is installed before the profile pins its posture, so a repo that withholds unattended merge installs gated and skill-lint and skill outdated still pass on the wrong posture"}
+        ],
+        "added": {"repo": "blamechris/skill-templates", "pr": 316, "at": "2026-09-27T03:48:52Z"},
+        "evidence": [
+          {"kind": "issue", "repo": "blamechris/skill-templates", "number": 172}
+        ]
+      }
     },
     {
       "label": "approval-before-create",
@@ -1612,7 +1621,17 @@
       "anyOf": [
         "(?m)^\\d+\\. \\*\\*Genesis never writes a seed or derives a scope; `/session-lifecycle end` does, through `session-seed\\.py`\\.\\*\\*$"
       ],
-      "note": "The seed is written by session-seed.py and nowhere else (#208, #210). Phase 6's \"writes no seed file\" is a different sentence. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit."
+      "note": "The seed is written by session-seed.py and nowhere else (#208, #210). Phase 6's \"writes no seed file\" is a different sentence. The WHOLE rule line is bound, start to end: the skill carries no customization markers and installs verbatim, so a leading negation, a qualifier inside the bold, or a reversing clause after it (\"An exit of 2 also counts as a pass\") all break the match (#226). A deliberate rewording updates this pattern in the same commit.",
+      "gate": {
+        "targets": [
+          {"label": "unclassified", "mode": "genesis writes the seed or derives the scope itself instead of calling session-seed.py, so a second derivation drifts from the one implementation and the seed can land where a worktree teardown, branch switch or index loses it"}
+        ],
+        "added": {"repo": "blamechris/skill-templates", "pr": 316, "at": "2026-09-27T03:48:52Z"},
+        "evidence": [
+          {"kind": "issue", "repo": "blamechris/skill-templates", "number": 208},
+          {"kind": "pr", "repo": "blamechris/skill-templates", "number": 210}
+        ]
+      }
     },
     {
       "label": "no-bypass",
