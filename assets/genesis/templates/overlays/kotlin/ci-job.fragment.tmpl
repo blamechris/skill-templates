@@ -1,5 +1,8 @@
   # Overlay: kotlin. Runs `./gradlew check` once `gradlew` exists; until then it skips
   # and ci-gate passes, which is the honest "no test target yet" state.
+  # There is no Android SDK setup step. On the self-hosted runner, ANDROID_HOME comes from
+  # the runner's own `.env` (a human step, rule `overlay.kotlin.android-sdk`); GitHub's
+  # hosted images carry an SDK, so a `[github]` run needs nothing either.
   kotlin:
     name: kotlin
     needs: [route, changes]

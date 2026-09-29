@@ -113,7 +113,7 @@ man = json.load(open(os.path.join(g, "standard-v1.json")))
 R = "repos_blamechris_soundbed"
 def put(key, obj, kind="json"):
     open(os.path.join(d, f"{key}.{kind}"), "w").write("" if obj is None else json.dumps(obj))
-repo = {"private": True, "visibility": "private", "permissions": {"admin": True, "pull": True},
+repo = {"private": True, "visibility": "private", "default_branch": "main", "permissions": {"admin": True, "pull": True},
         **man["github"]["repo"], **man["github"]["features"]}
 put(R, repo)
 put(f"{R}_actions_permissions", man["github"]["actions_permissions"])
@@ -139,6 +139,14 @@ put(f"{R}_actions_runners_per_page_100_page_1",
     {"total_count": 1, "runners": [{"name": "mac-soundbed", "status": "online"}]})
 put(f"{R}_actions_secrets_per_page_100_page_1",
     {"total_count": 2, "secrets": [{"name": "DISCORD_BOT_TOKEN"}, {"name": "DISCORD_CHANNEL_PRS"}]})
+put(f"{R}_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20",
+    {"total_count": 1, "workflow_runs": [{"id": 101, "head_sha": "a" * 40}]})
+put(f"{R}_actions_runs_101_jobs_per_page_100_page_1", {"total_count": 3, "jobs": [
+    {"name": "route", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"]},
+    {"name": "kotlin", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"],
+     "runner_name": "soundbed-mbp-arm64"},
+    {"name": "ci-gate", "conclusion": "success"},
+]})
 PY
 
 M="$TMP/mutant"; MG="$TMP/mutant-gh"
@@ -309,6 +317,41 @@ expect "relay secrets pending with an open human-setup issue" module.repo-relay.
 fresh; gh_edit repos_blamechris_soundbed_actions_secrets_per_page_100_page_1 'd["secrets"] = []'
 gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 8, "title": "human-setup: runner", "body": "rule `module.runner-mac`"}]'
 expect "a human-setup issue for another rule does not excuse this one" module.repo-relay.secrets FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1 'next(j for j in d["jobs"] if j["name"] == "kotlin")["conclusion"] = "failure"'
+expect "the kotlin job failed on the self-hosted runner, no human-setup issue" overlay.kotlin.android-sdk FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1 'next(j for j in d["jobs"] if j["name"] == "kotlin")["conclusion"] = "failure"'
+gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 20, "title": "human-setup: Android SDK", "body": "## Done when\n\nThe `genesis-verify` rule `overlay.kotlin.android-sdk` reports PASS."}]'
+expect "kotlin SDK failure pending with an open human-setup issue" overlay.kotlin.android-sdk PENDING-HUMAN 0
+fresh; gh_edit repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1 'next(j for j in d["jobs"] if j["name"] == "kotlin")["conclusion"] = "failure"'
+gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 21, "title": "human-setup: relay", "body": "rule `module.repo-relay.secrets`"}]'
+expect "a human-setup issue for a different rule does not excuse the Android SDK rule" overlay.kotlin.android-sdk FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1 'next(j for j in d["jobs"] if j["name"] == "kotlin")["labels"] = ["ubuntu-latest"]'
+expect "kotlin green only on a hosted runner proves nothing about the runner host" overlay.kotlin.android-sdk FAIL 1
+fresh
+gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20 'd["workflow_runs"].insert(0, {"id": 102, "head_sha": "b" * 40}); d["total_count"] = 2'
+python3 -c 'import json,sys; json.dump({"total_count": 3, "jobs": [
+    {"name": "route", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"]},
+    {"name": "kotlin", "conclusion": "skipped", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
+    {"name": "ci-gate", "conclusion": "success"},
+]}, open(sys.argv[1], "w"))' "$MG/repos_blamechris_soundbed_actions_runs_102_jobs_per_page_100_page_1.json"
+expect "the newest run's kotlin job skipped; an older run's success still counts" overlay.kotlin.android-sdk PASS 0
+fresh
+gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20 'd["workflow_runs"].insert(0, {"id": 102, "head_sha": "b" * 40}); d["total_count"] = 2'
+python3 -c 'import json,sys; json.dump({"total_count": 3, "jobs": [
+    {"name": "route", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"]},
+    {"name": "kotlin", "conclusion": "failure", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
+    {"name": "ci-gate", "conclusion": "success"},
+]}, open(sys.argv[1], "w"))' "$MG/repos_blamechris_soundbed_actions_runs_102_jobs_per_page_100_page_1.json"
+expect "the newest run's decisive result wins over an older success" overlay.kotlin.android-sdk FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20 'd["workflow_runs"] = []; d["total_count"] = 0'
+expect "no completed ci.yml runs yet" overlay.kotlin.android-sdk FAIL 1
+fresh; mv "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20.json" \
+          "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20.404"
+expect "GitHub has no ci.yml workflow" overlay.kotlin.android-sdk FAIL 1
+fresh; rm "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20.json"
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then ok "an unreadable ci.yml runs list is ERROR, not a guessed FAIL"
+else bad "an unreadable ci.yml runs list is ERROR, not a guessed FAIL" "exit $rc — $(flat "$out")"; fi
 fresh; rm "$M/CREDITS.md";                                                           expect "CREDITS.md removed" module.credits.file FAIL 1
 fresh; edit .claude/skill-profile.md 's.replace("- credits-paths: none", "- credits-paths: app/src/main/res/raw")'
 mkdir -p "$M/app/src/main/res/raw" && printf 'x' > "$M/app/src/main/res/raw/rain.ogg"
@@ -385,7 +428,8 @@ commit_all "$P" plain
 PG="$TMP/plain-gh"; cp -R "$GHBASE" "$PG"
 for f in "$PG"/repos_blamechris_soundbed*; do mv "$f" "${f/repos_blamechris_soundbed/repos_blamechris_plainrepo}"; done
 out=$(FAKE_GH_DIR="$PG" PATH="$FAKEBIN:$PATH" V --repo "$P" --ref HEAD --gh-repo blamechris/plainrepo --json 2>&1); rc=$?
-if [ "$rc" -eq 0 ] && [ "$(result_of "$out" module.repo-relay.secrets)" = N-A ] && [ "$(result_of "$out" overlay.kotlin.ci)" = N-A ]; then
+if [ "$rc" -eq 0 ] && [ "$(result_of "$out" module.repo-relay.secrets)" = N-A ] && [ "$(result_of "$out" overlay.kotlin.ci)" = N-A ] \
+   && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = N-A ]; then
   ok "a core + runner repo verifies clean with every other layer rule N-A"
 else bad "a core + runner repo verifies clean with every other layer rule N-A" "exit $rc — $(flat "$out")"; fi
 if grep -q '^  changes:' "$P/.github/workflows/ci.yml" || ! grep -q 'needs: \[route, hygiene\]' "$P/.github/workflows/ci.yml"; then
@@ -425,8 +469,20 @@ printf '%s' "$got" | grep -q 'create a bot' && ok "--relay-token-in none says cr
 got=$(plan_field "$PLAN" '" ".join(d["decision"] for d in p["decisions"] if d["defaulted"])')
 [ "$got" = "Visibility Self-merge posture Description" ] && ok "the Decisions table marks exactly the defaulted choices" || bad "the Decisions table marks exactly the defaulted choices" "got: $got"
 got=$(plan_field "$PLAN" '"|".join(i["title"] for i in p["issues"])')
-[ "$got" = "Land docs/design/SPEC.md|Credits reachable in-app for every bundled asset|human-setup: repo-relay Discord bot token and channel for blamechris/soundbed" ] \
+[ "$got" = "Land docs/design/SPEC.md|Credits reachable in-app for every bundled asset|human-setup: repo-relay Discord bot token and channel for blamechris/soundbed|human-setup: Android SDK on the runner host for blamechris/soundbed" ] \
   && ok "issues: SPEC always, credits with the module, one human-setup per manual step" || bad "plan issues" "$got"
+sdk_body=$(plan_field "$PLAN" '[i for i in p["issues"] if i.get("rule") == "overlay.kotlin.android-sdk"][0]["body"]')
+if printf '%s' "$sdk_body" | grep -qF '`overlay.kotlin.android-sdk`' \
+   && printf '%s' "$sdk_body" | grep -qF '~/github-runners/actions-runner-soundbed/.env' \
+   && ! printf '%s' "$sdk_body" | grep -q '@@'; then
+  ok "the Android SDK human-setup body names its Done-when rule and the runner .env path, with no placeholder"
+else
+  bad "the Android SDK human-setup body names its Done-when rule and the runner .env path, with no placeholder" "$(flat "$sdk_body")"
+fi
+got=$(V --plan --json --name plainrepo --modules runner-mac --date 2026-09-26 | python3 -c \
+  'import json,sys; p=json.load(sys.stdin); print(any("Android SDK" in i["title"] for i in p["issues"]))')
+[ "$got" = "False" ] && ok "a plan with no kotlin overlay files no Android SDK human-setup issue" \
+  || bad "a plan with no kotlin overlay files no Android SDK human-setup issue" "got: $got"
 if plan_field "$PLAN" '[f["path"] for f in p["files"]]' | grep -q 'skill-profile'; then
   bad "the plan never renders the skill profile (Phase 4 composes it)"
 else ok "the plan never renders the skill profile (Phase 4 composes it)"; fi
