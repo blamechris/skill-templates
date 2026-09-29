@@ -101,7 +101,7 @@ Present the proposed breakdown to the user as a table and wait for confirmation:
 | 2 | type(scope): … | Files: src/c.ts; new test surface | medium |
 | 3 | type(scope): … | Migration + backfill | medium |
 
-**Labels each sub-issue will receive:** enhancement, parent:#${PARENT_NUM}{{CUSTOMIZE: list any additional default labels here}}
+**Labels each sub-issue will receive:** {{CUSTOMIZE: exactly the set step 5 applies, and nothing it does not — its default sub-issue labels (e.g. enhancement, complexity:<level>), then parent:#${PARENT_NUM} only if its parent-link scheme uses that label}}, plus any `--label` flags
 
 Approve to create these 3 sub-issues, or reply with changes (e.g. "merge 1 and 2", "drop 3", "add a sub-issue for X").
 ```
@@ -235,7 +235,7 @@ Next: `/autonomous-dev-flow #${SUB_1} #${SUB_2} #${SUB_3}` to implement them, or
 Lines and sections marked with `{{CUSTOMIZE}}` need repo-specific adaptation:
 
 - **Default sub-issue labels** — some repos use `complexity:low|medium|high`, some use `size:S|M|L`, some just use `enhancement`.
-- **Parent-link convention** — body line "Part of #N" is universal; some repos additionally use a `parent:#N` label or GitHub's native sub-issue feature.
+- **Parent-link convention** — body line "Part of #N" is universal; some repos additionally use a `parent:#N` label or GitHub's native sub-issue feature. The step 4 proposal names the `parent:#N` label only when step 5 applies it.
 - **Parent-marker label** — `decomposed` / `epic` / `tracking` / none.
 - **Issue body template** — sub-issue body sections may differ from the default (Summary / Implementation Plan / Acceptance Criteria).
 - **Complexity vocabulary in Phase 3** — the "what counts as too complex" heuristics depend on what the repo treats as a unit of work.
