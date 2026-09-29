@@ -86,7 +86,7 @@
       "required": "every CI job routes to a self-hosted macOS runner by default, and runner-mac is the only implemented module that provides one; without it the scaffold PR's ci-gate can never run",
       "files": [],
       "machine": [
-        {"phase": 5, "command": "~/github-runners/provision-runner.sh @@NAME@@"},
+        {"phase": 5, "command": "~/github-runners/provision-runner.sh @@NAME@@ --host \"${RUNNER_HOST:?}\""},
         {"phase": 5, "command": "~/github-runners/fleet-status.sh --md"}
       ]
     },
@@ -162,7 +162,7 @@
     "vulnerability_alerts": true,
     "automated_security_fixes": true,
     "labels": "labels.json",
-    "remove_default_labels": ["duplicate", "good first issue", "help wanted", "invalid", "question", "wontfix"],
+    "remove_default_labels": ["accessibility", "duplicate", "good first issue", "help wanted", "invalid", "question", "wontfix"],
     "ruleset": "ruleset-main.json"
   },
   "skills": {

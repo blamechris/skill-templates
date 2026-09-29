@@ -73,6 +73,8 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
    ```
    `1` is FLOOR drift: stop and reconcile first. `2` means it could not verify: stop, say so, and never proceed as if it passed. `0` with default drift is information; name it and continue.
 3. **Machine scripts.** `~/.claude/scripts/session-seed.py`, `~/.claude/scripts/filed-from.py`, `~/github-runners/provision-runner.sh` and `~/github-runners/fleet-status.sh` must exist. Note whether `~/.claude/scripts/genesis-verify.py` is byte-identical to `origin/main`'s copy. If it is not, its bootstrap copy is approved write #1, done in Phase 1, so that later `--audit` runs have it.
+
+   **`RUNNER_HOST` must be set.** It is the `<host>` in the runner name `<repo>-<host>-arm64`, and the plan's runner step passes it as `--host "${RUNNER_HOST:?}"`. Without it, `provision-runner.sh` silently names the runner `<repo>-mac-arm64`, which is how Soundbed got `soundbed-mac-arm64` next to a fleet of `*-mbp-arm64` runners. If it is unset, stop. Ask the owner to set it once in their shell profile, to the token that the runners `fleet-status.sh` lists already use. Genesis never edits the profile itself. Name the resulting runner, `$NAME-$RUNNER_HOST-arm64`, beside the plan so the owner approves it.
 4. **Create or resume.** The epic title comes from the manifest, and only an exact title match counts:
    ```bash
    mkdir -p "$G"
@@ -157,9 +159,9 @@ Nothing in this phase writes to GitHub, the machine's configuration or any repo.
    DESC=$(jq -r '.intent.description // ""' "$PLAN_JSON"); [ -n "$DESC" ] && CREATE+=(--description "$DESC")
    gh repo view "$R" >/dev/null 2>&1 || "${CREATE[@]}"
    ```
-3. **Create the canonical checkout** only if it is absent:
+3. **Create the canonical checkout** only if it is absent. `gh repo clone` follows the machine's `gh config get git_protocol`, which is `https` on this fleet. A hard-coded `git@github.com:` URL fails with `Permission denied (publickey)` on a machine with no SSH key:
    ```bash
-   test -d "$HOME/Projects/$NAME/.git" || git clone "git@github.com:$R.git" "$HOME/Projects/$NAME"
+   test -d "$HOME/Projects/$NAME/.git" || gh repo clone "$R" "$HOME/Projects/$NAME"
    git -C "$HOME/Projects/$NAME" fetch --prune origin
    ```
 4. **File the epic now, before anything else can fail.** The epic is what makes a stopped genesis resumable, so it follows the repo immediately. First create only the `epic` label, from the plan:
@@ -264,7 +266,7 @@ Exit `2` means the probe could not look, for example because the token lacks adm
      || jq '.github.ruleset' "$PLAN_JSON" | gh api -X POST "repos/$R/rulesets" --input - --silent
    ```
    If a `main` ruleset exists and either rule still FAILs, stop and show the owner the probe's evidence. Never overwrite it, never disable it, and never add a bypass actor.
-5. **Re-probe.** Re-run the probe block above. Every `github.*` row must now PASS, and step 3's `OWNER_MISSING` must now be empty. If either still fails, stop and report its evidence.
+5. **Re-probe.** Re-run the probe block above. Every `github.*` row must now PASS, and step 3's `OWNER_MISSING` must now be empty. If either still fails, stop and report its evidence. The `github.labels` evidence also names every label outside the seed set (`also present: …`). An owner label belongs there. Any other name is a GitHub default that `remove_default_labels` does not list, which is how `accessibility` reached Soundbed. Report it so the manifest can be fixed. It never blocks the run.
 
 ### Phase 3: Scaffold
 
@@ -329,7 +331,7 @@ Profile first: nothing is installed until the step 2 check passes.
 
 ### Phase 5: Machine, Modules and Issues (no repo writes)
 
-1. **Machine steps.** Run every `plan.machine` entry with `phase` 5, in order. Today that is `provision-runner.sh <name>` then `fleet-status.sh --md`, from `runner-mac`.
+1. **Machine steps.** Run every `plan.machine` entry with `phase` 5, in order. Today that is `provision-runner.sh <name> --host "${RUNNER_HOST:?}"` then `fleet-status.sh --md`, from `runner-mac`. The guard aborts rather than falling back to `mac`; Phase 0 step 3 has already checked it.
 2. **Issues.** File every `plan.issues` entry, then every `plan.seed_issues` entry, in plan order. A title is the resume key: **file an entry only when `num_of "<its title>"` prints nothing**, so a re-run files only what is missing. Use the installed `/create-issue`, and give each issue **exactly** its entry's labels. Drop the `enhancement` label the create-issue template adds by default unless the entry lists it. Pass every body through a file (`jq -r '.issues[N].body'`, `jq -r '.seed_issues[N].body'`), never retyped:
    - **A work issue** from `plan.issues` is the SPEC issue, which is always filed, or the credits issue when `credits` is on. File it with `--from-issue $EPIC`. Its body is the create-issue shape: `## Context` with `Filed from: #$EPIC`, then `## Description` holding the entry's `description`, then `## Acceptance Criteria` as a checklist of its `acceptance`.
    - **A `human-setup` issue** from `plan.issues` is filed with `--from-issue $EPIC`. Its body is `## Context` with `Filed from: #$EPIC`, followed by the entry's `body` verbatim: What · Why a human · Exact steps · Secret names · Reuse or create · Done when.
@@ -424,6 +426,7 @@ Profile first: nothing is installed until the step 2 check passes.
 | HEAD is not `SESSION_BRANCH` | Stop writing, re-establish the branch, then re-probe. |
 | A `main` ruleset differs from the document | Report the probe's evidence; the owner decides. Never overwrite. |
 | `skill-lint` exit ≠ 0 on an install | Fix the profile value it names, then `/skill add` again. Never hand-edit the installed file. |
+| `RUNNER_HOST` is unset | Stop in Phase 0. The owner sets it once in their shell profile, to the host token their existing runners use. Never let the runner name fall back to `mac`. |
 | `ci-gate` never appears or stays Pending | Bring the Phase 5 runner online. `[github]` is the break-glass for a runner that is down, not a substitute for provisioning one. |
 | The session dies mid-phase | Re-run the same command. The epic's `genesis-plan` block re-renders the same plan from the same registry commit, and the probes find where genesis stopped. |
 

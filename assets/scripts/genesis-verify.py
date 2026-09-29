@@ -1663,7 +1663,12 @@ def _(ctx):
     missing = [l["name"] for l in want if l["name"] not in live]
     recolored = [l["name"] for l in want if l["name"] in live and live[l["name"]] != l["color"].lower()]
     problems = ([f"missing {missing}"] if missing else []) + ([f"wrong colour {recolored}"] if recolored else [])
-    return fail("; ".join(problems)) if problems else ok(f"all {len(want)} seed labels")
+    # Extra labels never FAIL (owner labels are legitimate), but they are named: a GitHub
+    # default the manifest does not know to delete is otherwise invisible (#323).
+    other = sorted(n for n in live if n not in {l["name"] for l in want})
+    note = (f"; also present: {', '.join(other[:8])}" + (f" (+{len(other) - 8} more)" if len(other) > 8 else "")
+            if other else "")
+    return fail("; ".join(problems) + note) if problems else ok(f"all {len(want)} seed labels{note}")
 
 
 def rule_param_problems(doc_rule, live_rule):
