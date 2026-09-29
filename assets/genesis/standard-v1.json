@@ -218,6 +218,11 @@
       "when": "module:repo-relay",
       "rule": "module.repo-relay.secrets",
       "title": "human-setup: repo-relay Discord bot token and channel for @@REPO@@"
+    },
+    {
+      "when": "overlay:kotlin",
+      "rule": "overlay.kotlin.android-sdk",
+      "title": "human-setup: Android SDK on the runner host for @@REPO@@"
     }
   ],
   "rules": [
@@ -266,6 +271,7 @@
     {"id": "overlay.kotlin.ci", "layer": "overlay:kotlin", "class": "probe", "ref": "§5.3", "summary": "ci.yml has the kotlin job running `./gradlew check`, gated on the changes job's kotlin output"},
     {"id": "overlay.kotlin.dependabot", "layer": "overlay:kotlin", "class": "probe", "ref": "§5.3", "summary": "dependabot.yml updates the gradle ecosystem"},
     {"id": "overlay.kotlin.app-id", "layer": "overlay:kotlin", "class": "probe", "ref": "§3.8", "summary": "Every applicationId in a Gradle build file equals the intent's app-id"},
+    {"id": "overlay.kotlin.android-sdk", "layer": "overlay:kotlin", "class": "probe", "ref": "§5.3", "human": true, "summary": "The newest `kotlin` job on the default branch that ran on a self-hosted runner succeeded. The runner's Android SDK and ANDROID_HOME are a human step"},
     {"id": "advisory.skills.profile-hash", "layer": "core", "class": "advisory", "ref": "§7", "summary": "Each skills.lock profileHash matches the current profile. Advisory until generic/skill.md names the hash algorithm (skill-templates#230)"},
     {"id": "advisory.tree-hygiene", "layer": "core", "class": "advisory", "ref": "§3.5", "summary": "No tracked file matches .gitignore. Enforced on every PR by the CI hygiene job (core.ci-hygiene), not re-derived at a ref"},
     {"id": "advisory.secret-scanning", "layer": "core", "class": "advisory", "ref": "§4.7", "summary": "Secret scanning is on where the plan offers it (INFERRED unavailable on personal private repos)"},

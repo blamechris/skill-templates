@@ -58,6 +58,7 @@ import posixpath
 import re
 import subprocess
 import sys
+import urllib.parse
 
 EXIT_OK, EXIT_FINDINGS, EXIT_CANNOT_VERIFY = 0, 1, 2
 
@@ -946,6 +947,39 @@ def human_setup_issue(man, intent, entry, values):
             "## Reuse or create", "", reuse, "",
             "## Done when", "",
             f"The `genesis-verify` rule `{entry['rule']}` reports PASS.",
+        ])
+    elif entry["rule"] == "overlay.kotlin.android-sdk":
+        runner_dir = f"~/github-runners/actions-runner-{intent.name}"
+        body = "\n".join([
+            "## What", "",
+            f"Install the Android SDK on the host that runs `{intent.repo}`'s self-hosted "
+            "runner, and give that runner `ANDROID_HOME`, so the `kotlin` CI job's "
+            "`./gradlew check` finds the SDK.", "",
+            "## Why a human", "",
+            "The SDK's licences are accepted on the host, and the runner's `.env` lives on "
+            "the host, outside the repo. The `kotlin` job has no SDK setup step: it relies on "
+            "the runner's environment, and GitHub's hosted images already carry an SDK.", "",
+            "## Exact steps", "",
+            "1. On the runner host, install the Android SDK command-line tools and accept the "
+            "licences: `sdkmanager --licenses`.",
+            "2. Install `platform-tools`, and the `platforms;android-<N>` and "
+            "`build-tools;<version>` packages the Gradle build pins.",
+            f"3. Make sure `{runner_dir}/.env` has the line `ANDROID_HOME=<the SDK path>`. "
+            "The runner's `config.sh` writes that line itself when the shell that ran "
+            "`provision-runner.sh` exported `ANDROID_HOME`; otherwise add it.",
+            f"4. Restart the runner so it rereads `.env`: `cd {runner_dir} && ./svc.sh stop "
+            "&& ./svc.sh start`.", "",
+            "## Secret names", "",
+            "None. This is a local software install, not a secret.", "",
+            "## Reuse or create", "",
+            "Reuse an SDK already on the host if it carries the packages the build pins: one "
+            "another runner already names (`grep -h '^ANDROID_HOME=' "
+            "~/github-runners/actions-runner-*/.env`), or Android Studio's at "
+            "`~/Library/Android/sdk`. Otherwise install the command-line tools.", "",
+            "## Done when", "",
+            f"The `genesis-verify` rule `{entry['rule']}` reports PASS: the newest `kotlin` "
+            "job on the default branch that ran on a self-hosted runner succeeded. The job "
+            "skips until `gradlew` exists, so this closes after the first Gradle PR merges.",
         ])
     else:
         raise RenderError(f"no human-setup body renderer for rule {entry['rule']}")
@@ -1845,6 +1879,48 @@ def _(ctx):
     if wrong:
         return fail(f"applicationId {sorted(wrong)} differs from the intent's `{want}`")
     return ok(f"applicationId `{want}`")
+
+
+SDK_RUN_WINDOW = 20  # newest completed ci.yml runs on the default branch the SDK probe reads
+
+
+@probe("overlay.kotlin.android-sdk")
+def _(ctx):
+    job_name = ctx.man["overlays"]["kotlin"]["ci_job"]
+    branch = ctx.gh.repo_info().get("default_branch")
+    if not branch:
+        raise CannotVerify(f"repos/{ctx.intent.repo} returned no default_branch")
+    wf_file = posixpath.basename(CI)
+    endpoint = f"repos/{ctx.intent.repo}/actions/workflows/{wf_file}/runs"
+    runs = ctx.gh.get(
+        f"{endpoint}?branch={urllib.parse.quote(branch, safe='')}&status=completed&per_page={SDK_RUN_WINDOW}",
+        missing_ok=True,
+    )
+    if runs is None:
+        return fail(f"GitHub has no {wf_file} workflow, so the {job_name} job has never run")
+    wf = runs.get("workflow_runs")
+    if not isinstance(wf, list):
+        raise CannotVerify(f"{endpoint} did not return workflow_runs")
+    for run in wf:
+        jobs = ctx.gh.paged(f"repos/{ctx.intent.repo}/actions/runs/{run['id']}/jobs", key="jobs")
+        for job in jobs:
+            if job.get("name") != job_name:
+                continue
+            labels = {str(l).lower() for l in (job.get("labels") or [])}
+            if "self-hosted" not in labels:
+                continue
+            runner = job.get("runner_name") or "a self-hosted runner"
+            sha = (run.get("head_sha") or "")[:7]
+            where = f"{runner}, run {run['id']} ({sha})"
+            conclusion = job.get("conclusion")
+            if conclusion == "success":
+                return ok(f"`{job_name}` succeeded on {where}")
+            if conclusion == "failure":
+                return fail(f"`{job_name}` failed on {where} — `SDK location not found` in its "
+                            "log means the runner's .env has no ANDROID_HOME")
+            # skipped, cancelled, None, ... — not decisive; keep walking
+    return fail(f"none of the newest {len(wf)} completed {wf_file} run(s) on {branch} ran `{job_name}` "
+                "to a result on a self-hosted runner (it skips until `gradlew` exists)")
 
 
 # ---------------------------------------------------------------- verify
