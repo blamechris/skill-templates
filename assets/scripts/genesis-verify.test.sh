@@ -280,6 +280,12 @@ if [ "$rc" -eq 2 ] && [ "$(result_of "$out" github.security)" = ERROR ]; then ok
 else bad "an empty security-fixes body is ERROR, never read as on or off" "exit $rc — $(flat "$out")"; fi
 fresh; gh_edit repos_blamechris_soundbed_labels_per_page_100_page_1 'd[:] = [l for l in d if l["name"] != "human-setup"]'; expect "a seed label missing" github.labels FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_labels_per_page_100_page_1 'd[0]["color"] = "ffffff"'; expect "a seed label recoloured" github.labels FAIL 1
+fresh; gh_edit repos_blamechris_soundbed_labels_per_page_100_page_1 'd.append({"name": "accessibility", "color": "ededed"})'
+out=$(verify); rc=$?
+ev=$(python3 -c 'import json,sys; print(next(r["evidence"] for r in json.loads(sys.argv[1])["results"] if r["rule"] == "github.labels"))' "$out" 2>/dev/null)
+if [ "$rc" -eq 0 ] && [ "$(result_of "$out" github.labels)" = PASS ] && [ "$ev" = "all 21 seed labels; also present: accessibility" ]; then
+  ok "a label outside the seed set is named in the evidence, never FAILed (#323)"
+else bad "a label outside the seed set is named in the evidence, never FAILed (#323)" "exit $rc — $ev"; fi
 fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'next(r for r in d["rules"] if r["type"] == "pull_request")["parameters"]["allowed_merge_methods"] = ["merge", "squash", "rebase"]'; expect "ruleset allows every merge method" github.ruleset FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'd["rules"] = [r for r in d["rules"] if r["type"] != "required_status_checks"]'; expect "ruleset without required checks" github.ruleset FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_rulesets_42 'next(r for r in d["rules"] if r["type"] == "required_status_checks")["parameters"]["required_status_checks"][0]["integration_id"] = 1'; expect "ci-gate pinned to the wrong app" github.ruleset FAIL 1
@@ -594,6 +600,12 @@ got=$(V --plan --json --name plainrepo --modules runner-mac --date 2026-09-26 | 
   'import json,sys; p=json.load(sys.stdin); print(p["intent"]["seed_issues"], p["seed_issues"], p["github"]["owner_labels"])')
 [ "$got" = "None [] []" ] && ok "without --seed-issues: intent.seed_issues is null, seed_issues is [], owner_labels is []" \
   || bad "without --seed-issues: intent.seed_issues is null, seed_issues is [], owner_labels is []" "got: $got"
+
+got=$(V --plan --json --name plainrepo --modules runner-mac --date 2026-09-26 | python3 -c \
+  'import json,sys; p=json.load(sys.stdin); print(p["machine"][0]["command"]); print("accessibility" in p["github"]["remove_default_labels"])')
+[ "$got" = "$(printf '%s\n%s' '~/github-runners/provision-runner.sh plainrepo --host "${RUNNER_HOST:?}"' True)" ] \
+  && ok "the runner step passes --host from a guarded RUNNER_HOST, and accessibility is a default to delete (#323)" \
+  || bad "the runner step passes --host from a guarded RUNNER_HOST, and accessibility is a default to delete (#323)" "got: $(flat "$got")"
 
 : > "$MG/calls.log"
 FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --plan --json --name soundbed --stack kotlin --seed-issues "$SEED" >/dev/null 2>&1
@@ -974,6 +986,10 @@ json.dump(allof[:100], open(os.path.join(d, key.format(1)), "w"))
 json.dump(allof[100:], open(os.path.join(d, key.format(2)), "w"))
 PY2
 expect "labels spread over two pages are all read" github.labels PASS 0
+out=$(verify)
+ev=$(python3 -c 'import json,sys; print(next(r["evidence"] for r in json.loads(sys.argv[1])["results"] if r["rule"] == "github.labels"))' "$out" 2>/dev/null)
+case "$ev" in *"also present: area:0, area:1, area:10, "*"(+72 more)") ok "80 extra labels: the evidence names 8 and counts the rest" ;;
+  *) bad "80 extra labels: the evidence names 8 and counts the rest" "$ev" ;; esac
 rm "$MG/repos_blamechris_soundbed_labels_per_page_100_page_2.json"
 out=$(verify); rc=$?
 [ "$rc" -eq 2 ] && ok "a page the API will not return is exit 2, not a missing label" || bad "a page the API will not return is exit 2, not a missing label" "exit $rc — $(flat "$out")"
