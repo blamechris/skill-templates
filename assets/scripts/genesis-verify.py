@@ -353,7 +353,9 @@ def split_list(value):
 
 
 def workflow_jobs(text):
-    """{job_key: {"needs": [...], "if": str|None, "body": str}} from a workflow's `jobs:`.
+    """{job_key: {"needs": [...], "if": str|None, "name": str, "body": str}} from a workflow's
+    `jobs:`. "name" is the job's display name -- its own `name:` property, falling back to the
+    job key when absent (GitHub's jobs API reports the display name the same way).
 
     Indentation-aware rather than column-fixed: the job-key indent is whatever the first key
     under `jobs:` uses, and a job's properties are the lines indented one level deeper.
@@ -382,11 +384,11 @@ def workflow_jobs(text):
             jobs[cur] = {"lines": []}
         elif cur:
             jobs[cur]["lines"].append(ln)
-    for j in jobs.values():
+    for key, j in jobs.items():
         body = j.pop("lines")
         props = [ln for ln in body if ln.strip() and not ln.lstrip().startswith("#")]
         pind = min((len(ln) - len(ln.lstrip(" ")) for ln in props), default=0)
-        j["needs"], j["if"] = [], None
+        j["needs"], j["if"], j["name"] = [], None, key
         for i, ln in enumerate(body):
             if len(ln) - len(ln.lstrip(" ")) != pind:
                 continue
@@ -406,6 +408,12 @@ def workflow_jobs(text):
             m = re.match(r"^\s*if:\s*(.+?)\s*$", ln)
             if m:
                 j["if"] = m.group(1)
+            # A comment needs whitespace before its `#`: a display name like `C#-lint` keeps it.
+            m = re.match(r"^\s*name:\s*(.*?)\s*(?:\s#.*)?$", ln)
+            if m and m.group(1) and "${{" not in m.group(1):
+                # An unresolved `${{ }}` expression can't be matched literally against the
+                # jobs API's display name, so the job-key fallback stands instead.
+                j["name"] = m.group(1).strip("'\"")
         j["body"] = "\n".join(body)
     return jobs
 
@@ -1502,6 +1510,51 @@ def ci_jobs(ctx):
     return (None, None) if text is None else (text, workflow_jobs(text))
 
 
+def runs_gradlew(body):
+    """True if a `run:` step in a job body (as returned by `workflow_jobs`) invokes
+    `./gradlew`: the inline value, or -- for `run: |` / `run: >` -- the block scalar's lines
+    (indented deeper than the `run:` key itself). YAML comment lines and shell comment lines
+    (stripped text starting with `#`) are never scanned, and a step's `name:` is a different
+    key: `- name: ./gradlew check` with an unrelated `run:` does not count."""
+    lines = body.splitlines()
+    for i, ln in enumerate(lines):
+        # `- run:` opens a step on its own line; the key's column (past the dash) is what a
+        # block scalar must out-indent, so a sibling key such as the step's `name:` ends it.
+        m = re.match(r"^(\s*(?:-\s+)?)run:\s*(.*?)\s*(?:\s#.*)?$", ln)
+        if not m:
+            continue
+        key, val = len(m.group(1)), m.group(2)
+        if val and not re.match(r"^[|>][0-9+-]*$", val):
+            if "./gradlew" in val:
+                return True
+            continue
+        bind = None  # the block scalar's own indent, fixed by its first line
+        for nxt in lines[i + 1:]:
+            if not nxt.strip():
+                continue
+            ni = len(nxt) - len(nxt.lstrip(" "))
+            if ni <= key or (bind is not None and ni < bind):
+                break
+            bind = bind if bind is not None else ni
+            stripped = nxt.strip()
+            if not stripped.startswith("#") and "./gradlew" in stripped:
+                return True
+    return False
+
+
+def kotlin_job_set(jobs):
+    """(job_set, ungated) from ci.yml's parsed `jobs` (workflow_jobs order == ci.yml order). A
+    job belongs to the Kotlin job set when it is gated on `needs.changes.outputs.kotlin` AND
+    runs `./gradlew`; `ungated` lists jobs that run `./gradlew` but are not gated, so a FAIL can
+    name them."""
+    job_set, ungated = [], []
+    for k, j in jobs.items():
+        if runs_gradlew(j["body"]):
+            gated = bool(j["if"]) and "needs.changes.outputs.kotlin" in j["if"]
+            (job_set if gated else ungated).append(k)
+    return job_set, ungated
+
+
 @probe("core.ci-gate")
 def _(ctx):
     text, jobs = ci_jobs(ctx)
@@ -1940,18 +1993,20 @@ def _(ctx):
     text, jobs = ci_jobs(ctx)
     if text is None:
         return fail(f"{CI} is missing")
-    job, changes = jobs.get("kotlin"), jobs.get("changes")
+    changes = jobs.get("changes")
+    job_set, ungated = kotlin_job_set(jobs)
     problems = []
-    if job is None:
-        problems.append("no `kotlin` job")
-    else:
-        if "./gradlew check" not in job["body"]:
-            problems.append("the kotlin job does not run `./gradlew check`")
-        if not job["if"] or "needs.changes.outputs.kotlin" not in job["if"]:
-            problems.append("the kotlin job is not gated on `needs.changes.outputs.kotlin`")
+    if not job_set:
+        msg = "no job gated on `needs.changes.outputs.kotlin` runs `./gradlew`"
+        if ungated:
+            msg += " (ungated: [" + ", ".join(f"`{k}`" for k in ungated) + "])"
+        problems.append(msg)
     if changes is None or not re.search(r"^\s*kotlin:\s*\$\{\{\s*steps\.", changes["body"], re.M):
         problems.append("no `changes` job output `kotlin`")
-    return fail("; ".join(problems)) if problems else ok("kotlin job gated on changes.kotlin")
+    if problems:
+        return fail("; ".join(problems))
+    names = ", ".join(f"`{jobs[k]['name']}`" for k in job_set)
+    return ok(f"Gradle job(s) {names} gated on changes.kotlin")
 
 
 @probe("overlay.kotlin.dependabot")
@@ -1972,28 +2027,48 @@ def _(ctx):
     if not found:
         return "N-A", "no applicationId in any Gradle build file yet"
     want = ctx.intent.app_id
-    wrong = {k: v for k, v in found.items() if k != want}
-    if wrong:
-        return fail(f"applicationId {sorted(wrong)} differs from the intent's `{want}`")
-    return ok(f"applicationId `{want}`")
+    others = sorted(k for k in found if k != want)
+    not_sub = [k for k in others if not k.startswith(want + ".")]
+    problems = []
+    if want not in found:
+        problems.append(f"no applicationId equals the intent's `{want}` (found {sorted(found)})")
+    if not_sub:
+        problems.append(f"applicationId {not_sub} is not a sub-namespace of `{want}`")
+    if problems:
+        return fail("; ".join(problems))
+    sub = [k for k in others if k.startswith(want + ".")]
+    return ok(f"applicationId `{want}`" + (f"; sub-namespaces {sub}" if sub else ""))
 
 
 # The SDK probe walks completed ci.yml runs on the default branch newest-first, a page at a
-# time, to the first decisive self-hosted `kotlin` result; reading every run without one is a
-# FAIL. A finished run with no `kotlin` job never ends the walk (a bad merge can drop the job
-# for one push), but at SDK_RUN_BOUND runs it decides: if the oldest finished run read has no
-# `kotlin` job, the job's history ends inside the window (FAIL, the `--add overlay:kotlin`
-# shape). Otherwise the bound is an ERROR, not a FAIL: a quiet non-Kotlin stretch ages the
-# evidence out without breaking anything, and a FAIL would have `--audit --file-issues` file a
-# redo of a done human step. A closed human-setup issue is not read as proof instead: progress
-# is probed, never stored (#331).
+# time, to the first decisive self-hosted result from a candidate job; reading every run
+# without one is a FAIL. Candidates are the Kotlin job set's display names in the audited
+# ci.yml (a repo may have split the scaffold's single `kotlin` job into several, each gated on
+# changes.kotlin and running `./gradlew`), plus the manifest's legacy `kotlin` name so runs
+# from before such a split still count. A finished run with no candidate job never ends the
+# walk (a bad merge can drop the job for one push), but at SDK_RUN_BOUND runs it decides: if
+# the oldest finished run read has no candidate job, the job's history ends inside the window
+# (FAIL, the `--add overlay:kotlin` shape). Otherwise the bound is an ERROR, not a FAIL: a
+# quiet non-Kotlin stretch ages the evidence out without breaking anything, and a FAIL would
+# have `--audit --file-issues` file a redo of a done human step. A closed human-setup issue is
+# not read as proof instead: progress is probed, never stored (#331).
 SDK_RUN_PAGE = 20    # completed runs requested per page
 SDK_RUN_BOUND = 100  # the most runs the probe reads, across all pages
 
 
 @probe("overlay.kotlin.android-sdk")
 def _(ctx):
-    job_name = ctx.man["overlays"]["kotlin"]["ci_job"]
+    _, wf_jobs = ci_jobs(ctx)
+    job_set, _ = kotlin_job_set(wf_jobs or {})
+    candidates = []
+    for k in job_set:
+        nm = wf_jobs[k]["name"]
+        if nm not in candidates:
+            candidates.append(nm)
+    legacy = ctx.man["overlays"]["kotlin"]["ci_job"]
+    if legacy not in candidates:
+        candidates.append(legacy)
+    name_set = "/".join(f"`{c}`" for c in candidates)
     branch = ctx.gh.repo_info().get("default_branch")
     if not branch:
         raise CannotVerify(f"repos/{ctx.intent.repo} returned no default_branch")
@@ -2008,33 +2083,48 @@ def _(ctx):
             missing_ok=(page == 1),
         )
         if runs is None:
-            return fail(f"GitHub has no {wf_file} workflow, so the {job_name} job has never run")
+            return fail(f"GitHub has no {wf_file} workflow, so the {name_set} job has never run")
         wf = runs.get("workflow_runs")
         if not isinstance(wf, list):
             raise CannotVerify(f"{endpoint} did not return workflow_runs")
         page_len = len(wf)
         for run in wf[:SDK_RUN_BOUND - seen]:  # never read past the bound, even mid-page
             seen += 1
-            jobs = ctx.gh.paged(f"repos/{ctx.intent.repo}/actions/runs/{run['id']}/jobs", key="jobs")
+            run_jobs = ctx.gh.paged(f"repos/{ctx.intent.repo}/actions/runs/{run['id']}/jobs", key="jobs")
             found_job = False
-            for job in jobs:
-                if job.get("name") != job_name:
+            succeeded, failed = [], []
+            for job in run_jobs:
+                if job.get("name") not in candidates:
                     continue
                 found_job = True
                 labels = {str(l).lower() for l in (job.get("labels") or [])}
                 if "self-hosted" not in labels:
                     continue
-                runner = job.get("runner_name") or "a self-hosted runner"
-                sha = (run.get("head_sha") or "")[:7]
-                where = f"{runner}, run {run['id']} ({sha})"
                 conclusion = job.get("conclusion")
                 if conclusion == "success":
-                    return ok(f"`{job_name}` succeeded on {where}")
-                if conclusion == "failure":
-                    return fail(f"`{job_name}` failed on {where} — `SDK location not found` in its "
-                                "log means the runner's .env has no ANDROID_HOME")
+                    succeeded.append(job)
+                elif conclusion == "failure":
+                    failed.append(job)
                 # skipped, cancelled, None, ... — not decisive; keep walking
-            if jobs and run.get("conclusion") in ("success", "failure"):
+            if failed or succeeded:
+                hit = failed[0] if failed else succeeded[0]
+                runner = hit.get("runner_name") or "a self-hosted runner"
+                sha = (run.get("head_sha") or "")[:7]
+                where = f"{runner}, run {run['id']} ({sha})"
+                listed = lambda js: ", ".join(f"`{j.get('name')}`" for j in js)
+                if failed and succeeded:
+                    # A failure wins even beside a success: ci.yml cannot say which candidate
+                    # needs the SDK, and a JVM-only job's success standing in for it would be a
+                    # false PASS. The sibling's success is named, so the finding (which
+                    # `--file-issues` files verbatim) is not read as an SDK fault.
+                    return fail(f"{listed(failed)} failed on {where}, while {listed(succeeded)} "
+                                "succeeded in the same run — only `SDK location not found` in the "
+                                "failed job's log means the runner's .env has no ANDROID_HOME")
+                if failed:
+                    return fail(f"{listed(failed)} failed on {where} — `SDK location not found` in "
+                                "its log means the runner's .env has no ANDROID_HOME")
+                return ok(f"{listed(succeeded)} succeeded on {where}")
+            if run_jobs and run.get("conclusion") in ("success", "failure"):
                 # only a finished run evaluated every job, so only it can show the job absent
                 in_gap, gap_run_id = not found_job, run["id"]
         # History that happens to end exactly at the bound is not detected: it reads as an
@@ -2042,15 +2132,15 @@ def _(ctx):
         if seen >= SDK_RUN_BOUND:
             if in_gap:
                 return fail(f"none of the newest {seen} completed {wf_file} runs on {branch} ran "
-                            f"`{job_name}` to a result on a self-hosted runner, and the oldest of "
+                            f"{name_set} to a result on a self-hosted runner, and the oldest of "
                             f"them predate the job (run {gap_run_id} has none)")
             raise CannotVerify(
-                f"none of the newest {seen} completed {wf_file} runs on {branch} ran `{job_name}` "
+                f"none of the newest {seen} completed {wf_file} runs on {branch} ran {name_set} "
                 "to a result on a self-hosted runner, and the probe reads no further back: the SDK "
-                f"is unverified, not failed — the next change that runs `{job_name}` re-probes it"
+                f"is unverified, not failed — the next change that runs {name_set} re-probes it"
             )
         if page_len < SDK_RUN_PAGE:
-            return fail(f"none of the {seen} completed {wf_file} run(s) on {branch} ran `{job_name}` "
+            return fail(f"none of the {seen} completed {wf_file} run(s) on {branch} ran {name_set} "
                         "to a result on a self-hosted runner (it skips until `gradlew` exists)")
         page += 1
 
