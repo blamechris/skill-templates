@@ -187,7 +187,9 @@ sdk_pages() {  # <starting run id> <python list-of-dicts, newest first> (#331)
   # plus each run's own jobs fixture. Per spec dict: "kotlin" is None (no kotlin job at
   # all), or the kotlin job's own conclusion (success/failure/skipped) on a self-hosted
   # runner unless "self_hosted": False; "conclusion" is the RUN's own top-level conclusion,
-  # only load-bearing when "kotlin" is None (the job-predates-the-run-history boundary).
+  # defaulting to "success" (a completed run almost always has one, even when its kotlin
+  # job was merely skipped) -- override it (e.g. "cancelled") for the #331 gap-tracking
+  # cases, where it decides whether this run sets, clears, or leaves alone the tail gap.
   rm -f "$MG/repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1.json"
   python3 - "$MG" "$1" "$2" <<'PY'
 import json, os, sys
@@ -207,10 +209,8 @@ for i, spec in enumerate(specs):
             job["labels"] = ["ubuntu-latest"]
         jobs = [job]
     else:
-        jobs = [{"name": "route", "conclusion": spec.get("conclusion") or "success"}]
-    run = {"id": rid, "head_sha": format(rid, "040x")}
-    if "conclusion" in spec:
-        run["conclusion"] = spec["conclusion"]
+        jobs = [{"name": "route", "conclusion": "success"}]
+    run = {"id": rid, "head_sha": format(rid, "040x"), "conclusion": spec.get("conclusion", "success")}
     runs.append(run)
     put(f"{R}_actions_runs_{rid}_jobs_per_page_100_page_1", {"total_count": len(jobs), "jobs": jobs})
 for p in range(0, len(runs), PAGE):
@@ -413,19 +413,33 @@ else
   bad "an open human-setup issue does not convert the read-bound ERROR to PENDING-HUMAN (ERROR is never converted)" "exit $rc — $(flat "$out")"
 fi
 fresh; sdk_pages 600 '[{"kotlin": "skipped"}] * 2 + [{"kotlin": None, "conclusion": "success"}] + [{"kotlin": "success"}]'
+expect "a transient gap (a finished run with no kotlin job) does not end the walk; an older success still counts" overlay.kotlin.android-sdk PASS 0
+fresh; sdk_pages 1100 '[{"kotlin": "skipped"}] * 2 + [{"kotlin": None, "conclusion": "success"}] * 118'
 out=$(verify); rc=$?
 if [ "$rc" -eq 1 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = FAIL ] \
-   && printf '%s' "$out" | grep -qF 'none of the 2 completed ci.yml run(s) on main since `kotlin` was added' \
-   && ! grep -qF 'actions/runs/603/jobs' "$MG/calls.log"; then
-  ok "a finished run with no kotlin job at all ends the walk (job predates it); the older run's jobs are never fetched"
+   && printf '%s' "$out" | grep -qF 'predate the job' \
+   && grep -qF 'per_page=20&page=5' "$MG/calls.log" && ! grep -qF 'per_page=20&page=6' "$MG/calls.log"; then
+  ok "the --add overlay:kotlin shape: a gap that reaches the bound's tail is FAIL, not ERROR (page 6 never requested)"
 else
-  bad "a finished run with no kotlin job at all ends the walk (job predates it); the older run's jobs are never fetched" "exit $rc — $(flat "$out")"
+  bad "the --add overlay:kotlin shape: a gap that reaches the bound's tail is FAIL, not ERROR (page 6 never requested)" "exit $rc — $(flat "$out")"
 fi
-fresh; sdk_pages 700 '[{"kotlin": "skipped"}] * 2 + [{"kotlin": None, "conclusion": "success"}] + [{"kotlin": "success"}]'
+fresh; sdk_pages 1100 '[{"kotlin": "skipped"}] * 2 + [{"kotlin": None, "conclusion": "success"}] * 118'
 gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 24, "title": "human-setup: Android SDK", "body": "## Done when\n\nThe `genesis-verify` rule `overlay.kotlin.android-sdk` reports PASS."}]'
-expect "the job predates the run history (the --add overlay:kotlin case), pending with an open human-setup issue" overlay.kotlin.android-sdk PENDING-HUMAN 0
-fresh; sdk_pages 800 '[{"kotlin": None, "conclusion": "cancelled"}, {"kotlin": "success"}]'
-expect "a cancelled run with no kotlin job is not a boundary; the older run's success still counts" overlay.kotlin.android-sdk PASS 0
+expect "the same gap-at-the-tail shape, pending with an open human-setup issue (the --add overlay:kotlin case)" overlay.kotlin.android-sdk PENDING-HUMAN 0
+fresh; sdk_pages 1300 '[{"kotlin": "skipped"}] * 50 + [{"kotlin": None, "conclusion": "success"}] * 10 + [{"kotlin": "skipped"}] * 60'
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then
+  ok "a gap in the middle of the window does not count at the tail (the trailing skipped runs clear it): ERROR"
+else
+  bad "a gap in the middle of the window does not count at the tail (the trailing skipped runs clear it): ERROR" "exit $rc — $(flat "$out")"
+fi
+fresh; sdk_pages 1500 '[{"kotlin": "skipped"}] * 99 + [{"kotlin": None, "conclusion": "cancelled"}] + [{"kotlin": "skipped"}] * 20'
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then
+  ok "a cancelled run with no kotlin job right at the bound's tail is not a gap: ERROR"
+else
+  bad "a cancelled run with no kotlin job right at the bound's tail is not a gap: ERROR" "exit $rc — $(flat "$out")"
+fi
 fresh; sdk_pages 900 '[{"kotlin": "skipped"}] * 20'
 out=$(verify); rc=$?
 if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then

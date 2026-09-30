@@ -1941,12 +1941,14 @@ def _(ctx):
 
 
 # The SDK probe walks completed ci.yml runs on the default branch newest-first, a page at a
-# time, to the first decisive self-hosted `kotlin` result. The job's history is exhausted, a
-# FAIL, when every run was read or a finished run has no `kotlin` job at all (it predates the
-# job). Past SDK_RUN_BOUND runs it stops with an ERROR, not a FAIL: a quiet stretch of
-# non-Kotlin commits ages the evidence out without breaking anything, and a FAIL there would
-# have `--audit --file-issues` file a redo of a done human step. A closed human-setup issue is
-# not read as proof instead: progress is probed, never stored (#331).
+# time, to the first decisive self-hosted `kotlin` result; reading every run without one is a
+# FAIL. A finished run with no `kotlin` job never ends the walk (a bad merge can drop the job
+# for one push), but at SDK_RUN_BOUND runs it decides: if the oldest finished run read has no
+# `kotlin` job, the job's history ends inside the window (FAIL, the `--add overlay:kotlin`
+# shape). Otherwise the bound is an ERROR, not a FAIL: a quiet non-Kotlin stretch ages the
+# evidence out without breaking anything, and a FAIL would have `--audit --file-issues` file a
+# redo of a done human step. A closed human-setup issue is not read as proof instead: progress
+# is probed, never stored (#331).
 SDK_RUN_PAGE = 20    # completed runs requested per page
 SDK_RUN_BOUND = 100  # the most runs the probe reads, across all pages
 
@@ -1961,6 +1963,7 @@ def _(ctx):
     endpoint = f"repos/{ctx.intent.repo}/actions/workflows/{wf_file}/runs"
     qbranch = urllib.parse.quote(branch, safe="")
     seen, page = 0, 1
+    in_gap, gap_run_id = False, None  # did the oldest finished run read so far lack the job?
     while True:
         runs = ctx.gh.get(
             f"{endpoint}?branch={qbranch}&status=completed&per_page={SDK_RUN_PAGE}&page={page}",
@@ -1993,13 +1996,16 @@ def _(ctx):
                     return fail(f"`{job_name}` failed on {where} — `SDK location not found` in its "
                                 "log means the runner's .env has no ANDROID_HOME")
                 # skipped, cancelled, None, ... — not decisive; keep walking
-            if not found_job and jobs and run.get("conclusion") in ("success", "failure"):
-                # a finished run (every job was evaluated) with no `kotlin` job at all: it
-                # predates the job's introduction, so the job's history is exhausted.
-                return fail(f"none of the {seen - 1} completed {wf_file} run(s) on {branch} since "
-                            f"`{job_name}` was added ran it to a result on a self-hosted runner "
-                            f"(run {run['id']} predates the job)")
+            if jobs and run.get("conclusion") in ("success", "failure"):
+                # only a finished run evaluated every job, so only it can show the job absent
+                in_gap, gap_run_id = not found_job, run["id"]
+        # History that happens to end exactly at the bound is not detected: it reads as an
+        # ERROR (or the gap's FAIL) rather than the short-page FAIL below. That is the safe side.
         if seen >= SDK_RUN_BOUND:
+            if in_gap:
+                return fail(f"none of the newest {seen} completed {wf_file} runs on {branch} ran "
+                            f"`{job_name}` to a result on a self-hosted runner, and the oldest of "
+                            f"them predate the job (run {gap_run_id} has none)")
             raise CannotVerify(
                 f"none of the newest {seen} completed {wf_file} runs on {branch} ran `{job_name}` "
                 "to a result on a self-hosted runner, and the probe reads no further back: the SDK "
