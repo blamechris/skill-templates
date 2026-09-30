@@ -525,6 +525,41 @@ got=$(V --plan --json --name plainrepo | python3 -c \
 [ "$got" = "none until an owner decision names one" ] \
   && ok "a defaulted stack: the Decisions Stack row keeps the no-decision recommendation" \
   || bad "a defaulted stack: the Decisions Stack row keeps the no-decision recommendation" "got: $got"
+# #333: App ID, Modules and Visibility get the Stack row's treatment. Each explicit case uses a
+# value the default would not produce, so the pre-#333 table (which ignored the flag) fails it.
+decision() {  # <decision> <plan args...> -> "<recommendation>\t<why>"
+  local d=$1; shift
+  V --plan --json "$@" | python3 -c 'import json,sys; r=next(x for x in json.load(sys.stdin)["decisions"] if x["decision"] == sys.argv[1]); print(r["recommendation"] + "\t" + r["why"])' "$d"
+}
+tab=$(printf '\t')
+got=$(decision "App ID" --name soundbed --stack kotlin --app-id com.blamechris.bedtime)
+case "$got" in "com.blamechris.bedtime${tab}Named by the owner with \`--app-id\`; permanent once an app is published under it.")
+  ok "an explicit --app-id: the App ID row recommends the owner's ID, not the derived one, and keeps the permanence warning" ;;
+*) bad "an explicit --app-id: the App ID row recommends the owner's ID, not the derived one, and keeps the permanence warning" "got: $(flat "$got")" ;; esac
+got=$(decision "App ID" --name soundbed --stack kotlin)
+[ "$got" = "com.blamechris.soundbed${tab}Permanent once an app is published under it." ] \
+  && ok "a defaulted app ID: the App ID row still recommends the derived ID" \
+  || bad "a defaulted app ID: the App ID row still recommends the derived ID" "got: $(flat "$got")"
+got=$(decision "Modules" --name plainrepo --modules runner-mac)
+case "$got" in "runner-mac${tab}Named by the owner with \`--modules\`; the ratified defaults (decision 8) are runner-mac, repo-memory, repo-relay (+ credits when media is bundled).")
+  ok "an explicit --modules: the Modules row recommends the owner's set, and why still names the ratified defaults" ;;
+*) bad "an explicit --modules: the Modules row recommends the owner's set, and why still names the ratified defaults" "got: $(flat "$got")" ;; esac
+got=$(decision "Modules" --name plainrepo)
+[ "$got" = "runner-mac, repo-memory, repo-relay (+ credits when media is bundled)${tab}Module defaults ratified 2026-09-26 (decision 8)." ] \
+  && ok "defaulted modules: the Modules row still recommends the ratified defaults" \
+  || bad "defaulted modules: the Modules row still recommends the ratified defaults" "got: $(flat "$got")"
+got=$(decision "Visibility" --name plainrepo --visibility private)
+case "$got" in "private${tab}Named by the owner with \`--visibility\`; "*)
+  ok "an explicit --visibility: the Visibility row's why names the flag" ;;
+*) bad "an explicit --visibility: the Visibility row's why names the flag" "got: $(flat "$got")" ;; esac
+got=$(decision "Visibility" --name plainrepo)
+[ "$got" = "private${tab}Going public is an owner decision recorded in an ADR; genesis never flips visibility." ] \
+  && ok "a defaulted visibility: the Visibility row keeps the standard's recommendation" \
+  || bad "a defaulted visibility: the Visibility row keeps the standard's recommendation" "got: $(flat "$got")"
+got=$(decision "Self-merge posture" --name plainrepo --posture gated)
+[ "${got%%"$tab"*}" = "withheld" ] \
+  && ok "an explicit --posture gated: the posture row still recommends withheld (the standard's own advice, deliberately not deferred)" \
+  || bad "an explicit --posture gated: the posture row still recommends withheld (the standard's own advice, deliberately not deferred)" "got: $(flat "$got")"
 
 echo "== seed issues"
 SEED="$TMP/seed.md"
