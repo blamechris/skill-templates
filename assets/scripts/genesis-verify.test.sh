@@ -19,6 +19,10 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
+# The verify_exit unit check IMPORTS the SUT, which would otherwise drop __pycache__/ into the
+# tracked source tree -- and pr-record.test.sh, running later in the same CI job, asserts that
+# directory is absent. Same fix filed-from.test.sh and session-distill.test.sh carry.
+export PYTHONDONTWRITEBYTECODE=1
 SUT="$HERE/genesis-verify.py"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/genesis-verify-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
@@ -1792,6 +1796,362 @@ if [ "$rc" -ne 0 ]; then
 else
   bad "--plan with --pin auto is refused" "exit $rc — $(flat "$out")"
 fi
+
+echo "== legacy shapes (#313)"
+# The conformant fixture has a committed profile intent (source == "profile"), and LEGACY is only
+# available with no committed intent (source == "flags"). drop_intent truncates the profile
+# before its trailing `## project-genesis Customizations` section, the same slice the
+# "core-only round trip" fixture above uses to build a plain profile. With no --stack/--modules
+# passed to `verify`, the resulting flags-intent has empty overlays/modules, so:
+#   - profile.genesis-intent always FAILs ("no committed intent") -- not itself under test here;
+#   - every overlay/module rule reads N-A (their layer is no longer in the intent) -- harmless;
+#   - core.app-id also FAILs (ADR-0001 still reserves com.blamechris.soundbed; the flags intent
+#     says "none") -- also harmless, and also why every case below asserts specific rows/exit 1,
+#     never a bare "verifies clean" exit.
+# Every end-to-end case in this section therefore exits 1, per the brief: assert the rows.
+drop_intent() { edit .claude/skill-profile.md 's.split("## project-genesis Customizations")[0]'; }
+legacy_of() {  # <json> <rule>
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(next((r.get("legacy") for r in d["results"] if r["rule"]==sys.argv[2]), "ABSENT"))' "$1" "$2" 2>/dev/null || echo UNPARSEABLE
+}
+shapes_of() {  # <json>
+  python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])["legacy_shapes"], sort_keys=True))' "$1" 2>/dev/null || echo UNPARSEABLE
+}
+add_workflow() {  # <name under .github/workflows/>, content on stdin
+  mkdir -p "$M/.github/workflows"
+  cat > "$M/.github/workflows/$1"
+}
+# The rejected shape (#313, standard §4.4): two `pull_request` workflows share the check names
+# `quick_checks`/`unit_tests` (one path-filtered with `paths-ignore`, one with `paths`), behind a
+# `decide_helper` job every other job in both workflows needs -- a shared helper, not itself a
+# mirrored check (archery-apprentice's `decide_runner`). mirror-a.yml also carries a `[skip-ci]`
+# title-tag check (a non-comment line); mirror-b.yml carries only the native `[skip ci]` (a
+# space) form, which must never be read as the same tag.
+add_mirror_pair() {
+  add_workflow mirror-a.yml <<'YAML'
+name: Mirror A
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+
+jobs:
+  decide_helper:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hello
+
+  quick_checks:
+    needs: decide_helper
+    runs-on: ubuntu-latest
+    steps:
+      - name: check title tag
+        run: |
+          if [[ "$TITLE" == *"[skip-ci]"* ]]; then
+            echo "skip"
+          fi
+
+  unit_tests:
+    needs: [decide_helper, quick_checks]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo tests
+YAML
+  add_workflow mirror-b.yml <<'YAML'
+name: Mirror B
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+  workflow_dispatch:
+
+jobs:
+  decide_helper:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hello
+
+  quick_checks:
+    needs: decide_helper
+    runs-on: ubuntu-latest
+    steps:
+      - name: auto pass
+        run: echo "auto pass, see [skip ci] note above"
+
+  unit_tests:
+    needs: decide_helper
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo tests
+YAML
+}
+
+echo "-- ci-mirror"
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair; snap
+out=$(verify); rc=$?
+gate=$(result_of "$out" core.ci-gate); trig=$(result_of "$out" core.ci-triggers)
+gate_shape=$(legacy_of "$out" core.ci-gate); trig_shape=$(legacy_of "$out" core.ci-triggers)
+gate_ev=$(python3 -c 'import json,sys; print(next(r["evidence"] for r in json.loads(sys.argv[1])["results"] if r["rule"]=="core.ci-gate"))' "$out" 2>/dev/null)
+if [ "$rc" -eq 1 ] && [ "$gate" = LEGACY ] && [ "$trig" = LEGACY ] && [ "$gate_shape" = ci-mirror ] && [ "$trig_shape" = ci-mirror ] \
+   && printf '%s' "$gate_ev" | grep -qF '`quick_checks` (mirror-a.yml / mirror-b.yml), `unit_tests` (mirror-a.yml / mirror-b.yml)' \
+   && ! printf '%s' "$gate_ev" | grep -q decide_helper; then
+  ok "no ci.yml + a path-filtered auto-pass mirror: core.ci-gate and core.ci-triggers LEGACY, evidence names the mirrored checks and not the shared helper"
+else
+  bad "no ci.yml + a path-filtered auto-pass mirror: core.ci-gate and core.ci-triggers LEGACY, evidence names the mirrored checks and not the shared helper" \
+      "gate=$gate($gate_shape) trig=$trig($trig_shape) exit=$rc evidence=$(flat "$gate_ev")"
+fi
+shapes=$(shapes_of "$out")
+[ "$shapes" = '{"ci-mirror": "path-filtered auto-pass CI mirror"}' ] \
+  && ok "JSON legacy_shapes lists exactly the shape present" \
+  || bad "JSON legacy_shapes lists exactly the shape present" "got: $shapes"
+
+expect_ev "a [skip-ci] title tag names the tagged workflow" core.ci-gate LEGACY 1 '1 workflow(s) (mirror-a.yml)'
+out=$(verify)
+ev=$(python3 -c 'import json,sys; print(next(r["evidence"] for r in json.loads(sys.argv[1])["results"] if r["rule"]=="core.ci-gate"))' "$out" 2>/dev/null)
+# mirror-b.yml legitimately appears elsewhere in the evidence (one of the two workflows defining
+# the mirrored check names) -- the assertion is that it is absent from THIS clause specifically,
+# so the needle anchors the exact tag-count phrase rather than searching the whole string.
+if printf '%s' "$ev" | grep -qF 'title tag in 1 workflow(s) (mirror-a.yml):'; then
+  ok "native [skip ci] (a space) in mirror-b.yml is never counted alongside the hyphenated tag"
+else
+  bad "native [skip ci] (a space) in mirror-b.yml is never counted alongside the hyphenated tag" "$(flat "$ev")"
+fi
+
+fresh; drop_intent; add_mirror_pair
+edit .github/workflows/ci.yml 's.replace("  ci-gate:\n    name: ci-gate\n", "  ci-gate-old:\n    name: ci-gate-old\n")'
+expect "ci.yml present but its ci-gate job is gone (renamed): core.ci-gate LEGACY" core.ci-gate LEGACY 1
+edit .github/workflows/ci.yml 's.replace("on:\n  pull_request:\n", "on:\n  pull_request:\n    paths: [\"src/**\"]\n")'
+expect "ci-triggers LEGACY when the workflow-level path filter is its ONLY problem" core.ci-triggers LEGACY 1
+
+fresh; drop_intent; add_mirror_pair
+edit .github/workflows/ci.yml 's.replace("  ci-gate:\n    name: ci-gate\n", "  ci-gate-old:\n    name: ci-gate-old\n")'
+edit .github/workflows/ci.yml 's.replace("on:\n  pull_request:\n", "on:\n  pull_request:\n    paths: [\"src/**\"]\n")'
+edit .github/workflows/ci.yml 's.replace("  workflow_dispatch:\n", "  workflow_dispatchX:\n", 1)'
+expect "core.ci-gate stays LEGACY regardless of ci-triggers' own problems" core.ci-gate LEGACY 1
+expect "ci-triggers keeps FAIL when it has a SECOND, unexplained problem too (a failure wins)" core.ci-triggers FAIL 1
+
+fresh; drop_intent; add_mirror_pair
+edit .github/workflows/ci.yml 's.replace("    if: always()\n", "    if: success()\n")'
+expect "a malformed ci-gate (wrong if:) stays FAIL even with a mirror present" core.ci-gate FAIL 1
+
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"
+add_workflow mirror-e.yml <<'YAML'
+name: Mirror E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke_check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo e
+YAML
+add_workflow mirror-f.yml <<'YAML'
+name: Mirror F
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke_check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo f
+YAML
+expect "duplicate job names across two workflows with NO path filter is not a mirror: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+expect "duplicate job names across two workflows with NO path filter is not a mirror: core.ci-triggers stays FAIL" core.ci-triggers FAIL 1
+
+# An inline flow list filters exactly as a block list does (`paths-ignore: ['docs/**']`).
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+edit .github/workflows/mirror-a.yml 's.replace("    paths-ignore:\n      - '"'"'docs/**'"'"'\n", "    paths-ignore: ['"'"'docs/**'"'"']\n")'
+edit .github/workflows/mirror-b.yml 's.replace("    paths:\n      - '"'"'docs/**'"'"'\n", "    paths: ['"'"'docs/**'"'"']\n")'
+expect "an inline paths/paths-ignore list is a path filter too: the mirror is still LEGACY" core.ci-gate LEGACY 1
+
+# `pull_request_target:` is not `pull_request:`: a filtered pull_request_target workflow sharing
+# check names with one unfiltered pull_request workflow is not a pair of pull_request workflows.
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+edit .github/workflows/mirror-a.yml 's.replace("on:\n  pull_request:\n", "on:\n  pull_request_target:\n")'
+edit .github/workflows/mirror-b.yml 's.replace("    paths:\n      - '"'"'docs/**'"'"'\n", "")'
+expect "a path-filtered pull_request_target workflow is not one of the pull_request pair: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+
+# The #348 review's false positive: a monorepo's independent per-area workflows, each filtered to
+# its own directory with `paths:`, both running a real `test` job. Nothing stands in for anything:
+# neither side runs because the other was skipped, so this is not the mirror (FAIL stands).
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"
+add_workflow backend-ci.yml <<'YAML'
+name: Backend CI
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pytest backend
+YAML
+add_workflow frontend-ci.yml <<'YAML'
+name: Frontend CI
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test --prefix frontend
+YAML
+expect "two per-area \`paths:\` workflows sharing a real \`test\` job are not a mirror: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+
+# Complementary kinds are not enough: a `paths-ignore` side and a `paths` side over DISJOINT
+# patterns never stand in for each other.
+edit .github/workflows/backend-ci.yml 's.replace("    paths:\n      - '"'"'backend/**'"'"'\n", "    paths-ignore:\n      - '"'"'docs/**'"'"'\n")'
+expect "a paths-ignore / paths pair over disjoint patterns is not a mirror: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+edit .github/workflows/frontend-ci.yml 's.replace("      - '"'"'frontend/**'"'"'\n", "      - '"'"'frontend/**'"'"'\n      - '"'"'docs/**'"'"'\n")'
+expect "the same pair once the paths side also runs on the ignored pattern is the mirror: core.ci-gate LEGACY" core.ci-gate LEGACY 1
+
+echo "-- the genesis-intent gate (ci-mirror)"
+fresh; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+expect "the SAME mirror on the unmodified profile-intent fixture: core.ci-gate stays FAIL (a genesis repo gets no exemption)" core.ci-gate FAIL 1
+expect "the SAME mirror on the unmodified profile-intent fixture: core.ci-triggers stays FAIL" core.ci-triggers FAIL 1
+
+echo "-- classic-protection"
+fresh; drop_intent; snap
+gh_edit repos_blamechris_soundbed_rulesets_per_page_100_page_1 'd[:] = []'
+cat > "$MG/repos_blamechris_soundbed_branches_main_protection.json" <<'JSON'
+{"required_pull_request_reviews": {"required_approving_review_count": 0}, "enforce_admins": {"enabled": true}, "allow_force_pushes": {"enabled": false}, "allow_deletions": {"enabled": false}, "required_conversation_resolution": {"enabled": true}}
+JSON
+out=$(verify); rc=$?
+rs=$(result_of "$out" github.ruleset); nb=$(result_of "$out" github.ruleset.no-bypass)
+rs_shape=$(legacy_of "$out" github.ruleset); nb_shape=$(legacy_of "$out" github.ruleset.no-bypass)
+rs_ev=$(python3 -c 'import json,sys; print(next(r["evidence"] for r in json.loads(sys.argv[1])["results"] if r["rule"]=="github.ruleset"))' "$out" 2>/dev/null)
+nb_ev=$(python3 -c 'import json,sys; print(next(r["evidence"] for r in json.loads(sys.argv[1])["results"] if r["rule"]=="github.ruleset.no-bypass"))' "$out" 2>/dev/null)
+if [ "$rc" -eq 1 ] && [ "$rs" = LEGACY ] && [ "$nb" = LEGACY ] && [ "$rs_shape" = classic-protection ] && [ "$nb_shape" = classic-protection ] \
+   && printf '%s' "$rs_ev" | grep -q "required checks" && printf '%s' "$rs_ev" | grep -q enforce_admins \
+   && printf '%s' "$nb_ev" | grep -q enforce_admins; then
+  ok "classic branch protection (no ruleset at all) explains github.ruleset and github.ruleset.no-bypass"
+else
+  bad "classic branch protection (no ruleset at all) explains github.ruleset and github.ruleset.no-bypass" \
+      "ruleset=$rs($rs_shape) no-bypass=$nb($nb_shape) exit=$rc rs_ev=$(flat "$rs_ev") nb_ev=$(flat "$nb_ev")"
+fi
+
+fresh; drop_intent
+gh_edit repos_blamechris_soundbed_rulesets_per_page_100_page_1 'd[:] = []'
+: > "$MG/repos_blamechris_soundbed_branches_main_protection.404"
+expect "no ruleset and no classic protection either (404): github.ruleset stays FAIL" github.ruleset FAIL 1
+expect "no ruleset and no classic protection either (404): github.ruleset.no-bypass stays FAIL" github.ruleset.no-bypass FAIL 1
+
+fresh; drop_intent
+gh_edit repos_blamechris_soundbed_rulesets_per_page_100_page_1 'd[:] = []'
+: > "$MG/repos_blamechris_soundbed_branches_main_protection.401"
+expect_ev "a 401 reading branch protection: github.ruleset stays FAIL with a could-not-run note (never ERROR)" github.ruleset FAIL 1 "could not run"
+out=$(verify); rc=$?
+if [ "$rc" -eq 1 ] && [ "$(result_of "$out" github.ruleset.no-bypass)" = FAIL ]; then
+  ok "a 401 reading branch protection: github.ruleset.no-bypass stays FAIL too, exit 1 (not 2 -- a detector that cannot look never makes an ERROR row)"
+else
+  bad "a 401 reading branch protection: github.ruleset.no-bypass stays FAIL too, exit 1 (not 2 -- a detector that cannot look never makes an ERROR row)" "exit $rc — $(flat "$out")"
+fi
+
+echo "-- the genesis-intent gate (classic-protection)"
+fresh
+gh_edit repos_blamechris_soundbed_rulesets_per_page_100_page_1 'd[:] = []'
+cat > "$MG/repos_blamechris_soundbed_branches_main_protection.json" <<'JSON'
+{"required_pull_request_reviews": {"required_approving_review_count": 0}, "enforce_admins": {"enabled": true}, "allow_force_pushes": {"enabled": false}, "allow_deletions": {"enabled": false}, "required_conversation_resolution": {"enabled": true}}
+JSON
+expect "the SAME classic-protection mutation on the unmodified profile-intent fixture: github.ruleset stays FAIL" github.ruleset FAIL 1
+expect "the SAME classic-protection mutation on the unmodified profile-intent fixture: github.ruleset.no-bypass stays FAIL" github.ruleset.no-bypass FAIL 1
+
+echo "-- verify_exit contract (LEGACY cannot be isolated end-to-end; a unit check on the import)"
+check=$(python3 - "$SUT" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gv_ut", sys.argv[1])
+gv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gv)
+cases = [
+    ([{"result": "LEGACY"}], 1),
+    ([{"result": "LEGACY"}, {"result": "ERROR"}], 2),
+    ([{"result": "DRIFT"}, {"result": "PENDING-HUMAN"}, {"result": "PASS"}], 0),
+    ([{"result": "FAIL"}], 1),
+]
+problems = []
+for rows, want in cases:
+    got = gv.verify_exit(rows)
+    if got != want:
+        problems.append(f"{rows} -> {got}, want {want}")
+print("OK" if not problems else "FAIL: " + "; ".join(problems))
+PY
+)
+[ "$check" = OK ] && ok "verify_exit: [LEGACY]->1, [LEGACY,ERROR]->2, [DRIFT,PENDING-HUMAN,PASS]->0, [FAIL]->1" \
+  || bad "verify_exit: [LEGACY]->1, [LEGACY,ERROR]->2, [DRIFT,PENDING-HUMAN,PASS]->0, [FAIL]->1" "$check"
+
+echo "-- non-git-stub"
+FAKEHOME="$TMP/fakehome"; mkdir -p "$FAKEHOME/Projects"
+verify_stub() { HOME="$FAKEHOME" FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" python3 "$SUT" --registry "$REG" --registry-ref HEAD --no-fetch --repo "$1" "${@:2}" 2>&1; }
+
+mkdir -p "$FAKEHOME/Projects/stubrepo/.claude"
+: > "$FAKEHOME/Projects/stubrepo/.mcp.json"
+out=$(verify_stub "$FAKEHOME/Projects/stubrepo" --json); rc=$?
+repo=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["repo"])' "$out" 2>/dev/null)
+row=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(len(d["results"]), d["results"][0]["rule"], d["results"][0]["result"], d["results"][0].get("legacy"), d["commit"], d["intent_source"], d["pin"])' "$out" 2>/dev/null)
+shapes=$(shapes_of "$out")
+if [ "$rc" -eq 2 ] && [ "$repo" = "blamechris/stubrepo" ] && [ "$row" = "1 machine.checkout LEGACY non-git-stub None None None" ] \
+   && [ "$shapes" = '{"non-git-stub": "non-git stub instead of a checkout"}' ]; then
+  ok "a stub dir under \$HOME/Projects/ (.claude + .mcp.json only): exit 2, one LEGACY machine.checkout row, JSON repo/commit/intent_source/pin/legacy_shapes as specified"
+else
+  bad "a stub dir under \$HOME/Projects/ (.claude + .mcp.json only): exit 2, one LEGACY machine.checkout row, JSON repo/commit/intent_source/pin/legacy_shapes as specified" \
+      "exit=$rc repo=$repo row=$row shapes=$shapes — $(flat "$out")"
+fi
+text=$(verify_stub "$FAKEHOME/Projects/stubrepo"); rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$text" | grep -q "1 LEGACY" && printf '%s' "$text" | grep -q "^LEGACY: known pre-standard shape" \
+   && printf '%s' "$text" | grep -qF "Could not verify: no rule was probed, because --repo is not a checkout. This is not a pass."; then
+  ok "text mode: the LEGACY footer, \"1 LEGACY\" in the counts line, and the stub's own could-not-verify line"
+else
+  bad "text mode: the LEGACY footer, \"1 LEGACY\" in the counts line, and the stub's own could-not-verify line" "exit $rc — $(flat "$text")"
+fi
+
+mkdir -p "$FAKEHOME/Projects/emptystub"
+out=$(verify_stub "$FAKEHOME/Projects/emptystub" --json); rc=$?
+row=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["results"][0]["result"])' "$out" 2>/dev/null)
+[ "$rc" -eq 2 ] && [ "$row" = LEGACY ] && ok "an empty directory under \$HOME/Projects/ also qualifies as a stub" \
+  || bad "an empty directory under \$HOME/Projects/ also qualifies as a stub" "exit $rc — $(flat "$out")"
+
+mkdir -p "$FAKEHOME/Projects/realish"; printf '# hi\n' > "$FAKEHOME/Projects/realish/README.md"
+out=$(verify_stub "$FAKEHOME/Projects/realish" --gh-repo blamechris/realish); rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "is not a git repository"; then
+  ok "a directory under \$HOME/Projects/ holding a README.md is NOT a stub (the existing die() message)"
+else
+  bad "a directory under \$HOME/Projects/ holding a README.md is NOT a stub (the existing die() message)" "exit $rc — $(flat "$out")"
+fi
+
+mkdir -p "$TMP/outside-projects/.claude"; : > "$TMP/outside-projects/.mcp.json"
+out=$(verify_stub "$TMP/outside-projects" --gh-repo blamechris/outside); rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "is not a git repository"; then
+  ok "a stub-shaped directory OUTSIDE \$HOME/Projects/ is NOT a stub"
+else
+  bad "a stub-shaped directory OUTSIDE \$HOME/Projects/ is NOT a stub" "exit $rc — $(flat "$out")"
+fi
+
+echo "-- self-check parity for legacy shapes"
+sc_case "a legacy shape naming a rule the manifest no longer has" "which is not a probed rule" "$LOADM
+m['rules'] = [r for r in m['rules'] if r['id'] != 'core.ci-gate']
+$SAVEM"
+
+echo "-- JSON legacy_shapes on the conformant round trip"
+fresh
+out=$(verify)
+shapes=$(shapes_of "$out")
+[ "$shapes" = "{}" ] && ok "JSON legacy_shapes is {} on the conformant round trip (no LEGACY rows)" \
+  || bad "JSON legacy_shapes is {} on the conformant round trip (no LEGACY rows)" "got: $shapes"
 
 echo "== every probed rule has a mutation that FAILs it"
 probed=$(V --list-rules --json | python3 -c 'import json,sys; print(" ".join(r["id"] for r in json.load(sys.stdin) if r["class"]=="probe"))')
