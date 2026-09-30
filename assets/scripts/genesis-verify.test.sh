@@ -222,6 +222,79 @@ PY
 
 snap() { git -C "$M" add -A >/dev/null 2>&1; git -C "$M" commit -qm mutant >/dev/null 2>&1; }
 
+kotlin_split() {  # <replacement jobs block, verbatim indented> <ci-gate needs jobs after "changes">
+  # Replaces the base fixture's single `kotlin:` job (#341: Soundbed's shape) with the given
+  # job block text, and updates ci-gate's `needs` to match -- both in one step, since the two
+  # must agree for core.ci-gate to still pass.
+  python3 - "$M/.github/workflows/ci.yml" "$1" "$2" <<'PY'
+import sys
+p, block, needs = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(p).read()
+old = '''  # Overlay: kotlin. Runs `./gradlew check` once `gradlew` exists; until then it skips
+  # and ci-gate passes, which is the honest "no test target yet" state.
+  # There is no Android SDK setup step. On the self-hosted runner, ANDROID_HOME comes from
+  # the runner's own `.env` (a human step, rule `overlay.kotlin.android-sdk`); GitHub's
+  # hosted images carry an SDK, so a `[github]` run needs nothing either.
+  kotlin:
+    name: kotlin
+    needs: [route, changes]
+    if: needs.changes.outputs.kotlin == 'true'
+    runs-on: ${{ fromJSON(needs.route.outputs.runner) }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 17
+      # cache-disabled: v6's cache is a separately licensed component, and its uploads stall
+      # on a self-hosted runner (archery-apprentice runs it the same way).
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-disabled: true
+      - name: ./gradlew check
+        shell: bash
+        run: ./gradlew check --no-daemon --stacktrace
+'''
+if old not in s:
+    sys.exit("kotlin_split: the base kotlin job block was not found verbatim")
+s = s.replace(old, block)
+gate_old = "needs: [route, hygiene, changes, kotlin]"
+if gate_old not in s:
+    sys.exit("kotlin_split: ci-gate's needs line was not found verbatim")
+s = s.replace(gate_old, f"needs: [route, hygiene, changes, {needs}]")
+open(p, "w").write(s)
+PY
+  [ $? -eq 0 ] || BROKEN=1
+}
+
+# Soundbed's #341 shape: the scaffold's single `kotlin` job split into two, both gated on
+# changes.kotlin and both running `./gradlew` in a `run:` step.
+KOTLIN_SPLIT_BLOCK="  core-jvm:
+    name: core-jvm
+    needs: [route, changes]
+    if: needs.changes.outputs.kotlin == 'true'
+    runs-on: \${{ fromJSON(needs.route.outputs.runner) }}
+    timeout-minutes: 45
+    steps:
+      - name: core jvm tests
+        shell: bash
+        run: ./gradlew :core:jvmTest --no-daemon --stacktrace
+
+  android-unit:
+    name: android-unit
+    needs: [route, changes]
+    if: needs.changes.outputs.kotlin == 'true'
+    runs-on: \${{ fromJSON(needs.route.outputs.runner) }}
+    timeout-minutes: 45
+    steps:
+      - name: android unit + lint + debug apk
+        shell: bash
+        run: ./gradlew testDebugUnitTest lint assembleDebug --no-daemon --stacktrace
+"
+
 COVERED=""
 # expect <name> <rule> <RESULT> <exit>: verify the current mutant and assert the rule's row.
 expect() {
@@ -235,6 +308,25 @@ expect() {
     [ "$want" = FAIL ] && COVERED="$COVERED $rule"
   else
     bad "$name" "rule $rule: $got (want $want), exit $rc (want $wantrc) — $(flat "$out")"
+  fi
+}
+
+# expect_ev <name> <rule> <RESULT> <exit> <evidence substring>: like `expect`, plus a check that
+# the rule's evidence contains a substring -- for a mutation where the (result, exit) pair alone
+# cannot distinguish the new behaviour from the old (both land on the same verdict, by a
+# different reading), so the evidence text is the only observable difference.
+expect_ev() {
+  local name=$1 rule=$2 want=$3 wantrc=$4 needle=$5 out rc got ev
+  if [ "$BROKEN" -ne 0 ]; then bad "$name" "the mutation did not apply (see the error above)"; return; fi
+  git -C "$M" add -A >/dev/null 2>&1; git -C "$M" commit -qm mutant >/dev/null 2>&1
+  out=$(verify); rc=$?
+  got=$(result_of "$out" "$rule")
+  ev=$(python3 -c 'import json,sys; print(next((r["evidence"] for r in json.loads(sys.argv[1])["results"] if r["rule"]==sys.argv[2]), ""))' "$out" "$rule" 2>/dev/null)
+  if [ "$got" = "$want" ] && [ "$rc" -eq "$wantrc" ] && printf '%s' "$ev" | grep -qF "$needle"; then
+    ok "$name"
+    [ "$want" = FAIL ] && COVERED="$COVERED $rule"
+  else
+    bad "$name" "rule $rule: $got (want $want), exit $rc (want $wantrc), evidence $(flat "$ev") (want to contain \"$needle\")"
   fi
 }
 
@@ -291,6 +383,56 @@ fresh; edit .github/workflows/ci.yml 's.replace("ls-files -ci --exclude-standard
 fresh; edit .github/workflows/ci.yml 's.replace("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "actions/checkout@v7", 1)'; expect "an action pinned to a tag" core.actions-pinned FAIL 1
 fresh; edit .github/dependabot.yml 's.replace("interval: weekly", "interval: daily", 1)'; expect "github-actions updates not weekly" core.dependabot FAIL 1
 fresh; edit .github/workflows/ci.yml 's.replace("if: needs.changes.outputs.kotlin == \x27true\x27", "if: true")'; expect "kotlin job not gated on changes" overlay.kotlin.ci FAIL 1
+
+echo "-- #341: the Kotlin job set is inferred from ci.yml, not a fixed job name"
+fresh
+kotlin_split "$KOTLIN_SPLIT_BLOCK" "core-jvm, android-unit"
+expect "Soundbed's split shape (core-jvm, android-unit), both gated and gradle" overlay.kotlin.ci PASS 0
+fresh
+kotlin_split "  core-jvm:
+    name: core-jvm
+    needs: [route, changes]
+    if: needs.changes.outputs.kotlin == 'true'
+    runs-on: \${{ fromJSON(needs.route.outputs.runner) }}
+    timeout-minutes: 45
+    steps:
+      - name: core jvm tests
+        shell: bash
+        run: ./gradlew :core:jvmTest --no-daemon --stacktrace
+
+  android-unit:
+    name: android-unit
+    needs: [route, changes]
+    runs-on: \${{ fromJSON(needs.route.outputs.runner) }}
+    timeout-minutes: 45
+    steps:
+      - name: android unit + lint + debug apk
+        shell: bash
+        run: ./gradlew testDebugUnitTest lint assembleDebug --no-daemon --stacktrace
+" "core-jvm, android-unit"
+expect "only one of the two split jobs is gated and runs gradlew" overlay.kotlin.ci PASS 0
+fresh; edit .github/workflows/ci.yml 's.replace(
+  "      - name: ./gradlew check\n        shell: bash\n        run: ./gradlew check --no-daemon --stacktrace\n",
+  "      # ./gradlew check runs here once the module lands\n      - name: ./gradlew check\n        shell: bash\n        run: echo \"not yet implemented\"\n")'
+expect "gradlew named only in a comment and a step name:, never a run: (old code's naive substring match is fooled; the new parser is not)" overlay.kotlin.ci FAIL 1
+# The step shapes the scaffold does not use, but a hand-edited ci.yml will: `- run:` on the
+# step's own line, and a `run: |` block scalar. A block ends at the next key of the same step.
+fresh; edit .github/workflows/ci.yml 's.replace(
+  "      - name: ./gradlew check\n        shell: bash\n        run: ./gradlew check --no-daemon --stacktrace\n",
+  "      - run: ./gradlew check --no-daemon --stacktrace\n")'
+expect "a \`- run: ./gradlew check\` step (the list-item form) counts" overlay.kotlin.ci PASS 0
+fresh; edit .github/workflows/ci.yml 's.replace(
+  "        run: ./gradlew check --no-daemon --stacktrace\n",
+  "        run: |\n          echo \"building\"\n          ./gradlew check --no-daemon --stacktrace\n")'
+expect "gradlew inside a \`run: |\` block scalar counts" overlay.kotlin.ci PASS 0
+fresh; edit .github/workflows/ci.yml 's.replace(
+  "      - name: ./gradlew check\n        shell: bash\n        run: ./gradlew check --no-daemon --stacktrace\n",
+  "      - run: |\n          echo \"not yet\"\n        name: ./gradlew check\n        shell: bash\n")'
+expect "a \`- run: |\` block ends at the step's next key: its \`name: ./gradlew check\` is not a command" overlay.kotlin.ci FAIL 1
+fresh
+kotlin_split "$KOTLIN_SPLIT_BLOCK" "core-jvm, android-unit"
+edit .github/workflows/ci.yml 's.replace("    if: needs.changes.outputs.kotlin == \x27true\x27\n", "")'
+expect_ev "both split jobs ungated: the FAIL names them in ci.yml order" overlay.kotlin.ci FAIL 1 '(ungated: [`core-jvm`, `android-unit`])'
 fresh; edit .github/dependabot.yml 's.split("  # Overlay: kotlin")[0]';              expect "no gradle update entry" overlay.kotlin.dependabot FAIL 1
 
 echo "== profile and skills"
@@ -455,6 +597,54 @@ fresh; rm "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_ma
 out=$(verify); rc=$?
 if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then ok "an unreadable ci.yml runs list is ERROR, not a guessed FAIL"
 else bad "an unreadable ci.yml runs list is ERROR, not a guessed FAIL" "exit $rc — $(flat "$out")"; fi
+
+echo "-- #341: the SDK probe follows the split job set, and legacy runs still count"
+fresh
+kotlin_split "$KOTLIN_SPLIT_BLOCK" "core-jvm, android-unit"
+gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1 'd["workflow_runs"].insert(0, {"id": 102, "head_sha": "b" * 40}); d["total_count"] = 2'
+python3 -c 'import json,sys; json.dump({"total_count": 4, "jobs": [
+    {"name": "route", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"]},
+    {"name": "core-jvm", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
+    {"name": "android-unit", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
+    {"name": "ci-gate", "conclusion": "success"},
+]}, open(sys.argv[1], "w"))' "$MG/repos_blamechris_soundbed_actions_runs_102_jobs_per_page_100_page_1.json"
+# Also fail the older run's legacy `kotlin` job: old code, blind to core-jvm/android-unit,
+# would skip run 102 and fall back to run 101 -- if that still succeeded, old code would
+# reach the same PASS by a different (and here irrelevant) path. Failing it isolates the
+# assertion to "the newest run's split jobs are recognized," not "the fallback still works."
+gh_edit repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1 'next(j for j in d["jobs"] if j["name"] == "kotlin")["conclusion"] = "failure"'
+expect "split ci.yml: the newest run's core-jvm and android-unit both succeed on self-hosted" overlay.kotlin.android-sdk PASS 0
+
+fresh
+kotlin_split "$KOTLIN_SPLIT_BLOCK" "core-jvm, android-unit"
+gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1 'd["workflow_runs"].insert(0, {"id": 102, "head_sha": "b" * 40}); d["total_count"] = 2'
+python3 -c 'import json,sys; json.dump({"total_count": 4, "jobs": [
+    {"name": "route", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"]},
+    {"name": "core-jvm", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
+    {"name": "android-unit", "conclusion": "failure", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
+    {"name": "ci-gate", "conclusion": "failure"},
+]}, open(sys.argv[1], "w"))' "$MG/repos_blamechris_soundbed_actions_runs_102_jobs_per_page_100_page_1.json"
+expect_ev "split ci.yml: android-unit fails, core-jvm succeeds in the newest run — FAIL naming android-unit" overlay.kotlin.android-sdk FAIL 1 "android-unit"
+
+fresh
+kotlin_split "$KOTLIN_SPLIT_BLOCK" "core-jvm, android-unit"
+gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1 'd["workflow_runs"].insert(0, {"id": 102, "head_sha": "b" * 40}); d["total_count"] = 2'
+python3 -c 'import json,sys; json.dump({"total_count": 4, "jobs": [
+    {"name": "route", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"]},
+    {"name": "core-jvm", "conclusion": "skipped", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
+    {"name": "android-unit", "conclusion": "skipped", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
+    {"name": "ci-gate", "conclusion": "success"},
+]}, open(sys.argv[1], "w"))' "$MG/repos_blamechris_soundbed_actions_runs_102_jobs_per_page_100_page_1.json"
+expect "split ci.yml: the newest run's split jobs are skipped; an older run's legacy kotlin success still counts" overlay.kotlin.android-sdk PASS 0
+
+fresh
+kotlin_split "$KOTLIN_SPLIT_BLOCK" "core-jvm, android-unit"
+gh_edit repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1 'd["jobs"] = [j for j in d["jobs"] if j["name"] != "kotlin"] + [{"name": "core-jvm", "conclusion": "success", "labels": ["ubuntu-latest"]}]'
+# The result/exit alone (FAIL/1) is the same whether the probe recognizes `core-jvm` as a
+# candidate or not -- neither reading finds a self-hosted decisive result here. The evidence
+# naming `core-jvm` (old code can only ever name the fixed `kotlin`) is what distinguishes them.
+expect_ev "split ci.yml: a split job succeeding only on a hosted runner is not decisive" overlay.kotlin.android-sdk FAIL 1 "core-jvm"
+
 fresh; rm "$M/CREDITS.md";                                                           expect "CREDITS.md removed" module.credits.file FAIL 1
 fresh; edit .claude/skill-profile.md 's.replace("- credits-paths: none", "- credits-paths: app/src/main/res/raw")'
 mkdir -p "$M/app/src/main/res/raw" && printf 'x' > "$M/app/src/main/res/raw/rain.ogg"
@@ -465,6 +655,30 @@ fresh; mkdir -p "$M/app" && printf 'android {\n  defaultConfig {\n    applicatio
 expect "applicationId differs from the reserved app ID" overlay.kotlin.app-id FAIL 1
 fresh; mkdir -p "$M/app" && printf 'android {\n  defaultConfig {\n    applicationId = "com.blamechris.soundbed"\n  }\n}\n' > "$M/app/build.gradle.kts"
 expect "applicationId equals the reserved app ID" overlay.kotlin.app-id PASS 0
+
+echo "-- #342: a second module's applicationId must be a sub-namespace of the intent's"
+fresh
+mkdir -p "$M/app" "$M/fixture"
+printf 'android {\n  defaultConfig {\n    applicationId = "com.blamechris.soundbed"\n  }\n}\n' > "$M/app/build.gradle.kts"
+printf 'android {\n  defaultConfig {\n    applicationId = "com.blamechris.soundbed.fixture"\n  }\n}\n' > "$M/fixture/build.gradle.kts"
+expect "a sub-namespace module (test fixture) alongside the correct app-id" overlay.kotlin.app-id PASS 0
+fresh
+mkdir -p "$M/app" "$M/other"
+printf 'android {\n  defaultConfig {\n    applicationId = "com.blamechris.soundbed"\n  }\n}\n' > "$M/app/build.gradle.kts"
+printf 'android {\n  defaultConfig {\n    applicationId = "com.unrelated.thing"\n  }\n}\n' > "$M/other/build.gradle.kts"
+# Old code's plain inequality check also FAILs here (any difference was wrong), so the evidence
+# text -- new code's specific "not a sub-namespace of" reasoning -- is what proves the new check
+# ran, not just a check that happens to land on the same verdict.
+expect_ev "an unrelated applicationId alongside the correct one" overlay.kotlin.app-id FAIL 1 "not a sub-namespace"
+fresh
+mkdir -p "$M/fixture"
+printf 'android {\n  defaultConfig {\n    applicationId = "com.blamechris.soundbed.fixture"\n  }\n}\n' > "$M/fixture/build.gradle.kts"
+expect_ev "only a sub-namespace id present; no module carries the intent's own app-id" overlay.kotlin.app-id FAIL 1 "no applicationId equals the intent's"
+fresh
+mkdir -p "$M/app" "$M/other"
+printf 'android {\n  defaultConfig {\n    applicationId = "com.blamechris.soundbed"\n  }\n}\n' > "$M/app/build.gradle.kts"
+printf 'android {\n  defaultConfig {\n    applicationId = "com.blamechris.soundbedx"\n  }\n}\n' > "$M/other/build.gradle.kts"
+expect_ev "a look-alike applicationId (soundbedx) is not a sub-namespace of soundbed" overlay.kotlin.app-id FAIL 1 "not a sub-namespace"
 
 echo "== waivers"
 fresh; edit .claude/skill-profile.md 's.replace("- waivers: none", "- waivers: core.gitattributes (docs/adr/0002-no-attributes.md)")'
