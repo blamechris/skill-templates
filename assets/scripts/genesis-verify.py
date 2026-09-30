@@ -1805,10 +1805,15 @@ def settings_probe(ctx, want, got, what):
     return fail(f"{what}: " + ", ".join(diff)) if diff else ok(f"{what} as standard")
 
 
+def live_visibility(info):
+    """The visibility GitHub reports for the repo. One reading for both probes that ask: a public
+    repo that github.fork-pr-workflows reads N-A is the one github.visibility judges (#353)."""
+    return "private" if info.get("private") else info.get("visibility", "public")
+
+
 @probe("github.visibility")
 def _(ctx):
-    info = ctx.gh.repo_info()
-    live = "private" if info.get("private") else info.get("visibility", "public")
+    live = live_visibility(ctx.gh.repo_info())
     if live != ctx.intent.visibility:
         return fail(f"the repo is {live}; the intent says {ctx.intent.visibility}")
     return ok(live)
@@ -1838,6 +1843,11 @@ def _(ctx):
 
 @probe("github.fork-pr-workflows")
 def _(ctx):
+    # The rule is the private-repo policy, and GitHub refuses its endpoint for a public repo
+    # (HTTP 422). Only repo_info decides public: a 422 on a private repo stays an ERROR.
+    if live_visibility(ctx.gh.repo_info()) == "public":
+        return "N-A", ("the repo is public, so the private-repo fork-PR policy does not apply; fork-PR "
+                       "approval for a public repo is the planned public bundle (blamechris/skill-templates#312)")
     got = ctx.gh.get(f"repos/{ctx.intent.repo}/actions/permissions/fork-pr-workflows-private-repos")
     return settings_probe(ctx, ctx.man["github"]["fork_pr_workflows_private"], got, "fork-PR workflows")
 

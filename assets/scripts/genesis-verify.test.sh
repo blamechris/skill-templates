@@ -68,6 +68,7 @@ if [ -f "$d/$key.json" ]; then cat "$d/$key.json"; exit 0; fi
 if [ -f "$d/$key.204" ]; then exit 0; fi
 if [ -f "$d/$key.404" ]; then echo '{"message":"Not Found","status":"404"}'; echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$d/$key.401" ]; then echo "gh: Bad credentials (HTTP 401)" >&2; exit 1; fi
+if [ -f "$d/$key.422" ]; then echo "gh: $(cat "$d/$key.422") (HTTP 422)" >&2; exit 1; fi
 echo "fake gh: no fixture for $ep" >&2; exit 1
 SH
 chmod +x "$FAKEBIN/gh"
@@ -466,6 +467,20 @@ fresh; gh_edit repos_blamechris_soundbed 'd["has_wiki"] = True';                
 fresh; gh_edit repos_blamechris_soundbed_actions_permissions 'd["sha_pinning_required"] = False'; expect "SHA pinning not required" github.actions FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_actions_permissions_workflow 'd["default_workflow_permissions"] = "write"'; expect "token writable" github.workflow-token FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_actions_permissions_fork-pr-workflows-private-repos 'd["run_workflows_from_fork_pull_requests"] = True'; expect "fork PRs may run workflows" github.fork-pr-workflows FAIL 1
+# #353: GitHub answers the private-repo fork-PR endpoint with a 422 on a public repo, and these
+# fixtures serve exactly that. The rule is the private-repo policy, so a public repo reads N-A
+# without asking (github.visibility is what FAILs it); the same 422 on a private repo is ERROR.
+FORK=repos_blamechris_soundbed_actions_permissions_fork-pr-workflows-private-repos
+FORK_422="Fork PR workflow settings is not allowed for public repositories."
+fresh; gh_edit repos_blamechris_soundbed 'd["private"] = False; d["visibility"] = "public"'
+rm "$MG/$FORK.json"; printf '%s' "$FORK_422" > "$MG/$FORK.422"
+expect_ev "a public repo: fork-PR workflows are N-A, naming why, not an ERROR (#353)" github.fork-pr-workflows N-A 1 \
+  "policy does not apply; fork-PR approval for a public repo is the planned public bundle (blamechris/skill-templates#312)"
+if grep -q '^api -H ' "$MG/calls.log" && ! grep -qF fork-pr-workflows-private-repos "$MG/calls.log"; then
+  ok "a public repo: the private-repo fork-PR endpoint is never requested (#353)"
+else bad "a public repo: the private-repo fork-PR endpoint is never requested (#353)" "$(grep -F fork-pr "$MG/calls.log" | head -1)"; fi
+fresh; rm "$MG/$FORK.json"; printf '%s' "$FORK_422" > "$MG/$FORK.422"
+expect "a private repo: a 422 from the fork-PR endpoint is still an ERROR (#353)" github.fork-pr-workflows ERROR 2
 fresh; gh_edit repos_blamechris_soundbed_actions_permissions_artifact-and-log-retention 'd["days"] = 90'; expect "retention 90 days" github.retention FAIL 1
 fresh; mv "$MG/repos_blamechris_soundbed_vulnerability-alerts.204" "$MG/repos_blamechris_soundbed_vulnerability-alerts.404"; expect "Dependabot alerts off (a meaningful 404)" github.security FAIL 1
 fresh; gh_edit repos_blamechris_soundbed_automated-security-fixes 'd["enabled"] = False'; expect "security updates off" github.security FAIL 1
