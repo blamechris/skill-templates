@@ -64,19 +64,20 @@ does not resolve is exit 2. Why (#314): a v1 change on the registry's default re
 retroactively FAIL a repo that conformed to the standard it was built from.
 
 LEGACY (verify only; the back-port audit, standard §10.4) is a FAIL row that a known pre-standard
-shape fully explains: the `ci-mirror` (path-filtered workflows whose checks an auto-pass sibling
-posts under the same names), `classic-protection` (classic branch protection instead of a
-ruleset), or the repo-level `non-git-stub` (a stub directory in place of the checkout). Only a
-repo with no committed genesis intent can read LEGACY; on a genesis repo the same shape is a
-regression and stays FAIL. LEGACY is a finding, like FAIL, not an exemption like DRIFT: DRIFT is
-exit-neutral because the repo conformed to the standard it was built from, and a LEGACY repo never
-did -- the mirror is a confirmed merge-gate hole twice over (it can post a pass under a failing
-check's name, and its `[skip-ci]` tag makes required jobs report Success, §4.4). What LEGACY adds
-is the fix it names: a migration of the shape, filed once per shape. A failure wins: a detector
-reclassifies a row only when its shape explains the row's WHOLE failure, and one that cannot look
-leaves the FAIL standing with a could-not-run note, as classify_drift does. The stub is reported
-before any git read, as one `machine.checkout` row, and exits 2: no rule was probed. Keeping a
-shape on purpose is a waiver ADR (WAIVED), as for any rule.
+shape fully explains: the `ci-mirror` (a complementary pair of workflows, one skipping pull_request
+on `paths-ignore` patterns the other runs on, posting the same check names so the stand-in reports
+whenever the real one is skipped), `classic-protection` (classic branch protection instead of a
+ruleset), or the repo-level `non-git-stub` (a stub directory in place of the checkout). Only a repo
+with no committed genesis intent can read LEGACY; on a genesis repo the same shape is a regression
+and stays FAIL. LEGACY is a finding, like FAIL, not an exemption like DRIFT: DRIFT is exit-neutral
+because the repo conformed to the standard it was built from, and a LEGACY repo never did -- the
+mirror is a confirmed merge-gate hole twice over (it can post a pass under a failing check's name,
+and its `[skip-ci]` tag makes required jobs report Success, §4.4). What LEGACY adds is the fix it
+names: a migration of the shape, filed once per shape. A failure wins: a detector reclassifies a
+row only when its shape explains the row's WHOLE failure, and one that cannot look leaves the FAIL
+standing with a could-not-run note, as classify_drift does. The stub is reported before any git
+read, as one `machine.checkout` row, and exits 2: no rule was probed. Keeping a shape on purpose is
+a waiver ADR (WAIVED), as for any rule.
 """
 import argparse
 import datetime
@@ -2209,48 +2210,78 @@ def event_block(block, event):
     return body
 
 
+def path_filters(event_lines):
+    """{"paths": [...], "paths-ignore": [...]} for whichever of the two keys an event block sets:
+    block or inline flow lists, quotes and trailing comments stripped."""
+    out = {}
+    for i, ln in enumerate(event_lines):
+        m = re.match(r"^(\s*)(paths|paths-ignore):\s*(.*?)\s*(?:\s#.*)?$", ln)
+        if not m:
+            continue
+        indent, key, val = len(m.group(1)), m.group(2), m.group(3)
+        if val.startswith("["):
+            out[key] = [x.strip().strip("'\"") for x in val.strip("[]").split(",") if x.strip()]
+            continue
+        items = []
+        for nxt in event_lines[i + 1:]:
+            if not nxt.strip() or nxt.strip().startswith("#"):
+                continue
+            item = re.match(r"^(\s*)-\s*(.+?)\s*(?:\s#.*)?$", nxt)
+            # An item may sit at the key's own indent (YAML's indentless sequence); a key does not.
+            if not item or len(item.group(1)) < indent:
+                break
+            items.append(item.group(2).strip("'\""))
+        out[key] = items
+    return out
+
+
 def wf_pull_request(text):
-    """(triggers_on_pull_request, path_filtered) for one workflow's `on:` block. An inline
+    """(triggers_on_pull_request, path_filters) for one workflow's `on:` block. An inline
     `on: [...]` list (no per-event block) can name `pull_request` but never filters it."""
     inline, block = on_block(text)
     if inline is not None:
-        return "pull_request" in inline, False
+        return "pull_request" in inline, {}
     if block is None:
-        return False, False
+        return False, {}
     pr = event_block(block, "pull_request")
     if pr is None:
-        return False, False
-    # Unanchored after the colon: `paths: ['docs/**']` filters exactly as a block list does.
-    return True, any(re.match(r"^\s*paths(-ignore)?:", ln) for ln in pr)
+        return False, {}
+    return True, path_filters(pr)
 
 
 SKIP_CI_TAG = re.compile(r"\b(skip-ci|ci-skip)\b")  # native `[skip ci]` (a space) never matches
 
 
 def ci_mirror_evidence(ctx):
-    """None, or evidence for the rejected shape (§4.4): a required check name a skipped workflow
-    can never report is satisfied instead by an unconditional pass in a sibling workflow. Found
-    when a check name is defined by >=2 `pull_request` workflows (>=1 of them path-filtered on
-    pull_request), excluding a name that is a `needs:` target of another job in EVERY
-    pull_request workflow that defines it -- a shared helper (e.g. `decide_runner`), not a
-    mirrored check. The `[skip-ci]`/`[ci-skip]` title tag, when present anywhere in the
-    workflows, is reported alongside as supporting evidence, never as a trigger on its own."""
+    """None, or evidence for the rejected shape (§4.4): a check a path-skipped workflow never
+    reports is posted instead by a sibling that runs exactly when it is skipped. The pair must be
+    COMPLEMENTARY -- one workflow skips pull_request on `paths-ignore` patterns the other runs on
+    (`paths`), at least one pattern shared -- so independent per-area workflows that merely reuse
+    a job name (a monorepo's `backend/**` and `frontend/**` each running `test`) are not a mirror.
+    A name that is a `needs:` target of another job in EVERY pull_request workflow defining it is
+    a shared helper (e.g. `decide_runner`), not a mirrored check. The `[skip-ci]`/`[ci-skip]`
+    title tag, anywhere in the workflows, is supporting evidence, never a trigger on its own."""
     wfs = [p for p in ctx.tree.under(".github/workflows/") if p.endswith((".yml", ".yaml"))]
     texts = {p: ctx.tree.read(p) for p in wfs}
-    prs = []  # (path, jobs, path_filtered) for every workflow that triggers on pull_request
+    prs = []  # (path, jobs, path_filters) for every workflow that triggers on pull_request
     for p, text in texts.items():
         if text is None:
             continue
-        triggers, filtered = wf_pull_request(text)
+        triggers, filters = wf_pull_request(text)
         if triggers:
-            prs.append((p, workflow_jobs(text), filtered))
+            prs.append((p, workflow_jobs(text), filters))
     if len(prs) < 2:
         return None
 
-    by_name = {}
-    for p, jobs, filtered in prs:
-        for k, j in jobs.items():
-            by_name.setdefault(j["name"], []).append((p, k, filtered))
+    by_name = {}  # check name -> {workflow path: its pull_request path filters}
+    for p, jobs, filters in prs:
+        for j in jobs.values():
+            by_name.setdefault(j["name"], {})[p] = filters
+
+    def complementary(hits):
+        """(skipping, standing-in) workflow pairs among one name's workflows."""
+        return sorted((a, b) for a, fa in hits.items() for b, fb in hits.items()
+                      if a != b and set(fa.get("paths-ignore") or ()) & set(fb.get("paths") or ()))
 
     def needed_everywhere(name):
         defining = [jobs for _, jobs, _ in prs if any(j["name"] == name for j in jobs.values())]
@@ -2260,19 +2291,21 @@ def ci_mirror_evidence(ctx):
                 return False
         return True
 
-    mirrored = sorted(
-        name for name, hits in by_name.items()
-        if len({p for p, _, _ in hits}) >= 2
-        and any(filtered for _, _, filtered in hits)
-        and not needed_everywhere(name)
-    )
+    mirrored = {}
+    for name, hits in by_name.items():
+        pairs = complementary(hits)
+        if pairs and not needed_everywhere(name):
+            mirrored[name] = pairs
     if not mirrored:
         return None
 
-    shown, more = mirrored[:6], mirrored[6:]
-    pairs = [f"`{n}` ({', '.join(sorted({posixpath.basename(p) for p, _, _ in by_name[n]}))})" for n in shown]
-    ev = ("check name(s) posted by >=2 pull_request workflows, at least one path-filtered: "
-          + ", ".join(pairs) + (f" (+{len(more)} more)" if more else ""))
+    names = sorted(mirrored)
+    shown, more = names[:6], names[6:]
+    listed = [f"`{n}` (" + ", ".join(f"{posixpath.basename(a)} / {posixpath.basename(b)}"
+                                     for a, b in mirrored[n]) + ")" for n in shown]
+    ev = ("check name(s) posted by a complementary pair, the first workflow skipping pull_request "
+          "on `paths-ignore` patterns the second runs on (`paths`), so one side always reports: "
+          + ", ".join(listed) + (f" (+{len(more)} more)" if more else ""))
 
     tagged = sorted({posixpath.basename(p) for p, text in texts.items() if text is not None
                      for ln in text.splitlines()

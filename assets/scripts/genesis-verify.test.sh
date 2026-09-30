@@ -1895,7 +1895,7 @@ gate=$(result_of "$out" core.ci-gate); trig=$(result_of "$out" core.ci-triggers)
 gate_shape=$(legacy_of "$out" core.ci-gate); trig_shape=$(legacy_of "$out" core.ci-triggers)
 gate_ev=$(python3 -c 'import json,sys; print(next(r["evidence"] for r in json.loads(sys.argv[1])["results"] if r["rule"]=="core.ci-gate"))' "$out" 2>/dev/null)
 if [ "$rc" -eq 1 ] && [ "$gate" = LEGACY ] && [ "$trig" = LEGACY ] && [ "$gate_shape" = ci-mirror ] && [ "$trig_shape" = ci-mirror ] \
-   && printf '%s' "$gate_ev" | grep -qF '`quick_checks` (mirror-a.yml, mirror-b.yml), `unit_tests` (mirror-a.yml, mirror-b.yml)' \
+   && printf '%s' "$gate_ev" | grep -qF '`quick_checks` (mirror-a.yml / mirror-b.yml), `unit_tests` (mirror-a.yml / mirror-b.yml)' \
    && ! printf '%s' "$gate_ev" | grep -q decide_helper; then
   ok "no ci.yml + a path-filtered auto-pass mirror: core.ci-gate and core.ci-triggers LEGACY, evidence names the mirrored checks and not the shared helper"
 else
@@ -1978,6 +1978,47 @@ fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
 edit .github/workflows/mirror-a.yml 's.replace("on:\n  pull_request:\n", "on:\n  pull_request_target:\n")'
 edit .github/workflows/mirror-b.yml 's.replace("    paths:\n      - '"'"'docs/**'"'"'\n", "")'
 expect "a path-filtered pull_request_target workflow is not one of the pull_request pair: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+
+# The #348 review's false positive: a monorepo's independent per-area workflows, each filtered to
+# its own directory with `paths:`, both running a real `test` job. Nothing stands in for anything:
+# neither side runs because the other was skipped, so this is not the mirror (FAIL stands).
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"
+add_workflow backend-ci.yml <<'YAML'
+name: Backend CI
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pytest backend
+YAML
+add_workflow frontend-ci.yml <<'YAML'
+name: Frontend CI
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test --prefix frontend
+YAML
+expect "two per-area \`paths:\` workflows sharing a real \`test\` job are not a mirror: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+
+# Complementary kinds are not enough: a `paths-ignore` side and a `paths` side over DISJOINT
+# patterns never stand in for each other.
+edit .github/workflows/backend-ci.yml 's.replace("    paths:\n      - '"'"'backend/**'"'"'\n", "    paths-ignore:\n      - '"'"'docs/**'"'"'\n")'
+expect "a paths-ignore / paths pair over disjoint patterns is not a mirror: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+edit .github/workflows/frontend-ci.yml 's.replace("      - '"'"'frontend/**'"'"'\n", "      - '"'"'frontend/**'"'"'\n      - '"'"'docs/**'"'"'\n")'
+expect "the same pair once the paths side also runs on the ignored pattern is the mirror: core.ci-gate LEGACY" core.ci-gate LEGACY 1
 
 echo "-- the genesis-intent gate (ci-mirror)"
 fresh; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
