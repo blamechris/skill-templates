@@ -43,8 +43,9 @@ Exit codes:
      For --plan: the plan was rendered.
   1  findings: at least one FAIL (or, for --self-check, at least one registry defect).
   2  could not verify -- the registry or repo is unreadable, a ref does not resolve, a fetch
-     failed, `gh` failed for any reason other than a meaningful 404 (an ERROR row), or --plan
-     refused its input. Never 0: a check that could not look must not report a pass.
+     failed, `gh` failed for any reason other than a meaningful 404 (an ERROR row), a probe hit
+     its read bound before finding decisive evidence, or --plan refused its input. Never 0: a
+     check that could not look must not report a pass.
 
 LEGACY is a reserved result: no v1 probe emits it. The back-port audit (standard §10.4) adds
 the detectors for known legacy shapes, such as archery's path-filtered auto-pass mirror.
@@ -87,7 +88,8 @@ ERROR = "ERROR"  # a row whose probe could not look; any ERROR row forces exit 2
 
 
 class CannotVerify(Exception):
-    """A probe could not look (gh failed, a git read failed). Becomes an ERROR row."""
+    """A probe could not look (gh failed, a git read failed, or its evidence lies past what it
+    reads). Becomes an ERROR row."""
 
 
 class RenderError(Exception):
@@ -1938,7 +1940,17 @@ def _(ctx):
     return ok(f"applicationId `{want}`")
 
 
-SDK_RUN_WINDOW = 20  # newest completed ci.yml runs on the default branch the SDK probe reads
+# The SDK probe walks completed ci.yml runs on the default branch newest-first, a page at a
+# time, to the first decisive self-hosted `kotlin` result; reading every run without one is a
+# FAIL. A finished run with no `kotlin` job never ends the walk (a bad merge can drop the job
+# for one push), but at SDK_RUN_BOUND runs it decides: if the oldest finished run read has no
+# `kotlin` job, the job's history ends inside the window (FAIL, the `--add overlay:kotlin`
+# shape). Otherwise the bound is an ERROR, not a FAIL: a quiet non-Kotlin stretch ages the
+# evidence out without breaking anything, and a FAIL would have `--audit --file-issues` file a
+# redo of a done human step. A closed human-setup issue is not read as proof instead: progress
+# is probed, never stored (#331).
+SDK_RUN_PAGE = 20    # completed runs requested per page
+SDK_RUN_BOUND = 100  # the most runs the probe reads, across all pages
 
 
 @probe("overlay.kotlin.android-sdk")
@@ -1949,35 +1961,60 @@ def _(ctx):
         raise CannotVerify(f"repos/{ctx.intent.repo} returned no default_branch")
     wf_file = posixpath.basename(CI)
     endpoint = f"repos/{ctx.intent.repo}/actions/workflows/{wf_file}/runs"
-    runs = ctx.gh.get(
-        f"{endpoint}?branch={urllib.parse.quote(branch, safe='')}&status=completed&per_page={SDK_RUN_WINDOW}",
-        missing_ok=True,
-    )
-    if runs is None:
-        return fail(f"GitHub has no {wf_file} workflow, so the {job_name} job has never run")
-    wf = runs.get("workflow_runs")
-    if not isinstance(wf, list):
-        raise CannotVerify(f"{endpoint} did not return workflow_runs")
-    for run in wf:
-        jobs = ctx.gh.paged(f"repos/{ctx.intent.repo}/actions/runs/{run['id']}/jobs", key="jobs")
-        for job in jobs:
-            if job.get("name") != job_name:
-                continue
-            labels = {str(l).lower() for l in (job.get("labels") or [])}
-            if "self-hosted" not in labels:
-                continue
-            runner = job.get("runner_name") or "a self-hosted runner"
-            sha = (run.get("head_sha") or "")[:7]
-            where = f"{runner}, run {run['id']} ({sha})"
-            conclusion = job.get("conclusion")
-            if conclusion == "success":
-                return ok(f"`{job_name}` succeeded on {where}")
-            if conclusion == "failure":
-                return fail(f"`{job_name}` failed on {where} — `SDK location not found` in its "
-                            "log means the runner's .env has no ANDROID_HOME")
-            # skipped, cancelled, None, ... — not decisive; keep walking
-    return fail(f"none of the newest {len(wf)} completed {wf_file} run(s) on {branch} ran `{job_name}` "
-                "to a result on a self-hosted runner (it skips until `gradlew` exists)")
+    qbranch = urllib.parse.quote(branch, safe="")
+    seen, page = 0, 1
+    in_gap, gap_run_id = False, None  # did the oldest finished run read so far lack the job?
+    while True:
+        runs = ctx.gh.get(
+            f"{endpoint}?branch={qbranch}&status=completed&per_page={SDK_RUN_PAGE}&page={page}",
+            missing_ok=(page == 1),
+        )
+        if runs is None:
+            return fail(f"GitHub has no {wf_file} workflow, so the {job_name} job has never run")
+        wf = runs.get("workflow_runs")
+        if not isinstance(wf, list):
+            raise CannotVerify(f"{endpoint} did not return workflow_runs")
+        page_len = len(wf)
+        for run in wf[:SDK_RUN_BOUND - seen]:  # never read past the bound, even mid-page
+            seen += 1
+            jobs = ctx.gh.paged(f"repos/{ctx.intent.repo}/actions/runs/{run['id']}/jobs", key="jobs")
+            found_job = False
+            for job in jobs:
+                if job.get("name") != job_name:
+                    continue
+                found_job = True
+                labels = {str(l).lower() for l in (job.get("labels") or [])}
+                if "self-hosted" not in labels:
+                    continue
+                runner = job.get("runner_name") or "a self-hosted runner"
+                sha = (run.get("head_sha") or "")[:7]
+                where = f"{runner}, run {run['id']} ({sha})"
+                conclusion = job.get("conclusion")
+                if conclusion == "success":
+                    return ok(f"`{job_name}` succeeded on {where}")
+                if conclusion == "failure":
+                    return fail(f"`{job_name}` failed on {where} — `SDK location not found` in its "
+                                "log means the runner's .env has no ANDROID_HOME")
+                # skipped, cancelled, None, ... — not decisive; keep walking
+            if jobs and run.get("conclusion") in ("success", "failure"):
+                # only a finished run evaluated every job, so only it can show the job absent
+                in_gap, gap_run_id = not found_job, run["id"]
+        # History that happens to end exactly at the bound is not detected: it reads as an
+        # ERROR (or the gap's FAIL) rather than the short-page FAIL below. That is the safe side.
+        if seen >= SDK_RUN_BOUND:
+            if in_gap:
+                return fail(f"none of the newest {seen} completed {wf_file} runs on {branch} ran "
+                            f"`{job_name}` to a result on a self-hosted runner, and the oldest of "
+                            f"them predate the job (run {gap_run_id} has none)")
+            raise CannotVerify(
+                f"none of the newest {seen} completed {wf_file} runs on {branch} ran `{job_name}` "
+                "to a result on a self-hosted runner, and the probe reads no further back: the SDK "
+                f"is unverified, not failed — the next change that runs `{job_name}` re-probes it"
+            )
+        if page_len < SDK_RUN_PAGE:
+            return fail(f"none of the {seen} completed {wf_file} run(s) on {branch} ran `{job_name}` "
+                        "to a result on a self-hosted runner (it skips until `gradlew` exists)")
+        page += 1
 
 
 # ---------------------------------------------------------------- verify

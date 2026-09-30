@@ -139,7 +139,7 @@ put(f"{R}_actions_runners_per_page_100_page_1",
     {"total_count": 1, "runners": [{"name": "mac-soundbed", "status": "online"}]})
 put(f"{R}_actions_secrets_per_page_100_page_1",
     {"total_count": 2, "secrets": [{"name": "DISCORD_BOT_TOKEN"}, {"name": "DISCORD_CHANNEL_PRS"}]})
-put(f"{R}_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20",
+put(f"{R}_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1",
     {"total_count": 1, "workflow_runs": [{"id": 101, "head_sha": "a" * 40}]})
 put(f"{R}_actions_runs_101_jobs_per_page_100_page_1", {"total_count": 3, "jobs": [
     {"name": "route", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"]},
@@ -179,6 +179,45 @@ if json.dumps(d, sort_keys=True) == before:
 json.dump(d, open(p, "w"))
 PY
   [ $? -eq 0 ] || BROKEN=1
+}
+
+sdk_pages() {  # <starting run id> <python list-of-dicts, newest first> (#331)
+  # Replaces the ci.yml run history in $MG with these runs, chunked SDK_RUN_PAGE=20 per
+  # page -- overwriting page 1 outright so the base fixture's run 101 never leaks in --
+  # plus each run's own jobs fixture. Per spec dict: "kotlin" is None (no kotlin job at
+  # all), or the kotlin job's own conclusion (success/failure/skipped) on a self-hosted
+  # runner unless "self_hosted": False; "conclusion" is the RUN's own top-level conclusion,
+  # defaulting to "success" (a completed run almost always has one, even when its kotlin
+  # job was merely skipped) -- override it (e.g. "cancelled") for the #331 gap-tracking
+  # cases, where it decides whether this run sets, clears, or leaves alone the tail gap.
+  rm -f "$MG/repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1.json"
+  python3 - "$MG" "$1" "$2" <<'PY'
+import json, os, sys
+d, start_id, specs = sys.argv[1], int(sys.argv[2]), eval(sys.argv[3])
+PAGE, R = 20, "repos_blamechris_soundbed"
+def put(key, obj):
+    open(os.path.join(d, f"{key}.json"), "w").write(json.dumps(obj))
+runs = []
+for i, spec in enumerate(specs):
+    rid = start_id + i
+    kotlin = spec.get("kotlin")
+    if kotlin is not None:
+        job = {"name": "kotlin", "conclusion": kotlin}
+        if spec.get("self_hosted", True):
+            job["labels"], job["runner_name"] = ["self-hosted", "macOS", "ARM64"], "soundbed-mbp-arm64"
+        else:
+            job["labels"] = ["ubuntu-latest"]
+        jobs = [job]
+    else:
+        jobs = [{"name": "route", "conclusion": "success"}]
+    run = {"id": rid, "head_sha": format(rid, "040x"), "conclusion": spec.get("conclusion", "success")}
+    runs.append(run)
+    put(f"{R}_actions_runs_{rid}_jobs_per_page_100_page_1", {"total_count": len(jobs), "jobs": jobs})
+for p in range(0, len(runs), PAGE):
+    chunk = runs[p:p + PAGE]
+    put(f"{R}_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_{p // PAGE + 1}",
+        {"total_count": len(runs), "workflow_runs": chunk})
+PY
 }
 
 snap() { git -C "$M" add -A >/dev/null 2>&1; git -C "$M" commit -qm mutant >/dev/null 2>&1; }
@@ -330,7 +369,7 @@ expect "a human-setup issue for a different rule does not excuse the Android SDK
 fresh; gh_edit repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1 'next(j for j in d["jobs"] if j["name"] == "kotlin")["labels"] = ["ubuntu-latest"]'
 expect "kotlin green only on a hosted runner proves nothing about the runner host" overlay.kotlin.android-sdk FAIL 1
 fresh
-gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20 'd["workflow_runs"].insert(0, {"id": 102, "head_sha": "b" * 40}); d["total_count"] = 2'
+gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1 'd["workflow_runs"].insert(0, {"id": 102, "head_sha": "b" * 40}); d["total_count"] = 2'
 python3 -c 'import json,sys; json.dump({"total_count": 3, "jobs": [
     {"name": "route", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"]},
     {"name": "kotlin", "conclusion": "skipped", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
@@ -338,19 +377,81 @@ python3 -c 'import json,sys; json.dump({"total_count": 3, "jobs": [
 ]}, open(sys.argv[1], "w"))' "$MG/repos_blamechris_soundbed_actions_runs_102_jobs_per_page_100_page_1.json"
 expect "the newest run's kotlin job skipped; an older run's success still counts" overlay.kotlin.android-sdk PASS 0
 fresh
-gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20 'd["workflow_runs"].insert(0, {"id": 102, "head_sha": "b" * 40}); d["total_count"] = 2'
+gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1 'd["workflow_runs"].insert(0, {"id": 102, "head_sha": "b" * 40}); d["total_count"] = 2'
 python3 -c 'import json,sys; json.dump({"total_count": 3, "jobs": [
     {"name": "route", "conclusion": "success", "labels": ["self-hosted", "macOS", "ARM64"]},
     {"name": "kotlin", "conclusion": "failure", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
     {"name": "ci-gate", "conclusion": "success"},
 ]}, open(sys.argv[1], "w"))' "$MG/repos_blamechris_soundbed_actions_runs_102_jobs_per_page_100_page_1.json"
 expect "the newest run's decisive result wins over an older success" overlay.kotlin.android-sdk FAIL 1
-fresh; gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20 'd["workflow_runs"] = []; d["total_count"] = 0'
+fresh; gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1 'd["workflow_runs"] = []; d["total_count"] = 0'
 expect "no completed ci.yml runs yet" overlay.kotlin.android-sdk FAIL 1
-fresh; mv "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20.json" \
-          "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20.404"
+fresh; gh_edit repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1 'd["workflow_runs"] = []; d["total_count"] = 0'
+gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 22, "title": "human-setup: Android SDK", "body": "## Done when\n\nThe `genesis-verify` rule `overlay.kotlin.android-sdk` reports PASS."}]'
+expect "no completed ci.yml runs yet, pending with an open human-setup issue" overlay.kotlin.android-sdk PENDING-HUMAN 0
+
+echo "-- #331: paging and the read bound"
+fresh; sdk_pages 200 '[{"kotlin": "skipped"}] * 20 + [{"kotlin": "success"}]'
+expect "a decisive success on page 2 (paging works)" overlay.kotlin.android-sdk PASS 0
+fresh; sdk_pages 300 '[{"kotlin": "skipped"}] * 20 + [{"kotlin": "failure"}]'
+expect "a decisive failure on page 2" overlay.kotlin.android-sdk FAIL 1
+fresh; sdk_pages 400 '[{"kotlin": "skipped"}] * 20 + [{"kotlin": "skipped"}] * 3'
+expect "history exhausted across pages, below the bound (20 + 3 skipped)" overlay.kotlin.android-sdk FAIL 1
+fresh; sdk_pages 500 '[{"kotlin": "skipped"}] * 120'
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ] \
+   && grep -qF 'per_page=20&page=5' "$MG/calls.log" && ! grep -qF 'per_page=20&page=6' "$MG/calls.log"; then
+  ok "the read bound (100 runs / 5 pages) stops the probe: ERROR, page 6 never requested"
+else
+  bad "the read bound (100 runs / 5 pages) stops the probe: ERROR, page 6 never requested" "exit $rc — $(flat "$out")"
+fi
+gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 23, "title": "human-setup: Android SDK", "body": "## Done when\n\nThe `genesis-verify` rule `overlay.kotlin.android-sdk` reports PASS."}]'
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then
+  ok "an open human-setup issue does not convert the read-bound ERROR to PENDING-HUMAN (ERROR is never converted)"
+else
+  bad "an open human-setup issue does not convert the read-bound ERROR to PENDING-HUMAN (ERROR is never converted)" "exit $rc — $(flat "$out")"
+fi
+fresh; sdk_pages 600 '[{"kotlin": "skipped"}] * 2 + [{"kotlin": None, "conclusion": "success"}] + [{"kotlin": "success"}]'
+expect "a transient gap (a finished run with no kotlin job) does not end the walk; an older success still counts" overlay.kotlin.android-sdk PASS 0
+fresh; sdk_pages 1100 '[{"kotlin": "skipped"}] * 2 + [{"kotlin": None, "conclusion": "success"}] * 118'
+out=$(verify); rc=$?
+if [ "$rc" -eq 1 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = FAIL ] \
+   && printf '%s' "$out" | grep -qF 'predate the job' \
+   && grep -qF 'per_page=20&page=5' "$MG/calls.log" && ! grep -qF 'per_page=20&page=6' "$MG/calls.log"; then
+  ok "the --add overlay:kotlin shape: a gap that reaches the bound's tail is FAIL, not ERROR (page 6 never requested)"
+else
+  bad "the --add overlay:kotlin shape: a gap that reaches the bound's tail is FAIL, not ERROR (page 6 never requested)" "exit $rc — $(flat "$out")"
+fi
+fresh; sdk_pages 1100 '[{"kotlin": "skipped"}] * 2 + [{"kotlin": None, "conclusion": "success"}] * 118'
+gh_edit repos_blamechris_soundbed_issues_labels_human-setup_state_open_per_page_100_page_1 'd[:] = [{"number": 24, "title": "human-setup: Android SDK", "body": "## Done when\n\nThe `genesis-verify` rule `overlay.kotlin.android-sdk` reports PASS."}]'
+expect "the same gap-at-the-tail shape, pending with an open human-setup issue (the --add overlay:kotlin case)" overlay.kotlin.android-sdk PENDING-HUMAN 0
+fresh; sdk_pages 1300 '[{"kotlin": "skipped"}] * 50 + [{"kotlin": None, "conclusion": "success"}] * 10 + [{"kotlin": "skipped"}] * 60'
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then
+  ok "a gap in the middle of the window does not count at the tail (the trailing skipped runs clear it): ERROR"
+else
+  bad "a gap in the middle of the window does not count at the tail (the trailing skipped runs clear it): ERROR" "exit $rc — $(flat "$out")"
+fi
+fresh; sdk_pages 1500 '[{"kotlin": "skipped"}] * 99 + [{"kotlin": None, "conclusion": "cancelled"}] + [{"kotlin": "skipped"}] * 20'
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then
+  ok "a cancelled run with no kotlin job right at the bound's tail is not a gap: ERROR"
+else
+  bad "a cancelled run with no kotlin job right at the bound's tail is not a gap: ERROR" "exit $rc — $(flat "$out")"
+fi
+fresh; sdk_pages 900 '[{"kotlin": "skipped"}] * 20'
+out=$(verify); rc=$?
+if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then
+  ok "an unreadable older page is ERROR, not a guessed FAIL"
+else
+  bad "an unreadable older page is ERROR, not a guessed FAIL" "exit $rc — $(flat "$out")"
+fi
+
+fresh; mv "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1.json" \
+          "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1.404"
 expect "GitHub has no ci.yml workflow" overlay.kotlin.android-sdk FAIL 1
-fresh; rm "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20.json"
+fresh; rm "$MG/repos_blamechris_soundbed_actions_workflows_ci.yml_runs_branch_main_status_completed_per_page_20_page_1.json"
 out=$(verify); rc=$?
 if [ "$rc" -eq 2 ] && [ "$(result_of "$out" overlay.kotlin.android-sdk)" = ERROR ]; then ok "an unreadable ci.yml runs list is ERROR, not a guessed FAIL"
 else bad "an unreadable ci.yml runs list is ERROR, not a guessed FAIL" "exit $rc — $(flat "$out")"; fi
