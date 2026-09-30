@@ -40,14 +40,16 @@ the clone's working tree: ~/Projects/skill-templates is a shared working copy th
 another session's branch.
 
 Exit codes:
-  0  no FAIL. PENDING-HUMAN and DRIFT rows are allowed: a human step with an open `human-setup`
-     issue, or a rule the registry has since changed underneath an already-conformant repo (see
-     --pin below). For --plan: the plan was rendered.
-  1  findings: at least one FAIL (or, for --self-check, at least one registry defect).
+  0  no FAIL and no LEGACY. PENDING-HUMAN and DRIFT rows are allowed: a human step with an open
+     `human-setup` issue, or a rule the registry has since changed underneath an already-conformant
+     repo (see --pin below). For --plan: the plan was rendered.
+  1  findings: at least one FAIL or LEGACY row (or, for --self-check, at least one registry
+     defect).
   2  could not verify -- the registry or repo is unreadable, a ref does not resolve, a fetch
      failed, `gh` failed for any reason other than a meaningful 404 (an ERROR row), a probe hit
-     its read bound before finding decisive evidence, or --plan refused its input. Never 0: a
-     check that could not look must not report a pass.
+     its read bound before finding decisive evidence, --plan refused its input, or --repo names a
+     non-git stub instead of a checkout (its own LEGACY finding, but no rule was probed: see
+     LEGACY below). Never 0: a check that could not look must not report a pass.
 
 --pin (verify only; default none). `none` judges every rule against --registry-ref alone. `auto`
 also reads the one registry commit `docs/adr/0001-project-genesis.md` records under `## Evidence`
@@ -61,8 +63,20 @@ that is not recorded or does not resolve falls back to --registry-ref alone; an 
 does not resolve is exit 2. Why (#314): a v1 change on the registry's default ref must not
 retroactively FAIL a repo that conformed to the standard it was built from.
 
-LEGACY is a reserved result: no v1 probe emits it. The back-port audit (standard §10.4) adds
-the detectors for known legacy shapes, such as archery's path-filtered auto-pass mirror.
+LEGACY (verify only; the back-port audit, standard §10.4) is a FAIL row that a known pre-standard
+shape fully explains: the `ci-mirror` (path-filtered workflows whose checks an auto-pass sibling
+posts under the same names), `classic-protection` (classic branch protection instead of a
+ruleset), or the repo-level `non-git-stub` (a stub directory in place of the checkout). Only a
+repo with no committed genesis intent can read LEGACY; on a genesis repo the same shape is a
+regression and stays FAIL. LEGACY is a finding, like FAIL, not an exemption like DRIFT: DRIFT is
+exit-neutral because the repo conformed to the standard it was built from, and a LEGACY repo never
+did -- the mirror is a confirmed merge-gate hole twice over (it can post a pass under a failing
+check's name, and its `[skip-ci]` tag makes required jobs report Success, §4.4). What LEGACY adds
+is the fix it names: a migration of the shape, filed once per shape. A failure wins: a detector
+reclassifies a row only when its shape explains the row's WHOLE failure, and one that cannot look
+leaves the FAIL standing with a could-not-run note, as classify_drift does. The stub is reported
+before any git read, as one `machine.checkout` row, and exits 2: no rule was probed. Keeping a
+shape on purpose is a waiver ADR (WAIVED), as for any rule.
 """
 import argparse
 import datetime
@@ -1577,23 +1591,36 @@ def _(ctx):
     return fail("; ".join(problems)) if problems else ok(f"ci-gate needs all {len(jobs) - 1} jobs")
 
 
-@probe("core.ci-triggers")
-def _(ctx):
-    text = ctx.tree.read(CI)
+def ci_triggers_problems(text):
+    """[(kind, message), ...] behind the core.ci-triggers probe -- kinds `missing`, `no-on`,
+    `inline-on`, `no-event`, `path-filter`, `push-branches` -- so the ci-mirror legacy detector
+    can ask "was the workflow-level path filter the ONLY problem?" without re-deriving the
+    probe's own reading. The probe below joins the messages exactly as before; no evidence text
+    changes."""
     if text is None:
-        return fail(f"{CI} is missing")
+        return [("missing", f"{CI} is missing")]
     inline, block = on_block(text)
     if block is None:
-        return fail(f"{CI} has no `on:`")
+        return [("no-on", f"{CI} has no `on:`")]
     if inline is not None:
-        return fail(f"`on: {inline}` — push must be restricted to main")
+        return [("inline-on", f"`on: {inline}` — push must be restricted to main")]
     events = {m.group(1) for ln in block for m in [re.match(r"^\s{1,4}([a-z_]+):", ln)] if m}
-    problems = [f"no `{e}` trigger" for e in ("pull_request", "push", "workflow_dispatch") if e not in events]
+    problems = [("no-event", f"no `{e}` trigger") for e in ("pull_request", "push", "workflow_dispatch")
+                if e not in events]
     if any(re.match(r"^\s*paths(-ignore)?:", ln) for ln in block):
-        problems.append("a workflow-level path filter leaves ci-gate Pending on skipped runs")
+        problems.append(("path-filter", "a workflow-level path filter leaves ci-gate Pending on skipped runs"))
     if "push" in events and push_branches(block) != ["main"]:
-        problems.append(f"push is not restricted to exactly `main` (branches: {push_branches(block)})")
-    return fail("; ".join(problems)) if problems else ok("pull_request, push→main, workflow_dispatch; no path filter")
+        problems.append(("push-branches",
+                         f"push is not restricted to exactly `main` (branches: {push_branches(block)})"))
+    return problems
+
+
+@probe("core.ci-triggers")
+def _(ctx):
+    problems = ci_triggers_problems(ctx.tree.read(CI))
+    if problems:
+        return fail("; ".join(m for _, m in problems))
+    return ok("pull_request, push→main, workflow_dispatch; no path filter")
 
 
 @probe("core.ci-hygiene")
@@ -2145,6 +2172,209 @@ def _(ctx):
         page += 1
 
 
+# ---------------------------------------------------------------- legacy shapes (#313)
+#
+# The back-port audit (standard §10.4): a FAIL row a known pre-standard shape fully explains, on
+# a repo with no committed genesis intent, reclassifies to LEGACY -- a finding, not an exemption
+# (see the module docstring). Each shape is registered with the manifest rule ids its detector
+# can explain; `classify_legacy` is `run_verify`'s hook, symmetric with `classify_drift`.
+
+LEGACY_SHAPES = {}
+
+
+def legacy_shape(shape_id, title, ref, rules):
+    """Registers a known pre-standard shape: `rules` are the manifest rule ids its detector can
+    explain, each via `detect(ctx, rid) -> str | None` -- a string is the shape's evidence for
+    that row ("explained"), None means "not this shape, not this row". `title` is used verbatim
+    in filed issue titles (`legacy: <title>`), so it carries no `§`."""
+    def deco(fn):
+        LEGACY_SHAPES[shape_id] = {"id": shape_id, "title": title, "ref": ref, "rules": rules, "detect": fn}
+        return fn
+    return deco
+
+
+def event_block(block, event):
+    """The lines under `<event>:` in an `on:` block (on_block's second element) -- the same
+    indentation-aware slice push_branches takes for `push:`. Anchored on `<event>:` at the end of
+    the line, so a lookup for `pull_request` never matches a `pull_request_target:` sibling."""
+    idx = next((i for i, ln in enumerate(block) if re.match(r"^\s+" + re.escape(event) + r":\s*(#.*)?$", ln)), None)
+    if idx is None:
+        return None
+    indent = len(block[idx]) - len(block[idx].lstrip())
+    body = []
+    for ln in block[idx + 1:]:
+        if ln.strip() and len(ln) - len(ln.lstrip()) <= indent:
+            break
+        body.append(ln)
+    return body
+
+
+def wf_pull_request(text):
+    """(triggers_on_pull_request, path_filtered) for one workflow's `on:` block. An inline
+    `on: [...]` list (no per-event block) can name `pull_request` but never filters it."""
+    inline, block = on_block(text)
+    if inline is not None:
+        return "pull_request" in inline, False
+    if block is None:
+        return False, False
+    pr = event_block(block, "pull_request")
+    if pr is None:
+        return False, False
+    # Unanchored after the colon: `paths: ['docs/**']` filters exactly as a block list does.
+    return True, any(re.match(r"^\s*paths(-ignore)?:", ln) for ln in pr)
+
+
+SKIP_CI_TAG = re.compile(r"\b(skip-ci|ci-skip)\b")  # native `[skip ci]` (a space) never matches
+
+
+def ci_mirror_evidence(ctx):
+    """None, or evidence for the rejected shape (§4.4): a required check name a skipped workflow
+    can never report is satisfied instead by an unconditional pass in a sibling workflow. Found
+    when a check name is defined by >=2 `pull_request` workflows (>=1 of them path-filtered on
+    pull_request), excluding a name that is a `needs:` target of another job in EVERY
+    pull_request workflow that defines it -- a shared helper (e.g. `decide_runner`), not a
+    mirrored check. The `[skip-ci]`/`[ci-skip]` title tag, when present anywhere in the
+    workflows, is reported alongside as supporting evidence, never as a trigger on its own."""
+    wfs = [p for p in ctx.tree.under(".github/workflows/") if p.endswith((".yml", ".yaml"))]
+    texts = {p: ctx.tree.read(p) for p in wfs}
+    prs = []  # (path, jobs, path_filtered) for every workflow that triggers on pull_request
+    for p, text in texts.items():
+        if text is None:
+            continue
+        triggers, filtered = wf_pull_request(text)
+        if triggers:
+            prs.append((p, workflow_jobs(text), filtered))
+    if len(prs) < 2:
+        return None
+
+    by_name = {}
+    for p, jobs, filtered in prs:
+        for k, j in jobs.items():
+            by_name.setdefault(j["name"], []).append((p, k, filtered))
+
+    def needed_everywhere(name):
+        defining = [jobs for _, jobs, _ in prs if any(j["name"] == name for j in jobs.values())]
+        for jobs in defining:
+            keys = {k for k, j in jobs.items() if j["name"] == name}
+            if not any(set(j2["needs"]) & keys for k2, j2 in jobs.items() if k2 not in keys):
+                return False
+        return True
+
+    mirrored = sorted(
+        name for name, hits in by_name.items()
+        if len({p for p, _, _ in hits}) >= 2
+        and any(filtered for _, _, filtered in hits)
+        and not needed_everywhere(name)
+    )
+    if not mirrored:
+        return None
+
+    shown, more = mirrored[:6], mirrored[6:]
+    pairs = [f"`{n}` ({', '.join(sorted({posixpath.basename(p) for p, _, _ in by_name[n]}))})" for n in shown]
+    ev = ("check name(s) posted by >=2 pull_request workflows, at least one path-filtered: "
+          + ", ".join(pairs) + (f" (+{len(more)} more)" if more else ""))
+
+    tagged = sorted({posixpath.basename(p) for p, text in texts.items() if text is not None
+                     for ln in text.splitlines()
+                     if ln.strip() and not ln.strip().startswith("#") and SKIP_CI_TAG.search(ln)})
+    if tagged:
+        t_shown, t_more = tagged[:6], tagged[6:]
+        ev += (f"; a [skip-ci]/[ci-skip] title tag in {len(tagged)} workflow(s) ("
+               + ", ".join(t_shown) + (f" +{len(t_more)} more" if t_more else "")
+               + "): a skipped required job reports Success")
+    return ev
+
+
+@legacy_shape("ci-mirror", "path-filtered auto-pass CI mirror", "§4.4", ["core.ci-gate", "core.ci-triggers"])
+def _(ctx, rid):
+    mirror = ci_mirror_evidence(ctx)
+    if mirror is None:
+        return None
+    if rid == "core.ci-gate":
+        text = ctx.tree.read(CI)
+        if text is not None and "ci-gate" in workflow_jobs(text):
+            return None  # ci-gate exists (even malformed); the mirror does not explain that
+    else:  # core.ci-triggers: explained only when the sole problem is the path filter
+        kinds = {k for k, _ in ci_triggers_problems(ctx.tree.read(CI))}
+        if kinds not in ({"path-filter"}, {"missing"}):
+            return None
+    return mirror
+
+
+@legacy_shape("classic-protection", "classic branch protection instead of a ruleset", "§4.3",
+              ["github.ruleset", "github.ruleset.no-bypass"])
+def _(ctx, rid):
+    """The rejected shape (§4.3): no `main` ruleset, the default branch governed instead by
+    GitHub's older classic branch protection. The migration adopts ruleset-main.json wholesale, so the classic
+    protection's own content gaps (missing required checks, zero required approvals, ...) do not
+    block LEGACY -- they are named in the evidence instead, for the owner to weigh."""
+    _, live = ctx.ruleset()
+    if live is not None:
+        return None  # a ruleset named `main` exists: this is not the classic-protection shape
+    branch = ctx.gh.repo_info().get("default_branch")
+    if not branch:
+        raise CannotVerify(f"repos/{ctx.intent.repo} returned no default_branch")
+    prot = ctx.gh.get(f"repos/{ctx.intent.repo}/branches/{urllib.parse.quote(branch, safe='')}/protection",
+                      missing_ok=True)
+    if prot is None:
+        return None  # no ruleset AND no classic protection either: an unexplained FAIL
+    if not isinstance(prot, dict):
+        raise CannotVerify(f"branch protection for {branch!r} returned {type(prot).__name__}, not an object")
+    admins_on = bool((prot.get("enforce_admins") or {}).get("enabled"))
+    if rid == "github.ruleset.no-bypass":
+        return (f"classic protection on `{branch}`, enforce_admins "
+                + ("on: admins cannot bypass it" if admins_on else "off: admins bypass it"))
+    rspc = prot.get("required_status_checks") or {}
+    contexts = rspc.get("contexts")
+    if not contexts:
+        checks = rspc.get("checks")
+        contexts = [c.get("context") for c in checks] if isinstance(checks, list) else None
+    approvals = (prot.get("required_pull_request_reviews") or {}).get("required_approving_review_count")
+    force = bool((prot.get("allow_force_pushes") or {}).get("enabled"))
+    deletions = bool((prot.get("allow_deletions") or {}).get("enabled"))
+    conv = bool((prot.get("required_conversation_resolution") or {}).get("enabled"))
+    return (f"classic protection on `{branch}`: required checks {contexts or 'none'}, "
+            f"approvals {approvals if approvals is not None else 'none required'}, "
+            f"enforce_admins {'on' if admins_on else 'off'}, "
+            f"force pushes {'allowed' if force else 'blocked'}, "
+            f"deletions {'allowed' if deletions else 'blocked'}, "
+            f"conversation resolution {'on' if conv else 'off'}")
+
+
+# The third shape is repo-level (standard §6: one checkout, no stub), reported by main()'s
+# --repo preflight as its own row -- never by a rule's probe -- so it carries no rules here. Its
+# metadata is still registered here, so a title lives in exactly one place.
+LEGACY_SHAPES["non-git-stub"] = {"id": "non-git-stub", "title": "non-git stub instead of a checkout",
+                                 "ref": "§6", "rules": [], "detect": None}
+
+
+def classify_legacy(rid, evidence, ctx):
+    """(result, evidence, shape_id) for a row that FAILed with no committed genesis intent
+    (ctx.intent.source == "flags"). Tries every shape naming `rid`; the first whose detector
+    explains this row's WHOLE failure reclassifies it LEGACY, keeping the probe's own evidence
+    text alongside the shape's. A detector that raises (including CannotVerify from a `gh` call)
+    degrades the row to FAIL with a could-not-run note -- the same shape as classify_drift's own
+    crash handling -- rather than propagating, so one shape's outage never blocks another rule's
+    verdict and never turns a row into ERROR."""
+    for shape_id, spec in LEGACY_SHAPES.items():
+        if rid not in spec["rules"]:
+            continue
+        try:
+            found = spec["detect"](ctx, rid)
+        except Exception as e:
+            return "FAIL", f"{evidence} (legacy check `{shape_id}` could not run: {type(e).__name__}: {e})", None
+        if found:
+            return "LEGACY", f"{spec['title']} (standard {spec['ref']}): {found} — probe: {evidence}", shape_id
+    return "FAIL", evidence, None
+
+
+def legacy_shapes_present(rows):
+    """{"<shape id>": "<title>", ...} for shapes actually present in `rows` -- the --json
+    `legacy_shapes` key -- so the skill can title an issue per shape without parsing evidence."""
+    ids = sorted({r["legacy"] for r in rows if r.get("legacy")})
+    return {i: LEGACY_SHAPES[i]["title"] for i in ids}
+
+
 # ---------------------------------------------------------------- verify
 
 def open_human_setup(ctx):
@@ -2265,10 +2495,15 @@ def run_verify(man, reg, tree, intent, gh, pin=None):
             else:
                 rows.append({"rule": rid, "layer": layer, "result": "WAIVED", "evidence": adr})
             continue
+        legacy_id = None
         try:
             result, evidence = PROBES[rid](ctx)
             if result == "FAIL" and pin is not None:
                 result, evidence = classify_drift(rid, evidence, pin, pin_ctx, ctx)
+            if result == "FAIL" and intent.source == "flags":
+                # Only a repo with no committed genesis intent can read LEGACY (the back-port
+                # audit, #313). On a genesis repo the same shape is a regression: a plain FAIL.
+                result, evidence, legacy_id = classify_legacy(rid, evidence, ctx)
             if result == "FAIL" and rule.get("human"):
                 # PENDING-HUMAN only when an OPEN human-setup issue names this rule: an
                 # unfiled human step is a FAIL, and an unreadable issue list is an ERROR.
@@ -2283,19 +2518,22 @@ def run_verify(man, reg, tree, intent, gh, pin=None):
             result, evidence = ERROR, f"cannot render the expected file: {e}"
         except Exception as e:  # a probe bug or an API shape it did not expect: it could not look
             result, evidence = ERROR, f"probe crashed ({type(e).__name__}: {e})"
-        rows.append({"rule": rid, "layer": layer, "result": result, "evidence": evidence})
+        row = {"rule": rid, "layer": layer, "result": result, "evidence": evidence}
+        if legacy_id is not None:  # only ever set for a LEGACY row; no other row carries this key
+            row["legacy"] = legacy_id
+        rows.append(row)
     return rows
 
 
 def verify_exit(rows):
     if any(r["result"] == ERROR for r in rows):
         return EXIT_CANNOT_VERIFY
-    if any(r["result"] == "FAIL" for r in rows):
+    if any(r["result"] in ("FAIL", "LEGACY") for r in rows):
         return EXIT_FINDINGS
-    return EXIT_OK  # DRIFT (like PENDING-HUMAN) never reaches here as FAIL, so it never flips this
+    return EXIT_OK  # DRIFT (like PENDING-HUMAN) never reaches here as FAIL or LEGACY, so never flips this
 
 
-def print_rows(head, rows, code, pin_info=None):
+def print_rows(head, rows, code, pin_info=None, not_a_checkout=False):
     print(head + "\n")
     print("| Rule | Result | Evidence |\n|---|---|---|")
     for r in rows:
@@ -2308,8 +2546,15 @@ def print_rows(head, rows, code, pin_info=None):
     if any(r["result"] == "DRIFT" for r in rows) and pin_info and pin_info.get("commit"):
         print(f"DRIFT: the standard moved after this repo's pin ({pin_info['commit'][:7]}); these "
               "rows pass there and do not change the exit code.")
+    if any(r["result"] == "LEGACY" for r in rows):
+        ids = sorted({r["legacy"] for r in rows if r.get("legacy")})
+        print(f"LEGACY: known pre-standard shape(s) {', '.join(ids)} (standard §10.4); each row is a "
+              "finding, and its fix is a migration of the shape.")
     if code == EXIT_CANNOT_VERIFY:
-        print("Could not verify (ERROR rows): this is not a pass.")
+        if not_a_checkout:
+            print("Could not verify: no rule was probed, because --repo is not a checkout. This is not a pass.")
+        else:
+            print("Could not verify (ERROR rows): this is not a pass.")
 
 
 def intent_for_verify(args, man, tree):
@@ -2351,6 +2596,10 @@ def self_check(man, reg):
         problems.append(f"probe `{rid}` has no rule in the manifest")
     for rid in sorted(set(PROBES) & advisory):
         problems.append(f"rule `{rid}` is classed advisory but has a probe — class it probe")
+    for shape_id, spec in sorted(LEGACY_SHAPES.items()):
+        for rid in spec["rules"]:
+            if rid not in probed:
+                problems.append(f"legacy shape `{shape_id}` names `{rid}`, which is not a probed rule")
     for kind, table in (("overlay", man["overlays"]), ("module", man["modules"])):
         for name, spec in table.items():
             layer_rules = [r["id"] for r in man["rules"] if r["layer"] == f"{kind}:{name}"]
@@ -2456,6 +2705,48 @@ def self_check(man, reg):
                     problems.append(f"human_setup_issue()'s rendered sections {got} for "
                                     f"`{i['title']}` differ from HUMAN_SETUP_SECTIONS")
     return problems
+
+
+# ---------------------------------------------------------------- non-git stub (--repo preflight)
+#
+# The third legacy shape (standard §6: "No stubs. One checkout, ~/Projects/<repo>") is repo-level:
+# it never reaches a rule's probe, because there is no git tree to probe. main() checks for it
+# before ever constructing a GitTree, so a stub is reported as its own LEGACY row instead of
+# tripping GitTree's ordinary "is not a git repository" die().
+
+STUB_ENTRIES = {".claude", ".mcp.json", ".repo-memory", ".repo-memory.json", ".DS_Store"}
+
+
+def stub_repo(path):
+    """True when `path` is a stub the standard forbids: a directory directly under ~/Projects/
+    that is not a git repository and holds at most machine/tooling droppings -- never true for a
+    git repository (however thin) or a directory outside ~/Projects/, so every other non-git
+    --repo still falls through to GitTree's own die()."""
+    if not os.path.isdir(path):
+        return False
+    if git(path, "rev-parse", "--git-dir").returncode == 0:
+        return False
+    real = os.path.realpath(path)
+    if os.path.dirname(real) != os.path.realpath(os.path.expanduser("~/Projects")):
+        return False
+    try:
+        entries = os.listdir(real)
+    except OSError:
+        return False
+    return all(e in STUB_ENTRIES for e in entries)
+
+
+def stub_row(path):
+    real = os.path.realpath(path)
+    entries = sorted(os.listdir(real))
+    spec = LEGACY_SHAPES["non-git-stub"]
+    holds = f"holds only {entries}" if entries else "is empty"
+    evidence = (f"{spec['title']} (standard {spec['ref']}): {path} {holds} and no .git; the standard "
+                "keeps one checkout at ~/Projects/<repo>, and a session started here resolves its "
+                "seed scope to `fleet`. Audit a clone instead (--repo <clone> --gh-repo "
+                "<owner>/<repo>); turning the stub into the checkout is the owner's call.")
+    return {"rule": "machine.checkout", "layer": "machine", "result": "LEGACY",
+            "legacy": "non-git-stub", "evidence": evidence}
 
 
 # ---------------------------------------------------------------- CLI
@@ -2582,6 +2873,22 @@ def main():
             print_plan(plan)
         return EXIT_OK
 
+    if stub_repo(args.repo):
+        row = stub_row(args.repo)
+        repo_label = args.gh_repo or f"{man['owner']}/{os.path.basename(os.path.realpath(args.repo))}"
+        code = EXIT_CANNOT_VERIFY
+        if args.json:
+            print(json.dumps({"repo": repo_label, "ref": None, "commit": None,
+                              "registry": {"ref": reg.ref, "commit": reg.commit},
+                              "standard": man["standard"], "intent_source": None, "pin": None,
+                              "results": [row], "legacy_shapes": legacy_shapes_present([row]),
+                              "exit": code}, indent=2))
+        else:
+            head = (f"genesis-verify — {repo_label} @ not a checkout · Standard {man['standard']} "
+                    f"(registry {reg.commit[:7]})")
+            print_rows(head, [row], code, not_a_checkout=True)
+        return code
+
     tree = GitTree(args.repo, args.ref, not args.no_fetch, "repo")
     pin, pin_info = resolve_pin(args, reg, tree)
     intent = intent_for_verify(args, man, tree)
@@ -2591,7 +2898,8 @@ def main():
         print(json.dumps({"repo": intent.repo, "ref": tree.ref, "commit": tree.commit,
                           "registry": {"ref": reg.ref, "commit": reg.commit},
                           "standard": man["standard"], "intent_source": intent.source,
-                          "pin": pin_info, "results": rows, "exit": code}, indent=2))
+                          "pin": pin_info, "results": rows, "legacy_shapes": legacy_shapes_present(rows),
+                          "exit": code}, indent=2))
     else:
         head = (f"genesis-verify — {intent.repo} @ {tree.ref} ({tree.commit[:7]}) · Standard "
                 f"{man['standard']} (registry {reg.commit[:7]}) · intent from {intent.source}")

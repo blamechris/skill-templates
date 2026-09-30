@@ -52,7 +52,7 @@ GV="$G/genesis-verify.py"                     # extracted in Phase 0 from the pl
 PLAN_REF=$(jq -r '.registry.commit // empty' "$PLAN_JSON" 2>/dev/null)
 SESSION_BRANCH=$(cat "$G/branch" 2>/dev/null); EPIC=$(cat "$G/epic" 2>/dev/null)
 WT=${SESSION_BRANCH:+${GENESIS_WT_ROOT:-${TMPDIR:-/tmp}}/$NAME-genesis-${SESSION_BRANCH##*/}}
-failed() { jq -e --arg r "$1" '.results[] | select(.rule == $r) | .result == "FAIL"' "$VERIFY_JSON" >/dev/null; }
+failed() { jq -e --arg r "$1" '.results[] | select(.rule == $r) | .result == "FAIL" or .result == "LEGACY"' "$VERIFY_JSON" >/dev/null; }
 put() { jq "$2" "$PLAN_JSON" | gh api -X PUT "repos/$R/$1" --input - --silent; }
 epic_plan() { gh issue view "${EPIC:?}" -R "$R" --json body -q .body | awk '/^```genesis-plan/{f=1;next} /^```/{f=0} f'; }
 num_of() { gh issue list -R "$R" --state all --limit 500 --json number,title | jq -r --arg t "$1" '.[] | select(.title == $t) | .number' | head -1; }
@@ -394,8 +394,10 @@ Profile first: nothing is installed until the step 2 check passes.
    A genesis repo supplies its own intent from the profile. A repo that predates the standard has none, so pass the layers it actually has (`--stack`, `--modules`, `--app-id`). Otherwise every overlay and module rule reads N-A.
 
    `--pin auto` also judges each FAIL row against the registry commit ADR-0001's `## Evidence` records — the commit the repo was built from. A row FAILs only if the repo misses both; a row that misses only `origin/main` reads DRIFT: the standard moved since this repo was built. DRIFT never changes the exit code and is never filed; adopting it is the owner's call. A repo with no recorded commit is judged against `origin/main` alone.
+
+   A repo with no committed genesis intent is also checked for the three known pre-standard shapes (standard §10.4): archery's path-filtered auto-pass CI mirror with its `[skip-ci]` tag, classic branch protection instead of a ruleset, and a non-git stub in place of the checkout. A FAIL row that one of them fully explains reads LEGACY, and the JSON row's `legacy` key names the shape. LEGACY is a finding, like FAIL, and sets exit 1. It is not an exemption like DRIFT: the repo never conformed, and its fix is a migration of the shape. On a genesis repo the same shape is a regression and stays FAIL. A non-git stub is one `machine.checkout` row that exits 2, because no rule was probed; audit a clone instead (`--repo <clone> --gh-repo <owner>/<repo>`). Keeping a shape on purpose is a waiver ADR, as for any rule.
 2. Print the table: rule ID, result (PASS / FAIL / WAIVED / N-A / LEGACY / PENDING-HUMAN / DRIFT / ERROR) and evidence.
-3. With `--file-issues`, file one `/create-issue "<rule>: <finding>" --label tech-debt --label from-audit` per **FAIL** row, after the duplicate check. Even when verify exits 2, every FAIL row still gets filed — a FAIL is evidence a probe actually read, whatever another rule could not. Never file an ERROR or DRIFT row; on exit 2, name every ERROR row in the report as "could not verify". Never fix anything, never delete anything, and never change a setting in audit mode.
+3. With `--file-issues`, file one `/create-issue "<rule>: <finding>" --label tech-debt --label from-audit` per **FAIL** row, and one `/create-issue "legacy: <title>" --label tech-debt --label from-audit` per **shape** in the JSON's `legacy_shapes` (per shape, not per row), each after the duplicate check. A shape's issue body carries a `Legacy shape: <id>` line, then every row whose `legacy` key names that shape, with its evidence verbatim. Even when verify exits 2, every FAIL row and every LEGACY shape still gets filed — each is evidence a probe or detector actually read, whatever another rule could not. The one exception is a `non-git-stub`, which is reported and not filed: there is no checkout to run `/create-issue` in. Never file an ERROR or DRIFT row; on exit 2, name every ERROR row in the report as "could not verify". Never fix anything, never delete anything, and never change a setting in audit mode.
 4. Exit with verify's code. A `2` is reported as "could not verify", never as clean.
 
 ### Mode: `--add overlay:<x>|module:<y>`
