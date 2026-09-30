@@ -1164,24 +1164,37 @@ def build_plan(man, reg, intent, explicit, seed=None):
 
 def decisions_table(man, intent, explicit):
     app_overlays = [o for o in intent.overlays if man["overlays"][o].get("app")]
-    rec_modules = [m for m, s in man["modules"].items() if s.get("default") and s.get("status") == "implemented"]
+    rec_modules = ", ".join(m for m, s in man["modules"].items()
+                            if s.get("default") and s.get("status") == "implemented")
+    rec_modules += " (+ credits when media is bundled)"
+
+    def owner_or(key, value, rec, why, named_why):
+        """A value passed as a flag is the owner's decision, so the Recommendation column shows it
+        rather than a default that reads as second-guessing it (#332 for Stack, #333 for the rest).
+        Self-merge posture is not routed here: `withheld` is the standard's own recommendation, and
+        an explicit `gated` at genesis is exactly the disagreement that column exists to show."""
+        if key in explicit:
+            return value, f"Named by the owner with `--{key.replace('_', '-')}`; {named_why}"
+        return rec, why
+
+    visibility = owner_or("visibility", intent.visibility, "private", "Going public is an owner decision "
+                          "recorded in an ADR; genesis never flips visibility.",
+                          "going public is recorded in an ADR, and genesis never flips visibility.")
     stack_value = ", ".join(intent.overlays) or "none"
-    if "stack" in explicit:
-        stack_rec = stack_value
-        stack_why = "Named by the owner with `--stack`; genesis never chooses a stack (Principle 7)."
-    else:
-        stack_rec = "none until an owner decision names one"
-        stack_why = "Genesis never chooses a stack (Principle 7)."
+    stack = owner_or("stack", stack_value, "none until an owner decision names one",
+                     "Genesis never chooses a stack (Principle 7).", "genesis never chooses a stack (Principle 7).")
+    modules_value = ", ".join(intent.modules) or "none"
+    modules = owner_or("modules", modules_value, rec_modules, "Module defaults ratified 2026-09-26 (decision 8).",
+                       f"the ratified defaults (decision 8) are {rec_modules}.")
+    app_id = owner_or("app_id", intent.app_id, derive_app_id(intent.name) if app_overlays else "none",
+                      "Permanent once an app is published under it.", "permanent once an app is published under it.")
     rows = [
         ("Name / scope", intent.name, "—", "Final before anything exists: the seed scope, runner "
          "directory and app ID all key off it.", "name"),
-        ("Visibility", intent.visibility, "private", "Going public is an owner decision recorded in "
-         "an ADR; genesis never flips visibility.", "visibility"),
-        ("Stack overlays", stack_value, stack_rec, stack_why, "stack"),
-        ("Modules", ", ".join(intent.modules) or "none", ", ".join(rec_modules)
-         + " (+ credits when media is bundled)", "Module defaults ratified 2026-09-26 (decision 8).", "modules"),
-        ("App ID", intent.app_id, derive_app_id(intent.name) if app_overlays else "none",
-         "Permanent once an app is published under it.", "app_id"),
+        ("Visibility", intent.visibility, *visibility, "visibility"),
+        ("Stack overlays", stack_value, *stack, "stack"),
+        ("Modules", modules_value, *modules, "modules"),
+        ("App ID", intent.app_id, *app_id, "app_id"),
         ("Self-merge posture", intent.posture, "withheld", "Flip to gated by a profile edit after the "
          "first reviewed PRs.", "posture"),
         ("Description", intent.description or "unset", "one line", "The GitHub description and the "
