@@ -2111,12 +2111,19 @@ def _(ctx):
                 runner = hit.get("runner_name") or "a self-hosted runner"
                 sha = (run.get("head_sha") or "")[:7]
                 where = f"{runner}, run {run['id']} ({sha})"
+                listed = lambda js: ", ".join(f"`{j.get('name')}`" for j in js)
+                if failed and succeeded:
+                    # A failure wins even beside a success: ci.yml cannot say which candidate
+                    # needs the SDK, and a JVM-only job's success standing in for it would be a
+                    # false PASS. The sibling's success is named, so the finding (which
+                    # `--file-issues` files verbatim) is not read as an SDK fault.
+                    return fail(f"{listed(failed)} failed on {where}, while {listed(succeeded)} "
+                                "succeeded in the same run — only `SDK location not found` in the "
+                                "failed job's log means the runner's .env has no ANDROID_HOME")
                 if failed:
-                    names = "/".join(f"`{j.get('name')}`" for j in failed)
-                    return fail(f"{names} failed on {where} — `SDK location not found` in its "
-                                "log means the runner's .env has no ANDROID_HOME")
-                names = "/".join(f"`{j.get('name')}`" for j in succeeded)
-                return ok(f"{names} succeeded on {where}")
+                    return fail(f"{listed(failed)} failed on {where} — `SDK location not found` in "
+                                "its log means the runner's .env has no ANDROID_HOME")
+                return ok(f"{listed(succeeded)} succeeded on {where}")
             if run_jobs and run.get("conclusion") in ("success", "failure"):
                 # only a finished run evaluated every job, so only it can show the job absent
                 in_gap, gap_run_id = not found_job, run["id"]

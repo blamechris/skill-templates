@@ -613,7 +613,7 @@ python3 -c 'import json,sys; json.dump({"total_count": 4, "jobs": [
 # reach the same PASS by a different (and here irrelevant) path. Failing it isolates the
 # assertion to "the newest run's split jobs are recognized," not "the fallback still works."
 gh_edit repos_blamechris_soundbed_actions_runs_101_jobs_per_page_100_page_1 'next(j for j in d["jobs"] if j["name"] == "kotlin")["conclusion"] = "failure"'
-expect "split ci.yml: the newest run's core-jvm and android-unit both succeed on self-hosted" overlay.kotlin.android-sdk PASS 0
+expect_ev "split ci.yml: the newest run's core-jvm and android-unit both succeed on self-hosted" overlay.kotlin.android-sdk PASS 0 '`core-jvm`, `android-unit` succeeded on soundbed-mbp-arm64, run 102 (bbbbbbb)'
 
 fresh
 kotlin_split "$KOTLIN_SPLIT_BLOCK" "core-jvm, android-unit"
@@ -624,7 +624,10 @@ python3 -c 'import json,sys; json.dump({"total_count": 4, "jobs": [
     {"name": "android-unit", "conclusion": "failure", "labels": ["self-hosted", "macOS", "ARM64"], "runner_name": "soundbed-mbp-arm64"},
     {"name": "ci-gate", "conclusion": "failure"},
 ]}, open(sys.argv[1], "w"))' "$MG/repos_blamechris_soundbed_actions_runs_102_jobs_per_page_100_page_1.json"
-expect_ev "split ci.yml: android-unit fails, core-jvm succeeds in the newest run — FAIL naming android-unit" overlay.kotlin.android-sdk FAIL 1 "android-unit"
+# A failure still wins beside a success (which job needs the SDK is not knowable from ci.yml),
+# but the evidence -- what --file-issues files -- names the sibling's success and stops short
+# of blaming the SDK.
+expect_ev "split ci.yml: android-unit fails, core-jvm succeeds in the newest run — FAIL naming both, not blaming the SDK" overlay.kotlin.android-sdk FAIL 1 '`android-unit` failed on soundbed-mbp-arm64, run 102 (bbbbbbb), while `core-jvm` succeeded in the same run — only `SDK location not found`'
 
 fresh
 kotlin_split "$KOTLIN_SPLIT_BLOCK" "core-jvm, android-unit"
