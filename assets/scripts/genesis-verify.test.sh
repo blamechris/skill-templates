@@ -19,6 +19,10 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
+# The verify_exit unit check IMPORTS the SUT, which would otherwise drop __pycache__/ into the
+# tracked source tree -- and pr-record.test.sh, running later in the same CI job, asserts that
+# directory is absent. Same fix filed-from.test.sh and session-distill.test.sh carry.
+export PYTHONDONTWRITEBYTECODE=1
 SUT="$HERE/genesis-verify.py"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/genesis-verify-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
