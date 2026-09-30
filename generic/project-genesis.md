@@ -389,11 +389,13 @@ Profile first: nothing is installed until the step 2 check passes.
    REG="${SKILL_REGISTRY_DIR:-$HOME/Projects/skill-templates}"; G="${TMPDIR:-/tmp}/genesis-audit"; mkdir -p "$G"
    git -C "$REG" fetch -q origin && git -C "$REG" show origin/main:assets/scripts/genesis-verify.py > "$G/genesis-verify.py" \
      && test -s "$G/genesis-verify.py" || { echo "could not verify: no genesis-verify.py from $REG"; exit 2; }
-   python3 "$G/genesis-verify.py" --repo . --ref origin/main --registry "$REG" [--json]
+   python3 "$G/genesis-verify.py" --repo . --ref origin/main --registry "$REG" --pin auto [--json]
    ```
    A genesis repo supplies its own intent from the profile. A repo that predates the standard has none, so pass the layers it actually has (`--stack`, `--modules`, `--app-id`). Otherwise every overlay and module rule reads N-A.
-2. Print the table: rule ID, result (PASS / FAIL / WAIVED / N-A / LEGACY / PENDING-HUMAN / ERROR) and evidence.
-3. With `--file-issues`, file one `/create-issue "<rule>: <finding>" --label tech-debt --label from-audit` per **FAIL** row, after the duplicate check. File nothing for ERROR rows and nothing at all on exit 2. Never fix anything, never delete anything, and never change a setting in audit mode.
+
+   `--pin auto` also judges each FAIL row against the registry commit ADR-0001's `## Evidence` records — the commit the repo was built from. A row FAILs only if the repo misses both; a row that misses only `origin/main` reads DRIFT: the standard moved since this repo was built. DRIFT never changes the exit code and is never filed; adopting it is the owner's call. A repo with no recorded commit is judged against `origin/main` alone.
+2. Print the table: rule ID, result (PASS / FAIL / WAIVED / N-A / LEGACY / PENDING-HUMAN / DRIFT / ERROR) and evidence.
+3. With `--file-issues`, file one `/create-issue "<rule>: <finding>" --label tech-debt --label from-audit` per **FAIL** row, after the duplicate check. Even when verify exits 2, every FAIL row still gets filed — a FAIL is evidence a probe actually read, whatever another rule could not. Never file an ERROR or DRIFT row; on exit 2, name every ERROR row in the report as "could not verify". Never fix anything, never delete anything, and never change a setting in audit mode.
 4. Exit with verify's code. A `2` is reported as "could not verify", never as clean.
 
 ### Mode: `--add overlay:<x>|module:<y>`

@@ -1361,6 +1361,221 @@ JS
   sim "changes: a push with no base touches everything" changes '{"event":"push","payload":{"before":"0000000000000000000000000000000000000000","after":"H"},"files":[],"tree":{"HEAD":["gradlew"]}}' 'r["out"]["kotlin"] == "true"'
 fi
 
+echo "== pinned drift (#314)"
+# A repo built from the registry at commit P should not FAIL just because origin/main moved on
+# without it. $REG stays untouched (every other section pins --registry-ref HEAD on it); a copy,
+# $DREG, gets its own history instead:
+#   DRIFT_P   == $REG HEAD == the commit BASE's ADR-0001 already records (rendered at plan time)
+#   DRIFT_C   a commit on top of P: promotes the deferred skill `parallel-dev` via `overlay:any`
+#             (a registry-only change -- BASE's skills.lock predates it and lacks the skill)
+#   DRIFT_P2  a side commit off P (not C): P's manifest with the android-sdk rule entry removed
+#   DRIFT_P3  a side commit off P (not C): P's manifest with the top-level "skills" key removed
+DREG="$TMP/drift-registry"; rm -rf "$DREG"; cp -R "$REG" "$DREG"
+DRIFT_P=$(git -C "$DREG" rev-parse HEAD)
+DREG_BRANCH=$(git -C "$DREG" branch --show-current)
+
+python3 - "$DREG/assets/genesis/standard-v1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+man = json.load(open(p))
+d = next(x for x in man["skills"]["deferred"] if x["name"] == "parallel-dev")
+d["when"] = "overlay:any"
+json.dump(man, open(p, "w"), indent=2)
+PY
+commit_all "$DREG" "drift: promote parallel-dev on overlay:any"
+DRIFT_C=$(git -C "$DREG" rev-parse HEAD)
+
+git -C "$DREG" branch no-sdk "$DRIFT_P"
+git -C "$DREG" checkout -q no-sdk
+python3 - "$DREG/assets/genesis/standard-v1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+man = json.load(open(p))
+man["rules"] = [r for r in man["rules"] if r["id"] != "overlay.kotlin.android-sdk"]
+json.dump(man, open(p, "w"), indent=2)
+PY
+commit_all "$DREG" "drift: drop the android-sdk rule"
+DRIFT_P2=$(git -C "$DREG" rev-parse HEAD)
+git -C "$DREG" checkout -q "$DREG_BRANCH"
+
+git -C "$DREG" branch no-skills "$DRIFT_P"
+git -C "$DREG" checkout -q no-skills
+python3 - "$DREG/assets/genesis/standard-v1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+man = json.load(open(p))
+del man["skills"]
+json.dump(man, open(p, "w"), indent=2)
+PY
+commit_all "$DREG" "drift: drop the skills key"
+DRIFT_P3=$(git -C "$DREG" rev-parse HEAD)
+git -C "$DREG" checkout -q "$DREG_BRANCH"
+
+#   DRIFT_P4  a side commit off P: a labels.json the pin's registry cannot parse. A plain
+#             Registry would die() on it and abort the run; the pin's must not.
+git -C "$DREG" branch bad-labels "$DRIFT_P"
+git -C "$DREG" checkout -q bad-labels
+printf '{not json\n' > "$DREG/assets/genesis/labels.json"
+commit_all "$DREG" "drift: an unparseable labels.json"
+DRIFT_P4=$(git -C "$DREG" rev-parse HEAD)
+git -C "$DREG" checkout -q "$DREG_BRANCH"
+
+DRIFT_P7="${DRIFT_P:0:7}"
+
+vd() { FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" python3 "$SUT" --registry "$DREG" --registry-ref "$DRIFT_C" --no-fetch --repo "$M" --ref HEAD --gh-repo blamechris/soundbed --json "$@" 2>&1; }
+jget() {  # <json> <python expr over d>
+  python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+try:
+    print(eval(sys.argv[2]))
+except Exception as e:
+    print(f"<jget-error: {e}>")' "$1" "$2" 2>/dev/null || echo UNPARSEABLE
+}
+
+fresh
+out=$(vd --pin auto); rc=$?
+res=$(result_of "$out" skills.installed); commit=$(jget "$out" 'd["pin"]["commit"]')
+source=$(jget "$out" 'd["pin"]["source"]')
+ev=$(jget "$out" 'next(r["evidence"] for r in d["results"] if r["rule"]=="skills.installed")')
+if [ "$rc" -eq 0 ] && [ "$res" = DRIFT ] && [ "$commit" = "$DRIFT_P" ] && [ "$source" = adr-0001 ] \
+   && printf '%s' "$ev" | grep -q "parallel-dev" && printf '%s' "$ev" | grep -q "$DRIFT_P7"; then
+  ok "auto pin: a registry-only skills change DRIFTs instead of FAILing"
+else
+  bad "auto pin: a registry-only skills change DRIFTs instead of FAILing" \
+      "result=$res exit=$rc commit=$commit source=$source evidence=$(flat "$ev")"
+fi
+
+fresh
+out=$(vd); rc=$?
+res=$(result_of "$out" skills.installed); pin=$(jget "$out" 'd["pin"]')
+if [ "$rc" -eq 1 ] && [ "$res" = FAIL ] && [ "$pin" = "None" ]; then
+  ok "--pin none (default) leaves genesis flows unchanged"
+else
+  bad "--pin none (default) leaves genesis flows unchanged" "result=$res exit=$rc pin=$pin — $(flat "$out")"
+fi
+
+fresh
+edit .claude/skills.lock 's.replace("\"create-pr\"", "\"create-pr-old\"")'
+rm "$M/.claude/commands/create-pr.md"
+if [ "$BROKEN" -ne 0 ]; then
+  bad "a real regression still FAILs under --pin auto" "the mutation did not apply"
+else
+  snap
+  out=$(vd --pin auto); rc=$?
+  res=$(result_of "$out" skills.installed)
+  if [ "$rc" -eq 1 ] && [ "$res" = FAIL ]; then
+    ok "a real regression still FAILs under --pin auto"
+  else
+    bad "a real regression still FAILs under --pin auto" "result=$res exit=$rc — $(flat "$out")"
+  fi
+fi
+
+fresh
+edit docs/adr/0001-project-genesis.md 're.sub(r"`[0-9a-f]{7,40}`", "`deadbee`", s)'
+if [ "$BROKEN" -ne 0 ]; then
+  bad "an unresolvable recorded pin degrades to today's verdict" "the mutation did not apply"
+else
+  snap
+  out=$(vd --pin auto); rc=$?
+  res=$(result_of "$out" skills.installed); commit=$(jget "$out" 'd["pin"]["commit"]')
+  note=$(jget "$out" 'd["pin"]["note"]')
+  if [ "$rc" -eq 1 ] && [ "$res" = FAIL ] && [ "$commit" = "None" ] && printf '%s' "$note" | grep -q "deadbee"; then
+    ok "an unresolvable recorded pin degrades to today's verdict"
+  else
+    bad "an unresolvable recorded pin degrades to today's verdict" \
+        "result=$res exit=$rc commit=$commit note=$(flat "$note")"
+  fi
+fi
+
+fresh
+edit docs/adr/0001-project-genesis.md 're.sub(r"`[0-9a-f]{7,40}`", "(none)", s)'
+if [ "$BROKEN" -ne 0 ]; then
+  bad "no recorded pin degrades to today's verdict" "the mutation did not apply"
+else
+  snap
+  out=$(vd --pin auto); rc=$?
+  res=$(result_of "$out" skills.installed); commit=$(jget "$out" 'd["pin"]["commit"]')
+  note=$(jget "$out" 'd["pin"]["note"]')
+  if [ "$rc" -eq 1 ] && [ "$res" = FAIL ] && [ "$commit" = "None" ] && [ -n "$note" ] && [ "$note" != "None" ]; then
+    ok "no recorded pin degrades to today's verdict"
+  else
+    bad "no recorded pin degrades to today's verdict" "result=$res exit=$rc commit=$commit note=$(flat "$note")"
+  fi
+fi
+
+fresh
+sdk_pages 500 '[{"kotlin": "success", "self_hosted": False}]'
+out=$(vd --pin "$DRIFT_P2"); rc=$?
+sdk=$(result_of "$out" overlay.kotlin.android-sdk); sk=$(result_of "$out" skills.installed)
+if [ "$rc" -eq 0 ] && [ "$sdk" = DRIFT ] && [ "$sk" = DRIFT ]; then
+  ok "a rule absent from the pin's standard DRIFTs instead of FAILing"
+else
+  bad "a rule absent from the pin's standard DRIFTs instead of FAILing" \
+      "android-sdk=$sdk skills.installed=$sk exit=$rc — $(flat "$out")"
+fi
+
+fresh
+out=$(verify --pin auto); rc=$?
+summary=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(" ".join(sorted({r["rule"]+"="+r["result"] for r in d["results"] if r["result"]!="PASS"})))' "$out" 2>/dev/null)
+if [ "$rc" -eq 0 ] && [ "$summary" = "module.credits.coverage=N-A overlay.kotlin.app-id=N-A" ]; then
+  ok "a pin equal to the current registry commit is a no-op"
+else
+  bad "a pin equal to the current registry commit is a no-op" "exit $rc — $(flat "$out")"
+fi
+fresh; rm "$M/CLAUDE.md"; snap
+out=$(verify --pin auto); rc=$?
+if [ "$rc" -eq 1 ] && [ "$(result_of "$out" core.claude-md)" = FAIL ]; then
+  ok "a real FAIL stays FAIL when the pin equals the current registry commit"
+else
+  bad "a real FAIL stays FAIL when the pin equals the current registry commit" "exit $rc — $(flat "$out")"
+fi
+
+fresh
+out=$(FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" V --repo "$M" --ref HEAD --gh-repo blamechris/soundbed --pin not-a-real-pin --json 2>&1); rc=$?
+if [ "$rc" -eq 2 ]; then
+  ok "an explicit --pin that does not resolve exits 2"
+else
+  bad "an explicit --pin that does not resolve exits 2" "exit $rc — $(flat "$out")"
+fi
+
+fresh
+out=$(vd --pin "$DRIFT_P3"); rc=$?
+res=$(result_of "$out" skills.installed)
+ev=$(jget "$out" 'next(r["evidence"] for r in d["results"] if r["rule"]=="skills.installed")')
+if [ "$rc" -eq 1 ] && [ "$res" = FAIL ] && printf '%s' "$ev" | grep -q "could not run"; then
+  ok "a probe that cannot run at the pin degrades to FAIL, not DRIFT"
+else
+  bad "a probe that cannot run at the pin degrades to FAIL, not DRIFT" "result=$res exit=$rc evidence=$(flat "$ev")"
+fi
+
+fresh
+gh_edit repos_blamechris_soundbed_labels_per_page_100_page_1 'd[0]["color"] = "ffffff"'
+out=$(vd --pin "$DRIFT_P4"); rc=$?
+res=$(result_of "$out" github.labels)
+ev=$(jget "$out" 'next(r["evidence"] for r in d["results"] if r["rule"]=="github.labels")')
+if [ "$BROKEN" -eq 0 ] && [ "$rc" -eq 1 ] && [ "$res" = FAIL ] && printf '%s' "$ev" | grep -q "could not run"; then
+  ok "an unreadable registry file at the pin keeps the row FAIL and never aborts the run"
+else
+  bad "an unreadable registry file at the pin keeps the row FAIL and never aborts the run" \
+      "result=$res exit=$rc evidence=$(flat "$ev") — $(flat "$out")"
+fi
+
+fresh
+text=$(FAKE_GH_DIR="$MG" PATH="$FAKEBIN:$PATH" python3 "$SUT" --registry "$DREG" --registry-ref "$DRIFT_C" --no-fetch --repo "$M" --ref HEAD --gh-repo blamechris/soundbed --pin auto 2>&1); rc=$?
+if printf '%s' "$text" | grep -q "pin ${DRIFT_P7} (adr-0001)" && printf '%s' "$text" | grep -Eq "[0-9]+ DRIFT · " \
+   && printf '%s' "$text" | grep -q "^DRIFT: the standard moved after this repo's pin (${DRIFT_P7})"; then
+  ok "text mode shows the pin in the header and DRIFT in the counts"
+else
+  bad "text mode shows the pin in the header and DRIFT in the counts" "$(flat "$text")"
+fi
+
+out=$(V --plan --pin auto 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+  ok "--plan with --pin auto is refused"
+else
+  bad "--plan with --pin auto is refused" "exit $rc — $(flat "$out")"
+fi
+
 echo "== every probed rule has a mutation that FAILs it"
 probed=$(V --list-rules --json | python3 -c 'import json,sys; print(" ".join(r["id"] for r in json.load(sys.stdin) if r["class"]=="probe"))')
 missing=""

@@ -8,7 +8,7 @@ Usage:
                     [--visibility private] [--posture withheld|gated] [--description TEXT]
                     [--relay-token-in LIST|none] [--seed-issues PATH] [--date YYYY-MM-DD] [--json]
                     [--registry PATH] [--registry-ref REF] [--no-fetch]
-  genesis-verify.py --repo PATH [--ref REF] [--gh-repo OWNER/NAME] [--json]
+  genesis-verify.py --repo PATH [--ref REF] [--gh-repo OWNER/NAME] [--json] [--pin auto|none|REF]
                     [--stack ... --modules ... --app-id ...]   (only when the profile has no intent)
                     [--registry PATH] [--registry-ref REF] [--no-fetch]
   genesis-verify.py --self-check [--registry PATH] [--registry-ref REF] [--no-fetch]
@@ -22,9 +22,10 @@ existing tool run in order. One renderer serves both halves of the job:
                 issues -- from assets/genesis/standard-v1.json. The agent performs the writes;
                 this script performs none. `--json` is what Phase 3 writes files from.
   verify        (--repo) probes a checkout AT A REF plus the live GitHub settings, and reports
-                one row per rule: PASS / FAIL / WAIVED / N-A / LEGACY / PENDING-HUMAN. Probes are
-                structural -- headings, keys, settings -- and the expected structure is read off
-                the SAME rendered templates the plan wrote, so the two cannot drift apart.
+                one row per rule: PASS / FAIL / WAIVED / N-A / LEGACY / PENDING-HUMAN / DRIFT.
+                Probes are structural -- headings, keys, settings -- and the expected structure
+                is read off the SAME rendered templates the plan wrote, so the two cannot drift
+                apart.
   --self-check  the registry's own gate: every `probe`-class rule in the manifest has a probe
                 here and every probe here has a rule (the rule<->probe parity), every template
                 is referenced and exists, every placeholder is declared and resolves, and every
@@ -39,13 +40,26 @@ the clone's working tree: ~/Projects/skill-templates is a shared working copy th
 another session's branch.
 
 Exit codes:
-  0  no FAIL. PENDING-HUMAN rows are allowed: a human step with an open `human-setup` issue.
-     For --plan: the plan was rendered.
+  0  no FAIL. PENDING-HUMAN and DRIFT rows are allowed: a human step with an open `human-setup`
+     issue, or a rule the registry has since changed underneath an already-conformant repo (see
+     --pin below). For --plan: the plan was rendered.
   1  findings: at least one FAIL (or, for --self-check, at least one registry defect).
   2  could not verify -- the registry or repo is unreadable, a ref does not resolve, a fetch
      failed, `gh` failed for any reason other than a meaningful 404 (an ERROR row), a probe hit
      its read bound before finding decisive evidence, or --plan refused its input. Never 0: a
      check that could not look must not report a pass.
+
+--pin (verify only; default none). `none` judges every rule against --registry-ref alone. `auto`
+also reads the one registry commit `docs/adr/0001-project-genesis.md` records under `## Evidence`
+-- the commit this repo was built from -- and an explicit REF names such a commit instead. With a
+pin, a row FAILs only when it fails at both commits; a row that fails only at --registry-ref is
+DRIFT: the standard moved after this repo was built. DRIFT is reported, never filed, and never
+changes the exit code; adopting the change is the owner's call. FAIL stays the default verdict: a
+pin exempts a row only on positive evidence (a PASS there, or a rule its standard did not
+require), and a probe that cannot run against the pin leaves the FAIL standing. An `auto` pin
+that is not recorded or does not resolve falls back to --registry-ref alone; an explicit REF that
+does not resolve is exit 2. Why (#314): a v1 change on the registry's default ref must not
+retroactively FAIL a repo that conformed to the standard it was built from.
 
 LEGACY is a reserved result: no v1 probe emits it. The back-port audit (standard §10.4) adds
 the detectors for known legacy shapes, such as archery's path-filtered auto-pass mirror.
@@ -83,7 +97,7 @@ POSTURE_LEAD = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?\*\*[ \t]*(Withheld|Gated)\b"
 # render must both match this — self_check asserts both against the one constant).
 HUMAN_SETUP_SECTIONS = ("What", "Why a human", "Exact steps", "Secret names", "Reuse or create", "Done when")
 
-RESULTS = ("PASS", "FAIL", "WAIVED", "N-A", "LEGACY", "PENDING-HUMAN")
+RESULTS = ("PASS", "FAIL", "WAIVED", "N-A", "LEGACY", "PENDING-HUMAN", "DRIFT")
 ERROR = "ERROR"  # a row whose probe could not look; any ERROR row forces exit 2
 
 
@@ -187,6 +201,30 @@ class Registry(GitTree):
         ids = FLOOR_TOKEN.findall(self.need(GLOBAL_CLAUDE))
         if not ids:
             die(f"{GLOBAL_CLAUDE} at {self.ref} declares no floor rules")
+        return ids
+
+
+class PinRegistry(Registry):
+    """The registry at a --pin commit. It is only ever read to classify a FAIL, so a missing or
+    malformed file raises CannotVerify -- the row keeps its FAIL -- instead of die(): a pin that
+    cannot speak for one row must never abort the whole run (#314)."""
+
+    def need(self, p):
+        text = self.read(p)
+        if text is None:
+            raise CannotVerify(f"the registry pin {self.commit[:7]} has no {p}")
+        return text
+
+    def genesis_json(self, rel):
+        try:
+            return json.loads(self.need(GENESIS_DIR + rel))
+        except json.JSONDecodeError as e:
+            raise CannotVerify(f"{GENESIS_DIR}{rel} at the registry pin {self.commit[:7]} is not valid JSON ({e})")
+
+    def floor_ids(self):
+        ids = FLOOR_TOKEN.findall(self.need(GLOBAL_CLAUDE))
+        if not ids:
+            raise CannotVerify(f"{GLOBAL_CLAUDE} at the registry pin {self.commit[:7]} declares no floor rules")
         return ids
 
 
@@ -2024,8 +2062,95 @@ def open_human_setup(ctx):
     return [i for i in items if "pull_request" not in i]
 
 
-def run_verify(man, reg, tree, intent, gh):
+class Pin:
+    """A resolved --pin target: the manifest and registry view classify_drift re-runs a FAIL
+    probe against. Never constructed for `--pin none`, an unresolved pin, or a pin equal to
+    the current --registry-ref (see resolve_pin)."""
+
+    def __init__(self, commit, man, reg):
+        self.commit, self.man, self.reg = commit, man, reg
+
+
+def resolve_pin(args, reg, tree):
+    """(Pin or None, info). `info` is None only for `--pin none`; otherwise a dict
+    {"commit": full sha or None, "source": "adr-0001"|"flag", "note": str or None} that the
+    header/JSON report even when nothing resolved. The first element is None whenever there is
+    nothing new to classify against: no pin requested, a pin that never resolved or whose
+    manifest could not be read (auto only -- an explicit --pin dies instead, since the owner
+    named it), or a pin equal to the current registry commit (a FAIL there is a FAIL here too,
+    so no second Ctx is worth building)."""
+    mode = args.pin
+    if mode == "none":
+        return None, None
+    if mode == "auto":
+        text = tree.read(ADR0001)
+        body = section(text, "Evidence") if text else None
+        hexes = re.findall(r"`([0-9a-f]{7,40})`", body or "")
+        if len(hexes) != 1:
+            note = ("no registry commit recorded in ADR-0001's Evidence" if not hexes else
+                     f"ADR-0001's Evidence names {len(hexes)} commit hashes, not one")
+            return None, {"commit": None, "source": "adr-0001", "note": note}
+        cand, source = hexes[0], "adr-0001"
+    else:
+        cand, source = mode, "flag"
+
+    rev = git(reg.path, "rev-parse", "--verify", "--quiet", f"{cand}^{{commit}}")
+    if rev.returncode != 0:
+        if source == "flag":
+            die(f"--pin {cand!r} does not resolve to a commit in the registry at {reg.path!r}")
+        return None, {"commit": None, "source": source,
+                      "note": f"ADR-0001 records `{cand}`, which does not resolve in the registry"}
+    sha = rev.stdout.decode().strip()
+
+    if sha == reg.commit:
+        return None, {"commit": sha, "source": source, "note": None}
+
+    # Registry.need()/manifest() call die() on failure; route around them until the manifest
+    # is known to be readable, so an auto pin can still degrade instead of aborting the run.
+    shown = git(reg.path, "show", f"{sha}:{MANIFEST}")
+    if shown.returncode != 0:
+        if source == "flag":
+            die(f"the registry pin {sha[:7]} has no {MANIFEST}")
+        return None, {"commit": None, "source": source, "note": f"the registry pin {sha[:7]} has no {MANIFEST}"}
+    try:
+        pin_man = json.loads(shown.stdout.decode("utf-8", "replace"))
+    except json.JSONDecodeError as e:
+        if source == "flag":
+            die(f"{MANIFEST} at the registry pin {sha[:7]} is not valid JSON ({e})")
+        return None, {"commit": None, "source": source,
+                      "note": f"{MANIFEST} at the registry pin {sha[:7]} is not valid JSON ({e})"}
+
+    pin_reg = PinRegistry(reg.path, sha, False, "registry pin")
+    return Pin(sha, pin_man, pin_reg), {"commit": sha, "source": source, "note": None}
+
+
+def classify_drift(rid, evidence, pin, pin_ctx, ctx):
+    """(result, evidence) for a row that FAILed at the current registry commit. FAIL is the
+    default verdict; DRIFT is an exemption that needs positive evidence from the pin, and a pin
+    that cannot speak for this row -- absent, the wrong layer, or unreadable here -- never
+    exempts it. Never raises (including CannotVerify/RenderError): a probe crash at the pin
+    degrades to FAIL, the same as a rule the pin never had an opinion about."""
+    p7, cur7 = pin.commit[:7], ctx.reg.commit[:7]
+    try:
+        pinned_rule = next((r for r in pin.man["rules"] if r["id"] == rid), None)
+        if pinned_rule is None or pinned_rule["class"] != "probe":
+            return "DRIFT", f"not in the standard at pin {p7}; at {cur7}: {evidence}"
+        if pinned_rule["layer"] not in ctx.intent.layers():
+            return "DRIFT", f"`{pinned_rule['layer']}` not required at pin {p7}; at {cur7}: {evidence}"
+        try:
+            pin_result, pin_evidence = PROBES[rid](pin_ctx)
+        except Exception as e:
+            return "FAIL", f"{evidence} (drift check at pin {p7} could not run: {type(e).__name__}: {e})"
+        if pin_result == "PASS":
+            return "DRIFT", f"PASS at pin {p7} ({pin_evidence}); at {cur7}: {evidence}"
+        return "FAIL", evidence  # FAIL at both commits: a real finding, not drift
+    except Exception as e:  # a pin manifest too malformed to even classify is not an exemption
+        return "FAIL", f"{evidence} (drift check at pin {p7} could not run: {type(e).__name__}: {e})"
+
+
+def run_verify(man, reg, tree, intent, gh, pin=None):
     ctx = Ctx(man, reg, tree, intent, gh)
+    pin_ctx = Ctx(pin.man, pin.reg, tree, intent, gh) if pin is not None else None
     layers = intent.layers()
     rows = []
     human_issues = None
@@ -2052,6 +2177,8 @@ def run_verify(man, reg, tree, intent, gh):
             continue
         try:
             result, evidence = PROBES[rid](ctx)
+            if result == "FAIL" and pin is not None:
+                result, evidence = classify_drift(rid, evidence, pin, pin_ctx, ctx)
             if result == "FAIL" and rule.get("human"):
                 # PENDING-HUMAN only when an OPEN human-setup issue names this rule: an
                 # unfiled human step is a FAIL, and an unreadable issue list is an ERROR.
@@ -2075,10 +2202,10 @@ def verify_exit(rows):
         return EXIT_CANNOT_VERIFY
     if any(r["result"] == "FAIL" for r in rows):
         return EXIT_FINDINGS
-    return EXIT_OK
+    return EXIT_OK  # DRIFT (like PENDING-HUMAN) never reaches here as FAIL, so it never flips this
 
 
-def print_rows(head, rows, code):
+def print_rows(head, rows, code, pin_info=None):
     print(head + "\n")
     print("| Rule | Result | Evidence |\n|---|---|---|")
     for r in rows:
@@ -2088,6 +2215,9 @@ def print_rows(head, rows, code):
         counts[r["result"]] = counts.get(r["result"], 0) + 1
     order = list(RESULTS) + [ERROR]
     print("\n" + " · ".join(f"{counts[k]} {k}" for k in order if k in counts) + f" · exit {code}")
+    if any(r["result"] == "DRIFT" for r in rows) and pin_info and pin_info.get("commit"):
+        print(f"DRIFT: the standard moved after this repo's pin ({pin_info['commit'][:7]}); these "
+              "rows pass there and do not change the exit code.")
     if code == EXIT_CANNOT_VERIFY:
         print("Could not verify (ERROR rows): this is not a pass.")
 
@@ -2310,9 +2440,14 @@ def main():
     ap.add_argument("--date")
     ap.add_argument("--ref", default="origin/main")
     ap.add_argument("--gh-repo", help="OWNER/NAME; default: the checkout's origin remote")
+    ap.add_argument("--pin", default="none",
+                    help="judge a FAIL against a second registry commit too: none (default), "
+                         "auto (ADR-0001's recorded commit), or an explicit registry ref/sha (#314)")
     args = ap.parse_args()
     if args.seed_issues is not None and not args.plan:
         ap.error("--seed-issues is a --plan flag; verify reads no seed file")
+    if args.pin != "none" and not args.repo:
+        ap.error("--pin is a verify (--repo) flag")
 
     reg = Registry(args.registry, args.registry_ref, not args.no_fetch, "registry")
     man = reg.manifest()
@@ -2358,18 +2493,22 @@ def main():
         return EXIT_OK
 
     tree = GitTree(args.repo, args.ref, not args.no_fetch, "repo")
+    pin, pin_info = resolve_pin(args, reg, tree)
     intent = intent_for_verify(args, man, tree)
-    rows = run_verify(man, reg, tree, intent, GH(intent.repo))
+    rows = run_verify(man, reg, tree, intent, GH(intent.repo), pin=pin)
     code = verify_exit(rows)
     if args.json:
         print(json.dumps({"repo": intent.repo, "ref": tree.ref, "commit": tree.commit,
                           "registry": {"ref": reg.ref, "commit": reg.commit},
                           "standard": man["standard"], "intent_source": intent.source,
-                          "results": rows, "exit": code}, indent=2))
+                          "pin": pin_info, "results": rows, "exit": code}, indent=2))
     else:
-        print_rows(f"genesis-verify — {intent.repo} @ {tree.ref} ({tree.commit[:7]}) · Standard "
-                   f"{man['standard']} (registry {reg.commit[:7]}) · intent from {intent.source}",
-                   rows, code)
+        head = (f"genesis-verify — {intent.repo} @ {tree.ref} ({tree.commit[:7]}) · Standard "
+                f"{man['standard']} (registry {reg.commit[:7]}) · intent from {intent.source}")
+        if pin_info is not None:
+            head += (f" · pin {pin_info['commit'][:7]} ({pin_info['source']})" if pin_info["commit"]
+                     else f" · no pin: {pin_info['note']}")
+        print_rows(head, rows, code, pin_info)
     return code
 
 
