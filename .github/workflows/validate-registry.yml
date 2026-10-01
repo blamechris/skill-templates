@@ -482,6 +482,9 @@ jobs:
         # notice, because both numbers look perfectly plausible.
         run: ./assets/scripts/usage-pace.test.sh
 
+      - name: usage-accounting regression tests
+        run: python3 -m unittest assets/scripts/usage_accounting_test.py
+
       - name: fleet-check regression tests
         # Proves the class split can still fail for its named regressions: a floor
         # difference exits 1, a default difference exits 0 naming the direction, and

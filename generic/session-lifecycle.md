@@ -136,7 +136,7 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
 
    The script generates all of it; `session-seed.py header <path>` reads it back. The seed's own home is private, so `sensitivity: vault` needs no separate outlet; what still may not go in is a secret, in any file, ever.
 
-2. **Benchmark row (artifact ①)** — append this session's row to `~/Obsidian/no-it-all/briefs/usage-benchmark.md` via `python3 ~/.claude/scripts/usage-benchmark-row.py`, replacing the placeholder with a one-line workload note. If the script resolves to a session ID that already has a row, **neither append nor overwrite** — the transcript counters are cumulative, so both actions corrupt the record; say so instead.
+2. **Usage checkpoint (artifact ①)** — capture cumulative parent and child usage at every end or continuation boundary with `python3 ~/.claude/scripts/usage-checkpoint.py --session "$CLAUDE_CODE_SESSION_ID" --run-id <stable-run-id> --status partial --out-dir ~/.claude/usage-history/checkpoints` (use `final` only when the session is truly finished). Checkpoints are immutable; `--aggregate-dir` selects the latest checkpoint per run/session, never their sum. The historical effective-unit benchmark row may be appended once via `usage-benchmark-row.py`, with its workload note and emitted suffixes retained. If a row already exists, leave it intact; **still record the new checkpoint** so continued work is visible.
 3. **Prove the seed the next session will read is *this* session's.** Step 1 already ran this proof and its verdict was step 1's exit code; run it again after anything that could have moved underneath you, and to re-print the paste line:
 
    ```bash
@@ -171,21 +171,28 @@ The canonical rules live in `~/.claude/CLAUDE.md` under **"Follow-on protocol"**
 
 Installing `session-lifecycle` should be followed by installing any missing components in the same pass — the bundle head without its components is a checklist that can't execute.
 
-**Three machine-level scripts back the End steps**, plus five more that other skills use
-independently — all eight are bootstrapped once per machine from the registry rather than
-installed per repo, in one copy command, because both End step 1 and `/next` call the same
-copy of the first three:
+**The machine-level scripts back the End steps** and other skills; bootstrap them
+together per machine because End step 1 and `/next` use the same installed copies:
 
 ```bash
+mkdir -p ~/.claude/scripts ~/.claude/usage-history
 cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
-   assets/scripts/usage-pace.py assets/scripts/filed-from.py \
+   assets/scripts/usage-checkpoint.py assets/scripts/usage_accounting.py \
+   assets/scripts/usage-pace.py assets/scripts/usage-trend.py assets/scripts/filed-from.py \
    assets/scripts/review-result.py assets/scripts/rework-lag.py \
    assets/scripts/session-distill.py assets/scripts/pr-record.py \
    assets/scripts/gate-ledger.py ~/.claude/scripts/
+cp assets/scripts/usage-trend.py assets/scripts/usage_accounting.py \
+   ~/.claude/usage-history/
 ```
 
+The second copy updates the existing scheduled `~/.claude/usage-history/usage-trend.py`
+path and gives it a sibling shared module. Confirm that schedule before rollout;
+neither copy command is run by installing this repository alone.
+
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
-`usage-benchmark-row.py` emits artifact ①'s row; `usage-pace.py` answers "how much of the meter
+`usage-checkpoint.py` emits artifact ①'s cumulative measurement; `usage-benchmark-row.py`
+emits the historical index row once; `usage-pace.py` answers "how much of the meter
 week is spent", records meter readings, and — on macOS with the Claude desktop app — measures
 the cap outright with `--calibrate`, by regressing spend against the meter samples the app
 already writes every ~15 minutes. On a machine without that app the flag explains itself and

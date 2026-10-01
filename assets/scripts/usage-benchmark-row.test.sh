@@ -25,6 +25,7 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUT="$HERE/usage-benchmark-row.py"
+export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/usage-benchmark-row-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
@@ -49,6 +50,7 @@ gen() {
   "$PY" - "$1" "$2" "$3" "$4" <<'PY'
 import json, sys
 path, turns, blocks, mode = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+prefix = path.rsplit("/", 1)[-1]
 usage = {"input_tokens": 1000, "cache_read_input_tokens": 100000,
          "cache_creation_input_tokens": 5000, "output_tokens": 2000}
 with open(path, "w", encoding="utf-8") as f:
@@ -59,10 +61,10 @@ with open(path, "w", encoding="utf-8") as f:
             rec = {"type": "assistant", "timestamp": ts,
                    "message": {"usage": dict(usage)}, "pad": "x" * 400}
             if mode == "msgid":
-                rec["message"]["id"] = "msg_%d" % i
-                rec["requestId"] = "req_%d" % i
+                rec["message"]["id"] = "%s_msg_%d" % (prefix, i)
+                rec["requestId"] = "%s_req_%d" % (prefix, i)
             elif mode == "requestid":
-                rec["requestId"] = "req_%d" % i
+                rec["requestId"] = "%s_req_%d" % (prefix, i)
             f.write(json.dumps(rec) + "\n")
 PY
 }

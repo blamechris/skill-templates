@@ -1,0 +1,59 @@
+{
+  "source": "/Users/blamechris/Obsidian/no-it-all/reviews/agent-progress-2026-09-27/evidence/2026-09-29-economics/native-usage-summary.json",
+  "window": {
+    "start_inclusive_utc": "2026-09-29T03:00:00+00:00",
+    "end_exclusive_utc": "2026-09-30T04:00:00+00:00",
+    "hours": 25.0
+  },
+  "models": {
+    "claude-haiku-4-5-20251001": {
+      "responses": 634,
+      "tokens": {
+        "input_tokens": 5122,
+        "output_tokens": 221515,
+        "cache_creation_input_tokens": 1746469,
+        "cache_read_input_tokens": 51899111,
+        "cache_5m_tokens": 1746469,
+        "cache_1h_tokens": 0,
+        "cache_ttl_unclassified_tokens": 0,
+        "thinking_tokens_included_in_output": 85541
+      }
+    },
+    "claude-opus-5-5": {
+      "responses": 1307,
+      "tokens": {
+        "input_tokens": 2940,
+        "output_tokens": 1276360,
+        "cache_creation_input_tokens": 4671261,
+        "cache_read_input_tokens": 472556910,
+        "cache_5m_tokens": 354102,
+        "cache_1h_tokens": 4317159,
+        "cache_ttl_unclassified_tokens": 0,
+        "thinking_tokens_included_in_output": 436955
+      }
+    },
+    "claude-sonnet-5": {
+      "responses": 6604,
+      "tokens": {
+        "input_tokens": 13208,
+        "output_tokens": 4751568,
+        "cache_creation_input_tokens": 21874587,
+        "cache_read_input_tokens": 1612743073,
+        "cache_5m_tokens": 21874587,
+        "cache_1h_tokens": 0,
+        "cache_ttl_unclassified_tokens": 0,
+        "thinking_tokens_included_in_output": 2232653
+      }
+    }
+  },
+  "role_responses": {
+    "child": 7323,
+    "main": 1222
+  },
+  "role_usd": {
+    "child": "441.61966525",
+    "main": "148.00133120"
+  },
+  "selected_without_terminal_metadata": 632,
+  "expected_usd": "589.62099645"
+}
