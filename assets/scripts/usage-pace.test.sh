@@ -41,7 +41,7 @@ import os as _os
 
 _real_datetime = _dt.datetime
 _instant = _real_datetime.fromisoformat(
-    _os.environ.get("USAGE_PACE_TEST_NOW", "2026-09-29T12:00:00+00:00")
+    _os.environ.get("USAGE_PACE_TEST_NOW", "2026-09-30T08:00:00+00:00")
 )
 
 class _FrozenDateTime(_real_datetime):
@@ -56,7 +56,7 @@ class _FrozenDateTime(_real_datetime):
 _dt.datetime = _FrozenDateTime
 CLOCKEOF
 export PYTHONPATH="$TMP/clock${PYTHONPATH:+:$PYTHONPATH}"
-export USAGE_PACE_TEST_NOW=2026-09-29T12:00:00+00:00
+export USAGE_PACE_TEST_NOW=2026-09-30T08:00:00+00:00
 
 pass=0; fail=0; skip=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
@@ -1914,7 +1914,7 @@ for edge in '2026-09-30T22:58:00+00:00 2026-09-30' \
         "usable=$(fixf "$fx" usable) got=$(flat "$got") week=$actual_week"
   fi
 done
-export USAGE_PACE_TEST_NOW=2026-09-29T12:00:00+00:00
+export USAGE_PACE_TEST_NOW=2026-09-30T08:00:00+00:00
 
 # NEAR CAP is gone from every path, whatever the fixture says.
 case "$line" in
