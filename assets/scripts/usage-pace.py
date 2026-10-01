@@ -45,6 +45,9 @@ import argparse, bisect, hashlib, json, math, os, sys, time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from usage_accounting import (RATES, RATE_CARD_VERSION, Responses, price_usage,
+                              prefer_response, response_key, token_split)
 
 HOME = Path.home()
 HIST = HOME / ".claude" / "usage-history"
@@ -84,12 +87,13 @@ STRADDLE_GRACE_MS = 3_600_000
 # is therefore ~1% stale, not ~10%; only the all-models and subagent figures carry the
 # full correction (#256).
 #
-# Supersession is on the greater (cost, timestamp) rather than on "last seen". "Last" is
+# Supersession now uses coherent cumulative counters and completion metadata, rather
+# than cost or "last seen". "Last" is
 # not merely unsafe in principle: 1,094 keys ($25.00) have a last-WRITTEN record cheaper
 # than their maximum, because one request lands in more than one transcript (resumes,
 # sidechains) and the later copy can be the truncated one. Scan order is not write order
 # either -- `rglob` order is arbitrary, and an incremental scan sees the two halves in
-# different passes. Max is the same answer from any order and is idempotent; "last" is
+# different passes. The cumulative selection is order-independent; "last" is
 # neither.
 #
 # COST_POLICY stamps values DERIVED from that choice, so they are not silently mixed with
@@ -98,29 +102,26 @@ STRADDLE_GRACE_MS = 3_600_000
 # disclosed instead (resolve_cap), because a cap 9% low divided into a numerator that is
 # no longer 9% low overstates the percentage by 9%, which is a wrong VERDICT and not just
 # a wrong dollar figure.
-COST_POLICY = "supersede-partial-1"
-CACHE_V = 2        # bumped with COST_POLICY: a v1 cache records no per-key contribution,
+COST_POLICY = "coherent-response-exact-rates-2026-09-30"
+CACHE_V = 6        # bumped with COST_POLICY and conservative one-ID coverage;
                    # so nothing in it can be superseded in place -- rescan once instead.
 
 # ONE derivation of the staleness sentence. `resolve_cap` builds a basis string with it and
 # `fmt` looks for it to decide whether the one-liner has to carry a warning of its own: a
 # second hand-typed copy in the formatter is the thing that would drift, and a marker only
 # `--caps` prints is a disclosure nobody reads. Every caller goes through `_stale_note`.
-STALE_CAP_NOTE = ("measured under the superseded first-occurrence dedup (pre-#256), so it "
-                  "reads LOW and this percentage reads high")
+STALE_CAP_NOTE = ("measured under an older response-selection or rate-card basis; "
+                  "its direction and magnitude are unknown on the current basis")
 
 
 def _stale_note(kind, remedy):
     """The disclosure for a cap measured before COST_POLICY, at the magnitude that applies
     to THIS meter.
 
-    The two meters did not move together and quoting one figure for both would overstate
-    the Fable case fivefold: the duplication is sidechain-only, and Fable is main-thread
-    only by doctrine, so the all-models numerator moved 3.5%-14.4% per week while the
-    Fable numerator moved 0%-5% (0% for the week this was measured in).
+    Old figures may contain both a response-selection and a model-pricing difference.
+    Their combined direction cannot be inferred from the prior dedup-only study.
     """
-    mag = "3.5-14.4%" if kind == "all" else "0-5%"
-    return f" -- WARNING: {STALE_CAP_NOTE} (this meter's numerator moved {mag}); {remedy}"
+    return f" -- WARNING: {STALE_CAP_NOTE}; {remedy}"
 
 # DERIVED figures, used only when there is no live sample AND no reading on file -- i.e.
 # on a machine with no desktop app, which is the only place the derived path runs at all.
@@ -131,30 +132,21 @@ def _stale_note(kind, remedy):
 # falsified, which is why neither is called a measurement here either. The live readout
 # never touches them; the cap it uses is this week's own rate.
 #
-# Both were also measured BEFORE COST_POLICY, so both read low against a numerator
-# counted the new way -- the all-models figure by 3.5%-14.4%, the Fable figure by 0%-5%
-# (the superseded duplication is sidechain-only, and Fable is main-thread only by
-# doctrine). resolve_cap discloses that via `_stale_note` rather than silently correcting
-# it, because a guessed multiplier on a measurement is not a measurement; the remedy is
-# `--calibrate` or a reading pair on this machine.
+# Both were measured before COST_POLICY. Their dollar basis is now incompatible;
+# resolve_cap discloses that rather than silently correcting with a guessed multiplier.
 FALLBACK = {"fable": 920.0, "all": 2363.0}
 
-PRICING = [
-    ("fable-5", (10.0, 50.0)), ("mythos", (10.0, 50.0)),
-    ("opus-5", (5.0, 25.0)), ("opus-4-8", (5.0, 25.0)), ("opus-4-7", (5.0, 25.0)),
-    ("opus-4-6", (5.0, 25.0)), ("opus-4-5", (5.0, 25.0)),
-    ("opus-4-1", (15.0, 75.0)), ("opus-4-2025", (15.0, 75.0)), ("opus", (5.0, 25.0)),
-    ("sonnet", (3.0, 15.0)),
-    ("haiku-3-5", (0.8, 4.0)), ("haiku", (1.0, 5.0)),
-]
+# Kept for callers that inspect the model table; matching is exact in rates().
+PRICING = [(model, (float(rate[0]), float(rate[1])))
+           for model, rate in RATES.items()]
 TIERS = ["fable", "opus", "sonnet", "haiku"]
 
 
 def rates(model):
-    for key, r in PRICING:
-        if key in model:
-            return r
-    return (5.0, 25.0)
+    if model not in RATES:
+        raise ValueError("unpriced model: %s" % model)
+    rate = RATES[model]
+    return float(rate[0]), float(rate[1])
 
 
 # `mythos` is priced at the Fable rate in PRICING, so it must TIER as fable too.
@@ -176,18 +168,8 @@ def tier(model):
 
 
 def cost_usd(u, model):
-    """Identical pricing to usage-trend.py -- keep the two in step."""
-    inp, out = rates(model)
-    c = u.get("input_tokens", 0) * inp / 1e6
-    c += u.get("output_tokens", 0) * out / 1e6
-    c += u.get("cache_read_input_tokens", 0) * inp * 0.1 / 1e6
-    cc = u.get("cache_creation") or {}
-    if "ephemeral_5m_input_tokens" in cc or "ephemeral_1h_input_tokens" in cc:
-        c += cc.get("ephemeral_5m_input_tokens", 0) * inp * 1.25 / 1e6
-        c += cc.get("ephemeral_1h_input_tokens", 0) * inp * 2.0 / 1e6
-    else:
-        c += u.get("cache_creation_input_tokens", 0) * inp * 1.25 / 1e6
-    return c
+    """Lower standard/global valuation; unknown cache TTL is tracked separately."""
+    return float(price_usage(u, model)["lower_usd"])
 
 
 def week_close(dt):
@@ -209,7 +191,9 @@ def week_bounds(close_label):
 # ---------------------------------------------------------------- incremental scan
 
 def _fresh_cache(week):
-    return {"week": week, "v": CACHE_V, "files": {}, "totals": {}, "seen": {}}
+    return {"week": week, "v": CACHE_V, "files": {}, "totals": {},
+            "seen": {}, "aliases": {}, "pair_keys": {},
+            "unpriced": {}, "unidentified": {}}
 
 
 def _load_cache(week):
@@ -262,17 +246,14 @@ def token_measures(u):
             price multiplier. It is the candidate that says "the meter counts tokens,
             weighted by cache class, but does not care that Fable costs 2x Opus."
     """
-    cc = u.get("cache_creation") or {}
-    i = u.get("input_tokens", 0)
-    o = u.get("output_tokens", 0)
-    cr = u.get("cache_read_input_tokens", 0)
-    if "ephemeral_5m_input_tokens" in cc or "ephemeral_1h_input_tokens" in cc:
-        c5 = cc.get("ephemeral_5m_input_tokens", 0)
-        c1 = cc.get("ephemeral_1h_input_tokens", 0)
-    else:
-        c5, c1 = u.get("cache_creation_input_tokens", 0), 0
-    raw = i + o + cr + c5 + c1
-    ieq = i + cr * 0.1 + c5 * 1.25 + c1 * 2.0 + o * 5.0
+    t = token_split(u)
+    i, o, cr = t["input_tokens"], t["output_tokens"], t["cache_read_input_tokens"]
+    c5, c1, unknown = (t["cache_5m_tokens"], t["cache_1h_tokens"],
+                       t["cache_ttl_unknown_tokens"])
+    raw = i + o + cr + c5 + c1 + unknown
+    # The historical input-equivalent index uses the 5m weight as a lower bound
+    # for unknown TTL; the separate unknown counter keeps that assumption visible.
+    ieq = i + cr * 0.1 + (c5 + unknown) * 1.25 + c1 * 2.0 + o * 5.0
     return raw, ieq
 
 
@@ -282,7 +263,8 @@ def token_measures(u):
 #   applied     -- 0 for a record whose timestamp falls OUTSIDE this week. The key is
 #                  still remembered, so a third record for it is compared and not
 #                  re-added, but nothing of it is in the week's totals.
-_C_COST, _C_RAW, _C_IEQ, _C_TS, _C_TIER, _C_SUB, _C_APPLIED = range(7)
+(_C_COST, _C_RAW, _C_IEQ, _C_TS, _C_TIER, _C_SUB, _C_APPLIED,
+ _C_RECORD, _C_UNKNOWN) = range(9)
 _BAD = object()      # a cached entry that cannot be trusted; see _prior()
 
 
@@ -299,10 +281,11 @@ def _prior(seen, k):
     v = seen.get(k)
     if v is None:
         return None
-    if (isinstance(v, list) and len(v) == 7 and isinstance(v[_C_TIER], str)
+    if (isinstance(v, list) and len(v) == 9 and isinstance(v[_C_TIER], str)
+            and isinstance(v[_C_RECORD], dict)
             and all(isinstance(v[i], (int, float)) and not isinstance(v[i], bool)
                     and math.isfinite(v[i])
-                    for i in (_C_COST, _C_RAW, _C_IEQ, _C_TS))):
+                    for i in (_C_COST, _C_RAW, _C_IEQ, _C_TS, _C_UNKNOWN))):
         return v
     return _BAD
 
@@ -331,6 +314,8 @@ def _apply(tot, bk, sign, entry):
         tot[key] = tot.get(key, 0.0) + sign * v
     if is_sub:
         tot[f"sub_{t}"] = tot.get(f"sub_{t}", 0.0) + sign * cost
+    tot["cache_ttl_unknown_tokens"] = (tot.get("cache_ttl_unknown_tokens", 0.0)
+                                       + sign * entry[_C_UNKNOWN])
     b = bk.setdefault(bucket_of(entry[_C_TS]), [0.0, 0.0])
     b[0] += sign * cost
     if t == "fable":
@@ -481,9 +466,14 @@ def scan_detail(week, force=False):
     # came back as $61 against a true $2,533, because only the minutes scanned AFTER the
     # upgrade were in it. A full rescan is ~5s and happens once.
     if not force and abs(sum(v[0] for v in bk.values()) - tot.get("all", 0.0)) > 0.01:
-        c = {"week": week, "files": {}, "totals": {}, "seen": set()}
+        c = _fresh_cache(week)
         tot, bk = {}, {}
     seen, files = c["seen"], c["files"]
+    unpriced = c.setdefault("unpriced", {})
+    aliases = c.setdefault("aliases", {})
+    pair_keys = c.setdefault("pair_keys", {})
+    one_id = c.setdefault("one_id", {})
+    unidentified = c.setdefault("unidentified", {})
     close_ms = week_bounds(week)[1].timestamp() * 1000
     for path in ROOT.rglob("*.jsonl"):
         parts = path.parts
@@ -519,7 +509,7 @@ def scan_detail(week, force=False):
             files[key] = [off, mtime]
             continue
         consumed = cut + 1
-        for raw in data[:consumed].split(b"\n"):
+        for line_no, raw in enumerate(data[:consumed].split(b"\n"), 1):
             if not raw:
                 continue
             line = raw.decode("utf-8", "replace")
@@ -533,7 +523,7 @@ def scan_detail(week, force=False):
                 continue
             m = e.get("message") or {}
             u, model = m.get("usage"), m.get("model") or ""
-            if not u or not model or model == "<synthetic>":
+            if not isinstance(u, dict) or model == "<synthetic>" or e.get("isApiErrorMessage"):
                 continue
             ts = e.get("timestamp")
             if not ts:
@@ -542,15 +532,96 @@ def scan_detail(week, force=False):
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except ValueError:
                 continue
-            k = hashlib.md5(f"{m.get('id')}|{e.get('requestId')}".encode()).hexdigest()[:12]
+            identity = response_key(e, key, off + line_no)
+            key_text = (f"{identity[2]}|{identity[1]}" if identity[0] == "pair"
+                        else repr(identity))
+            default_key = hashlib.md5(key_text.encode()).hexdigest()[:12]
+            k = default_key
             in_week = week_close(dt) == week
-            # Round once, so the value cached is byte-identical to the value applied:
-            # a later subtraction then cancels the addition exactly.
-            cost = round(cost_usd(u, model), 9)
             ts_ms = dt.timestamp() * 1000
             prev = _prior(seen, k)
             if prev is _BAD:
                 continue
+            if prev is None and not in_week and abs(ts_ms - close_ms) > STRADDLE_GRACE_MS:
+                continue
+            selected_record = {"message": {"usage": u,
+                                            "stop_reason": m.get("stop_reason")},
+                               "timestamp": ts}
+            if identity[0] in ("message", "request"):
+                alias_name = identity[0] + ":" + identity[1]
+                prior_alias = one_id.get(k)
+                if prior_alias is None or prefer_response(
+                    {"record": prior_alias, "time": 0, "source": "", "line": 0, "role": "main"},
+                    {"record": selected_record, "time": ts_ms / 1000,
+                     "source": key, "line": off, "role": "main"})["record"] is selected_record:
+                    one_id[k] = selected_record
+                if alias_name in aliases and aliases[alias_name] is None:
+                    unpriced[k] = "ambiguous response identity"
+                    continue
+                if alias_name in aliases:
+                    paired = _prior(seen, aliases[alias_name])
+                    if paired is not None and paired is not _BAD:
+                        winning = prefer_response(
+                            {"record": paired[_C_RECORD], "time": paired[_C_TS] / 1000,
+                             "source": "", "line": 0, "role": "main"},
+                            {"record": one_id[k], "time": ts_ms / 1000,
+                             "source": key, "line": off, "role": "main"})
+                        if winning["record"] is one_id[k]:
+                            unpriced[k] = "one-ID observation exceeds paired counters"
+                            continue
+                        else:
+                            continue
+            if identity[0] == "pair":
+                pair_keys[k] = list(identity[1:])
+                for alias_kind, value in (("message", identity[2]),
+                                          ("request", identity[1])):
+                    alias_name = alias_kind + ":" + value
+                    old = aliases.get(alias_name)
+                    alias_key = hashlib.md5(repr((alias_kind, value)).encode()).hexdigest()[:12]
+                    alias_entry = _prior(seen, alias_key)
+                    if alias_entry is not None and alias_entry is not _BAD:
+                        _apply(tot, bk, -1.0, alias_entry)
+                        seen.pop(alias_key, None)
+                    if alias_name in aliases and old != k:
+                        aliases[alias_name] = None
+                        unpriced[alias_key] = "ambiguous response identity"
+                    else:
+                        aliases[alias_name] = k
+                        alias_record = one_id.get(alias_key)
+                        if alias_record is not None:
+                            winner = prefer_response(
+                                {"record": selected_record, "time": ts_ms / 1000,
+                                 "source": key, "line": off, "role": "main"},
+                                {"record": alias_record, "time": 0,
+                                 "source": "", "line": 0, "role": "main"})
+                            if winner["record"] is alias_record:
+                                unpriced[alias_key] = (
+                                    "one-ID observation exceeds paired counters")
+                            else:
+                                unpriced.pop(alias_key, None)
+                        else:
+                            unpriced.pop(alias_key, None)
+            if identity[0] == "unidentified":
+                unidentified[k] = True
+            if prev is not None:
+                old = {"record": prev[_C_RECORD], "time": prev[_C_TS] / 1000,
+                       "source": "", "line": 0, "role": "main"}
+                new = {"record": selected_record, "time": ts_ms / 1000,
+                       "source": key, "line": off, "role": "main"}
+                if prefer_response(old, new) is old:
+                    continue
+            # Round once, so the value cached is byte-identical to the value applied:
+            # a later subtraction then cancels the addition exactly.
+            try:
+                priced = price_usage(u, model)
+            except ValueError as exc:
+                if prev is not None:
+                    _apply(tot, bk, -1.0, prev)
+                    seen.pop(k, None)
+                unpriced[k] = str(exc)
+                continue
+            unpriced.pop(k, None)
+            cost = round(float(priced["lower_usd"]), 9)
             # The week test runs AFTER the key is known, because a key already counted has
             # to be reachable by a superseding record even when that record falls outside
             # the week: the meter bills at the COMPLETE record's minute, so a partial
@@ -572,17 +643,14 @@ def scan_detail(week, force=False):
             # be the partner of an in-week one: the measured partial-to-complete gap is
             # 2.1s at the median and 661s at the widest on record, so an hour is ~5x the
             # worst observed pair.
-            if prev is None and not in_week and abs(ts_ms - close_ms) > STRADDLE_GRACE_MS:
-                continue
-            if prev is not None and (cost, ts_ms) <= (prev[_C_COST], prev[_C_TS]):
-                continue                    # a duplicate that adds nothing; see COST_POLICY
             rawt, ieq = token_measures(u)
             # Parallel accumulators in the two non-dollar candidate units, so a
             # meter reading can identify WHICH unit the meter counts (see
             # `--units`). Cheap to carry; impossible to reconstruct once
             # transcripts are pruned.
             entry = [cost, rawt, round(ieq, 6), ts_ms, tier(model),
-                     1 if is_sub else 0, 1 if in_week else 0]
+                     1 if is_sub else 0, 1 if in_week else 0,
+                     selected_record, priced["tokens"]["cache_ttl_unknown_tokens"]]
             if prev is not None:
                 _apply(tot, bk, -1.0, prev)  # the partial's contribution comes back out
             _apply(tot, bk, 1.0, entry)
@@ -590,6 +658,8 @@ def scan_detail(week, force=False):
         # Outside the line loop: the offset must advance even when this chunk held no
         # parseable assistant records, or those bytes are re-read on every scan forever.
         files[key] = [off + consumed, mtime]
+    tot["unpriced_responses"] = len(unpriced)
+    tot["unidentified_responses"] = len(unidentified)
     c["totals"] = tot
     # Keys are stringified because JSON object keys are strings anyway; _load_buckets
     # turns them back into ints. A week holds at most 10,080 of them.
@@ -909,74 +979,43 @@ def _fit(xs, ys):
     return b, (1 - ssr / sst if sst else None)
 
 
-def _cum_events(unit="$"):
-    """Cumulative spend over every transcript: (times_ms, cum, cum_fable).
-
-    `cum[k]` is the total after the first k events, so `cum[bisect_right(times, t)]` is
-    the total as of instant `t` -- and `cum[0] == 0` covers "before anything happened".
-
-    One full walk, shared. The cap regression and the meter anchor need the same series
-    and this walk is the expensive thing in this file; building it twice per invocation
-    is what the anchor cache exists to avoid. The Fable column rides along because the
-    desktop app's samples carry NO Fable meter, so the Fable side of an out-of-band
-    reset can only be recovered by summing Fable spend up to the zero instant.
-
-    Supersession matters here for the same reason it matters in the week total -- the
-    VALUE, not the instant. Measured over 59,192 superseded pairs, the partial-to-complete
-    gap is 2.1s at the median and 8.7s at p90, so the two records almost always land in
-    the same minute and the series' x-axis barely moves; the widest pair on record is
-    661s, and the fixture in section 20 of the suite uses that tail deliberately rather
-    than as a typical case. What DID move is what the regression fitted and what the
-    anchor localised the meter's zero against: a cumulative curve built from stub costs.
-    """
-    idx = {"$": 0, "raw": 1, "ieq": 2}[unit]
-    best = {}
+def _cum_events(unit="$ "):
+    """Cumulative response usage, selected globally before valuation."""
+    unit = unit.strip()
+    if unit not in ("$", "raw", "ieq"):
+        raise ValueError("unknown unit")
+    selected = Responses()
     for path in ROOT.rglob("*.jsonl"):
         if "memory" in path.parts or "tool-results" in path.parts:
             continue
         try:
-            fh = open(path, "rb")
+            fh = open(path, "r", errors="replace")
         except OSError:
             continue
         with fh:
-            for raw_line in fh:
-                if b'"type":"assistant"' not in raw_line:
-                    continue
+            for line_no, line in enumerate(fh, 1):
                 try:
-                    e = json.loads(raw_line.decode("utf-8", "replace"))
-                except ValueError:
+                    selected.add(json.loads(line), str(path), line_no,
+                                 "child" if "subagents" in path.parts else "main")
+                except json.JSONDecodeError:
                     continue
-                if e.get("type") != "assistant":
-                    continue
-                m = e.get("message") or {}
-                u, model = m.get("usage"), m.get("model") or ""
-                if not u or not model or model == "<synthetic>":
-                    continue
-                # The timestamp is parsed BEFORE the key is claimed. It used to be parsed
-                # after: a record with a missing or unparseable timestamp added its key
-                # to `seen` and then skipped, so a later GOOD duplicate of it was
-                # discarded as already-seen and the request vanished from the series.
-                ts = e.get("timestamp")
-                if not ts:
-                    continue
-                try:
-                    d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except ValueError:
-                    continue
-                k = (m.get("id"), e.get("requestId"))
-                cost, t_ms = cost_usd(u, model), d.timestamp() * 1000
-                prior = best.get(k)
-                if prior is not None and (cost, t_ms) <= (prior[0], prior[1]):
-                    continue
-                rawt, ieq = token_measures(u)
-                v = (cost, rawt, ieq)[idx]
-                # (comparator cost, instant) first, so the tuple sorts and compares by
-                # the same rule whichever unit is being summed: the record that wins is
-                # the complete one in every unit, not a different one per unit.
-                best[k] = (cost, t_ms, v, v if tier(model) == "fable" else 0.0)
-    if not best:
+    ev = []
+    for item in selected.rows():
+        e = item["record"]
+        m = e.get("message") or {}
+        u, model = m.get("usage"), m.get("model")
+        ts = e.get("timestamp")
+        try:
+            t_ms = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000
+            cost = cost_usd(u, model)
+        except (AttributeError, ValueError):
+            continue
+        rawt, ieq = token_measures(u)
+        v = {"$": cost, "raw": rawt, "ieq": ieq}[unit]
+        ev.append((t_ms, v, v if tier(model) == "fable" else 0.0))
+    if not ev:
         return [], [0.0], [0.0]
-    ev = sorted((t_ms, v, vf) for _, t_ms, v, vf in best.values())
+    ev.sort()
     times = [e[0] for e in ev]
     cum, cumf = [0.0], [0.0]
     for _, v, vf in ev:
@@ -1384,10 +1423,8 @@ def resolve_cap(kind, rows, use_cached=True):
             rng = (f", range ${lo:,.0f}-${hi:,.0f}"
                    if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else "")
             age = f", measured {c['at'][:16]}" if isinstance(c.get("at"), str) else ""
-            # A cached cap measured under the old first-occurrence dedup reads low --
-            # 2.0% to 12.9% per period as measured -- and the numerator divided into it no
-            # longer does, so the percentage reads HIGH by that much: a wrong VERDICT, not
-            # just a wrong dollar figure. It is disclosed rather than rejected because this
+# A cached cap measured under an older rate card and response policy has an
+            # unknown net bias against the current numerator. It is disclosed because this
             # is a MEASUREMENT with a date on it, and the file's rule for a number it
             # cannot trust is to say so (see meter_offset) -- but "disclosed" has to mean
             # disclosed WHERE THE PERCENTAGE IS READ, which is `fmt`, not `--caps`.
@@ -1593,6 +1630,10 @@ def pace(now=None, force=False, prefer="live"):
         "hours_to_reset": hours_to_reset,
         "week_all": tot.get("all", 0.0), "week_fable": tot.get("fable", 0.0),
         "main": tot.get("main", 0.0), "sub": tot.get("sub", 0.0),
+        "cache_ttl_unknown_tokens": tot.get("cache_ttl_unknown_tokens", 0.0),
+        "unpriced_responses": tot.get("unpriced_responses", 0),
+        "unidentified_responses": tot.get("unidentified_responses", 0),
+        "rate_card": RATE_CARD_VERSION,
         "sub_fable": tot.get("sub_fable", 0.0),
         "burn_1h": burn_1h, "burn_3h": burn_3h,
         "fable_reading": fable_reading(rows, now),
@@ -1873,6 +1914,13 @@ def fmt(p, margin=None):
                  f"figure above is a range]")
     if p["source"] == "derived" and not p.get("anchor_exact", True):
         line += f" | WARNING: {p['anchor']}"
+    if p.get("cache_ttl_unknown_tokens"):
+        line += (" | cache-write TTL unknown for %,.0f tokens; dollar figures use "
+                 "the 5m lower bound" % p["cache_ttl_unknown_tokens"])
+    if p.get("unpriced_responses"):
+        line += " | %d unpriced responses omitted from dollars" % p["unpriced_responses"]
+    if p.get("unidentified_responses"):
+        line += " | %d responses lack IDs" % p["unidentified_responses"]
     return line
 
 

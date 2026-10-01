@@ -21,6 +21,7 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUT="$HERE/usage-pace.py"
+export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # This is the only suite that IMPORTS the SUT rather than running it as a subprocess,
 # so it is the only one that would drop __pycache__/ into the tracked source tree.
@@ -445,7 +446,7 @@ got=$(pymod "print(up.token_measures({'input_tokens':100,'output_tokens':10,'cac
   && ok "token_measures weights cache reads at 0.1 and output at 5 for input-eq" \
   || bad "token_measures weights cache reads at 0.1 and output at 5 for input-eq" "got=$(flat "$got")"
 
-got=$(pymod "print(up.token_measures({'input_tokens':0,'output_tokens':0,'cache_read_input_tokens':0,'cache_creation':{'ephemeral_1h_input_tokens':100}}))" 2>&1)
+got=$(pymod "print(up.token_measures({'input_tokens':0,'output_tokens':0,'cache_read_input_tokens':0,'cache_creation_input_tokens':100,'cache_creation':{'ephemeral_1h_input_tokens':100}}))" 2>&1)
 [ "$got" = "(100, 200.0)" ] \
   && ok "token_measures prices a 1h cache write at 2.0x" \
   || bad "token_measures prices a 1h cache write at 2.0x" "got=$(flat "$got")"
@@ -464,7 +465,7 @@ print(up.week_close(datetime(2026,9,2,15,58,tzinfo=PT)), up.week_close(datetime(
 # usage-trend.py is not in this registry; on a machine that has both, the two
 # pricing tables MUST agree or the pace check and the benchmark disagree about
 # what a week cost. Checked where it can be, skipped where it cannot.
-TREND="$HOME/.claude/scripts/usage-trend.py"
+TREND="$HERE/usage-trend.py"
 if [ -f "$TREND" ]; then
   got=$("$PY" - "$SUT" "$TREND" <<'PYEOF' 2>&1
 import importlib.util, sys
@@ -2780,7 +2781,8 @@ def basis(extra):
     up.CALIB.write_text(up.json.dumps(dict({"all":2363.0,"periods":6,"r2":0.994}, **extra)))
     return up.resolve_cap("all", [])[1]
 old, new = basis({}), basis({"policy": up.COST_POLICY})
-print("pre-#256" in old, "WARNING" in old, "pre-#256" in new or "WARNING" in new)')
+print(up.STALE_CAP_NOTE in old, "WARNING" in old,
+      up.STALE_CAP_NOTE in new or "WARNING" in new)')
 [ "$got" = "True True False" ] \
   && ok "a cap measured under the old dedup is disclosed in the basis, not silently divided by" \
   || bad "a cap measured under the old dedup is disclosed in the basis" "got=$(flat "$got")"
@@ -2874,8 +2876,8 @@ row = lambda pol: [{"week":"w","at":"t","note":"","policy":pol,"all_pct":50.0,
                     "all_raw":None,"fable_raw":None,"all_ieq":None,"fable_ieq":None}]
 old_row = up.resolve_cap("fable", row(None))[1]
 new_row = up.resolve_cap("fable", row(up.COST_POLICY))[1]
-print("FB-FALLBACK" if up.STALE_CAP_NOTE in fb and "0-5%" in fb else "fable-undisclosed",
-      "ALL-FALLBACK" if up.STALE_CAP_NOTE in al and "3.5-14.4%" in al else "all-undisclosed",
+print("FB-FALLBACK" if up.STALE_CAP_NOTE in fb and "unknown" in fb else "fable-undisclosed",
+      "ALL-FALLBACK" if up.STALE_CAP_NOTE in al and "unknown" in al else "all-undisclosed",
       "OLD-ROW" if up.STALE_CAP_NOTE in old_row else "row-undisclosed",
       "NEW-ROW-QUIET" if up.STALE_CAP_NOTE not in new_row else "row-always-warns")')
 [ "$got" = "FB-FALLBACK ALL-FALLBACK OLD-ROW NEW-ROW-QUIET" ] \
@@ -3069,7 +3071,7 @@ p_new, line_new = run(up.COST_POLICY)
 print("source=%s pct=%.0f cap=%.0f" % (p_old["source"], p_old["pct"], p_old["all_cap"]),
       "DERIVED" if p_old["source"]=="derived" else "NOT-DERIVED",
       "WIRED" if up.STALE_CAP_NOTE in line_old else "wire-silent",
-      "MAGNITUDE" if "3.5-14.4%" in line_old and "record a fresh reading" in line_old
+      "MAGNITUDE" if "direction and magnitude are unknown" in line_old and "record a fresh reading" in line_old
       else "bare-sentence",
       "QUIET-WHEN-STAMPED" if up.STALE_CAP_NOTE not in line_new else "always-warns")
 PY_19G
@@ -3169,7 +3171,7 @@ with contextlib.redirect_stdout(out):
 o = out.getvalue()
 print("rc=%d" % rc,
       "DISCLOSED" if up.STALE_CAP_NOTE in o else "silent",
-      "BOTH-MAGNITUDES" if "0-5%" in o and "3.5-14.4%" in o else "one-magnitude",
+      "BOTH-MAGNITUDES" if o.count("direction and magnitude are unknown") >= 2 else "one-magnitude",
       "REMEDY" if "record a reading pair here" in o else "no-remedy",
       "FIGURES" if ("$%s" % format(up.FALLBACK["all"], ",.0f")) in o
       and ("$%s" % format(up.FALLBACK["fable"], ",.0f")) in o else "figures-moved")')

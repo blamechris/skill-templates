@@ -55,7 +55,11 @@ session-lifecycle's End step 2 is "neither append nor overwrite" once a row
 exists. skill-templates#207.
 """
 import json, glob, os, re, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from usage_accounting import RATE_CARD_VERSION, Responses, price_usage
 from datetime import datetime
+from decimal import Decimal
 
 W_IN, W_CR, W_CW, W_OUT = 1.0, 0.1, 2.0, 5.0
 
@@ -91,50 +95,33 @@ def pick_transcript():
     die("no session id: pass one explicitly, or run from inside a Claude session "
         "(where $CLAUDE_CODE_SESSION_ID is set).")
 
-def scan_subagents(transcript_path):
-    """Sum the session's subagent transcripts (<session-dir>/subagents/**/*.jsonl)
-    with the same dedup and weights as the main loop. Returns (eff, file_count)."""
+def scan_subagents(transcript_path, selected):
+    """Add child records to the same global selection as the parent."""
     base = transcript_path[:-len(".jsonl")] if transcript_path.endswith(".jsonl") else transcript_path
-    eff = 0.0
     count = 0
-    seen = set()
     subdir = os.path.join(base, "subagents")
     if not os.path.isdir(subdir):
-        return 0.0, 0  # no subagents dir is the normal case, not an error
-    # Below here, an unreadable file or directory means the number cannot be
-    # trusted, and a confident-but-wrong suffix is the failure this script exists
-    # to prevent — so unreadable is a REFUSE, never a silent undercount.
+        return count
     def walk_err(e):
         die(f"cannot measure subagents: {e}")
     for root, _dirs, names in os.walk(subdir, onerror=walk_err):
         for name in names:
             if not name.endswith(".jsonl"):
                 continue
+            source = os.path.join(root, name)
             try:
-                fh = open(os.path.join(root, name), errors="replace")
+                fh = open(source, errors="replace")
             except OSError as e:
                 die(f"cannot measure subagents: {e}")
             count += 1
             with fh:
-                for line in fh:
+                for line_no, line in enumerate(fh, 1):
                     try:
                         rec = json.loads(line)
-                    except Exception:
+                    except ValueError:
                         continue
-                    if rec.get("type") != "assistant":
-                        continue
-                    msg = rec.get("message") or {}
-                    k = msg.get("id") or rec.get("requestId")
-                    if k:
-                        if k in seen:
-                            continue
-                        seen.add(k)
-                    u = msg.get("usage") or {}
-                    eff += (u.get("input_tokens", 0) * W_IN
-                            + u.get("cache_read_input_tokens", 0) * W_CR
-                            + u.get("cache_creation_input_tokens", 0) * W_CW
-                            + u.get("output_tokens", 0) * W_OUT)
-    return eff, count
+                    selected.add(rec, source, line_no, "child")
+    return count
 
 # --- work numerator -------------------------------------------------------
 # The ledger could state spend to four significant figures and could not state
@@ -257,12 +244,12 @@ def scan_work(transcript_path, t0, t1):
 
 path, how = pick_transcript()
 n = 0; eff = 0.0; out = 0; t0 = t1 = None
-seen = set()
+selected = Responses()
 with open(path, errors="replace") as f:
-    for line in f:
+    for line_no, line in enumerate(f, 1):
         try:
             rec = json.loads(line)
-        except Exception:
+        except ValueError:
             continue
         ts = rec.get("timestamp")
         if ts:
@@ -271,29 +258,47 @@ with open(path, errors="replace") as f:
         if rec.get("type") != "assistant":
             continue
         msg = rec.get("message") or {}
-        # One turn, one count. `message.id` is the API's id for the assistant turn
-        # and repeats on every content block of it; `requestId` is the harness's
-        # and is the fallback for lines that carry no message id. A line with
-        # NEITHER is counted (no key, no way to tell it from a distinct turn) —
-        # undercounting a turn is the failure the other direction.
+        # Keep the explicit fallback: a keyless line is a distinct observation.
         key = msg.get("id") or rec.get("requestId")
-        if key:
-            if key in seen:
-                continue
-            seen.add(key)
-        u = msg.get("usage") or {}
-        i, cr, cw, o = (u.get("input_tokens", 0), u.get("cache_read_input_tokens", 0),
-                        u.get("cache_creation_input_tokens", 0), u.get("output_tokens", 0))
-        if i + cr + cw + o == 0:
-            continue
+        if key is None:
+            rec = dict(rec, requestId=None, message=dict(msg, id=None))
+        selected.add(rec, path, line_no, "main")
+sub_count = scan_subagents(path, selected)
+sub_eff = 0.0
+child_responses = 0
+parent_cost = child_cost = Decimal(0)
+parent_upper = child_upper = Decimal(0)
+unpriced = 0
+for item in selected.rows():
+    msg = item["record"].get("message") or {}
+    u = msg.get("usage") or {}
+    i, cr, cw, o = (u.get("input_tokens", 0), u.get("cache_read_input_tokens", 0),
+                    u.get("cache_creation_input_tokens", 0), u.get("output_tokens", 0))
+    if i + cr + cw + o == 0:
+        continue
+    weighted = i * W_IN + cr * W_CR + cw * W_CW + o * W_OUT
+    if item["role"] == "child":
+        child_responses += 1
+        sub_eff += weighted
+    else:
         n += 1
         out += o
-        eff += i * W_IN + cr * W_CR + cw * W_CW + o * W_OUT
+        eff += weighted
+    try:
+        priced = price_usage(u, msg.get("model"))
+    except ValueError:
+        unpriced += 1
+    else:
+        if item["role"] == "child":
+            child_cost += priced["lower_usd"]
+            child_upper += priced["upper_usd"]
+        else:
+            parent_cost += priced["lower_usd"]
+            parent_upper += priced["upper_usd"]
 
 if not (n and t0 and t1):
     die(f"no usage records in {path}")
 
-sub_eff, sub_count = scan_subagents(path)
 # One format for every row, zero included ("0.0M/0") — two shapes in one column
 # is the hand-typed drift this suffix replaces, in miniature.
 sub_note = f"{sub_eff/1e6:.1f}M/{sub_count}"
@@ -306,6 +311,11 @@ print(f"| {date} | {sid} | {dur:.1f} | {n} | {eff/1e6:.1f} | {out/1e3:.0f} | {ef
       f"| <workload note> · subagents: {sub_note} · work: {work_note} |")
 print(f"\nresolved {sid} via {how}", file=sys.stderr)
 print(f"  transcript: {path}", file=sys.stderr)
+print(f"  selected responses: parent {n}, children {child_responses}; "
+      f"child transcript files {sub_count}", file=sys.stderr)
+print(f"  model-priced USD ({RATE_CARD_VERSION}): parent {parent_cost}–{parent_upper}; "
+      f"children {child_cost}–{child_upper}; all-in {parent_cost + child_cost}–"
+      f"{parent_upper + child_upper}; {unpriced} unpriced responses", file=sys.stderr)
 print(f"  If that is not the session you are ending, STOP — pass the id explicitly.", file=sys.stderr)
 print(f"\n(append to ~/Obsidian/no-it-all/briefs/usage-benchmark.md; replace only the "
       f"<workload note> text — the measured subagents and work suffixes stay)", file=sys.stderr)

@@ -301,6 +301,8 @@ UUID=5fc4a59c-394b-4c35-b512-d3a38e4c241c
 BH="$TMP/c1/benchhome"; mkdir -p "$BH/.claude/scripts" "$BH/.claude/projects/-demo"
 cp "$HERE/usage-benchmark-row.py" "$BH/.claude/scripts/" 2>/dev/null || \
   bad "fixture: usage-benchmark-row.py is present" "missing next to the SUT"
+cp "$HERE/usage_accounting.py" "$BH/.claude/scripts/" 2>/dev/null || \
+  bad "fixture: usage_accounting.py is present" "missing next to the SUT"
 "$PY" - "$BH/.claude/projects/-demo/$UUID.jsonl" <<'PY'
 import json, sys
 with open(sys.argv[1], 'w', encoding='utf-8') as f:

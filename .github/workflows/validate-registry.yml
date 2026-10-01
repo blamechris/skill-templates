@@ -29,6 +29,10 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      # Usage helpers now import a sibling module; keep their test imports from
+      # leaving bytecode in assets/scripts before pr-record's clean-tree check.
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -481,6 +485,9 @@ jobs:
         # duplication is sidechain-only). It is the one thing here no local run can
         # notice, because both numbers look perfectly plausible.
         run: ./assets/scripts/usage-pace.test.sh
+
+      - name: usage-accounting regression tests
+        run: python3 -m unittest assets/scripts/usage_accounting_test.py
 
       - name: fleet-check regression tests
         # Proves the class split can still fail for its named regressions: a floor

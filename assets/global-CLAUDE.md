@@ -252,14 +252,14 @@ mission selects prime mode. A user watching the app does not change the selected
   compactions/restarts. Route heavy output to workers when useful. A lower auto-compaction
   window is a host configuration experiment, not a workflow stopping rule; measure total
   cost including compaction, handoff and reconstruction before claiming savings.
-- **Ending a session = two artifacts, every time:** ① the session's row appended to
-  the usage benchmark (`~/Obsidian/no-it-all/briefs/usage-benchmark.md`) — generate it
-  with `python3 ~/.claude/scripts/usage-benchmark-row.py` and replace only the
-  `<workload note>` placeholder with a one-line workload note (duration + workload
-  class make rows comparable; the measured `· subagents:` and `· work:` suffixes stay as
-  emitted); if it
-  resolves to a session ID that already has a row, neither append nor overwrite — the
-  counters are cumulative and both corrupt the record; ② the next-session seed, below.
+- **Ending or continuing a session = two artifacts:** ① an immutable cumulative usage
+  checkpoint from `usage-checkpoint.py` covering parent and children, with a stable run ID
+  and partial/final status; at each new capture, aggregate only the latest checkpoint for
+  that run/session. The historical effective-unit row in
+  `~/Obsidian/no-it-all/briefs/usage-benchmark.md` may be appended once with
+  `usage-benchmark-row.py`; keep its emitted `· subagents:` and `· work:` suffixes. If
+  it already has a row, leave that row intact and still capture the continuation.
+  ② The next-session seed, below. Full commands are in `/session-lifecycle`.
 
 <!--floor:seed-written-outside-any-worktree-->
 **The seed is written outside any worktree, at an absolute path:**
