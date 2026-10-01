@@ -31,10 +31,24 @@ and paused cost breaker remain unchanged until a separately approved rollout.
 Capture a partial checkpoint before a continuation and a final one only when the
 session ends. Pass the full session ID and stable run ID. `--aggregate-dir` selects
 the latest capture per run/session and globally deduplicates the retained response
-identities across sessions. An unknown model or cache lifetime remains visible as
-unpriced coverage or a lower/upper range. Checkpoint files contain response usage
-metadata and source hashes, never prompt or tool text; store them with the same
+identities across sessions. Its output is cumulative for those sessions, with
+source checkpoint identities and selected-response time bounds. Both lower and
+upper API-equivalent totals, unknown cache-lifetime tokens, and unpriced-response
+coverage remain visible. Ambiguous aliases excluded from global selection are
+counted as coverage gaps, and `pricing_complete` is false for any uncertainty or
+partial checkpoint. When observations are excluded, the dollar fields are priced
+subtotals, not complete bounds. The legacy `*_usd` fields are lower-bound aliases, not
+exact prices when the bounds differ or models are unpriced. Do not compare a
+cumulative aggregate with a narrower meter interval without checking that its
+run IDs and response time bounds belong to the work window. Checkpoint files
+contain response usage metadata and source hashes, never prompt or tool text;
+store them with the same
 access controls as the transcript-derived ledgers.
+
+The scheduled trend LaunchAgent uses `~/.claude/scripts/usage-trend.py`; on this
+machine that is a symlink to `~/.claude/usage-history/usage-trend.py`. Verify the
+actual LaunchAgent command and symlink target at installation, and keep the
+shared `usage_accounting.py` beside the target script.
 
 To roll back, restore the dated helper and instruction backups, and remove only
 the new `pace-cache.json`/anchor state after preserving a copy for diagnosis. The

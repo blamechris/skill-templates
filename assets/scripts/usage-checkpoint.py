@@ -150,30 +150,74 @@ def latest_totals(directory):
         if key not in latest or (doc["captured_at"], doc["status"] == "final") > (latest[key]["captured_at"], latest[key]["status"] == "final"):
             latest[key] = doc
     result = {"sessions": len(latest), "partial_sessions": 0,
-              "rate_card": RATE_CARD_VERSION,
-              "parent_usd": Decimal(0), "children_usd": Decimal(0),
+              "rate_card": RATE_CARD_VERSION, "cumulative": True,
+              "source_checkpoints": [],
+              "parent_lower_usd": Decimal(0), "parent_upper_usd": Decimal(0),
+              "children_lower_usd": Decimal(0), "children_upper_usd": Decimal(0),
               "parent_responses": 0, "children_responses": 0,
-              "unpriced_models": {}}
+              "parent_priced_responses": 0, "children_priced_responses": 0,
+              "unpriced_models": {},
+              "tokens": {field: 0 for field in TOKEN_FIELDS}}
     global_rows = Responses()
-    for doc in latest.values():
+    for (run_id, session_id), doc in sorted(latest.items()):
         result["partial_sessions"] += doc["status"] != "final"
         if "selected_responses" not in doc:
             raise ValueError("checkpoint lacks response identities; cannot deduplicate sessions")
+        result["source_checkpoints"].append({
+            "run_id": run_id, "session_id": session_id,
+            "captured_at": doc["captured_at"], "status": doc["status"],
+            "source_coverage": [{"bytes": source["bytes"], "sha256": source["sha256"]}
+                                for source in doc.get("source_coverage", [])]})
         for item in doc["selected_responses"]:
             global_rows.add(item, item["source"], item["line"], item["role"])
+    response_times = []
+    undated = 0
     for item in global_rows.rows():
         msg = item["record"]["message"]
         role = "children" if item["role"] == "child" else "parent"
         result[role + "_responses"] += 1
+        try:
+            at = datetime.fromisoformat(item["record"]["timestamp"].replace("Z", "+00:00"))
+            if at.tzinfo is None:
+                raise ValueError("response timestamp needs timezone")
+            response_times.append(at.astimezone(timezone.utc))
+        except (KeyError, TypeError, AttributeError, ValueError):
+            undated += 1
         try:
             priced = price_usage(msg["usage"], msg.get("model"))
         except ValueError:
             model = msg.get("model") or "unknown"
             result["unpriced_models"][model] = result["unpriced_models"].get(model, 0) + 1
             continue
-        result[role + "_usd"] += priced["lower_usd"]
-    result["all_in_usd"] = result["parent_usd"] + result["children_usd"]
+        result[role + "_priced_responses"] += 1
+        result[role + "_lower_usd"] += priced["lower_usd"]
+        result[role + "_upper_usd"] += priced["upper_usd"]
+        for field in TOKEN_FIELDS:
+            result["tokens"][field] += priced["tokens"][field]
+    result["all_in_lower_usd"] = result["parent_lower_usd"] + result["children_lower_usd"]
+    result["all_in_upper_usd"] = result["parent_upper_usd"] + result["children_upper_usd"]
+    # Existing consumers read these as lower-bound values. Explicit upper fields
+    # and coverage keep uncertain cache lifetimes and unpriced models visible.
+    for role in ("parent", "children", "all_in"):
+        result[role + "_usd"] = result[role + "_lower_usd"]
     result["all_in_responses"] = result["parent_responses"] + result["children_responses"]
+    result["priced_responses"] = result["parent_priced_responses"] + result["children_priced_responses"]
+    result["unpriced_responses"] = result["all_in_responses"] - result["priced_responses"]
+    result["excluded_ambiguous_observations"] = global_rows.ambiguous_identities
+    result["coverage_gap_observations"] = (result["unpriced_responses"] +
+                                           result["excluded_ambiguous_observations"])
+    result["bounds_cover_all_responses"] = result["coverage_gap_observations"] == 0
+    result["pricing_complete"] = (result["bounds_cover_all_responses"] and
+                                  result["all_in_lower_usd"] == result["all_in_upper_usd"] and
+                                  result["partial_sessions"] == 0 and
+                                  global_rows.conflicts == 0 and
+                                  global_rows.without_terminal_metadata() == 0)
+    result["valuation_scope"] = ("all selected responses" if result["bounds_cover_all_responses"]
+                                 else "priced-response subtotal; unpriced or ambiguous observations excluded")
+    result["selected_response_time_bounds"] = {
+        "first": min(response_times).isoformat() if response_times else None,
+        "last": max(response_times).isoformat() if response_times else None,
+        "without_timestamp": undated}
     result["quality"] = {"cross_session_conflicts": global_rows.conflicts,
                          "cross_role_pairs": global_rows.cross_role_pairs,
                          "ambiguous_identities": global_rows.ambiguous_identities,
@@ -184,7 +228,8 @@ def latest_totals(directory):
                         ("service_tier", "service_tier_unknown_responses")):
         result["quality"][name] = sum(not bool((item["record"].get("message") or {}).get(
             "usage", {}).get(field)) for item in global_rows.rows())
-    for key in ("parent_usd", "children_usd", "all_in_usd"):
+    for key in (role + suffix for role in ("parent", "children", "all_in")
+                for suffix in ("_lower_usd", "_upper_usd", "_usd")):
         result[key] = str(result[key])
     return result
 

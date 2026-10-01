@@ -230,6 +230,9 @@ class UsageAccountingTests(unittest.TestCase):
             self.assertEqual(Decimal(doc["parent_usd"]), Decimal(".004"))
             self.assertEqual(Decimal(doc["children_usd"]), Decimal("2.501"))
             self.assertEqual(Decimal(doc["all_in_usd"]), Decimal("2.505"))
+            self.assertEqual(doc["all_in_lower_usd"], doc["all_in_upper_usd"])
+            self.assertEqual(doc["source_checkpoints"][0]["run_id"], "run-1")
+            self.assertEqual(doc["selected_response_time_bounds"]["without_timestamp"], 0)
             self.assertEqual(doc["rate_card"], RATE_CARD_VERSION)
             snapshots = [json.loads(p.read_text()) for p in out.glob("*.json")]
             final = next(s for s in snapshots if s["status"] == "final")
@@ -251,6 +254,54 @@ class UsageAccountingTests(unittest.TestCase):
             self.assertEqual(deduped["all_in_responses"], 3)
             self.assertEqual(Decimal(deduped["all_in_usd"]), Decimal("2.505"))
 
+    def test_aggregate_keeps_unknown_ttl_bounds_and_unpriced_coverage(self):
+        checkpoint = load("usage_checkpoint_bounds", HERE / "usage-checkpoint.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "session.jsonl"
+            uncertain = rec("2026-09-29T00:00:00Z", "r1", "m1", "claude-opus-5-5", 0)
+            uncertain["message"]["usage"]["cache_creation_input_tokens"] = 1000000
+            uncertain["message"]["usage"]["cache_creation"] = {}
+            unknown = rec("2026-09-29T00:01:00Z", "r2", "m2", "claude-unknown", 1)
+            source.write_text(json.dumps(uncertain) + "\n" + json.dumps(unknown) + "\n")
+            out = root / "checkpoints"
+            out.mkdir()
+            snapshot = checkpoint.capture(source, "pilot-1", "2026-09-29T00:02:00Z", "final")
+            (out / "snapshot.json").write_text(json.dumps(snapshot))
+            aggregate = checkpoint.latest_totals(out)
+            self.assertEqual(Decimal(aggregate["parent_lower_usd"]), Decimal(5))
+            self.assertEqual(Decimal(aggregate["parent_upper_usd"]), Decimal(8))
+            self.assertEqual(Decimal(aggregate["all_in_upper_usd"]), Decimal(8))
+            self.assertEqual(aggregate["parent_usd"], aggregate["parent_lower_usd"])
+            self.assertEqual(aggregate["tokens"]["cache_ttl_unknown_tokens"], 1000000)
+            self.assertEqual((aggregate["priced_responses"], aggregate["unpriced_responses"]), (1, 1))
+            self.assertFalse(aggregate["bounds_cover_all_responses"])
+            self.assertFalse(aggregate["pricing_complete"])
+            self.assertEqual(aggregate["unpriced_models"], {"claude-unknown": 1})
+            self.assertEqual(aggregate["source_checkpoints"][0]["session_id"], "session")
+            self.assertEqual(aggregate["selected_response_time_bounds"], {
+                "first": "2026-09-29T00:00:00+00:00", "last": "2026-09-29T00:01:00+00:00",
+                "without_timestamp": 0})
+            source.write_text(json.dumps(uncertain) + "\n")
+            known_only = root / "known-only"
+            known_only.mkdir()
+            (known_only / "snapshot.json").write_text(json.dumps(
+                checkpoint.capture(source, "pilot-1", "2026-09-29T00:03:00Z", "final")))
+            ttl_only = checkpoint.latest_totals(known_only)
+            self.assertTrue(ttl_only["bounds_cover_all_responses"])
+            self.assertFalse(ttl_only["pricing_complete"])
+            self.assertEqual(ttl_only["unpriced_responses"], 0)
+            certain = rec("2026-09-29T00:00:00Z", "r3", "m3", "claude-opus-5-5", 1,
+                          stop="end_turn")
+            source.write_text(json.dumps(certain) + "\n")
+            exact_dir = root / "exact"
+            exact_dir.mkdir()
+            (exact_dir / "snapshot.json").write_text(json.dumps(
+                checkpoint.capture(source, "pilot-1", "2026-09-29T00:04:00Z", "final")))
+            exact = checkpoint.latest_totals(exact_dir)
+            self.assertTrue(exact["pricing_complete"])
+            self.assertEqual(exact["all_in_lower_usd"], exact["all_in_upper_usd"])
+
     def test_checkpoint_keeps_pair_identity_when_one_id_wins(self):
         checkpoint = load("usage_checkpoint_alias", HERE / "usage-checkpoint.py")
         with tempfile.TemporaryDirectory() as tmp:
@@ -264,6 +315,30 @@ class UsageAccountingTests(unittest.TestCase):
             self.assertEqual(doc["all_in"]["responses"], 1)
             self.assertEqual(doc["selected_responses"][0]["requestId"], "r")
             self.assertEqual(doc["selected_responses"][0]["message"]["usage"]["output_tokens"], 100)
+
+    def test_cross_session_ambiguous_alias_prevents_complete_valuation(self):
+        checkpoint = load("usage_checkpoint_ambiguous", HERE / "usage-checkpoint.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out = root / "checkpoints"
+            out.mkdir()
+            alias = rec("2026-09-29T00:00:00Z", None, "shared", "claude-opus-5-5", 100)
+            alias.pop("requestId")
+            pairs = [rec("2026-09-29T00:00:01Z", "r1", "shared", "claude-opus-5-5", 1),
+                     rec("2026-09-29T00:00:02Z", "r2", "shared", "claude-opus-5-5", 1)]
+            for index, record in enumerate([alias] + pairs):
+                source = root / ("session-%d.jsonl" % index)
+                source.write_text(json.dumps(record) + "\n")
+                (out / ("snapshot-%d.json" % index)).write_text(json.dumps(
+                    checkpoint.capture(source, "run", "2026-09-29T00:03:00Z", "final")))
+            aggregate = checkpoint.latest_totals(out)
+            self.assertEqual(aggregate["all_in_responses"], 2)
+            self.assertEqual(aggregate["unpriced_responses"], 0)
+            self.assertEqual(aggregate["quality"]["ambiguous_identities"], 1)
+            self.assertEqual(aggregate["excluded_ambiguous_observations"], 1)
+            self.assertEqual(aggregate["coverage_gap_observations"], 1)
+            self.assertFalse(aggregate["bounds_cover_all_responses"])
+            self.assertFalse(aggregate["pricing_complete"])
 
     def test_trend_uses_final_record_day_and_global_parent_child_selection(self):
         spec = importlib.util.spec_from_file_location("usage_trend", HERE / "usage-trend.py")
