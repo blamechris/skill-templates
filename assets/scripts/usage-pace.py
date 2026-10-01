@@ -102,9 +102,9 @@ STRADDLE_GRACE_MS = 3_600_000
 # disclosed instead (resolve_cap), because a cap 9% low divided into a numerator that is
 # no longer 9% low overstates the percentage by 9%, which is a wrong VERDICT and not just
 # a wrong dollar figure.
-COST_POLICY = "coherent-response-exact-rates-2026-09-30"
-CACHE_V = 6        # bumped with COST_POLICY and conservative one-ID coverage;
-                   # so nothing in it can be superseded in place -- rescan once instead.
+COST_POLICY = "coherent-response-geo-bounds-2026-10-01"
+CACHE_V = 7        # old nine-field entries cannot carry geography uncertainty;
+                   # discard them and rescan once instead.
 
 # ONE derivation of the staleness sentence. `resolve_cap` builds a basis string with it and
 # `fmt` looks for it to decide whether the one-liner has to carry a warning of its own: a
@@ -257,14 +257,15 @@ def token_measures(u):
     return raw, ieq
 
 
-# One cached `seen` entry: [cost, raw, ieq, ts_ms, tier, is_sub, applied].
+# One cached `seen` entry: [cost, raw, ieq, ts_ms, tier, is_sub, applied,
+#                            selected_record, unknown_ttl_tokens, geo_uncertain].
 #   cost/ts_ms  -- the supersession comparator, and the reason ts is stored at all.
 #   raw/ieq     -- the parallel unit accumulators, which must be subtractable too.
 #   applied     -- 0 for a record whose timestamp falls OUTSIDE this week. The key is
 #                  still remembered, so a third record for it is compared and not
 #                  re-added, but nothing of it is in the week's totals.
 (_C_COST, _C_RAW, _C_IEQ, _C_TS, _C_TIER, _C_SUB, _C_APPLIED,
- _C_RECORD, _C_UNKNOWN) = range(9)
+ _C_RECORD, _C_UNKNOWN, _C_GEO_UNKNOWN) = range(10)
 _BAD = object()      # a cached entry that cannot be trusted; see _prior()
 
 
@@ -281,11 +282,12 @@ def _prior(seen, k):
     v = seen.get(k)
     if v is None:
         return None
-    if (isinstance(v, list) and len(v) == 9 and isinstance(v[_C_TIER], str)
+    if (isinstance(v, list) and len(v) == 10 and isinstance(v[_C_TIER], str)
             and isinstance(v[_C_RECORD], dict)
             and all(isinstance(v[i], (int, float)) and not isinstance(v[i], bool)
                     and math.isfinite(v[i])
-                    for i in (_C_COST, _C_RAW, _C_IEQ, _C_TS, _C_UNKNOWN))):
+                    for i in (_C_COST, _C_RAW, _C_IEQ, _C_TS, _C_UNKNOWN,
+                              _C_GEO_UNKNOWN))):
         return v
     return _BAD
 
@@ -316,6 +318,8 @@ def _apply(tot, bk, sign, entry):
         tot[f"sub_{t}"] = tot.get(f"sub_{t}", 0.0) + sign * cost
     tot["cache_ttl_unknown_tokens"] = (tot.get("cache_ttl_unknown_tokens", 0.0)
                                        + sign * entry[_C_UNKNOWN])
+    tot["geo_unknown_responses"] = (tot.get("geo_unknown_responses", 0.0)
+                                     + sign * entry[_C_GEO_UNKNOWN])
     b = bk.setdefault(bucket_of(entry[_C_TS]), [0.0, 0.0])
     b[0] += sign * cost
     if t == "fable":
@@ -619,6 +623,19 @@ def scan_detail(week, force=False):
                     _apply(tot, bk, -1.0, prev)
                     seen.pop(k, None)
                 unpriced[k] = str(exc)
+                # A missing rate must not erase valid observed token counters.
+                # Retain a zero-dollar entry so a later complete copy can replace
+                # these counters through the same subtraction path as priced ones.
+                try:
+                    rawt, ieq = token_measures(u)
+                    unknown_ttl = token_split(u)["cache_ttl_unknown_tokens"]
+                except (TypeError, ValueError):
+                    continue
+                entry = [0.0, rawt, round(ieq, 6), ts_ms, tier(model),
+                         1 if is_sub else 0, 1 if in_week else 0,
+                         selected_record, unknown_ttl, 0]
+                _apply(tot, bk, 1.0, entry)
+                seen[k] = entry
                 continue
             unpriced.pop(k, None)
             cost = round(float(priced["lower_usd"]), 9)
@@ -650,7 +667,8 @@ def scan_detail(week, force=False):
             # transcripts are pruned.
             entry = [cost, rawt, round(ieq, 6), ts_ms, tier(model),
                      1 if is_sub else 0, 1 if in_week else 0,
-                     selected_record, priced["tokens"]["cache_ttl_unknown_tokens"]]
+                     selected_record, priced["tokens"]["cache_ttl_unknown_tokens"],
+                     1 if priced["geography_uncertain"] else 0]
             if prev is not None:
                 _apply(tot, bk, -1.0, prev)  # the partial's contribution comes back out
             _apply(tot, bk, 1.0, entry)
@@ -1596,6 +1614,20 @@ def fable_reading(rows, now):
             "age_h": ((now.timestamp() - inst) / 3600.0) if kind == 0 else None}
 
 
+def suppress_incomplete_cost_guidance(p):
+    """Keep direct meter facts, but remove forecasts based on incomplete dollars."""
+    p["cost_guidance_unavailable"] = bool(
+        p["unpriced_responses"] or p["unidentified_responses"] or
+        p["geo_unknown_responses"] or p["cache_ttl_unknown_tokens"])
+    if p["cost_guidance_unavailable"]:
+        for field in ("rate", "usd_left", "hours_to_wall", "landing",
+                      "need_per_hour", "pct_now", "burn_1h", "burn_3h"):
+            p[field] = None
+            if field + "_hi" in p:
+                p[field + "_hi"] = None
+    return p
+
+
 def pace(now=None, force=False, prefer="live"):
     """The week as the METER sees it. Two modes, and the first is the point of this file.
 
@@ -1631,6 +1663,7 @@ def pace(now=None, force=False, prefer="live"):
         "week_all": tot.get("all", 0.0), "week_fable": tot.get("fable", 0.0),
         "main": tot.get("main", 0.0), "sub": tot.get("sub", 0.0),
         "cache_ttl_unknown_tokens": tot.get("cache_ttl_unknown_tokens", 0.0),
+        "geo_unknown_responses": int(tot.get("geo_unknown_responses", 0)),
         "unpriced_responses": tot.get("unpriced_responses", 0),
         "unidentified_responses": tot.get("unidentified_responses", 0),
         "rate_card": RATE_CARD_VERSION,
@@ -1663,6 +1696,19 @@ def pace(now=None, force=False, prefer="live"):
         rejected = (f"newest sample predates this meter week "
                     f"(sd {samp['sd']:.0f}%, {samp['age_min']:,.0f}m old)")
         samp = None
+    if not samp and (p["unpriced_responses"] or p["unidentified_responses"] or
+                    p["geo_unknown_responses"] or p["cache_ttl_unknown_tokens"]):
+        # No observed percentage is available. Do not fit or persist an anchor
+        # from a priced subtotal, then present that estimate as meter capacity.
+        p.update({"source": "unavailable", "sd": None, "fh": None,
+                  "sample_at": None, "sample_age_min": None, "stale": False,
+                  "pct": None, "spend": tot.get("all", 0.0),
+                  "fable": tot.get("fable", 0.0),
+                  "live_rejected": rejected})
+        suppress_incomplete_cost_guidance(p)
+        p["wall_at"] = None
+        p["warnings"] = []
+        return p
     if samp:
         spend, fable = window_spend(bk, anchor_ms, now_ms)
         # Split at the sample, not at now: the rate belongs over the meter as it was READ.
@@ -1741,6 +1787,7 @@ def pace(now=None, force=False, prefer="live"):
             p[k] = v
             p[k + "_hi"] = v
     p["live_rejected"] = rejected
+    suppress_incomplete_cost_guidance(p)
     w = p.get("hours_to_wall")
     p["wall_at"] = (f"{(now + timedelta(hours=w)).astimezone(PT):%a %H:%M} PT"
                     if w is not None and math.isfinite(w) else None)
@@ -1773,7 +1820,9 @@ def warnings_for(p):
     and late about waste -- the intended asymmetry, since one costs the rest of the week
     and the other costs nothing to learn an hour later.
 
-    One thing DOES gate warning (a), and it is not the sample's age: a `provisional` rate,
+    Incomplete pricing or response identity gates BOTH warnings: a priced subtotal
+    cannot support advice about the wall or supposedly expiring quota. Separately,
+    one thing gates warning (a) but not (b), and it is not the sample's age: a `provisional` rate,
     which is one calibrated on fewer than MIN_MOVED points of meter movement. hours_to_wall
     is that rate's only consumer here, and in the first hour after a reset the rate is a
     single rounded point -- uncertain by a factor of three before any question of whether
@@ -1788,6 +1837,10 @@ def warnings_for(p):
     hour of a week anyway", which is a different proposition, true of neither gate, and
     would have made the absent gate look accidental rather than decided.
     """
+    if (p.get("cost_guidance_unavailable") or p.get("unpriced_responses") or
+            p.get("unidentified_responses") or p.get("geo_unknown_responses") or
+            p.get("cache_ttl_unknown_tokens")):
+        return []
     out = []
     h, w = p.get("hours_to_reset"), p.get("hours_to_wall")
     if (h and w is not None and math.isfinite(w) and w < 0.5 * h
@@ -1852,6 +1905,8 @@ def fmt(p, margin=None):
         parts = [f"sd {p['sd']:.0f}% (sample {p['sample_at']}, "
                  f"{p['sample_age_min']:,.0f}m old){fwd}",
                  f"fh {p['fh']:.0f}%" if p["fh"] is not None else "fh n/a"]
+    elif p.get("cost_guidance_unavailable"):
+        parts = ["no direct meter sample — derived capacity unavailable with incomplete pricing"]
     else:
         # Two reasons to be here, and they are not the same reason. No sample file at all
         # is a machine without the desktop app; a sample that predates this meter period
@@ -1861,6 +1916,22 @@ def fmt(p, margin=None):
                  else "derived — no live sample",
                  f"all-models ~{p['pct']:.0f}% of cap ${p['all_cap']:,.0f} "
                  f"({p['all_cap_basis']})"]
+    if p.get("cost_guidance_unavailable"):
+        parts += [f"priced spend subtotal ${p['spend']:,.2f} (not total)",
+                  f"reset in {p['hours_to_reset']:.1f}h",
+                  "cost-derived burn, landing, wall and need unavailable"]
+        fr = p.get("fable_reading")
+        if fr:
+            parts.append(f"fable reading {fr['pct']:.0f}%")
+        if p.get("stale"):
+            parts.append(f"SAMPLE STALE {p['sample_age_min']:,.0f}m — open /usage to refresh")
+        for key, label in (("unpriced_responses", "unpriced responses"),
+                           ("unidentified_responses", "responses lack IDs"),
+                           ("geo_unknown_responses", "geography unknown responses"),
+                           ("cache_ttl_unknown_tokens", "cache-write TTL unknown tokens")):
+            if p.get(key):
+                parts.append(f"{p[key]:,.0f} {label}")
+        return " · ".join(parts)
     parts += [
         f"spent {_rng(p['spend'], p['spend_hi'])} since {p['anchor_label']}"
         if p["source"] == "live" else f"spent ${p['spend']:,.0f}",

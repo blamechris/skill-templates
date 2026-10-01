@@ -14,7 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from usage_accounting import RATE_CARD_VERSION, Responses, price_usage
+from usage_accounting import RATE_CARD_VERSION, Responses, price_usage, token_split
 
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_5m_tokens",
                 "cache_1h_tokens", "cache_read_input_tokens", "cache_ttl_unknown_tokens")
@@ -88,7 +88,8 @@ def capture(path, run_id, captured_at, status):
                        "synthetic_records": selected.synthetic,
                        "speed_unknown_responses": 0,
                        "geography_unknown_responses": 0,
-                       "service_tier_unknown_responses": 0},
+                       "service_tier_unknown_responses": 0,
+                       "invalid_token_responses": 0},
            "parent": empty_part(), "children": empty_part(),
            "unpriced_models": {},
            "selected_responses": [minimal_record(item, key)
@@ -100,10 +101,19 @@ def capture(path, run_id, captured_at, status):
         for field, name in (("speed", "speed_unknown_responses"),
                             ("inference_geo", "geography_unknown_responses"),
                             ("service_tier", "service_tier_unknown_responses")):
-            if not usage.get(field):
+            if not usage.get(field) or (field == "inference_geo" and
+                                        usage.get(field) == "not_available"):
                 out["quality"][name] += 1
         part = out["children" if item["role"] == "child" else "parent"]
         part["responses"] += 1
+        try:
+            tokens = token_split(usage)
+        except ValueError:
+            out["quality"]["invalid_token_responses"] += 1
+        else:
+            # Keep observed tokens even if the model or modifier cannot be priced.
+            for field in TOKEN_FIELDS:
+                part["tokens"][field] += tokens[field]
         try:
             priced = price_usage(msg.get("usage"), model)
         except ValueError:
@@ -112,8 +122,6 @@ def capture(path, run_id, captured_at, status):
         part["lower_usd"] += priced["lower_usd"]
         part["upper_usd"] += priced["upper_usd"]
         part["priced_responses"] += 1
-        for field in TOKEN_FIELDS:
-            part["tokens"][field] += priced["tokens"][field]
         by_model = part["by_model"].setdefault(model, {"responses": 0,
                                                        "lower_usd": Decimal(0),
                                                        "upper_usd": Decimal(0)})
@@ -131,6 +139,7 @@ def capture(path, run_id, captured_at, status):
                          "lower_usd": Decimal(0), "upper_usd": Decimal(0)})
             for key in target:
                 target[key] += detail[key]
+    out["tokens_cover_selected_responses"] = out["quality"]["invalid_token_responses"] == 0
     for part in ("parent", "children", "all_in"):
         for key in ("lower_usd", "upper_usd"):
             out[part][key] = str(out[part][key])
@@ -172,6 +181,7 @@ def latest_totals(directory):
             global_rows.add(item, item["source"], item["line"], item["role"])
     response_times = []
     undated = 0
+    invalid_token_responses = 0
     for item in global_rows.rows():
         msg = item["record"]["message"]
         role = "children" if item["role"] == "child" else "parent"
@@ -184,6 +194,13 @@ def latest_totals(directory):
         except (KeyError, TypeError, AttributeError, ValueError):
             undated += 1
         try:
+            tokens = token_split(msg["usage"])
+        except (KeyError, ValueError):
+            invalid_token_responses += 1
+        else:
+            for field in TOKEN_FIELDS:
+                result["tokens"][field] += tokens[field]
+        try:
             priced = price_usage(msg["usage"], msg.get("model"))
         except ValueError:
             model = msg.get("model") or "unknown"
@@ -192,8 +209,6 @@ def latest_totals(directory):
         result[role + "_priced_responses"] += 1
         result[role + "_lower_usd"] += priced["lower_usd"]
         result[role + "_upper_usd"] += priced["upper_usd"]
-        for field in TOKEN_FIELDS:
-            result["tokens"][field] += priced["tokens"][field]
     result["all_in_lower_usd"] = result["parent_lower_usd"] + result["children_lower_usd"]
     result["all_in_upper_usd"] = result["parent_upper_usd"] + result["children_upper_usd"]
     # Existing consumers read these as lower-bound values. Explicit upper fields
@@ -214,6 +229,7 @@ def latest_totals(directory):
                                   global_rows.without_terminal_metadata() == 0)
     result["valuation_scope"] = ("all selected responses" if result["bounds_cover_all_responses"]
                                  else "priced-response subtotal; unpriced or ambiguous observations excluded")
+    result["tokens_cover_selected_responses"] = invalid_token_responses == 0
     result["selected_response_time_bounds"] = {
         "first": min(response_times).isoformat() if response_times else None,
         "last": max(response_times).isoformat() if response_times else None,
@@ -222,12 +238,16 @@ def latest_totals(directory):
                          "cross_role_pairs": global_rows.cross_role_pairs,
                          "ambiguous_identities": global_rows.ambiguous_identities,
                          "selected_without_terminal_metadata": global_rows.without_terminal_metadata(),
-                         "unidentified_records": global_rows.unidentified}
+                         "unidentified_records": global_rows.unidentified,
+                         "invalid_token_responses": invalid_token_responses}
     for field, name in (("speed", "speed_unknown_responses"),
                         ("inference_geo", "geography_unknown_responses"),
                         ("service_tier", "service_tier_unknown_responses")):
-        result["quality"][name] = sum(not bool((item["record"].get("message") or {}).get(
-            "usage", {}).get(field)) for item in global_rows.rows())
+        result["quality"][name] = sum(
+            not bool((item["record"].get("message") or {}).get("usage", {}).get(field)) or
+            (field == "inference_geo" and
+             (item["record"].get("message") or {}).get("usage", {}).get(field) == "not_available")
+            for item in global_rows.rows())
     for key in (role + suffix for role in ("parent", "children", "all_in")
                 for suffix in ("_lower_usd", "_upper_usd", "_usd")):
         result[key] = str(result[key])

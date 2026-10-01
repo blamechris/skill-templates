@@ -2,7 +2,7 @@
 from decimal import Decimal
 from datetime import datetime
 
-RATE_CARD_VERSION = "anthropic-standard-global-2026-09-30"
+RATE_CARD_VERSION = "anthropic-standard-global-2026-10-01-geo-bounds"
 # USD per million: uncached input, output, 5m write, 1h write, cache read.
 RATES = {
     "claude-opus-5-5": (4, 20, 5, 8, ".20"),
@@ -66,7 +66,7 @@ def price_usage(usage, model):
         raise ValueError("unsupported speed: %s" % speed)
     if service_tier not in (None, "standard", "batch"):
         raise ValueError("unsupported service tier: %s" % service_tier)
-    if geography not in (None, "global", "us"):
+    if geography not in (None, "global", "us", "not_available"):
         raise ValueError("unsupported inference geography: %s" % geography)
     modifier = Decimal(1)
     if speed == "fast":
@@ -81,12 +81,20 @@ def price_usage(usage, model):
         if model not in US_PREMIUM_MODELS:
             raise ValueError("unverified US-inference pricing: %s" % model)
         modifier *= Decimal("1.1")
+    # Claude Code can emit this sentinel or omit the field for a current model
+    # even though the API supports both global and US inference. Neither identifies
+    # the route. Keep the standard price as the lower bound and the US premium as
+    # the upper bound;
+    # older models without a US premium retain one exact rate.
+    geography_uncertain = geography in (None, "not_available") and model in US_PREMIUM_MODELS
     scale = Decimal(1000000)
     return {"lower_usd": modifier * (known + unknown * r5) / scale,
-            "upper_usd": modifier * (known + unknown * r1) / scale,
+            "upper_usd": modifier * (known + unknown * r1) *
+                         (Decimal("1.1") if geography_uncertain else Decimal(1)) / scale,
             "tokens": t, "rate_card": RATE_CARD_VERSION,
             "speed": speed or "unknown", "service_tier": service_tier or "unknown",
-            "inference_geo": geography or "unknown"}
+            "inference_geo": geography or "unknown",
+            "geography_uncertain": geography_uncertain}
 
 
 def response_key(record, source, line):

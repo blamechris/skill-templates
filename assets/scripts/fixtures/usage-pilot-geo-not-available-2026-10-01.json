@@ -1,0 +1,18 @@
+{
+  "provenance": "Sanitized usage fields from one completed Claude Code CLI pilot on 2026-10-01; no prompts, IDs, paths, or tool content",
+  "model": "claude-sonnet-5-5",
+  "speed": "standard",
+  "service_tier": "standard",
+  "inference_geo": "not_available",
+  "responses": [
+    {"input_tokens": 2, "output_tokens": 373, "cache_creation_input_tokens": 47609, "cache_read_input_tokens": 3535},
+    {"input_tokens": 2, "output_tokens": 618, "cache_creation_input_tokens": 1087, "cache_read_input_tokens": 51144},
+    {"input_tokens": 2, "output_tokens": 866, "cache_creation_input_tokens": 22840, "cache_read_input_tokens": 52231},
+    {"input_tokens": 2, "output_tokens": 362, "cache_creation_input_tokens": 27800, "cache_read_input_tokens": 75071},
+    {"input_tokens": 2, "output_tokens": 595, "cache_creation_input_tokens": 1120, "cache_read_input_tokens": 102871},
+    {"input_tokens": 2, "output_tokens": 5711, "cache_creation_input_tokens": 12384, "cache_read_input_tokens": 103991}
+  ],
+  "cache_lifetime": "1h",
+  "expected_global_lower_usd": "0.6144026",
+  "expected_us_only_upper_usd": "0.67584286"
+}
