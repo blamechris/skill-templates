@@ -780,5 +780,237 @@ out=$(env -u FROM_PR -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID -u STANDALONE FROM
   && ok "S7: --from-issue (FROM_ISSUE, decompose case) resolves to #7, under set -euo pipefail" \
   || bad "S7: --from-issue (FROM_ISSUE, decompose case) resolves to #7, under set -euo pipefail" "rc=$rc $(flat "$out")"
 
+# --- #363: only an OPEN PR is the source ------------------------------------------------------
+# `gh pr view` returns the branch's PR in ANY state, so the first auto-detect read a CLOSED or
+# MERGED PR as the PR the work is filed from -- verified live on archery-apprentice, whose
+# checkout sits on a branch whose PR 552 is closed. CI_GHBIN above cannot model that: it fails
+# every `pr view`, so it can only ever say "no PR". EMU_GHBIN's gh answers from $FAKE_PR_JSON
+# the way the real one does: it keeps ONLY the fields named after --json (a template that
+# stopped asking for `state` would really see it missing), then applies the caller's own -q
+# with `jq -r`, which is what `gh -q` does. A branch with no PR, or a detached HEAD, is a
+# nonzero exit with a message on stderr. `label list` is emulated the same way for Group F,
+# including gh's default of 30 results when --limit is absent.
+EMU_GHBIN="$TMP/emu_ghbin"; mkdir -p "$EMU_GHBIN"
+cat > "$EMU_GHBIN/gh" <<'SH'
+#!/usr/bin/env bash
+set -u
+sub="${1:-} ${2:-}"
+[ "$sub" = "repo view" ] && { echo "owner/repo"; exit 0; }
+case "$sub" in
+  "pr view"|"label list") shift 2 ;;
+  *) echo "fake gh: unhandled invocation: $*" >&2; exit 1 ;;
+esac
+fields=""; q=""; limit=30
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) fields="$2"; shift 2 ;;
+    -q|--jq) q="$2"; shift 2 ;;
+    -L|--limit) limit="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$fields" ] || { echo "fake gh: only the --json form is emulated" >&2; exit 1; }
+if [ "$sub" = "pr view" ]; then
+  if [ -z "${FAKE_PR_JSON:-}" ]; then
+    echo "no pull requests found for the current branch (or HEAD is detached)" >&2
+    exit 1
+  fi
+  json=$(printf '%s' "$FAKE_PR_JSON" | jq -c --arg f "$fields" \
+    '($f | split(",")) as $keep | with_entries(select(.key as $k | ($keep | index($k)) != null))') \
+    || { echo "fake gh: FAKE_PR_JSON is not valid JSON" >&2; exit 2; }
+else
+  [ -z "${FAKE_LABELS_FAIL:-}" ] || { echo "fake gh: label list failed" >&2; exit 1; }
+  json=$(jq -Rn --argjson n "$limit" '[inputs | select(length > 0) | {name: .}] | .[:$n]' \
+    < "${FAKE_LABELS_FILE:?}") || { echo "fake gh: could not read the labels fixture" >&2; exit 2; }
+fi
+if [ -n "$q" ]; then printf '%s' "$json" | jq -r "$q"; else printf '%s\n' "$json"; fi
+SH
+chmod +x "$EMU_GHBIN/gh"
+
+# The same §1 fence as above, but echoing the PR it resolved as well as the Filed from: value --
+# SOURCE_PR is what selects §3's From-Review form and §4's from-review label.
+FENCE_SCRIPT2="$TMP/create-issue-filed-from-block-2.sh"
+{ echo 'set -euo pipefail'; printf '%s\n' "$FENCE"
+  echo 'echo "FILED_FROM=$FILED_FROM"'; echo 'echo "SOURCE_PR=$SOURCE_PR"'; } > "$FENCE_SCRIPT2"
+ff2() { printf 'FILED_FROM=%s\nSOURCE_PR=%s' "$1" "$2"; }   # the two lines that script prints
+
+if ! command -v jq >/dev/null 2>&1; then
+  bad "#363: jq is required to emulate gh's --json/-q for these cases (CI's ubuntu-latest has it)" "jq not found on PATH"
+else
+  out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u STANDALONE CLAUDE_CODE_SESSION_ID=abc123ef \
+        FAKE_PR_JSON='{"number":41,"state":"OPEN"}' PATH="$EMU_GHBIN:$PATH" bash "$FENCE_SCRIPT2" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "$(ff2 '#41' 41)" ] \
+    && ok "#363: an OPEN PR on the branch is the source -> #41, SOURCE_PR=41" \
+    || bad "#363: an OPEN PR on the branch is the source -> #41, SOURCE_PR=41" "rc=$rc $(flat "$out")"
+
+  # The archery-apprentice case: the old form printed 552 here.
+  out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u STANDALONE CLAUDE_CODE_SESSION_ID=abc123ef \
+        FAKE_PR_JSON='{"number":552,"state":"CLOSED"}' PATH="$EMU_GHBIN:$PATH" bash "$FENCE_SCRIPT2" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "$(ff2 'session abc123ef' '')" ] \
+    && ok "#363: a CLOSED PR is no source (archery's 552) -> the session id, SOURCE_PR empty" \
+    || bad "#363: a CLOSED PR is no source (archery's 552) -> the session id, SOURCE_PR empty" "rc=$rc $(flat "$out")"
+
+  out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u STANDALONE CLAUDE_CODE_SESSION_ID=abc123ef \
+        FAKE_PR_JSON='{"number":364,"state":"MERGED"}' PATH="$EMU_GHBIN:$PATH" bash "$FENCE_SCRIPT2" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "$(ff2 'session abc123ef' '')" ] \
+    && ok "#363: a MERGED PR is no source either -> the session id, SOURCE_PR empty" \
+    || bad "#363: a MERGED PR is no source either -> the session id, SOURCE_PR empty" "rc=$rc $(flat "$out")"
+
+  out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID STANDALONE=1 \
+        FAKE_PR_JSON='{"number":552,"state":"CLOSED"}' PATH="$EMU_GHBIN:$PATH" bash "$FENCE_SCRIPT2" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "$(ff2 'none' '')" ] \
+    && ok "#363: --standalone works on a closed-PR branch -> none, SOURCE_PR empty" \
+    || bad "#363: --standalone works on a closed-PR branch -> none, SOURCE_PR empty" "rc=$rc $(flat "$out")"
+
+  # Explicit flags outrank the auto-detected PR, and SOURCE_PR follows what Filed from: names.
+  out=$(env -u FROM_PR -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID -u STANDALONE FROM_ISSUE=7 \
+        FAKE_PR_JSON='{"number":41,"state":"OPEN"}' PATH="$EMU_GHBIN:$PATH" bash "$FENCE_SCRIPT2" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "$(ff2 '#7' '')" ] \
+    && ok "#363: --from-issue outranks an OPEN PR -> #7, SOURCE_PR empty (no from-review)" \
+    || bad "#363: --from-issue outranks an OPEN PR -> #7, SOURCE_PR empty (no from-review)" "rc=$rc $(flat "$out")"
+
+  out=$(env -u FROM_ISSUE -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID -u STANDALONE FROM_PR=99 \
+        FAKE_PR_JSON='{"number":41,"state":"OPEN"}' PATH="$EMU_GHBIN:$PATH" bash "$FENCE_SCRIPT2" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "$(ff2 '#99' 99)" ] \
+    && ok "#363: --from-pr outranks an OPEN PR -> #99, SOURCE_PR=99 (the PR Filed from: names, not the branch's)" \
+    || bad "#363: --from-pr outranks an OPEN PR -> #99, SOURCE_PR=99 (the PR Filed from: names, not the branch's)" "rc=$rc $(flat "$out")"
+
+  # No PR at all, or a detached HEAD: gh exits 1, which reads as none.
+  out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u STANDALONE -u FAKE_PR_JSON CLAUDE_CODE_SESSION_ID=abc123ef \
+        PATH="$EMU_GHBIN:$PATH" bash "$FENCE_SCRIPT2" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "$(ff2 'session abc123ef' '')" ] \
+    && ok "#363: no PR on the branch (or a detached HEAD) -> the session id, SOURCE_PR empty" \
+    || bad "#363: no PR on the branch (or a detached HEAD) -> the session id, SOURCE_PR empty" "rc=$rc $(flat "$out")"
+fi
+
+# ============================================== GROUP F — #357: create-issue.md §4's labels
+echo; echo "F. #357 — create-issue.md §4's label set, built and verified for real"
+
+# This lives here rather than in a file of its own because this suite already does the one thing
+# the check needs -- extracts create-issue.md's fenced bash and RUNS it, against a fake gh, under
+# set -euo pipefail -- and is already a CI step (validate-registry.yml has no *.test.sh glob, so
+# a new file would need a step of its own). What it pins:
+#   #357: `gh label list` returns only 30 labels, oldest first, so on a repo with more, every
+#         label past the 30th read as missing and was silently dropped. The fixture puts
+#         `from-review` at position 31 -- archery-apprentice's shape, which has 32 labels.
+#   #363 (the from-review half): SOURCE_PR is set only from the PR the issue is filed from,
+#         which is now only ever an OPEN one, so a closed-PR branch no longer earns from-review.
+# ONE script is built from three fences, in order -- §1 (REPO, FILED_FROM, SOURCE_PR), §4's
+# label-building fence and §4's verification fence -- so what is asserted is the LABELS a real
+# run would hand to `gh issue create`, not what each fence does alone.
+F_LABELS="$TMP/f-labels.txt"
+{
+  printf '%s\n' bug 'priority: low' Tech-Debt           # 1-3: named labels, Tech-Debt mixed-case on purpose
+  for i in $(seq 4 29); do printf 'l%02d\n' "$i"; done   # 4-29: filler
+  printf '%s\n' enhancement from-review                  # 30, 31: from-review is past gh's default 30
+} > "$F_LABELS"
+
+LABELS_FENCE=$(extract_bash_fence_after "$GENERIC/create-issue.md" '### 4\. Determine Labels')
+VERIFY_FENCE=$(extract_bash_fence_after "$GENERIC/create-issue.md" '\*\*Verify labels exist\*\*')
+F_SCRIPT="$TMP/create-issue-labels-block.sh"
+{
+  cat <<'PRELUDE'
+set -euo pipefail
+# What flag parsing would have set before §4 runs. EXTRA_LABELS is never empty: the template's
+# own `for extra in "${EXTRA_LABELS[@]}"` is an unbound-variable error on an empty array under
+# `set -u` in bash 3.2 (pre-existing, and not what this group is about), so a case that wants
+# no extra label still carries one that exists in the fixture.
+COMPLEXITY="${COMPLEXITY:-}"
+EXTRA_LABELS=("priority: low")
+[ -z "${FAKE_EXTRA_LABEL:-}" ] || EXTRA_LABELS+=("$FAKE_EXTRA_LABEL")
+PRELUDE
+  printf '%s\n' "$FENCE" "$LABELS_FENCE" "$VERIFY_FENCE"
+  echo 'echo "LABELS=$LABELS"'
+} > "$F_SCRIPT"
+
+has_label() {  # has_label <csv> <name> -- EXACT membership in a comma-separated list, never a
+               # substring: `review` must not satisfy `from-review`
+  case ",$1," in *",$2,"*) return 0 ;; *) return 1 ;; esac
+}
+run_f() {  # run_f [VAR=val ...] -- one run of the script above with every ambient input cleared
+           # first, so a variable inherited from whoever runs this suite (CLAUDE_CODE_SESSION_ID
+           # is set in every agent session) cannot decide a case. Sets $out, $err and $rc.
+  local errfile; errfile=$(mktemp)
+  out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u STANDALONE -u CLAUDE_CODE_SESSION_ID \
+        -u FAKE_PR_JSON -u FAKE_EXTRA_LABEL -u FAKE_LABELS_FAIL -u COMPLEXITY \
+        FAKE_LABELS_FILE="$F_LABELS" PATH="$EMU_GHBIN:$PATH" "$@" bash "$F_SCRIPT" 2>"$errfile")
+  rc=$?
+  err=$(cat "$errfile"); rm -f "$errfile"
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  bad "F: jq is required to emulate gh's --json/-q (CI's ubuntu-latest has it)" "jq not found on PATH"
+elif [ -z "$LABELS_FENCE" ] || [ -z "$VERIFY_FENCE" ]; then
+  bad "F: could not extract §4's bash fences from create-issue.md" \
+      "is the '### 4. Determine Labels' heading or the '**Verify labels exist**' marker renamed?"
+else
+  # F1 -- from-review is label 31 of 31: it survives only because the listing asks for --limit
+  # 500. tech-debt is asked for in lowercase and the repo spells it Tech-Debt. Every label
+  # exists, so nothing may be reported missing: stderr stays empty.
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' FAKE_EXTRA_LABEL=tech-debt
+  csv=${out#LABELS=}
+  [ "$rc" -eq 0 ] && [ -z "$err" ] \
+    && has_label "$csv" enhancement && has_label "$csv" from-review \
+    && has_label "$csv" 'priority: low' && has_label "$csv" tech-debt \
+    && ok "F1: from-review at position 31 is kept (--limit 500); tech-debt matches Tech-Debt; no warning" \
+    || bad "F1: from-review at position 31 is kept (--limit 500); tech-debt matches Tech-Debt; no warning" \
+           "rc=$rc out=$out err=$(flat "$err")"
+
+  # F2 -- #363's AC: a branch whose PR is CLOSED earns no from-review. The session id resolves
+  # Filed from:, SOURCE_PR stays empty, and the rest of the set is untouched.
+  run_f FAKE_PR_JSON='{"number":552,"state":"CLOSED"}' CLAUDE_CODE_SESSION_ID=abc123ef
+  csv=${out#LABELS=}
+  [ "$rc" -eq 0 ] && has_label "$csv" enhancement && has_label "$csv" 'priority: low' \
+    && ! has_label "$csv" from-review \
+    && ok "F2: a CLOSED-PR branch does not earn from-review (#363); the rest of the set is intact" \
+    || bad "F2: a CLOSED-PR branch does not earn from-review (#363); the rest of the set is intact" \
+           "rc=$rc out=$out err=$(flat "$err")"
+
+  # F3 -- a label the repo lacks is skipped with a warning, never fatal, and takes nothing else
+  # down with it.
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' FAKE_EXTRA_LABEL=nonexistent-label
+  csv=${out#LABELS=}
+  [ "$rc" -eq 0 ] && ! has_label "$csv" nonexistent-label \
+    && has_label "$csv" enhancement && has_label "$csv" from-review && has_label "$csv" 'priority: low' \
+    && ok "F3: a label the repo lacks is dropped; enhancement, from-review and priority: low are kept, exit 0" \
+    || bad "F3: a label the repo lacks is dropped; enhancement, from-review and priority: low are kept, exit 0" \
+           "rc=$rc out=$out err=$(flat "$err")"
+  [ "$(printf '%s\n' "$err" | grep -c '^Warning:')" -eq 1 ] \
+    && printf '%s\n' "$err" | grep -qF "Warning: 'nonexistent-label' label not found" \
+    && ok "F3: the drop is one Warning on stderr naming the label" \
+    || bad "F3: the drop is one Warning on stderr naming the label" "err=$(flat "$err")"
+
+  # F3b -- names match WHOLE: `review` is a substring of the repo's from-review and must still
+  # read as missing.
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' FAKE_EXTRA_LABEL=review
+  csv=${out#LABELS=}
+  [ "$rc" -eq 0 ] && ! has_label "$csv" review && has_label "$csv" from-review \
+    && printf '%s\n' "$err" | grep -qF "Warning: 'review' label not found" \
+    && ok "F3b: names match whole -- review is dropped although it is a substring of from-review" \
+    || bad "F3b: names match whole -- review is dropped although it is a substring of from-review" \
+           "rc=$rc out=$out err=$(flat "$err")"
+
+  # F4 -- a failed listing must not read as "the repo has no labels": that would file the issue
+  # unlabeled and look like success.
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' FAKE_LABELS_FAIL=1
+  [ "$rc" -eq 1 ] && [ -z "$out" ] && printf '%s\n' "$err" | grep -q '^REFUSE: could not list labels' \
+    && ok "F4: a failed label listing REFUSES, exit 1, files nothing -- never an unlabeled issue" \
+    || bad "F4: a failed label listing REFUSES, exit 1, files nothing -- never an unlabeled issue" \
+           "rc=$rc out=$out err=$(flat "$err")"
+
+  # F5 -- the fixture really does reproduce #357. Asked the way the OLD template asked (no
+  # --limit), the emulated gh returns gh's default 30 and from-review is not among them, while
+  # enhancement (position 30) still is -- so F1 passing depends on --limit 500 and on nothing else.
+  unl=$(FAKE_LABELS_FILE="$F_LABELS" "$EMU_GHBIN/gh" label list --json name -q '.[].name')
+  lim=$(FAKE_LABELS_FILE="$F_LABELS" "$EMU_GHBIN/gh" label list --limit 500 --json name -q '.[].name')
+  n_unl=$(printf '%s\n' "$unl" | grep -c .); n_lim=$(printf '%s\n' "$lim" | grep -c .)
+  [ "$n_unl" -eq 30 ] && [ "$n_lim" -eq 31 ] \
+    && grep -qxF -- enhancement <<< "$unl" && ! grep -qxF -- from-review <<< "$unl" \
+    && grep -qxF -- from-review <<< "$lim" \
+    && ok "F5: the fixture reproduces #357 -- without --limit gh returns 30 labels and from-review is not among them" \
+    || bad "F5: the fixture reproduces #357 -- without --limit gh returns 30 labels and from-review is not among them" \
+           "default=$n_unl limit500=$n_lim"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
