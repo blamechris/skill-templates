@@ -16,7 +16,7 @@ Every phase is **probe → act only on what is missing → re-probe**. Nothing r
     - `--description "<one line>"` — the GitHub description and the README lead.
     - `--seed-issues <path>` — an owner-supplied Markdown file of repo labels and issues to file at genesis. `genesis-verify.py --plan` parses, checks and renders it; its docstring holds the grammar. In short: an optional preamble of `Label: <name> | <colour> | <description>` lines, then one `# <title>` per issue, a header block of one `Labels:` line plus optional `Parent: <earlier title>` and `Acceptance: <criterion>` lines, a blank line, and the body, which may use `##` headings. Keep the file at a stable path outside the scratchpad: the plan records its path and SHA-256 digest, and a resume re-reads it.
     - `--dry-run` — Phase 0 only: print the plan and write nothing outside the session scratchpad.
-  - `--audit [--json] [--file-issues]` — conformance of the current repo. Read-only unless `--file-issues` is given; that opt-in files the findings and creates `tech-debt` / `from-audit` when the repo lacks them.
+  - `--audit [--json] [--file-issues]` — conformance of the current repo. Read-only unless `--file-issues` is given; that opt-in files the findings and, before the first one, creates `tech-debt` / `from-audit` if the repo lacks them.
   - `--add overlay:<x>|module:<y>` — apply one layer to the current, already-conformant repo.
 
 ## Instructions
@@ -399,7 +399,7 @@ Profile first: nothing is installed until the step 2 check passes.
 2. Print the table: rule ID, result (PASS / FAIL / WAIVED / N-A / LEGACY / PENDING-HUMAN / DRIFT / ERROR) and evidence.
 3. With `--file-issues`, file one `/create-issue "<rule>: <finding>" --label tech-debt --label from-audit` per **FAIL** row, and one `/create-issue "legacy: <title>" --label tech-debt --label from-audit` per **shape** in the JSON's `legacy_shapes` (per shape, not per row), each after the duplicate check. A shape's issue body carries a `Legacy shape: <id>` line, then every row whose `legacy` key names that shape, with its evidence verbatim. Even when verify exits 2, every FAIL row and every LEGACY shape still gets filed — each is evidence a probe or detector actually read, whatever another rule could not. The one exception is a `non-git-stub`, which is reported and not filed: there is no checkout to run `/create-issue` in. Never file an ERROR or DRIFT row; on exit 2, name every ERROR row in the report as "could not verify".
 
-   A repo that predates the standard often lacks `tech-debt` or `from-audit`, and `/create-issue` skips a label the repo lacks, so its issues would land unlabelled, invisible to the `--label from-audit` triage `/start-working` runs. Run this block once, immediately before the first `/create-issue` that will actually file — the first FAIL row or shape whose duplicate check finds no existing issue. It creates whichever of the two labels is missing. With nothing to file (no FAIL row and no shape, every one already a duplicate, or only a `non-git-stub`), skip it: no label is created.
+   A repo that predates the standard often lacks `tech-debt` or `from-audit`, and `/create-issue` skips a label the repo lacks, so its issues would be filed without them, invisible to the `--label from-audit` triage `/start-working` runs. So run each row's duplicate check before invoking `/create-issue` for it, as the same search `/create-issue` starts with: `gh issue list --state open --search "<title>" --json number,title --limit 5`. The first FAIL row or shape whose search finds no close match runs this block, then its `/create-issue`. The block creates whichever of the two labels is missing and writes nothing once both exist, so running it again is harmless. With nothing to file (no FAIL row and no shape, every one already a duplicate, or only a `non-git-stub`), it never runs and no label is created.
    ```bash
    REG="${SKILL_REGISTRY_DIR:-$HOME/Projects/skill-templates}"
    R=$(gh repo view --json nameWithOwner -q .nameWithOwner) && [ -n "$R" ] || { echo "STOP: no GitHub repo here; file nothing"; exit 2; }
@@ -407,14 +407,16 @@ Profile first: nothing is installed until the step 2 check passes.
    LIVE=$(gh label list -R "$R" --limit 500 --json name -q '.[].name') || { echo "STOP: could not list labels; file nothing"; exit 2; }
    git -C "$REG" show origin/main:assets/genesis/labels.json \
      | jq -r '.[] | select(.name == "tech-debt" or .name == "from-audit") | [.name, .color, .description] | @tsv' \
-     | while IFS=$'\t' read -r n c d; do has "$n" || gh label create "$n" --color "$c" --description "$d" -R "$R"; done
+     | while IFS=$'\t' read -r n c d; do
+         has "$n" || { gh label create "$n" --color "$c" --description "$d" -R "$R" && echo "created label $n in $R"; }
+       done
    LIVE=$(gh label list -R "$R" --limit 500 --json name -q '.[].name') && has tech-debt && has from-audit \
      || { echo "STOP: tech-debt or from-audit is still missing; file nothing"; exit 2; }
    ```
 
-   The colour and description come from the registry's `origin/main`, the same way step 1 extracts the script, never from a working tree. `--force` is never passed, so a label that already exists keeps its colour and description whatever they are; the name match is case-insensitive, as GitHub's label names are. A STOP files nothing: report it, fix access, and re-run; the duplicate check makes a re-run safe.
+   The colour and description come from the registry's `origin/main`, the same way step 1 extracts the script, never from a working tree. `--force` is never passed, so a label that already exists keeps its colour and description whatever they are; the name match is case-insensitive, as GitHub's label names are. A STOP files nothing: report it, fix access, and re-run; the duplicate check makes a re-run safe. The report names every label the block created.
 
-   After each `/create-issue`, run `gh issue edit <n> --add-label tech-debt,from-audit` on the issue it filed. `/create-issue`'s label check runs `gh label list` without `--limit`, which returns only the 30 oldest labels, so on a repo with more it skips a label that exists — and a label created a moment ago sorts last. Adding a label the issue already carries changes nothing.
+   After each `/create-issue`, run `gh issue edit <url> --add-label tech-debt,from-audit` with the issue URL it reported, so the edit lands in the repo the issue was filed in. `/create-issue`'s label check runs `gh label list` without `--limit`, which returns only the 30 oldest labels, so on a repo with more it skips a label that exists — and a label created a moment ago sorts last. Adding a label the issue already carries changes nothing.
 
    Never fix anything, never delete anything, never change a setting, and never edit an existing label in audit mode; `--file-issues` may create only the two labels its issues carry, when missing.
 4. Exit with verify's code. A `2` is reported as "could not verify", never as clean.
