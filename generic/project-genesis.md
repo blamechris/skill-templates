@@ -399,6 +399,16 @@ Profile first: nothing is installed until the step 2 check passes.
 2. Print the table: rule ID, result (PASS / FAIL / WAIVED / N-A / LEGACY / PENDING-HUMAN / DRIFT / ERROR) and evidence.
 3. With `--file-issues`, file one `/create-issue "<rule>: <finding>" --label tech-debt --label from-audit` per **FAIL** row, and one `/create-issue "legacy: <title>" --label tech-debt --label from-audit` per **shape** in the JSON's `legacy_shapes` (per shape, not per row), each after the duplicate check. A shape's issue body carries a `Legacy shape: <id>` line, then every row whose `legacy` key names that shape, with its evidence verbatim. Even when verify exits 2, every FAIL row and every LEGACY shape still gets filed — each is evidence a probe or detector actually read, whatever another rule could not. The one exception is a `non-git-stub`, which is reported and not filed: there is no checkout to run `/create-issue` in. Never file an ERROR or DRIFT row; on exit 2, name every ERROR row in the report as "could not verify".
 
+   An audit issue has no source PR, but `/create-issue` auto-detects one from the checkout's branch, and the audited checkout is on whatever branch its owner or another session left it (#363). So every filing runs from a detached worktree at `origin/main`. It is on no branch, so `Filed from:` resolves past the PR step, and the shared checkout is left alone. Before the first filing, run this block with the audited checkout's path and the repo's name typed literally. It creates the worktree, or reuses it on a re-run after a STOP, and stops if that path is on a branch. `--no-checkout` is enough, because only the detached HEAD matters, and it skips a full checkout and any git-lfs smudge:
+   ```bash
+   CHK=<audited checkout>; AWT="${TMPDIR:-/tmp}/genesis-audit/<name>-file"   # both typed literally; never under .claude/worktrees/
+   git -C "$CHK" fetch -q origin || { echo "STOP: could not fetch origin; file nothing"; exit 2; }
+   [ -e "$AWT/.git" ] || git -C "$CHK" worktree add -q --detach --no-checkout "$AWT" origin/main \
+     || { echo "STOP: could not create $AWT; file nothing"; exit 2; }
+   if git -C "$AWT" symbolic-ref -q HEAD >/dev/null; then echo "STOP: $AWT is on a branch; file nothing"; exit 2; fi
+   ```
+   Then run the label block below and every `/create-issue` as `cd "${TMPDIR:-/tmp}/genesis-audit/<name>-file" && …`, and keep `/create-issue`'s `## Context` section and its `Filed from:` line in every body. After the last filing, run `git -C <audited checkout> worktree remove --force "${TMPDIR:-/tmp}/genesis-audit/<name>-file"`.
+
    A repo that predates the standard often lacks `tech-debt` or `from-audit`, and `/create-issue` skips a label the repo lacks, so its issues would be filed without them, invisible to the `--label from-audit` triage `/start-working` runs. So run each row's duplicate check before invoking `/create-issue` for it, as the same search `/create-issue` starts with: `gh issue list --state open --search "<title>" --json number,title --limit 5`. The first FAIL row or shape whose search finds no close match runs this block, then its `/create-issue`. The block creates whichever of the two labels is missing and writes nothing once both exist, so running it again is harmless. With nothing to file (no FAIL row and no shape, every one already a duplicate, or only a `non-git-stub`), it never runs and no label is created.
    ```bash
    REG="${SKILL_REGISTRY_DIR:-$HOME/Projects/skill-templates}"
@@ -416,9 +426,9 @@ Profile first: nothing is installed until the step 2 check passes.
 
    The colour and description come from the registry's `origin/main`, the same way step 1 extracts the script, never from a working tree. `--force` is never passed, so a label that already exists keeps its colour and description whatever they are; the name match is case-insensitive, as GitHub's label names are. A STOP files nothing: report it, fix access, and re-run; the duplicate check makes a re-run safe. The report names every label the block created.
 
-   After each `/create-issue`, run `gh issue edit <url> --add-label tech-debt,from-audit` with the issue URL it reported, so the edit lands in the repo the issue was filed in. `/create-issue`'s label check runs `gh label list` without `--limit`, which returns only the 30 oldest labels, so on a repo with more it skips a label that exists — and a label created a moment ago sorts last. Adding a label the issue already carries changes nothing.
+   After each `/create-issue`, run `gh issue edit <url> --add-label tech-debt,from-audit` with the issue URL it reported, so the edit lands in the repo the issue was filed in. An installed `/create-issue` older than #357's fix runs `gh label list` without `--limit`, which returns only the 30 oldest labels, so on a repo with more it skips a label that exists — and a label created a moment ago sorts last. The audited repo's installed copy may still be that old, so the edit stays. Adding a label the issue already carries changes nothing.
 
-   Never fix anything, never delete anything, never change a setting, and never edit an existing label in audit mode; `--file-issues` may create only the two labels its issues carry, when missing.
+   Never fix anything, never delete anything, never change a setting, and never edit an existing label in audit mode; `--file-issues` may create only the two labels its issues carry, when missing, and the scratch worktree it files from, which it removes after the last filing.
 4. Exit with verify's code. A `2` is reported as "could not verify", never as clean.
 
 ### Mode: `--add overlay:<x>|module:<y>`
