@@ -37,7 +37,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from usage_accounting import RATES, RATE_CARD_VERSION, Responses, price_usage
+from usage_accounting import RATES, RATE_CARD_VERSION, Responses, price_usage, token_split
 
 ROOT = Path.home() / ".claude" / "projects"
 HIST_DIR = Path.home() / ".claude" / "usage-history"
@@ -140,6 +140,15 @@ def scan():
             continue
         d = days[day]
         try:
+            tokens = token_split(u)
+        except (TypeError, ValueError):
+            tokens = None
+        if tokens is not None:
+            d["output_tokens"] += tokens["output_tokens"]
+            d["cache_read_tokens"] += tokens["cache_read_input_tokens"]
+            d["token_observed_responses"] += 1
+            sessions[day].add(root_session(item["source"]))
+        try:
             priced = price_usage(u, model)
         except ValueError:
             d["unpriced_responses"] += 1
@@ -147,13 +156,11 @@ def scan():
         c = float(priced["lower_usd"])
         d["cost"] += c
         d["cost_upper"] += float(priced["upper_usd"])
+        d["geo_unknown_responses"] += int(priced["geography_uncertain"])
         d["cache_ttl_unknown_tokens"] += priced["tokens"]["cache_ttl_unknown_tokens"]
         d["requests"] += 1
-        d["output_tokens"] += u.get("output_tokens", 0)
-        d["cache_read_tokens"] += u.get("cache_read_input_tokens", 0)
         d["cache_read_cost"] += u.get("cache_read_input_tokens", 0) * float(RATES[model][4]) / 1e6
         tiers[day][tier(model)] += c
-        sessions[day].add(root_session(item["source"]))
     result = {}
     for day, d in days.items():
         rec = {k: round(v, 4) for k, v in d.items()}
@@ -220,7 +227,9 @@ def _day_bucket() -> dict:
     return {
         "cost": 0.0, "requests": 0, "sessions": 0, "output_tokens": 0,
         "cost_upper": 0.0, "cache_ttl_unknown_tokens": 0,
-        "unpriced_responses": 0, "cache_read_tokens": 0, "cache_read_cost": 0.0,
+        "unpriced_responses": 0, "geo_unknown_responses": 0,
+        "token_observed_responses": 0,
+        "cache_read_tokens": 0, "cache_read_cost": 0.0,
         "tier_cost": defaultdict(float), "machines": [],
     }
 
@@ -241,7 +250,10 @@ def merged_history():
             g["cost_upper"] += r.get("cost_upper", r.get("cost", 0))
             g["cache_ttl_unknown_tokens"] += r.get("cache_ttl_unknown_tokens", 0)
             g["unpriced_responses"] += r.get("unpriced_responses", 0)
+            g["geo_unknown_responses"] += r.get("geo_unknown_responses", 0)
             g["requests"] += int(r.get("requests", 0))
+            g["token_observed_responses"] += int(r.get("token_observed_responses",
+                                                        r.get("requests", 0)))
             g["sessions"] += r.get("sessions", 0)
             g["output_tokens"] += r.get("output_tokens", 0)
             g["cache_read_tokens"] += r.get("cache_read_tokens", 0)
@@ -289,26 +301,33 @@ def scan_weeks():
         except ValueError:
             continue
         w = weeks[meter_week_close(dt)]
+        is_sub = item["role"] == "child"
+        try:
+            tokens = token_split(u)
+        except (TypeError, ValueError):
+            tokens = None
+        if tokens is not None:
+            w["token_observed_responses"] += 1
+            if not is_sub:
+                w["reqs_main"] += 1
+                w["ctx_main"] += (tokens["input_tokens"] + tokens["cache_read_input_tokens"]
+                                  + tokens["cache_5m_tokens"] + tokens["cache_1h_tokens"]
+                                  + tokens["cache_ttl_unknown_tokens"])
         try:
             priced = price_usage(u, model)
         except ValueError:
             w["unpriced_responses"] += 1
             continue
         c = float(priced["lower_usd"])
-        is_sub = item["role"] == "child"
         w["cost"] += c
         w["cost_upper"] += float(priced["upper_usd"])
+        w["geo_unknown_responses"] += int(priced["geography_uncertain"])
         w["cache_ttl_unknown_tokens"] += priced["tokens"]["cache_ttl_unknown_tokens"]
         w["requests"] += 1
         w["cost_sub" if is_sub else "cost_main"] += c
         w["cost_sub_upper" if is_sub else "cost_main_upper"] += float(priced["upper_usd"])
         w[f"tier_{tier(model)}"] += c
         w["cache_read_cost"] += u.get("cache_read_input_tokens", 0) * float(RATES[model][4]) / 1e6
-        if not is_sub:
-            w["reqs_main"] += 1
-            w["ctx_main"] += (u.get("input_tokens", 0)
-                              + u.get("cache_read_input_tokens", 0)
-                              + u.get("cache_creation_input_tokens", 0))
     return {k: {**{f: round(v, 4) for f, v in rec.items()},
                 "rate_card": RATE_CARD_VERSION} for k, rec in weeks.items()}
 
@@ -364,6 +383,7 @@ def week_rows(hist, n):
             "close": wk, "cost": cost, "cost_upper": r.get("cost_upper", cost),
             "cache_ttl_unknown_tokens": r.get("cache_ttl_unknown_tokens", 0),
             "unpriced_responses": r.get("unpriced_responses", 0),
+            "geo_unknown_responses": r.get("geo_unknown_responses", 0),
             "main": r.get("cost_main", 0), "sub": r.get("cost_sub", 0),
             "sub_pct": 100 * r.get("cost_sub", 0) / cost if cost else 0,
             "fable": r.get("tier_fable", 0), "opus": r.get("tier_opus", 0),
@@ -374,6 +394,22 @@ def week_rows(hist, n):
             "fable_cap": 100 * r.get("tier_fable", 0) / CAP_EST["fable"],
         })
     return rows
+
+
+def week_amount(lower, upper):
+    """Show a bounded week with enough precision to expose its endpoints."""
+    if upper > lower:
+        for decimals in range(2, 13):
+            lo, hi = f"${lower:,.{decimals}f}", f"${upper:,.{decimals}f}"
+            if lo != hi:
+                return f"{lo}–{hi}"
+        return f"${lower:.12g}–${upper:.12g}"
+    if 0 < lower < .01:
+        for decimals in range(2, 13):
+            shown = f"${lower:,.{decimals}f}"
+            if float(shown[1:].replace(",", "")) > 0:
+                return shown
+    return f"${lower:,.2f}" if lower < 1 else f"${lower:,.0f}"
 
 
 def write_vault_weeks(rows, open_close=None):
@@ -391,17 +427,19 @@ def write_vault_weeks(rows, open_close=None):
     ]
     for r in rows:
         label = r["close"] + (" (open)" if r["close"] == open_close else "")
-        total = (f"${r['cost']:,.0f}–${r['cost_upper']:,.0f}"
-                 if r["cost_upper"] > r["cost"] else f"${r['cost']:,.0f}")
+        total = week_amount(r["cost"], r["cost_upper"])
         lines.append(
             f"| {label} | {total} | ${r['main']:,.0f} | ${r['sub']:,.0f} "
             f"| {r['sub_pct']:.0f}% | ${r['fable']:,.0f} | ${r['opus']:,.0f} | {r['reqs']:,} "
             f"| {r['ctx']:.0f}K | {r['crp']:.0f}% | {r['all_cap']:.0f}% | {r['fable_cap']:.0f}% |")
-    uncertain = [r for r in rows if r["cache_ttl_unknown_tokens"] or r["unpriced_responses"]]
+    uncertain = [r for r in rows if (r["cache_ttl_unknown_tokens"] or
+                 r["unpriced_responses"] or r["geo_unknown_responses"])]
     if uncertain:
-        lines += ["", "Uncertain coverage by week (unpriced responses are omitted from dollars):", ""]
+        lines += ["", "Uncertain coverage by week (unpriced responses are omitted from dollars;"
+                  " unknown geography spans global to US pricing):", ""]
         lines += [f"- {r['close']}: {r['cache_ttl_unknown_tokens']:,.0f} unknown-TTL "
-                  f"tokens; {r['unpriced_responses']:,.0f} unpriced responses"
+                  f"tokens; {r['unpriced_responses']:,.0f} unpriced responses; "
+                  f"{r['geo_unknown_responses']:,.0f} geography-unknown responses"
                   for r in uncertain]
     VAULT_WEEKS_MD.parent.mkdir(parents=True, exist_ok=True)
     VAULT_WEEKS_MD.write_text("\n".join(lines) + "\n")
@@ -427,29 +465,31 @@ def week_main():
     if "--oneline" in sys.argv:
         r = next((x for x in week_rows(hist, len(hist)) if x["close"] == now_close), None)
         if r:
-            amount = (f"${r['cost']:,.0f}–${r['cost_upper']:,.0f}"
-                      if r["cost_upper"] > r["cost"] else f"${r['cost']:,.0f}")
+            amount = week_amount(r["cost"], r["cost_upper"])
             print(f"week closing {r['close']}: {amount} total "
                   f"(main ${r['main']:,.0f} / sub ${r['sub']:,.0f}), fable ${r['fable']:,.0f} "
                   f"= {r['fable_cap']:.0f}% of est. cap; "
                   f"{r['cache_ttl_unknown_tokens']:,.0f} unknown-TTL tokens, "
-                  f"{r['unpriced_responses']:,.0f} unpriced responses")
+                  f"{r['unpriced_responses']:,.0f} unpriced responses, "
+                  f"{r['geo_unknown_responses']:,.0f} geography-unknown responses")
         else:
             print(f"week closing {now_close}: no activity recorded yet")
         return
-    print(f"{'week close':<14}{'total$':>8}{'main$':>8}{'sub$':>7}{'sub%':>6}"
+    print(f"{'week close':<14}{'total$':>17}{'main$':>8}{'sub$':>7}{'sub%':>6}"
           f"{'fable$':>8}{'opus$':>7}{'reqs':>7}{'ctx/req':>9}{'cacheR%':>9}{'all-cap%':>10}{'fbl-cap%':>10}")
     for r in rows:
         label = r["close"] + (" *" if r["close"] == now_close else "")
-        print(f"{label:<14}{r['cost']:>8.0f}{r['main']:>8.0f}{r['sub']:>7.0f}{r['sub_pct']:>5.0f}%"
+        print(f"{label:<14}{week_amount(r['cost'], r['cost_upper']):>17}{r['main']:>8.0f}{r['sub']:>7.0f}{r['sub_pct']:>5.0f}%"
               f"{r['fable']:>8.0f}{r['opus']:>7.0f}{r['reqs']:>7}{r['ctx']:>8.0f}K{r['crp']:>8.0f}%"
               f"{r['all_cap']:>9.0f}%{r['fable_cap']:>9.0f}%")
     print("\n* = open (still accumulating). cap% vs 2026-08-06 ESTIMATES "
           "(~$1.9K all / ~$0.94K fable) — recalibrate from meter-readings.md")
-    print("coverage: %,.0f unknown-TTL tokens; %,.0f unpriced responses; "
-          "displayed dollars are lower bounds where coverage is uncertain" %
-          (sum(r["cache_ttl_unknown_tokens"] for r in rows),
-           sum(r["unpriced_responses"] for r in rows)))
+    ttl = sum(r["cache_ttl_unknown_tokens"] for r in rows)
+    unpriced = sum(r["unpriced_responses"] for r in rows)
+    geo_unknown = sum(r["geo_unknown_responses"] for r in rows)
+    print(f"coverage: {ttl:,.0f} unknown-TTL tokens; {unpriced:,.0f} unpriced responses; "
+          f"{geo_unknown:,.0f} geography-unknown responses; displayed dollars are "
+          "lower bounds where coverage is uncertain")
     if write:
         write_vault_weeks(week_rows(hist, len(hist)), now_close)  # vault gets FULL history
         print(f"persisted weekly-v2-{machine}.json and regenerated {VAULT_WEEKS_MD}")
@@ -483,7 +523,8 @@ def main():
     for day, r in rows:
         cost = r["cost"]
         crp = 100 * r["cache_read_cost"] / cost if cost else 0
-        ctx = r["cache_read_tokens"] / r["requests"] / 1000 if r["requests"] else 0
+        observed = r["token_observed_responses"]
+        ctx = r["cache_read_tokens"] / observed / 1000 if observed else 0
         tc = r["tier_cost"]
         def pct(t):
             return 100 * tc.get(t, 0) / cost if cost else 0
@@ -498,9 +539,11 @@ def main():
     amount = f"${tot:,.2f}–${upper:,.2f}" if upper > tot else f"${tot:,.2f}"
     print(f"\n{len(rows)} days shown, {amount} total (API-list-rate equivalent)"
           f" across {n_machines} machine(s)")
-    print("coverage: %,.0f unknown-TTL tokens; %,.0f unpriced responses" %
-          (sum(r["cache_ttl_unknown_tokens"] for _, r in rows),
-           sum(r["unpriced_responses"] for _, r in rows)))
+    ttl = sum(r["cache_ttl_unknown_tokens"] for _, r in rows)
+    unpriced = sum(r["unpriced_responses"] for _, r in rows)
+    geo_unknown = sum(r["geo_unknown_responses"] for _, r in rows)
+    print(f"coverage: {ttl:,.0f} unknown-TTL tokens; {unpriced:,.0f} unpriced responses; "
+          f"{geo_unknown:,.0f} geography-unknown responses")
     print(f"this machine: {machine} -> {own_file.name}; history dir: {HIST_DIR}")
 
 

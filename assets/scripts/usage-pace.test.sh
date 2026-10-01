@@ -178,7 +178,7 @@ ev.sort()
 lines = [json.dumps({"type": "assistant", "timestamp":
          datetime.fromtimestamp(t / 1000, timezone.utc).isoformat().replace("+00:00", "Z"),
          "message": {"id": "f%d" % i, "model": model,
-                     "usage": {"output_tokens": tok}}}, separators=(",", ":"))
+                     "usage": {"output_tokens": tok, "inference_geo": "global"}}}, separators=(",", ":"))
          for i, (t, tok, model) in enumerate(ev)]
 (home / ".claude" / "projects" / "p" / "t.jsonl").write_text("\n".join(lines) + "\n")
 
@@ -1080,7 +1080,7 @@ for period,(per_step,pts) in enumerate([(1,40),(2,40)]):
                 up.datetime.fromtimestamp((base+i*10*60000+n)/1000, up.timezone.utc)
                   .isoformat().replace("+00:00","Z"),
                 "message":{"id":"m%d"%n,"model":"claude-opus-5",
-                           "usage":{"output_tokens":80000}}}, separators=(",",":")))
+                           "usage":{"output_tokens":80000,"inference_geo":"global"}}}, separators=(",",":")))
             n+=1
         samples.append({"t": base+i*10*60000, "u": {"sd": i}})
 (root/"t.jsonl").write_text("\n".join(recs)+"\n")
@@ -1256,7 +1256,7 @@ def mk(pre_reset_reqs, post_reqs, fable_pre=0, fable_post=0, n_samples=24, tag="
                   .isoformat().replace("+00:00","Z"),
                 "message":{"id":"m%d"%n,
                            "model":"claude-fable-5-1" if i in fset else "claude-opus-5",
-                           "usage":{"output_tokens":80000}}}, separators=(",",":")))
+                           "usage":{"output_tokens":80000,"inference_geo":"global"}}}, separators=(",",":")))
             n+=1; clock[0]+=step
     add(pre_reset_reqs, fable_pre, pre_step)
     reset_ms=clock[0]                         # the meter zeroes HERE
@@ -1291,7 +1291,7 @@ recs=[json.dumps({"type":"assistant","timestamp":
     up.datetime.fromtimestamp((open_ms+60_000+i*60_000)/1000, up.timezone.utc)
       .isoformat().replace("+00:00","Z"),
     "message":{"id":"n%d"%i,"model":"claude-opus-5",
-               "usage":{"output_tokens":80000}}}, separators=(",",":")) for i in range(300)]
+               "usage":{"output_tokens":80000,"inference_geo":"global"}}}, separators=(",",":")) for i in range(300)]
 (root/"t.jsonl").write_text("\n".join(recs)+"\n")
 s=[{"t":int(open_ms+60_000+i*600_000),"u":{"sd":i*2}} for i in range(30)]
 up.PLAN_SAMPLES=tmp/"n_p.json"; up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":s}))
@@ -1345,7 +1345,7 @@ lines += [json.dumps({"type":"assistant","timestamp":
     up.datetime.fromtimestamp((t_last+(i+1)*60_000)/1000, up.timezone.utc)
       .isoformat().replace("+00:00","Z"),
     "message":{"id":"z%d"%i,"model":"claude-opus-5",
-               "usage":{"output_tokens":80000}}}, separators=(",",":")) for i in range(300)]
+               "usage":{"output_tokens":80000,"inference_geo":"global"}}}, separators=(",",":")) for i in range(300)]
 f.write_text("\n".join(lines)+"\n")
 s=json.loads(up.PLAN_SAMPLES.read_text())
 s["samples"] += [{"t":int(t_last+30_000),"u":{"sd":0}}] + [
@@ -2042,7 +2042,7 @@ def rec(i, ms, tok):
         up.datetime.fromtimestamp(ms / 1000, up.timezone.utc).isoformat()
           .replace('+00:00', 'Z'),
         'message': {'id': 'r%d' % i, 'model': 'claude-fable-5',
-                    'usage': {'output_tokens': tok}}}, separators=(',', ':'))
+                    'usage': {'output_tokens': tok, 'inference_geo': 'global'}}}, separators=(',', ':'))
 (root / 't.jsonl').write_text('\n'.join([
     rec(0, a - 150_000, 100_000),             # \$5 inside the reset gap -> a range at all
     rec(1, a + 10 * 60_000, 1_000_000),       # \$50 before the sample  -> the rate
@@ -2156,7 +2156,7 @@ mid = (a + now_ms) / 2
                 datetime.fromtimestamp((mid + i * 1000) / 1000, timezone.utc)
                 .isoformat().replace("+00:00", "Z"),
                 "message": {"id": "z%d" % i, "model": "claude-fable-5",
-                            "usage": {"output_tokens": 400_000}}}, separators=(",", ":"))
+                            "usage": {"output_tokens": 400_000, "inference_geo": "global"}}}, separators=(",", ":"))
     for i in range(3)) + "\n")
 print("built")
 FLATEOF
@@ -2295,7 +2295,7 @@ lines = [json.dumps({"type": "assistant", "timestamp":
          datetime.fromtimestamp((now_ms - (20 - i) * 60_000) / 1000, timezone.utc)
          .isoformat().replace("+00:00", "Z"),
          "message": {"id": "p%d" % i, "model": "claude-fable-5",
-                     "usage": {"output_tokens": 800_000}}}, separators=(",", ":"))
+                     "usage": {"output_tokens": 800_000, "inference_geo": "global"}}}, separators=(",", ":"))
          for i in range(15)]
 (home / ".claude" / "projects" / "p" / "t.jsonl").write_text("\n".join(lines) + "\n")
 PREEOF
@@ -3043,7 +3043,8 @@ up.ROOT=root; up.HIST=d; up.CACHE=d/"c.json"; up.CALIB=d/"k.json"
 up.READINGS=d/"r.md"; up.PLAN_SAMPLES=d/"absent.json"
 now=up.datetime.now().astimezone(); wk=up.week_close(now)
 open_ms=up.week_bounds(wk)[0].timestamp()*1000
-U={"input_tokens":4,"cache_read_input_tokens":400000,"output_tokens":80000}
+U={"input_tokens":4,"cache_read_input_tokens":400000,"output_tokens":80000,
+   "inference_geo":"global"}
 # Enough requests that the derived percentage is a real figure rather than 0%: the line
 # under test is the one a machine with no desktop app prints mid-week.
 t0=max(open_ms+1000, now.timestamp()*1000-300*60000)

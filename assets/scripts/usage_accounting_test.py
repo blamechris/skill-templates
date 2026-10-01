@@ -1,10 +1,12 @@
 """Synthetic edge cases and the preserved, sanitized recent-cohort arithmetic."""
 import json
 import importlib.util
+import io
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from decimal import Decimal
 from pathlib import Path
 
@@ -25,6 +27,7 @@ def rec(ts, request, message, model, output, cache_read=0, cache_5m=0,
     return {"type": "assistant", "timestamp": ts, "requestId": request,
             "message": {"id": message, "model": model, "stop_reason": stop,
                         "usage": {"input_tokens": 0, "output_tokens": output,
+                                  "inference_geo": "global",
                                   "cache_read_input_tokens": cache_read,
                                   "cache_creation_input_tokens": cache_5m + cache_1h,
                                   "cache_creation": {
@@ -56,6 +59,25 @@ class UsageAccountingTests(unittest.TestCase):
                          Decimal(2))
         self.assertEqual(price_usage(dict(plain, inference_geo="us"), "claude-opus-5-5")["lower_usd"],
                          Decimal("4.4"))
+        unknown_geo = price_usage(dict(plain, inference_geo="not_available"),
+                                  "claude-opus-5-5")
+        self.assertEqual((unknown_geo["lower_usd"], unknown_geo["upper_usd"]),
+                         (Decimal(4), Decimal("4.4")))
+        self.assertTrue(unknown_geo["geography_uncertain"])
+        missing_geo = price_usage(plain, "claude-opus-5-5")
+        self.assertEqual((missing_geo["lower_usd"], missing_geo["upper_usd"]),
+                         (Decimal(4), Decimal("4.4")))
+        self.assertTrue(missing_geo["geography_uncertain"])
+        legacy_geo = price_usage(dict(plain, inference_geo="not_available"),
+                                 "claude-haiku-4-5")
+        self.assertEqual(legacy_geo["lower_usd"], legacy_geo["upper_usd"])
+        self.assertFalse(legacy_geo["geography_uncertain"])
+        ttl_geo = price_usage({"cache_creation_input_tokens": 1000000,
+                               "inference_geo": "not_available"}, "claude-sonnet-5-5")
+        self.assertEqual((ttl_geo["lower_usd"], ttl_geo["upper_usd"]),
+                         (Decimal("2.50"), Decimal("4.4")))
+        with self.assertRaises(ValueError):
+            price_usage(dict(plain, inference_geo="eu"), "claude-opus-5-5")
         with self.assertRaises(ValueError):
             price_usage(dict(plain, speed="fast"), "claude-haiku-4-5-20251001")
 
@@ -197,6 +219,168 @@ class UsageAccountingTests(unittest.TestCase):
         self.assertEqual(sum(fixture["role_responses"].values()), responses)
         self.assertEqual(sum((Decimal(x) for x in fixture["role_usd"].values()), Decimal(0)), total)
         self.assertEqual(fixture["selected_without_terminal_metadata"], 632)
+
+    def test_real_pilot_metadata_bounds_unknown_geo_and_keeps_tokens(self):
+        fixture = json.loads((HERE / "fixtures" /
+                              "usage-pilot-geo-not-available-2026-10-01.json").read_text())
+        checkpoint = load("usage_checkpoint_pilot_geo", HERE / "usage-checkpoint.py")
+        pace = load("usage_pace_pilot_geo", HERE / "usage-pace.py")
+        trend = load("usage_trend_pilot_geo", HERE / "usage-trend.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "projects" / "pilot.jsonl"
+            source.parent.mkdir()
+            lines = []
+            for index, counters in enumerate(fixture["responses"]):
+                usage = {**counters, "speed": fixture["speed"],
+                         "service_tier": fixture["service_tier"],
+                         "inference_geo": fixture["inference_geo"],
+                         "cache_creation": {"ephemeral_1h_input_tokens":
+                                            counters["cache_creation_input_tokens"],
+                                            "ephemeral_5m_input_tokens": 0}}
+                final = {"type": "assistant", "timestamp":
+                         f"2026-10-01T17:07:{index:02d}Z", "requestId": f"r{index}",
+                         "message": {"id": f"m{index}", "model": fixture["model"],
+                                     "stop_reason": "end_turn", "usage": usage}}
+                partial = json.loads(json.dumps(final))
+                partial["message"]["stop_reason"] = None
+                partial["message"]["usage"]["output_tokens"] = 1
+                lines.extend([partial, final, final, final])
+            source.write_text("".join(json.dumps(row, separators=(",", ":")) + "\n"
+                                      for row in lines))
+            doc = checkpoint.capture(source, "pilot", "2026-10-01T17:09:00Z", "final")
+            self.assertEqual((doc["parent"]["responses"], doc["children"]["responses"]), (6, 0))
+            self.assertEqual(doc["quality"]["geography_unknown_responses"], 6)
+            self.assertTrue(doc["tokens_cover_selected_responses"])
+            out = root / "checkpoints"
+            out.mkdir()
+            (out / "pilot.json").write_text(json.dumps(doc))
+            aggregate = checkpoint.latest_totals(out)
+            self.assertEqual((aggregate["all_in_responses"], aggregate["unpriced_responses"]),
+                             (6, 0))
+            self.assertEqual((aggregate["all_in_lower_usd"], aggregate["all_in_upper_usd"]),
+                             (fixture["expected_global_lower_usd"],
+                              fixture["expected_us_only_upper_usd"]))
+            self.assertTrue(aggregate["bounds_cover_all_responses"])
+            self.assertFalse(aggregate["pricing_complete"])
+            self.assertTrue(aggregate["tokens_cover_selected_responses"])
+            self.assertEqual(aggregate["quality"]["geography_unknown_responses"], 6)
+            self.assertEqual(aggregate["tokens"]["input_tokens"], 12)
+            self.assertEqual(aggregate["tokens"]["output_tokens"], 8525)
+            self.assertEqual(aggregate["tokens"]["cache_1h_tokens"], 112840)
+            self.assertEqual(aggregate["tokens"]["cache_read_input_tokens"], 388843)
+            self.assertEqual(aggregate["tokens"]["cache_ttl_unknown_tokens"], 0)
+
+            pace.ROOT = source.parent
+            pace.HIST = root / "history"
+            pace.CACHE = pace.HIST / "pace-cache.json"
+            totals = pace.scan_detail("2026-10-07", force=True)[0]
+            self.assertEqual(totals["geo_unknown_responses"], 6)
+            self.assertEqual(totals["unpriced_responses"], 0)
+            self.assertAlmostEqual(totals["all"], float(fixture["expected_global_lower_usd"]))
+
+            trend.ROOT = source.parent
+            daily = trend.scan()
+            weekly = trend.scan_weeks()
+            self.assertEqual(sum(row["geo_unknown_responses"] for row in daily.values()), 6)
+            self.assertEqual(sum(row["geo_unknown_responses"] for row in weekly.values()), 6)
+            self.assertGreater(sum(row["cost_upper"] for row in daily.values()),
+                               sum(row["cost"] for row in daily.values()))
+
+            unknown = rec("2026-10-01T17:08:00Z", "ru", "mu", "claude-unknown", 7,
+                          cache_read=13, stop="end_turn")
+            source.write_text(json.dumps(unknown, separators=(",", ":")) + "\n")
+            unpriced = checkpoint.capture(source, "pilot", "2026-10-01T17:10:00Z", "final")
+            self.assertEqual(unpriced["all_in"]["priced_responses"], 0)
+            self.assertEqual(unpriced["all_in"]["tokens"]["output_tokens"], 7)
+            self.assertTrue(unpriced["tokens_cover_selected_responses"])
+            (out / "pilot.json").write_text(json.dumps(unpriced))
+            subtotal = checkpoint.latest_totals(out)
+            self.assertEqual(subtotal["unpriced_responses"], 1)
+            self.assertEqual(subtotal["tokens"]["output_tokens"], 7)
+            self.assertFalse(subtotal["bounds_cover_all_responses"])
+            unpriced_pace = pace.scan_detail("2026-10-07", force=True)[0]
+            self.assertEqual(unpriced_pace["unpriced_responses"], 1)
+            self.assertEqual(unpriced_pace["all_raw"], 20)
+            self.assertAlmostEqual(unpriced_pace["all_ieq"], 36.3)
+            unpriced_daily = trend.scan()
+            unpriced_weekly = trend.scan_weeks()
+            self.assertEqual(sum(row["output_tokens"] for row in unpriced_daily.values()), 7)
+            self.assertEqual(sum(row["cache_read_tokens"] for row in unpriced_daily.values()), 13)
+            self.assertEqual(sum(row["ctx_main"] for row in unpriced_weekly.values()), 13)
+            self.assertEqual(sum(row["reqs_main"] for row in unpriced_weekly.values()), 1)
+            partial_unknown = rec("2026-10-01T17:08:00Z", "ru", "mu",
+                                  "claude-unknown", 2, cache_read=13)
+            source.write_text(json.dumps(partial_unknown, separators=(",", ":")) + "\n")
+            pace.scan_detail("2026-10-07", force=True)
+            with source.open("a") as stream:
+                stream.write(json.dumps(unknown, separators=(",", ":")) + "\n")
+            completed_tokens = pace.scan_detail("2026-10-07")[0]
+            self.assertEqual(completed_tokens["all_raw"], 20)
+            self.assertEqual(completed_tokens["unpriced_responses"], 1)
+            missing = rec("2026-10-01T17:08:00Z", "rm", "mm", "claude-sonnet-5-5", 7,
+                          cache_read=13, stop="end_turn")
+            missing["message"]["usage"].pop("inference_geo")
+            source.write_text(json.dumps(missing, separators=(",", ":")) + "\n")
+            missing_pace = pace.scan_detail("2026-10-07", force=True)[0]
+            self.assertEqual(missing_pace["geo_unknown_responses"], 1)
+            pace.read_readings = lambda: []
+            pace._plan_raw = lambda: []
+            def no_anchor(*args, **kwargs):
+                raise AssertionError("missing geography must not seed a derived anchor")
+            pace.meter_offset = no_anchor
+            live = pace.pace(now=pace.datetime.fromisoformat("2026-10-01T17:10:00+00:00"))
+            self.assertTrue(live["cost_guidance_unavailable"])
+            self.assertIsNone(live["need_per_hour"])
+            self.assertEqual(live["warnings"], [])
+            unknown["message"]["usage"]["output_tokens"] = -1
+            source.write_text(json.dumps(unknown, separators=(",", ":")) + "\n")
+            invalid = checkpoint.capture(source, "pilot", "2026-10-01T17:11:00Z", "final")
+            self.assertEqual(invalid["quality"]["invalid_token_responses"], 1)
+            self.assertFalse(invalid["tokens_cover_selected_responses"])
+
+    def test_incomplete_cost_coverage_suppresses_pace_guidance(self):
+        pace = load("usage_pace_incomplete", HERE / "usage-pace.py")
+        for cause in ("unpriced_responses", "unidentified_responses",
+                      "geo_unknown_responses", "cache_ttl_unknown_tokens"):
+            p = {"source": "live", "sd": 19, "fh": 0,
+                 "sample_at": "2026-10-01T17:00:00Z", "sample_age_min": 5,
+                 "spend": 0.61, "hours_to_reset": 3, "stale": False,
+                 "fable_reading": None, "rate": 10, "rate_hi": 11,
+                 "usd_left": 810, "usd_left_hi": 891,
+                 "hours_to_wall": 1, "hours_to_wall_hi": 1.1,
+                 "landing": 50, "landing_hi": 55,
+                 "need_per_hour": 270, "need_per_hour_hi": 297,
+                 "pct_now": 19, "pct_now_hi": 20,
+                 "burn_1h": 5, "burn_3h": 6,
+                 "unpriced_responses": 0, "unidentified_responses": 0,
+                 "geo_unknown_responses": 0, "cache_ttl_unknown_tokens": 0}
+            p[cause] = 6
+            self.assertEqual(pace.warnings_for(p), [], cause)
+            pace.suppress_incomplete_cost_guidance(p)
+            self.assertTrue(p["cost_guidance_unavailable"])
+            for field in ("rate", "usd_left", "hours_to_wall", "landing",
+                          "need_per_hour", "pct_now", "burn_1h", "burn_3h"):
+                self.assertIsNone(p[field], (cause, field))
+            self.assertEqual(pace.warnings_for(p), [])
+            line = pace.fmt(p)
+            self.assertIn("sd 19%", line)
+            self.assertIn("cost-derived burn, landing, wall and need unavailable", line)
+            self.assertNotIn("→ lands", line)
+            self.assertNotIn("need $", line)
+        pace.scan_detail = lambda week, force=False: ({"all": 0.61,
+            "unpriced_responses": 6, "geo_unknown_responses": 0}, {})
+        pace.read_readings = lambda: []
+        pace._plan_raw = lambda: []
+        def no_anchor(*args, **kwargs):
+            raise AssertionError("an incomplete cost basis must not persist a derived anchor")
+        pace.meter_offset = no_anchor
+        p = pace.pace(now=pace.datetime.fromisoformat("2026-10-01T17:00:00+00:00"))
+        self.assertEqual(p["source"], "unavailable")
+        self.assertTrue(p["cost_guidance_unavailable"])
+        self.assertIsNone(p["need_per_hour"])
+        self.assertEqual(p["warnings"], [])
+        self.assertIn("no direct meter sample", pace.fmt(p))
 
     def test_continuation_checkpoints_use_latest_parent_and_child_snapshot(self):
         script = HERE / "usage-checkpoint.py"
@@ -392,6 +576,65 @@ class UsageAccountingTests(unittest.TestCase):
                 self.assertEqual(merged["unpriced_responses"], 2)
             finally:
                 trend.HIST_DIR = old_hist
+
+    def test_trend_week_readout_names_geography_range(self):
+        trend = load("usage_trend_geo_readout", HERE / "usage-trend.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            trend.HIST_DIR = Path(tmp)
+            trend.machine_name = lambda: "test"
+            week = trend.meter_week_close(trend.datetime.now().astimezone())
+            record = {"rate_card": RATE_CARD_VERSION, "cost": .6144,
+                      "cost_upper": .6758, "requests": 6,
+                      "geo_unknown_responses": 6, "unpriced_responses": 0}
+            trend.scan_weeks = lambda: {week: record}
+            trend.merged_weekly = lambda fresh, machine, write: fresh
+            original_argv = sys.argv
+            try:
+                for args in (["usage-trend.py", "--week", "--oneline"],
+                             ["usage-trend.py", "--week"]):
+                    sys.argv = args
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        trend.week_main()
+                    self.assertIn("6 geography-unknown responses", output.getvalue())
+                    self.assertIn("$0.61–$0.68", output.getvalue())
+                trend.VAULT_WEEKS_MD = Path(tmp) / "weeks.md"
+                trend.write_vault_weeks(trend.week_rows({week: record}, 1), week)
+                self.assertIn("$0.61–$0.68", trend.VAULT_WEEKS_MD.read_text())
+                self.assertEqual(trend.week_amount(.000002, .0000022),
+                                 "$0.0000020–$0.0000022")
+            finally:
+                sys.argv = original_argv
+
+    def test_trend_context_average_includes_unpriced_observed_responses(self):
+        trend = load("usage_trend_unpriced_context", HERE / "usage-trend.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trend.ROOT = root / "projects"
+            trend.ROOT.mkdir()
+            trend.HIST_DIR = root / "history"
+            trend.machine_name = lambda: "test"
+            source = trend.ROOT / "pilot.jsonl"
+            unknown = rec("2026-10-01T17:08:00Z", "ru", "mu", "claude-unknown", 7,
+                          cache_read=300000, stop="end_turn")
+            priced = rec("2026-10-01T17:09:00Z", "rp", "mp", "claude-sonnet-5-5", 9,
+                         cache_read=100000, stop="end_turn")
+            original_argv = sys.argv
+            try:
+                sys.argv = ["usage-trend.py", "--no-sync"]
+                for records, observed, average in (([unknown], 1, 300),
+                                                   ([unknown, priced], 2, 200)):
+                    source.write_text("".join(json.dumps(row) + "\n" for row in records))
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        trend.main()
+                    row = trend.merged_history()["2026-10-01"]
+                    self.assertEqual(row["token_observed_responses"], observed)
+                    self.assertEqual(row["cache_read_tokens"], average * observed * 1000)
+                    self.assertRegex(output.getvalue(),
+                                     rf"2026-10-01[^\n]*\s{average}K")
+            finally:
+                sys.argv = original_argv
 
 
 if __name__ == "__main__":
