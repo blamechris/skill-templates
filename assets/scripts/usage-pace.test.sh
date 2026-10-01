@@ -29,6 +29,35 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/usage-pace-test.XXXXXX")
 cleanup() { chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 
+# Every Python process in this suite (the fixture builder, the CLI and imported
+# unit checks) must see the same instant. Otherwise fixtures built near Wednesday
+# 15:59 PT can straddle the reset, and need_per_hour drifts while the CLI starts.
+# sitecustomize is loaded only from this temporary test directory; production code
+# has no clock override.
+mkdir -p "$TMP/clock"
+cat > "$TMP/clock/sitecustomize.py" <<'CLOCKEOF'
+import datetime as _dt
+import os as _os
+
+_real_datetime = _dt.datetime
+_instant = _real_datetime.fromisoformat(
+    _os.environ.get("USAGE_PACE_TEST_NOW", "2026-09-30T08:00:00+00:00")
+)
+
+class _FrozenDateTime(_real_datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls.fromtimestamp(_instant.timestamp(), tz)
+
+    @classmethod
+    def utcnow(cls):
+        return cls.fromtimestamp(_instant.timestamp(), _dt.timezone.utc).replace(tzinfo=None)
+
+_dt.datetime = _FrozenDateTime
+CLOCKEOF
+export PYTHONPATH="$TMP/clock${PYTHONPATH:+:$PYTHONPATH}"
+export USAGE_PACE_TEST_NOW=2026-09-30T08:00:00+00:00
+
 pass=0; fail=0; skip=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
@@ -1822,7 +1851,8 @@ else
   # green. hours_to_wall is the worst of those -- it is the ONLY input to warning (a), and
   # the warning itself was unit-tested exclusively with injected dictionaries, so the guard
   # was covered and its producer was not.
-  got=$(HOME="$LIVEHOME" "$PY" "$SUT" --json 2>&1 | "$PY" -c '
+  compare_live_json() {
+    HOME="$LIVEHOME" "$PY" "$1" --json 2>&1 | "$PY" -c '
 import json, sys
 p = json.load(sys.stdin); w = json.loads(sys.argv[1])
 pairs = [("rate","rate"), ("pct_now","pct_now"), ("pts_left","pts_left"),
@@ -1832,10 +1862,28 @@ pairs = [("rate","rate"), ("pct_now","pct_now"), ("pts_left","pts_left"),
          ("spend_since_sample","since")]
 off = [k for k, j in pairs
        if p.get(k) is None or abs(p[k] - w[j]) > max(0.01, abs(w[j]) * 1e-6)]
-print("OFF", off or "none")' "$fx")
+print("OFF", off or "none")' "$2"
+  }
+  got=$(compare_live_json "$SUT" "$fx")
   [ "$got" = "OFF none" ] \
     && ok "--json's rate, pct_now, headroom, wall, landing and need match the fixture exactly" \
     || bad "--json's derived figures match the fixture" "got=$(flat "$got")"
+
+  # Prove the assertion remains sensitive to the arithmetic it protects. This
+  # copy lives in the temp dir; neither the source nor the installed helper moves.
+  mutant=$TMP/usage-pace-need-double.py
+  "$PY" - "$SUT" "$mutant" <<'PY_MUTATE_NEED'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+old = '"need_per_hour": (usd_left / hours_to_reset'
+assert source.count(old) == 1
+Path(sys.argv[2]).write_text(source.replace(old, '"need_per_hour": (2 * usd_left / hours_to_reset'))
+PY_MUTATE_NEED
+  got=$(compare_live_json "$mutant" "$fx")
+  [ "$got" = "OFF ['need_per_hour']" ] \
+    && ok "the live JSON comparison rejects doubled need_per_hour" \
+    || bad "the live JSON comparison rejects doubled need_per_hour" "got=$(flat "$got")"
 
   # The discriminating case: SAME transcripts, a different meter sample. A computed
   # percentage cannot move here and a read one must -- and \$/pt must move with it,
@@ -1848,6 +1896,25 @@ print("OFF", off or "none")' "$fx")
     *) bad "the printed percentage follows the sample, not the spend" "want $w1/$w2/$w3 || $(flat "$line2")" ;;
   esac
 fi
+
+# Exercise both reset edges explicitly. The suite itself stays pinned mid-week
+# so every other fixture remains valid even when CI runs at the real reset.
+for edge in '2026-09-30T22:58:00+00:00 2026-09-30' \
+            '2026-09-30T23:04:00+00:00 2026-10-07'; do
+  stamp=${edge%% *}; expected_week=${edge##* }
+  export USAGE_PACE_TEST_NOW=$stamp
+  fx=$(mkfix "$LIVEHOME" '{"sd":82,"fh":8,"age_min":0.5,"reqs":[[1.5,20000000,"claude-fable-5"],[0.1,1000000,"claude-fable-5"]]}')
+  got=$(compare_live_json "$SUT" "$fx")
+  actual_week=$(HOME="$LIVEHOME" "$PY" "$SUT" --json | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["week"])')
+  if [ "$(fixf "$fx" usable)" = "True" ] && [ "$got" = "OFF none" ] \
+     && [ "$actual_week" = "$expected_week" ]; then
+    ok "live arithmetic and week selection agree at $stamp"
+  else
+    bad "live arithmetic and week selection agree at $stamp" \
+        "usable=$(fixf "$fx" usable) got=$(flat "$got") week=$actual_week"
+  fi
+done
+export USAGE_PACE_TEST_NOW=2026-09-30T08:00:00+00:00
 
 # NEAR CAP is gone from every path, whatever the fixture says.
 case "$line" in
