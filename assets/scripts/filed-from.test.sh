@@ -790,26 +790,42 @@ out=$(env -u FROM_PR -u COMMENT_URL -u CLAUDE_CODE_SESSION_ID -u STANDALONE FROM
 # with `jq -r`, which is what `gh -q` does. A branch with no PR, or a detached HEAD, is a
 # nonzero exit with a message on stderr. `label list` is emulated the same way for Group F,
 # including gh's default of 30 results when --limit is absent.
+# It is also STRICT, and the first assertions below pin that: an emulator that shrugs at an
+# unknown flag or field lets a typo in a fence pass every case that follows, because the
+# real gh would refuse it and this one would not.
 EMU_GHBIN="$TMP/emu_ghbin"; mkdir -p "$EMU_GHBIN"
 cat > "$EMU_GHBIN/gh" <<'SH'
 #!/usr/bin/env bash
 set -u
 sub="${1:-} ${2:-}"
 [ "$sub" = "repo view" ] && { echo "owner/repo"; exit 0; }
+# `pr view` and `label list` accept only the flags and --json fields the fences use, and
+# refuse the rest the way real gh does. A flag or field that real gh accepts but this
+# emulator does not implement fails too, on purpose: extend the emulator first, then the fence.
 case "$sub" in
-  "pr view"|"label list") shift 2 ;;
+  "pr view") allowed="number state" ;;
+  "label list") allowed="name" ;;
   *) echo "fake gh: unhandled invocation: $*" >&2; exit 1 ;;
 esac
+shift 2
 fields=""; q=""; limit=30
 while [ $# -gt 0 ]; do
   case "$1" in
-    --json) fields="$2"; shift 2 ;;
-    -q|--jq) q="$2"; shift 2 ;;
-    -L|--limit) limit="$2"; shift 2 ;;
-    *) shift ;;
+    --json|-q|--jq|-L|--limit)
+      [ $# -ge 2 ] || { echo "flag needs an argument: $1" >&2; exit 1; }
+      case "$1" in --json) fields="$2" ;; -q|--jq) q="$2" ;; *) limit="$2" ;; esac
+      shift 2 ;;
+    -*) echo "unknown flag: $1" >&2; exit 1 ;;
+    *) echo "fake gh: unexpected argument: $1" >&2; exit 1 ;;
   esac
 done
 [ -n "$fields" ] || { echo "fake gh: only the --json form is emulated" >&2; exit 1; }
+for f in $(printf '%s' "$fields" | tr ',' ' '); do
+  case " $allowed " in
+    *" $f "*) ;;
+    *) echo "Unknown JSON field: \"$f\"" >&2; exit 1 ;;
+  esac
+done
 if [ "$sub" = "pr view" ]; then
   if [ -z "${FAKE_PR_JSON:-}" ]; then
     echo "no pull requests found for the current branch (or HEAD is detached)" >&2
@@ -837,6 +853,24 @@ ff2() { printf 'FILED_FROM=%s\nSOURCE_PR=%s' "$1" "$2"; }   # the two lines that
 if ! command -v jq >/dev/null 2>&1; then
   bad "#363: jq is required to emulate gh's --json/-q for these cases (CI's ubuntu-latest has it)" "jq not found on PATH"
 else
+  # The emulator must stay strict. Each of these is something real gh refuses, and these
+  # assertions are what stop a later edit from quietly making the emulator permissive again.
+  printf 'bug\n' > "$TMP/emu-selftest-labels.txt"
+  out=$(FAKE_LABELS_FILE="$TMP/emu-selftest-labels.txt" "$EMU_GHBIN/gh" label list --no-such-flag --json name 2>&1); rc=$?
+  [ "$rc" -eq 1 ] && [ "$out" = "unknown flag: --no-such-flag" ] \
+    && ok "emulator: an unknown flag is refused, exit 1 (label list --no-such-flag)" \
+    || bad "emulator: an unknown flag is refused, exit 1 (label list --no-such-flag)" "rc=$rc $(flat "$out")"
+
+  out=$(FAKE_PR_JSON='{"number":41,"state":"OPEN"}' "$EMU_GHBIN/gh" pr view --json number,noSuchField 2>&1); rc=$?
+  [ "$rc" -eq 1 ] && [ "$out" = 'Unknown JSON field: "noSuchField"' ] \
+    && ok "emulator: an unknown --json field is refused, exit 1 (pr view --json number,noSuchField)" \
+    || bad "emulator: an unknown --json field is refused, exit 1 (pr view --json number,noSuchField)" "rc=$rc $(flat "$out")"
+
+  out=$(FAKE_PR_JSON='{"number":41,"state":"OPEN"}' "$EMU_GHBIN/gh" pr view 41 --json number 2>&1); rc=$?
+  [ "$rc" -eq 1 ] && [ "$out" = "fake gh: unexpected argument: 41" ] \
+    && ok "emulator: a positional argument is refused, exit 1 (pr view 41)" \
+    || bad "emulator: a positional argument is refused, exit 1 (pr view 41)" "rc=$rc $(flat "$out")"
+
   out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u STANDALONE CLAUDE_CODE_SESSION_ID=abc123ef \
         FAKE_PR_JSON='{"number":41,"state":"OPEN"}' PATH="$EMU_GHBIN:$PATH" bash "$FENCE_SCRIPT2" 2>&1); rc=$?
   [ "$rc" -eq 0 ] && [ "$out" = "$(ff2 '#41' 41)" ] \
@@ -883,8 +917,8 @@ else
     || bad "#363: no PR on the branch (or a detached HEAD) -> the session id, SOURCE_PR empty" "rc=$rc $(flat "$out")"
 fi
 
-# ============================================== GROUP F — #357: create-issue.md §4's labels
-echo; echo "F. #357 — create-issue.md §4's label set, built and verified for real"
+# ============================================== GROUP F — #357, #369: create-issue.md §4's labels
+echo; echo "F. #357, #369 — create-issue.md §4's label set, built and verified for real"
 
 # This lives here rather than in a file of its own because this suite already does the one thing
 # the check needs -- extracts create-issue.md's fenced bash and RUNS it, against a fake gh, under
@@ -895,45 +929,53 @@ echo; echo "F. #357 — create-issue.md §4's label set, built and verified for 
 #         `from-review` at position 31 -- archery-apprentice's shape, which has 32 labels.
 #   #363 (the from-review half): SOURCE_PR is set only from the PR the issue is filed from,
 #         which is now only ever an OPEN one, so a closed-PR branch no longer earns from-review.
-# ONE script is built from three fences, in order -- §1 (REPO, FILED_FROM, SOURCE_PR), §4's
-# label-building fence and §4's verification fence -- so what is asserted is the LABELS a real
-# run would hand to `gh issue create`, not what each fence does alone.
+#   #369: §4 looped over `"${EXTRA_LABELS[@]}"`, an array nothing defined -- an unbound variable
+#         under `set -u` in bash 3.2. §1 now defaults COMPLEXITY and EXTRA_LABELS like its other
+#         flag values, so a case passes them through the environment, as Group E passes FROM_PR,
+#         and F8 runs with both unset.
+# ONE script is built from three fences, in order -- §1 (REPO, FILED_FROM, SOURCE_PR, the flag
+# defaults), §4's label-building fence and §4's verification fence -- so what is asserted is the
+# LABELS a real run would hand to `gh issue create`, not what each fence does alone. Every case
+# pins the EXACT line, because a leading or trailing comma, an empty element or a wrongly
+# dropped label each change it, and an empty stderr wherever nothing may be reported.
+# F9 is the one place a fence runs alone. An agent's shell keeps nothing between calls and does
+# not set -u, so a fence can run with the block before it never having run; it is run in a plain
+# bash with those inputs unset, because -u alone would mask exactly what is being checked.
 F_LABELS="$TMP/f-labels.txt"
 {
   printf '%s\n' bug 'priority: low' Tech-Debt           # 1-3: named labels, Tech-Debt mixed-case on purpose
-  for i in $(seq 4 29); do printf 'l%02d\n' "$i"; done   # 4-29: filler
-  printf '%s\n' enhancement from-review                  # 30, 31: from-review is past gh's default 30
+  for i in $(seq 4 28); do printf 'l%02d\n' "$i"; done   # 4-28: filler
+  printf '%s\n' -dash enhancement from-review            # 29: a leading dash, for the grep's `--`; 30, 31
 } > "$F_LABELS"
 
 LABELS_FENCE=$(extract_bash_fence_after "$GENERIC/create-issue.md" '### 4\. Determine Labels')
 VERIFY_FENCE=$(extract_bash_fence_after "$GENERIC/create-issue.md" '\*\*Verify labels exist\*\*')
 F_SCRIPT="$TMP/create-issue-labels-block.sh"
-{
-  cat <<'PRELUDE'
-set -euo pipefail
-# What flag parsing would have set before §4 runs. EXTRA_LABELS is never empty: the template's
-# own `for extra in "${EXTRA_LABELS[@]}"` is an unbound-variable error on an empty array under
-# `set -u` in bash 3.2 (pre-existing, and not what this group is about), so a case that wants
-# no extra label still carries one that exists in the fixture.
-COMPLEXITY="${COMPLEXITY:-}"
-EXTRA_LABELS=("priority: low")
-[ -z "${FAKE_EXTRA_LABEL:-}" ] || EXTRA_LABELS+=("$FAKE_EXTRA_LABEL")
-PRELUDE
-  printf '%s\n' "$FENCE" "$LABELS_FENCE" "$VERIFY_FENCE"
-  echo 'echo "LABELS=$LABELS"'
-} > "$F_SCRIPT"
+{ echo 'set -euo pipefail'; printf '%s\n' "$FENCE" "$LABELS_FENCE" "$VERIFY_FENCE"
+  echo 'echo "LABELS=$LABELS"'; } > "$F_SCRIPT"
 
-has_label() {  # has_label <csv> <name> -- EXACT membership in a comma-separated list, never a
-               # substring: `review` must not satisfy `from-review`
-  case ",$1," in *",$2,"*) return 0 ;; *) return 1 ;; esac
+labels_are() {  # labels_are <csv> -- the run exited 0 and printed exactly this LABELS line
+  [ "$rc" -eq 0 ] && [ "$out" = "LABELS=$1" ]
+}
+one_warning() {  # one_warning <label> -- stderr is exactly one Warning, and it names that label
+  [ "$(printf '%s\n' "$err" | grep -c '^Warning:')" -eq 1 ] \
+    && printf '%s\n' "$err" | grep -qF "Warning: '$1' label not found"
 }
 run_f() {  # run_f [VAR=val ...] -- one run of the script above with every ambient input cleared
            # first, so a variable inherited from whoever runs this suite (CLAUDE_CODE_SESSION_ID
            # is set in every agent session) cannot decide a case. Sets $out, $err and $rc.
   local errfile; errfile=$(mktemp)
   out=$(env -u FROM_PR -u FROM_ISSUE -u COMMENT_URL -u STANDALONE -u CLAUDE_CODE_SESSION_ID \
-        -u FAKE_PR_JSON -u FAKE_EXTRA_LABEL -u FAKE_LABELS_FAIL -u COMPLEXITY \
+        -u FAKE_PR_JSON -u FAKE_LABELS_FAIL -u COMPLEXITY -u EXTRA_LABELS \
         FAKE_LABELS_FILE="$F_LABELS" PATH="$EMU_GHBIN:$PATH" "$@" bash "$F_SCRIPT" 2>"$errfile")
+  rc=$?
+  err=$(cat "$errfile"); rm -f "$errfile"
+}
+run_alone() {  # run_alone <script> -- one §4 fence on its own, in a plain bash (no set -e or -u)
+               # with none of the inputs the blocks before it would have set. Sets $out, $err, $rc.
+  local errfile; errfile=$(mktemp)
+  out=$(env -u LABELS -u REPO -u FILED_FROM -u SOURCE_PR -u COMMENT_URL -u COMPLEXITY -u EXTRA_LABELS \
+        FAKE_LABELS_FILE="$F_LABELS" PATH="$EMU_GHBIN:$PATH" bash "$1" 2>"$errfile")
   rc=$?
   err=$(cat "$errfile"); rm -f "$errfile"
 }
@@ -947,45 +989,35 @@ else
   # F1 -- from-review is label 31 of 31: it survives only because the listing asks for --limit
   # 500. tech-debt is asked for in lowercase and the repo spells it Tech-Debt. Every label
   # exists, so nothing may be reported missing: stderr stays empty.
-  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' FAKE_EXTRA_LABEL=tech-debt
-  csv=${out#LABELS=}
-  [ "$rc" -eq 0 ] && [ -z "$err" ] \
-    && has_label "$csv" enhancement && has_label "$csv" from-review \
-    && has_label "$csv" 'priority: low' && has_label "$csv" tech-debt \
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' EXTRA_LABELS='priority: low,tech-debt'
+  labels_are 'enhancement,from-review,priority: low,tech-debt' && [ -z "$err" ] \
     && ok "F1: from-review at position 31 is kept (--limit 500); tech-debt matches Tech-Debt; no warning" \
     || bad "F1: from-review at position 31 is kept (--limit 500); tech-debt matches Tech-Debt; no warning" \
            "rc=$rc out=$out err=$(flat "$err")"
 
   # F2 -- #363's AC: a branch whose PR is CLOSED earns no from-review. The session id resolves
   # Filed from:, SOURCE_PR stays empty, and the rest of the set is untouched.
-  run_f FAKE_PR_JSON='{"number":552,"state":"CLOSED"}' CLAUDE_CODE_SESSION_ID=abc123ef
-  csv=${out#LABELS=}
-  [ "$rc" -eq 0 ] && has_label "$csv" enhancement && has_label "$csv" 'priority: low' \
-    && ! has_label "$csv" from-review \
+  run_f FAKE_PR_JSON='{"number":552,"state":"CLOSED"}' CLAUDE_CODE_SESSION_ID=abc123ef EXTRA_LABELS='priority: low'
+  labels_are 'enhancement,priority: low' && [ -z "$err" ] \
     && ok "F2: a CLOSED-PR branch does not earn from-review (#363); the rest of the set is intact" \
     || bad "F2: a CLOSED-PR branch does not earn from-review (#363); the rest of the set is intact" \
            "rc=$rc out=$out err=$(flat "$err")"
 
   # F3 -- a label the repo lacks is skipped with a warning, never fatal, and takes nothing else
   # down with it.
-  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' FAKE_EXTRA_LABEL=nonexistent-label
-  csv=${out#LABELS=}
-  [ "$rc" -eq 0 ] && ! has_label "$csv" nonexistent-label \
-    && has_label "$csv" enhancement && has_label "$csv" from-review && has_label "$csv" 'priority: low' \
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' EXTRA_LABELS='priority: low,nonexistent-label'
+  labels_are 'enhancement,from-review,priority: low' \
     && ok "F3: a label the repo lacks is dropped; enhancement, from-review and priority: low are kept, exit 0" \
     || bad "F3: a label the repo lacks is dropped; enhancement, from-review and priority: low are kept, exit 0" \
            "rc=$rc out=$out err=$(flat "$err")"
-  [ "$(printf '%s\n' "$err" | grep -c '^Warning:')" -eq 1 ] \
-    && printf '%s\n' "$err" | grep -qF "Warning: 'nonexistent-label' label not found" \
+  one_warning nonexistent-label \
     && ok "F3: the drop is one Warning on stderr naming the label" \
     || bad "F3: the drop is one Warning on stderr naming the label" "err=$(flat "$err")"
 
   # F3b -- names match WHOLE: `review` is a substring of the repo's from-review and must still
   # read as missing.
-  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' FAKE_EXTRA_LABEL=review
-  csv=${out#LABELS=}
-  [ "$rc" -eq 0 ] && ! has_label "$csv" review && has_label "$csv" from-review \
-    && printf '%s\n' "$err" | grep -qF "Warning: 'review' label not found" \
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' EXTRA_LABELS='priority: low,review'
+  labels_are 'enhancement,from-review,priority: low' && one_warning review \
     && ok "F3b: names match whole -- review is dropped although it is a substring of from-review" \
     || bad "F3b: names match whole -- review is dropped although it is a substring of from-review" \
            "rc=$rc out=$out err=$(flat "$err")"
@@ -1010,6 +1042,53 @@ else
     && ok "F5: the fixture reproduces #357 -- without --limit gh returns 30 labels and from-review is not among them" \
     || bad "F5: the fixture reproduces #357 -- without --limit gh returns 30 labels and from-review is not among them" \
            "default=$n_unl limit500=$n_lim"
+
+  # F6 -- a label whose name starts with a dash reaches grep as data, not as an option: the `--`
+  # in `grep -qixF -- "$LABEL"`. Without it grep reads -dash as `-d ash` and errors, so a label
+  # that exists is dropped with a warning.
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' EXTRA_LABELS=-dash
+  labels_are 'enhancement,from-review,-dash' && [ -z "$err" ] \
+    && ok "F6: a label starting with a dash is matched as data (the -- in grep), kept, no warning" \
+    || bad "F6: a label starting with a dash is matched as data (the -- in grep), kept, no warning" \
+           "rc=$rc out=$out err=$(flat "$err")"
+
+  # F7 -- an empty element is skipped silently: the `continue`. The doubled comma sits in the
+  # MIDDLE on purpose, because a trailing comma would not test this -- $(...) strips the trailing
+  # newline before the loop ever sees it. Without the `continue` the empty name goes to grep,
+  # matches nothing, and is reported as a missing label.
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}' EXTRA_LABELS='priority: low,,tech-debt'
+  labels_are 'enhancement,from-review,priority: low,tech-debt' && [ -z "$err" ] \
+    && ok "F7: an empty element (a doubled comma) is skipped without a warning" \
+    || bad "F7: an empty element (a doubled comma) is skipped without a warning" \
+           "rc=$rc out=$out err=$(flat "$err")"
+
+  # F8 -- #369: nothing supplied at all. EXTRA_LABELS and COMPLEXITY are both unset in the
+  # caller's environment, and the block still runs clean under set -euo pipefail. The old array
+  # loop died here, in bash 3.2, on an unbound variable. Newer bash (5.2 checked) tolerates an
+  # undeclared array under set -u, so only a bash 3.2 run (macOS's /bin/bash) can see that half
+  # of the defect; on bash 5 this case still catches COMPLEXITY or EXTRA_LABELS going unbound.
+  run_f FAKE_PR_JSON='{"number":41,"state":"OPEN"}'
+  labels_are 'enhancement,from-review' && [ -z "$err" ] \
+    && ok "F8: #369 -- EXTRA_LABELS and COMPLEXITY both unset runs clean under set -euo pipefail" \
+    || bad "F8: #369 -- EXTRA_LABELS and COMPLEXITY both unset runs clean under set -euo pipefail" \
+           "rc=$rc out=$out err=$(flat "$err")"
+
+  # F9 -- the input guards, each fence ALONE (review S1). Run in a fresh shell, which is all an
+  # agent has between calls, the verification fence used to exit 0 with LABELS empty -- an
+  # issue filed unlabeled with no warning -- and the label-building fence built a set from
+  # nothing. Both now stop and say which block to run first.
+  F9_VERIFY="$TMP/f9-verify-alone.sh"; printf '%s\n' "$VERIFY_FENCE" > "$F9_VERIFY"
+  F9_BUILD="$TMP/f9-build-alone.sh";   printf '%s\n' "$LABELS_FENCE" > "$F9_BUILD"
+  run_alone "$F9_VERIFY"
+  [ "$rc" -ne 0 ] && printf '%s\n' "$err" | grep -q 'LABELS' \
+    && ok "F9: the verification fence run alone (LABELS and REPO unset) stops, naming LABELS" \
+    || bad "F9: the verification fence run alone (LABELS and REPO unset) stops, naming LABELS" \
+           "rc=$rc out=$out err=$(flat "$err")"
+  run_alone "$F9_BUILD"
+  [ "$rc" -ne 0 ] && printf '%s\n' "$err" | grep -q 'FILED_FROM' \
+    && ok "F9: the label-building fence run alone (FILED_FROM unset) stops, naming FILED_FROM" \
+    || bad "F9: the label-building fence run alone (FILED_FROM unset) stops, naming FILED_FROM" \
+           "rc=$rc out=$out err=$(flat "$err")"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

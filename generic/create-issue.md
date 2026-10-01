@@ -35,6 +35,8 @@ FROM_PR="${FROM_PR:-}"           # --from-pr N
 FROM_ISSUE="${FROM_ISSUE:-}"     # --from-issue N
 COMMENT_URL="${COMMENT_URL:-}"   # --comment-url URL
 STANDALONE="${STANDALONE:-}"     # --standalone
+COMPLEXITY="${COMPLEXITY:-}"     # --complexity low|medium|high
+EXTRA_LABELS="${EXTRA_LABELS:-}" # --label NAME, comma-joined when repeated
 
 # FILED_FROM per the resolution order above. SOURCE_PR is the PR it names, if any: it (or
 # --comment-url) selects §3's From-Review form and §4's from-review label.
@@ -126,6 +128,7 @@ placeholder: it is one of the four resolved forms from step 1 (`#N`, `#N (<url>)
 Build the label set:
 
 ```bash
+: "${FILED_FROM:?run the block in §1 first, in the same shell}"
 LABELS="enhancement"
 
 # Always add from-review if this came from a PR review
@@ -140,14 +143,15 @@ if [ -n "$COMPLEXITY" ]; then
 fi
 
 # Add any extra --label flags
-for extra in "${EXTRA_LABELS[@]}"; do
-  LABELS="$LABELS,$extra"
-done
+if [ -n "$EXTRA_LABELS" ]; then
+  LABELS="$LABELS,$EXTRA_LABELS"
+fi
 ```
 
 **Verify labels exist** before using them. If a label doesn't exist in the repo, skip it with a warning rather than failing. List the labels once, with `--limit 500`: `gh label list` returns only 30 by default, oldest first, so without it every label past the 30th reads as missing and is dropped (#357). Match names case-insensitively, as GitHub does:
 
 ```bash
+: "${LABELS:?run the label-building block above first, in the same shell}" "${REPO:?run the block in §1 first, in the same shell}"
 # A failed listing stops here: reading it as "no labels exist" would file the issue unlabeled.
 REPO_LABELS=$(gh label list --limit 500 --json name -q '.[].name') \
   || { echo "REFUSE: could not list labels in ${REPO}" >&2; exit 1; }
