@@ -577,6 +577,49 @@ jobs:
           done
           if [ "$rc" -ne 0 ]; then exit 1; fi
 
+      - name: compiled skill targets are in sync with their sources
+        run: |
+          # #227: `.claude/skills/<name>/SKILL.md` is compiled from `.claude/commands/<name>.md`
+          # and both are committed, but the lint step above reads only the source. The compiled
+          # copy is what the Skill tool actually loads: `/agent-review` through the Skill tool
+          # loaded a compiled copy with no review-result block while the commands copy had
+          # carried it since #275, so a forgotten recompile shipped green. `--dry-run` never
+          # reports drift, so this runs the real compile and reads git state afterwards.
+          # `status --porcelain`, not `diff --quiet`: an uncommitted NEW compiled skill is
+          # untracked and invisible to diff. The profile's `targets:` is `claude`, so the
+          # compiler writes only under the workspace; the extra pathspecs cover the other
+          # repo-local targets if the profile ever grows, and a pathspec that matches nothing
+          # is not an error.
+          node assets/compile-skill-targets.mjs
+          drift=$(git status --porcelain -- .claude/skills .gemini .codex)
+          if [ -n "$drift" ]; then
+            echo "::error::compiled skill targets are out of sync with .claude/commands/ — run 'node assets/compile-skill-targets.mjs' and commit the result"
+            echo "$drift"
+            git --no-pager diff -- .claude/skills .gemini .codex
+            exit 1
+          fi
+          # The compiler never deletes: a compiled skill whose source was removed keeps
+          # loading. Every compiled artifact, under each repo-local target root, must still
+          # have a source.
+          rc=0
+          for d in .claude/skills/*/ .codex/skills/*/; do
+            [ -d "$d" ] || continue
+            name=$(basename "$d")
+            if [ ! -f ".claude/commands/$name.md" ]; then
+              echo "::error::$d has no source at .claude/commands/$name.md — remove the compiled skill or restore its source"
+              rc=1
+            fi
+          done
+          for f in .gemini/commands/*.toml; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f" .toml)
+            if [ ! -f ".claude/commands/$name.md" ]; then
+              echo "::error::$f has no source at .claude/commands/$name.md — remove the compiled command or restore its source"
+              rc=1
+            fi
+          done
+          if [ "$rc" -ne 0 ]; then exit 1; fi
+
       - name: skill-lint regression tests
         # Covers the attribution check's line-anchored semantics — prose that
         # FORBIDS a footer (create-pr's first Critical Rule) must not be mistaken
