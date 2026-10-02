@@ -2073,6 +2073,16 @@ mirror_form "one half a flow mapping, the other a quoted key (mixed forms)" "on:
   'pull_request':
     paths:
       - docs/**"
+# #372 review: quoted escapes must retain their actual path meaning. A Unicode
+# slash is equivalent to a literal slash, but NOT to the old decoder's "u002f".
+mirror_form "a Unicode-escaped slash matches the same literal path" \
+  'on: {pull_request: {paths-ignore: ["docs\u002f**"]}}' \
+  'on: {pull_request: {paths: ["docs/**"]}}'
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+set_on mirror-a.yml 'on: {pull_request: {paths-ignore: ["docs\u002f**"]}}'
+set_on mirror-b.yml 'on: {pull_request: {paths: ["docsu002f**"]}}'
+expect "unequal decoded paths cannot become a complementary mirror: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+
 # A sequence or a list cannot carry a filter, so a pair using one is NOT complementary: it must
 # stay FAIL. The detection itself is asserted at the unit level, below.
 fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
@@ -2110,6 +2120,46 @@ PY
 UNIT=$(python3 "$TMP/wf-pull-request-unit.py" "$SUT")
 [ "$UNIT" = OK ] && ok "wf_pull_request reads every documented on: form (sequence, list, scalar, flow, quoted key), filters included" \
   || bad "wf_pull_request reads every documented on: form" "$(flat "$UNIT")"
+
+cat > "$TMP/flow-escapes-unit.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gv", sys.argv[1])
+gv = importlib.util.module_from_spec(spec); spec.loader.exec_module(gv)
+cases = [
+    (r'"docs\u002f**"', "docs/**"),
+    (r'"docs\x2f**"', "docs/**"),
+    (r'"docs\U0000002f**"', "docs/**"),
+    (r'"docs\/**"', "docs/**"),
+    (r'"quote\"and\\slash"', 'quote"and\\slash'),
+    (r'"\0\a\b\t\n\v\f\r\e"', "\0\a\b\t\n\v\f\r\x1b"),
+    ('"\\\t"', "\t"),
+    (r'"\ \N\_\L\P"', " \x85\xa0\u2028\u2029"),
+    (r'"\u00e9\U0001F600"', "\u00e9\U0001f600"),
+    (r"'docs\u002f**'", r"docs\u002f**"),
+    ("'it''s/**'", "it's/**"),
+]
+for source, expected in cases:
+    assert gv.parse_flow(source) == expected, (source, gv.parse_flow(source), expected)
+# Invalid/unsupported escapes may not silently turn into a different literal.
+for source in [
+    r'"\q"', r'"\x2"', r'"\xGG"', r'"\u002"', r'"\u00xz"',
+    r'"\U0000002"', r'"\U00110000"', r'"\uD800"', r'"\uDFFF"',
+    '"' + "\\", '"line\\\ncontinuation"',
+]:
+    try:
+        gv.parse_flow(source)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(("accepted unsupported escape", source))
+    assert gv.wf_pull_request("on: {pull_request: {paths: [" + source + "]}}\n") == (False, {})
+assert gv.wf_pull_request(r'on: {pull_request: {paths-ignore: ["docs\u002f**"]}}') == (
+    True, {"paths-ignore": ["docs/**"]})
+print("OK")
+PY
+UNIT=$(python3 "$TMP/flow-escapes-unit.py" "$SUT")
+[ "$UNIT" = OK ] && ok "flow scalar escapes decode exactly; malformed or unsupported escapes fail closed" \
+  || bad "flow scalar escape semantics" "$(flat "$UNIT")"
 
 # The #348 review's false positive: a monorepo's independent per-area workflows, each filtered to
 # its own directory with `paths:`, both running a real `test` job. Nothing stands in for anything:

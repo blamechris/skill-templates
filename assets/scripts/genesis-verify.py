@@ -509,9 +509,36 @@ def parse_flow(s):
                         continue
                     pos[0] += 1
                     return "".join(out)
-                if c == "\\" and q == '"' and pos[0] + 1 < len(s):
+                if c == "\\" and q == '"':
                     pos[0] += 1
-                    c = s[pos[0]]
+                    if pos[0] >= len(s):
+                        raise ValueError("incomplete quoted escape")
+                    escape = s[pos[0]]
+                    # YAML double-quoted escapes denote characters, not the text
+                    # after the slash: docs\u002f** must remain docs/**. Unknown
+                    # syntax must fail closed rather than invent a path filter.
+                    escapes = {
+                        "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t",
+                        "n": "\n", "v": "\v", "f": "\f", "r": "\r", "e": "\x1b",
+                        " ": " ", '"': '"', "/": "/", "\\": "\\",
+                        "N": "\x85", "_": "\xa0", "L": "\u2028", "P": "\u2029",
+                    }
+                    if escape in escapes:
+                        out.append(escapes[escape])
+                    elif escape in ("x", "u", "U"):
+                        width = {"x": 2, "u": 4, "U": 8}[escape]
+                        digits = s[pos[0] + 1:pos[0] + 1 + width]
+                        if len(digits) != width or not re.fullmatch(r"[0-9A-Fa-f]+", digits):
+                            raise ValueError("bad hexadecimal quoted escape")
+                        codepoint = int(digits, 16)
+                        if codepoint > 0x10ffff or 0xd800 <= codepoint <= 0xdfff:
+                            raise ValueError("quoted escape is not a Unicode scalar")
+                        out.append(chr(codepoint))
+                        pos[0] += width
+                    else:
+                        raise ValueError("unsupported quoted escape")
+                    pos[0] += 1
+                    continue
                 out.append(c)
                 pos[0] += 1
             raise ValueError("unterminated quote")
