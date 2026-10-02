@@ -423,6 +423,19 @@ def workflow_jobs(text):
             m = re.match(r"^\s*if:\s*(.+?)\s*$", ln)
             if m:
                 j["if"] = m.group(1)
+                ind = re.match(r"^([|>])[0-9+-]*\s*(?:#.*)?$", j["if"])
+                if ind:
+                    # A `|` / `>` block scalar (any chomping or indentation indicator): the
+                    # condition is the lines indented deeper than `if:`, joined into one string.
+                    # Either style yields a single evaluable line; a literal's newlines would only
+                    # matter to a consumer comparing text, and none does.
+                    parts = []
+                    for nxt in body[i + 1:]:
+                        if nxt.strip() and len(nxt) - len(nxt.lstrip(" ")) <= pind:
+                            break
+                        if nxt.strip():
+                            parts.append(nxt.strip())
+                    j["if"] = " ".join(parts) or None
             # A comment needs whitespace before its `#`: a display name like `C#-lint` keeps it.
             m = re.match(r"^\s*name:\s*(.*?)\s*(?:\s#.*)?$", ln)
             if m and m.group(1) and "${{" not in m.group(1):
@@ -446,6 +459,138 @@ def on_block(text):
         block = []
         for nxt in lines[i + 1:]:
             if nxt.strip() and not nxt.startswith((" ", "\t", "#")):
+                break
+            block.append(nxt)
+        return None, block
+    return None, None
+
+
+ON_LINE = re.compile(r"^(?:on|\"on\"|'on'|true):\s*(.*?)\s*(#.*)?$")
+
+
+def strip_comment(s):
+    """`s` without a trailing YAML comment (` #` outside quotes), right-trimmed."""
+    quote = None
+    for i, c in enumerate(s):
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or s[i - 1] in " \t"):
+            return s[:i].rstrip()
+    return s.rstrip()
+
+
+def parse_flow(s):
+    """A YAML flow node -- `{k: v, ...}`, `[a, b]` or a scalar -- as dict / list / str, quotes
+    removed. A flow-mapping key with no value (`{pull_request, push}`) maps to None. Raises
+    ValueError on anything it cannot read, so a caller can fall back to "unknown"."""
+    pos = [0]
+
+    def skip():
+        while pos[0] < len(s) and s[pos[0]] in " \t\n":
+            pos[0] += 1
+
+    def scalar(stops):
+        skip()
+        if pos[0] < len(s) and s[pos[0]] in "'\"":
+            q = s[pos[0]]
+            pos[0] += 1
+            out = []
+            while pos[0] < len(s):
+                c = s[pos[0]]
+                if c == q:
+                    if q == "'" and s[pos[0]:pos[0] + 2] == "''":
+                        out.append("'")
+                        pos[0] += 2
+                        continue
+                    pos[0] += 1
+                    return "".join(out)
+                if c == "\\" and q == '"' and pos[0] + 1 < len(s):
+                    pos[0] += 1
+                    c = s[pos[0]]
+                out.append(c)
+                pos[0] += 1
+            raise ValueError("unterminated quote")
+        start = pos[0]
+        while pos[0] < len(s) and s[pos[0]] not in stops:
+            if s[pos[0]] == ":" and (pos[0] + 1 >= len(s) or s[pos[0] + 1] in " \t\n,]}"):
+                break
+            pos[0] += 1
+        return s[start:pos[0]].strip()
+
+    def node():
+        skip()
+        if pos[0] >= len(s):
+            raise ValueError("unexpected end")
+        c = s[pos[0]]
+        if c == "[":
+            pos[0] += 1
+            items = []
+            while True:
+                skip()
+                if pos[0] < len(s) and s[pos[0]] == "]":
+                    pos[0] += 1
+                    return items
+                items.append(node())
+                skip()
+                if pos[0] < len(s) and s[pos[0]] == ",":
+                    pos[0] += 1
+                elif pos[0] >= len(s) or s[pos[0]] != "]":
+                    raise ValueError("bad flow sequence")
+        if c == "{":
+            pos[0] += 1
+            out = {}
+            while True:
+                skip()
+                if pos[0] < len(s) and s[pos[0]] == "}":
+                    pos[0] += 1
+                    return out
+                key = scalar(",:}]")
+                skip()
+                val = None
+                if pos[0] < len(s) and s[pos[0]] == ":":
+                    pos[0] += 1
+                    skip()
+                    if pos[0] < len(s) and s[pos[0]] not in ",}":
+                        val = node()
+                out[key] = val
+                skip()
+                if pos[0] < len(s) and s[pos[0]] == ",":
+                    pos[0] += 1
+                elif pos[0] >= len(s) or s[pos[0]] != "}":
+                    raise ValueError("bad flow mapping")
+        return scalar(",]}")
+
+    value = node()
+    skip()
+    if pos[0] != len(s):
+        raise ValueError("trailing text")
+    return value
+
+
+def on_section(text):
+    """(inline_value_or_None, [lines of the block]) of a workflow's `on:`, for wf_pull_request.
+    Unlike on_block it keeps the raw inline text (a flow mapping is not a comma list), joins a
+    flow collection that spans lines, and keeps an indentless block sequence (`on:` followed by
+    `- pull_request` at column 0) in the block. (None, None) when there is no `on:`."""
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        m = ON_LINE.match(ln)
+        if not m:
+            continue
+        val = m.group(1)
+        if val:
+            if val[0] in "[{":
+                for nxt in lines[i + 1:]:
+                    if not (val.count("[") + val.count("{") > val.count("]") + val.count("}")):
+                        break
+                    val += "\n" + strip_comment(nxt)
+            return val, []
+        block = []
+        for nxt in lines[i + 1:]:
+            if nxt.strip() and not nxt.startswith((" ", "\t", "#", "- ")):
                 break
             block.append(nxt)
         return None, block
@@ -2208,7 +2353,7 @@ def event_block(block, event):
     """The lines under `<event>:` in an `on:` block (on_block's second element) -- the same
     indentation-aware slice push_branches takes for `push:`. Anchored on `<event>:` at the end of
     the line, so a lookup for `pull_request` never matches a `pull_request_target:` sibling."""
-    idx = next((i for i, ln in enumerate(block) if re.match(r"^\s+" + re.escape(event) + r":\s*(#.*)?$", ln)), None)
+    idx = next((i for i, ln in enumerate(block) if re.match(r"^\s+['\"]?" + re.escape(event) + r"['\"]?:\s*(#.*)?$", ln)), None)
     if idx is None:
         return None
     indent = len(block[idx]) - len(block[idx].lstrip())
@@ -2225,7 +2370,7 @@ def path_filters(event_lines):
     block or inline flow lists, quotes and trailing comments stripped."""
     out = {}
     for i, ln in enumerate(event_lines):
-        m = re.match(r"^(\s*)(paths|paths-ignore):\s*(.*?)\s*(?:\s#.*)?$", ln)
+        m = re.match(r"^(\s*)['\"]?(paths|paths-ignore)['\"]?:\s*(.*?)\s*(?:\s#.*)?$", ln)
         if not m:
             continue
         indent, key, val = len(m.group(1)), m.group(2), m.group(3)
@@ -2245,18 +2390,52 @@ def path_filters(event_lines):
     return out
 
 
+def flow_filters(node):
+    """{"paths": [...], "paths-ignore": [...]} from a parsed flow `pull_request` value."""
+    out = {}
+    if isinstance(node, dict):
+        for k in ("paths", "paths-ignore"):
+            v = node.get(k)
+            if isinstance(v, list):
+                out[k] = [x for x in v if isinstance(x, str)]
+            elif isinstance(v, str):
+                out[k] = [v]
+    return out
+
+
 def wf_pull_request(text):
-    """(triggers_on_pull_request, path_filters) for one workflow's `on:` block. An inline
-    `on: [...]` list (no per-event block) can name `pull_request` but never filters it."""
-    inline, block = on_block(text)
+    """(triggers_on_pull_request, path_filters) for one workflow's `on:`. All four YAML shapes
+    count: a block mapping (the key may be quoted, its value a block or an inline flow mapping),
+    a block sequence (`- pull_request`, also at column 0), an inline list or bare scalar (items
+    may be quoted), and a flow mapping (`on: {pull_request: {paths: [...]}}`, possibly spread
+    over lines). Only the mapping shapes can carry a path filter. Text that cannot be read reads
+    as "does not trigger" -- the safe direction, the row stays FAIL."""
+    inline, block = on_section(text)
     if inline is not None:
-        return "pull_request" in inline, {}
+        try:
+            node = parse_flow(inline)
+        except ValueError:
+            return False, {}
+        if isinstance(node, dict):
+            return "pull_request" in node, flow_filters(node.get("pull_request"))
+        return "pull_request" in (node if isinstance(node, list) else [node]), {}
     if block is None:
         return False, {}
+    body = [ln for ln in block if ln.strip() and not ln.lstrip().startswith("#")]
+    if body and body[0].lstrip().startswith("- "):
+        items = [strip_comment(ln.lstrip()[2:]).strip("'\"") for ln in body if ln.lstrip().startswith("- ")]
+        return "pull_request" in items, {}
     pr = event_block(block, "pull_request")
-    if pr is None:
-        return False, {}
-    return True, path_filters(pr)
+    if pr is not None:
+        return True, path_filters(pr)
+    for ln in block:
+        m = re.match(r"^\s+['\"]?pull_request['\"]?:\s*(\S.*?)\s*$", ln)
+        if m:
+            try:
+                return True, flow_filters(parse_flow(strip_comment(m.group(1))))
+            except ValueError:
+                return True, {}
+    return False, {}
 
 
 SKIP_CI_TAG = re.compile(r"\b(skip-ci|ci-skip)\b")  # native `[skip ci]` (a space) never matches

@@ -440,6 +440,30 @@ edit .github/workflows/ci.yml 's.replace("    if: needs.changes.outputs.kotlin =
 expect_ev "both split jobs ungated: the FAIL names them in ci.yml order" overlay.kotlin.ci FAIL 1 '(ungated: [`core-jvm`, `android-unit`])'
 fresh; edit .github/dependabot.yml 's.split("  # Overlay: kotlin")[0]';              expect "no gradle update entry" overlay.kotlin.dependabot FAIL 1
 
+echo "-- #346: a block-scalar if: is the condition on its following lines, not just the indicator"
+# The folded two-line gate from the issue, and every chomping variant of both styles.
+for ind in '>' '>-' '>+' '|' '|-' '|+'; do
+  fresh; edit .github/workflows/ci.yml 's.replace(
+    "    if: needs.changes.outputs.kotlin == \x27true\x27\n",
+    "    if: '"$ind"'\n      needs.changes.outputs.kotlin == \x27true\x27 &&\n      github.event_name == \x27push\x27\n")'
+  expect "a kotlin job gated by a two-line \`if: $ind\` block scalar is gated and runs gradlew" overlay.kotlin.ci PASS 0
+done
+fresh; edit .github/workflows/ci.yml 's.replace(
+  "    if: needs.changes.outputs.kotlin == \x27true\x27\n",
+  "    if: >\n      github.event_name == \x27push\x27\n")'
+expect "a block-scalar if: that never mentions changes.kotlin is still ungated" overlay.kotlin.ci FAIL 1
+# The scalar ends at the next key of the job: a LATER property naming the output is not the condition.
+fresh; edit .github/workflows/ci.yml 's.replace(
+  "    if: needs.changes.outputs.kotlin == \x27true\x27\n    runs-on:",
+  "    if: >-\n      github.event_name == \x27push\x27\n    env:\n      NOTE: needs.changes.outputs.kotlin\n    runs-on:")'
+expect "a block-scalar if: ends at the job's next key: a later value naming the output does not gate it" overlay.kotlin.ci FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace("    if: always()\n", "    if: >-\n      always()\n")'
+expect "a multi-line if: that resolves to always() is still ci-gate's always()" core.ci-gate PASS 0
+fresh; edit .github/workflows/ci.yml 's.replace("    if: always()\n", "    if: |\n      ${{ always() }}\n")'
+expect "a literal block holding \${{ always() }} is still always()" core.ci-gate PASS 0
+fresh; edit .github/workflows/ci.yml 's.replace("    if: always()\n", "    if: >\n      always() &&\n      github.event_name == \x27push\x27\n")'
+expect "a multi-line if: of always() && ... can skip the gate: core.ci-gate FAIL" core.ci-gate FAIL 1
+
 echo "== profile and skills"
 fresh; edit .claude/skill-profile.md 's.replace("- standard: v1\n", "")';            expect "intent without standard" profile.genesis-intent FAIL 1
 fresh; edit .claude/skill-profile.md 's.replace("- overlays: kotlin", "- overlays: kotlin, flutter")'; expect "intent naming a planned overlay" profile.genesis-intent FAIL 1
@@ -1993,6 +2017,84 @@ fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
 edit .github/workflows/mirror-a.yml 's.replace("on:\n  pull_request:\n", "on:\n  pull_request_target:\n")'
 edit .github/workflows/mirror-b.yml 's.replace("    paths:\n      - '"'"'docs/**'"'"'\n", "")'
 expect "a path-filtered pull_request_target workflow is not one of the pull_request pair: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+
+# #349: every legal YAML spelling of the same trigger is read the same way. Each form below
+# rewrites the `on:` block of BOTH halves of the mirror pair, so the pair still reads LEGACY.
+set_on() {  # <workflow under .github/workflows/> <replacement on: block, with its trailing newline>
+  python3 - "$M/.github/workflows/$1" "$2" <<'PY'
+import re, sys
+p, block = sys.argv[1], sys.argv[2]
+s = open(p).read()
+t = re.sub(r"^on:\n(?:[ \t].*\n|\n)*", lambda m: block + "\n", s, count=1, flags=re.M)
+if t == s:
+    sys.exit(f"set_on made no change to {p}")
+open(p, "w").write(t)
+PY
+  [ $? -eq 0 ] || BROKEN=1
+}
+mirror_form() {  # <name> <on: block of mirror-a (paths-ignore)> <on: block of mirror-b (paths)>
+  fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+  set_on mirror-a.yml "$2"; set_on mirror-b.yml "$3"
+  expect "$1: the mirror pair still reads LEGACY" core.ci-gate LEGACY 1
+}
+echo "-- #349: pull_request written as a flow mapping, a quoted key, a sequence or a quoted list"
+mirror_form "a flow mapping" "on: {pull_request: {paths-ignore: ['docs/**']}, workflow_dispatch: {}}" \
+  "on: {pull_request: {paths: ['docs/**']}}"
+mirror_form "a flow mapping spread over lines, with quoted keys and a comment" 'on: {
+  "pull_request": {"paths-ignore": ["docs/**"]},  # filtered
+  workflow_dispatch: {}
+}' 'on: { pull_request: { paths: [ docs/** ] } }'
+mirror_form "a quoted event key in block style" "on:
+  'pull_request':
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:" 'on:
+  "pull_request":
+    "paths":
+      - "docs/**"'
+mirror_form "a block mapping whose event value is an inline flow mapping" "on:
+  pull_request: {paths-ignore: ['docs/**']}
+  workflow_dispatch:" "on:
+  pull_request: { paths: ['docs/**'] } # standing in"
+mirror_form "one half a flow mapping, the other a quoted key (mixed forms)" "on: {pull_request: {paths-ignore: ['docs/**']}}" "on:
+  'pull_request':
+    paths:
+      - docs/**"
+# A sequence or a list cannot carry a filter, so a pair using one is NOT complementary: it must
+# stay FAIL. The detection itself is asserted at the unit level, below.
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+set_on mirror-a.yml "on:
+  - pull_request
+  - workflow_dispatch"
+expect "a block-sequence pull_request carries no filter, so it is not one half of a mirror: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+set_on mirror-a.yml 'on: ["pull_request", "workflow_dispatch"]'
+expect "a quoted inline list carries no filter either: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+cat > "$TMP/wf-pull-request-unit.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gv", sys.argv[1])
+gv = importlib.util.module_from_spec(spec); spec.loader.exec_module(gv)
+cases = [
+  ("block sequence, indented",      "on:\n  - push\n  - pull_request\n",              (True, {})),
+  ("block sequence, indentless",    "on:\n- push\n- 'pull_request'  # c\n",           (True, {})),
+  ("block sequence without it",     "on:\n  - push\n  - pull_request_target\n",       (False, {})),
+  ("quoted inline list",            'on: ["pull_request", \'push\']\n',                (True, {})),
+  ("quoted inline list without it", 'on: ["push", "pull_request_target"]\n',           (False, {})),
+  ("bare scalar",                   "on: pull_request\n",                              (True, {})),
+  ("flow mapping with filters",     "on: {pull_request: {paths: ['a/**', \"b\"], paths-ignore: [c]}}\n",
+                                    (True, {"paths": ["a/**", "b"], "paths-ignore": ["c"]})),
+  ("flow mapping, key without value", "on: {push, pull_request}\n",                    (True, {})),
+  ("flow mapping without it",       "on: {push: {branches: [main]}, pull_request_target: {}}\n", (False, {})),
+  ("quoted block key",              "on:\n  'pull_request':\n    paths: [x]\n",       (True, {"paths": ["x"]})),
+  ("quoted pull_request_target is not pull_request", "on:\n  'pull_request_target':\n    paths: [x]\n", (False, {})),
+  ("unparseable flow reads as no trigger", "on: {pull_request: {paths: [a}\n",          (False, {})),
+]
+bad = [f"{n}: got {gv.wf_pull_request(t)}, want {w}" for n, t, w in cases if gv.wf_pull_request(t) != w]
+print("\n".join(bad) if bad else "OK")
+PY
+UNIT=$(python3 "$TMP/wf-pull-request-unit.py" "$SUT")
+[ "$UNIT" = OK ] && ok "wf_pull_request reads every documented on: form (sequence, list, scalar, flow, quoted key), filters included" \
+  || bad "wf_pull_request reads every documented on: form" "$(flat "$UNIT")"
 
 # The #348 review's false positive: a monorepo's independent per-area workflows, each filtered to
 # its own directory with `paths:`, both running a real `test` job. Nothing stands in for anything:
