@@ -457,6 +457,19 @@ fresh; edit .github/workflows/ci.yml 's.replace(
   "    if: needs.changes.outputs.kotlin == \x27true\x27\n    runs-on:",
   "    if: >-\n      github.event_name == \x27push\x27\n    env:\n      NOTE: needs.changes.outputs.kotlin\n    runs-on:")'
 expect "a block-scalar if: ends at the job's next key: a later value naming the output does not gate it" overlay.kotlin.ci FAIL 1
+fresh; edit .github/workflows/ci.yml 's.replace(
+  "    if: needs.changes.outputs.kotlin == \x27true\x27\n",
+  "    if: |2 # keep\n        needs.changes.outputs.kotlin == \x27true\x27\n")'
+expect "an indentation indicator (|2) with a trailing comment still reads as the condition" overlay.kotlin.ci PASS 0
+fresh; edit .github/workflows/ci.yml 's.replace(
+  "    if: needs.changes.outputs.kotlin == \x27true\x27\n    runs-on: ${{ fromJSON(needs.route.outputs.runner) }}\n    timeout-minutes: 45\n    steps:",
+  "    runs-on: ${{ fromJSON(needs.route.outputs.runner) }}\n    timeout-minutes: 45\n    steps:")'
+edit .github/workflows/ci.yml 's.replace("      - name: ./gradlew check\n        shell: bash\n        run: ./gradlew check --no-daemon --stacktrace\n", "      - name: ./gradlew check\n        shell: bash\n        run: ./gradlew check --no-daemon --stacktrace\n    if: >-\n      needs.changes.outputs.kotlin == \x27true\x27\n")'
+expect "a block-scalar if: as the LAST property of a job (end of the job body) is read" overlay.kotlin.ci PASS 0
+fresh; edit .github/workflows/ci.yml 's.replace(
+  "    if: needs.changes.outputs.kotlin == \x27true\x27\n",
+  "    if: >\n      # needs.changes.outputs.kotlin == \x27true\x27\n      github.event_name == \x27push\x27\n")'
+expect "a commented-out needs.changes.outputs.kotlin line inside the scalar is not the condition" overlay.kotlin.ci FAIL 1
 fresh; edit .github/workflows/ci.yml 's.replace("    if: always()\n", "    if: >-\n      always()\n")'
 expect "a multi-line if: that resolves to always() is still ci-gate's always()" core.ci-gate PASS 0
 fresh; edit .github/workflows/ci.yml 's.replace("    if: always()\n", "    if: |\n      ${{ always() }}\n")'
@@ -2087,6 +2100,8 @@ cases = [
   ("flow mapping without it",       "on: {push: {branches: [main]}, pull_request_target: {}}\n", (False, {})),
   ("quoted block key",              "on:\n  'pull_request':\n    paths: [x]\n",       (True, {"paths": ["x"]})),
   ("quoted pull_request_target is not pull_request", "on:\n  'pull_request_target':\n    paths: [x]\n", (False, {})),
+  ("pull_request nested under another event is not a trigger", "on:\n  workflow_run:\n    pull_request: x\n", (False, {})),
+  ("inline-flow pull_request beside another event", "on:\n  push: {}\n  pull_request: {paths: [x]}\n", (True, {"paths": ["x"]})),
   ("unparseable flow reads as no trigger", "on: {pull_request: {paths: [a}\n",          (False, {})),
 ]
 bad = [f"{n}: got {gv.wf_pull_request(t)}, want {w}" for n, t, w in cases if gv.wf_pull_request(t) != w]

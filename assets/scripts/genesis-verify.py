@@ -433,7 +433,9 @@ def workflow_jobs(text):
                     for nxt in body[i + 1:]:
                         if nxt.strip() and len(nxt) - len(nxt.lstrip(" ")) <= pind:
                             break
-                        if nxt.strip():
+                        # A `#` line is a comment in every reading GitHub could accept, so it
+                        # is never condition text a gate probe could match against.
+                        if nxt.strip() and not nxt.lstrip().startswith("#"):
                             parts.append(nxt.strip())
                     j["if"] = " ".join(parts) or None
             # A comment needs whitespace before its `#`: a display name like `C#-lint` keeps it.
@@ -2428,9 +2430,12 @@ def wf_pull_request(text):
     pr = event_block(block, "pull_request")
     if pr is not None:
         return True, path_filters(pr)
+    top = min((len(ln) - len(ln.lstrip()) for ln in body), default=0)
     for ln in block:
+        # Only a key of the `on:` mapping itself: `pull_request:` nested under another event
+        # (`workflow_run:`) is that event's own key, not a trigger.
         m = re.match(r"^\s+['\"]?pull_request['\"]?:\s*(\S.*?)\s*$", ln)
-        if m:
+        if m and len(ln) - len(ln.lstrip()) == top:
             try:
                 return True, flow_filters(parse_flow(strip_comment(m.group(1))))
             except ValueError:
