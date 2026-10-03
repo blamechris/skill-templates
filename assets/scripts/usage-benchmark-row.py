@@ -54,17 +54,20 @@ machine bootstrapped from it (`cp assets/scripts/usage-benchmark-row.py
 session-lifecycle's End step 2 is "neither append nor overwrite" once a row
 exists. skill-templates#207.
 
-SCOPE: THE SUBAGENT SCAN IS KEYED BY SESSION ID, NOT BY DIRECTORY. The harness can
-recycle a session's worktree mid-run, and every worktree has its own project dir
-under ~/.claude/projects/. The main transcript is carried to the NEW dir; the
-subagent transcripts written before the recycle stay in the OLD one, so a scan of
-only the dir beside the main transcript silently undercounts (measured: 1 of 22
-files for session 5ae4397b). The OLD dir also holds other sessions' transcripts, so
-sweeping it is wrong the other way — it read 88.4M against a true 14.3M. The scan
-therefore globs ~/.claude/projects/*/<full uuid>/subagents and nothing else, and
-dedups messages across every dir it reads. When more than one project dir held this
-session's children, a WARNING on stderr names them all: the figure is right, but the
-reader should know the session was split. skill-templates#254.
+SCOPE: THE SUBAGENT SCAN IS KEYED BY SESSION ID — NEVER A DIRECTORY SWEEP. The
+harness can recycle a session's worktree mid-run, and every worktree has its own
+project dir under ~/.claude/projects/. The main transcript is carried to the NEW
+dir; the subagent transcripts written before the recycle stay in the OLD one, so a
+scan of only the dir beside the main transcript silently undercounts (measured: 1
+of 22 files for session 5ae4397b). The OLD dir also holds other sessions'
+transcripts, so sweeping it is wrong the other way (88.4M against 14.3M, both under
+the pre-#259 first-record dedup; the same 22 files read 18.2M under today's
+complete-record policy). The scan reads exactly two roots: the session's own
+<full uuid>/subagents under every ~/.claude/projects/* dir, and the sibling of the
+main transcript (which keeps an explicit .jsonl path outside ~/.claude/projects
+working). Roots dedupe by realpath, messages by key across every dir. A WARNING on
+stderr fires when children sit in a project dir other than the transcript's own, and
+lists every dir: the figure is right, but the session was split. skill-templates#254.
 """
 import json, glob, os, re, subprocess, sys
 from pathlib import Path
@@ -110,8 +113,10 @@ def pick_transcript():
 def scan_subagents(transcript_path, selected):
     """Add child records to the same global selection as the parent.
 
-    Returns (files counted, project dirs that held any). Scoped by the session's
-    FULL uuid, never by directory — see the SCOPE paragraph in the module docstring."""
+    Returns (files counted, sorted realpaths of the project dirs that held any).
+    Reads the session's own <uuid>/subagents in every project dir plus the sibling
+    root beside the transcript — scoped by the FULL uuid, never a directory sweep;
+    see the SCOPE paragraph in the module docstring."""
     base = transcript_path[:-len(".jsonl")] if transcript_path.endswith(".jsonl") else transcript_path
     sid_full = os.path.basename(base)
     roots = [os.path.join(base, "subagents")]
@@ -147,10 +152,10 @@ def scan_subagents(transcript_path, selected):
                             continue
                         selected.add(rec, source, line_no, "child")
         if found:
-            proj = os.path.dirname(os.path.dirname(subdir))
+            proj = os.path.realpath(os.path.dirname(os.path.dirname(subdir)))
             if proj not in dirs:
                 dirs.append(proj)
-    return count, dirs
+    return count, sorted(dirs)
 
 # --- work numerator -------------------------------------------------------
 # The ledger could state spend to four significant figures and could not state
@@ -293,6 +298,11 @@ with open(path, errors="replace") as f:
             rec = dict(rec, requestId=None, message=dict(msg, id=None))
         selected.add(rec, path, line_no, "main")
 sub_count, sub_dirs = scan_subagents(path, selected)
+# A session is SPLIT when any child sits in a project dir other than the main
+# transcript's own. The transcript's dir counts as a holder then even if it has no
+# children of its own — the commonest recycle shape is every child in the old dir.
+main_dir = os.path.realpath(os.path.dirname(path))
+split = sorted(set(sub_dirs) | {main_dir}) if any(d != main_dir for d in sub_dirs) else []
 sub_eff = 0.0
 child_responses = 0
 parent_cost = child_cost = Decimal(0)
@@ -339,13 +349,13 @@ date = t0[5:10]
 print(f"| {date} | {sid} | {dur:.1f} | {n} | {eff/1e6:.1f} | {out/1e3:.0f} | {eff/n/1e3:.1f} "
       f"| <workload note> · subagents: {sub_note} · work: {work_note} |")
 print(f"\nresolved {sid} via {how}", file=sys.stderr)
-if len(sub_dirs) > 1:
+if split:
     # stderr only: End step 2 appends stdout to a shared table verbatim.
-    print(f"WARNING: subagent transcripts for {sid} found in {len(sub_dirs)} project dirs — "
-          f"the harness recycled this session's worktree mid-run; all {len(sub_dirs)} are "
-          f"counted (skill-templates#254):", file=sys.stderr)
-    for d in sub_dirs:
-        print(f"  {d}", file=sys.stderr)
+    print(f"WARNING: subagent transcripts for {sid} found in {len(split)} project dirs — "
+          f"the harness most likely recycled this session's worktree mid-run; every "
+          f"dir's subagent transcripts are counted (skill-templates#254):", file=sys.stderr)
+    for d in split:
+        print(f"  {d}" + ("  (main transcript)" if d == main_dir else ""), file=sys.stderr)
 print(f"  transcript: {path}", file=sys.stderr)
 print(f"  selected responses: parent {n}, children {child_responses}; "
       f"child transcript files {sub_count}", file=sys.stderr)
