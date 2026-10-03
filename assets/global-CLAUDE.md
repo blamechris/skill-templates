@@ -125,6 +125,9 @@ This applies to the main agent AND to any subagent reporting back (a subagent's 
 - Lead with verifiable work outcomes (PRs merged, issues closed, gates passed); don't pad with misleading raw metrics (whole-file token/time counts mislead — omit or label honestly).
 The vault copy is the durable historical record; the open-in-browser is the presentation. Still end the chat message itself with the short `**Status:**` block pointing at the report.
 
+<!--default:html-dark-by-default-->
+**Every HTML page generated for Chris to read is dark by default — whoever or whatever produced it.** A brief, a smoke or review report, a QA form, the output of a one-off generator script, a page written by a subagent or by another agent runtime: put `color-scheme: dark` on `:root` (and `content="dark"` in the `color-scheme` meta, if the page has one), ship a dark palette, and add **no** `prefers-color-scheme` switch and no `light dark` declaration. "Follow the reader's setting" is the trap, not the safe choice: the Claude app's browser pane renders local HTML light whatever the OS says, so a page that follows it arrives glaring white. Light is opt-in per document, when Chris asks for it. When the page is delegated — to a subagent, to Codex, to a script written to render it — the rule goes **in the brief or in the generator**, because that producer does not read this file. That is the reason this paragraph exists: the rule was decided 2026-09-24 and written only inside `visual-brief` and `smoke-form`, so it bound exactly the sessions that loaded those two skills, and on 2026-10-02 a hand-written `build_report.py` shipped `Chroxy Smoke Review.html` with `color-scheme: light` hard-coded and no dark palette at all. The one exception is a page published as a claude.ai Artifact, which follows the Artifact contract and carries both themes.
+
 ## Attribution — core rule (all projects)
 
 <!--floor:no-agent-attribution-->
