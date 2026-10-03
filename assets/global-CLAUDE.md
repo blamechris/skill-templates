@@ -587,6 +587,27 @@ When a task completes and work remains:
    Keep configured retry/budget caps and do not silently expand scope, fake-merge, or drop
    a follow-on unrecorded.
 
+<!--default:private-advisory-for-exploitable-findings-->
+**In a public repo, an exploitable weakness that is not yet fixed goes into a private security advisory — never into a public issue, PR, review comment or discussion** (decided 2026-10-03). Item 3's "file a scoped issue", and any skill step that runs `gh issue create`, do not apply to such a finding. A repo is public unless `gh repo view --json visibility` says otherwise; `chroxy` and this registry both are, and chroxy's own `SECURITY.md` already asks outside reporters for exactly this.
+
+- **Exploitable** means someone who lacks the authority could use it now, against the default branch or a released version, to read a secret, reach a session or a machine, run or approve a command, bypass an auth or permission check, or tamper with data. When unsure, treat it as exploitable: a wrong "private" costs one private note, a wrong "public" publishes an exploit.
+- **Stays public:** hardening with no path to exploit today, and a weakness that exists only inside the unmerged PR under review (say it on that PR; it never shipped). An ordinary bug is not a security finding and is filed as before.
+- **File it** as a draft advisory, which only the repo's owner and people they add can see:
+
+  ```bash
+  gh api -X POST repos/<owner>/<repo>/security-advisories --input - <<'JSON'
+  {"summary": "<one line>",
+   "description": "<what, where, how to reproduce, suggested fix>",
+   "severity": "<low|medium|high|critical>",
+   "vulnerabilities": [{"package": {"ecosystem": "<npm|pip|go|rust|other>", "name": "<package or repo>"}}]}
+  JSON
+  ```
+
+  The response carries a `ghsa_id`. The public trail (a review's deferred-items table, a PR body, the status block) gets that id and one neutral line such as "1 finding filed privately", with no detail. Adding exploit detail to an issue that is already public is the same mistake.
+- **A reviewer that may not file** (a read-only brief) returns the finding to its coordinator marked private and leaves it out of the comment it posts.
+- **If the call fails, do not fall back to a public issue.** Write the finding under `~/Obsidian/no-it-all/security/` and name it in the ⛔ slot.
+- **The fix** lands through an ordinary PR whose body says what changes, not how to exploit what it replaces, and cites the `ghsa_id`. Publishing the advisory, after the fix is merged and, for a published package, released, is Chris's action.
+
 ## Waiting on CI (all projects)
 
 <!--default:ci-watcher-by-default-->
