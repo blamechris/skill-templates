@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**skill-templates** is a private repository of reusable Claude Code skill templates (`.claude/commands/*.md`) that get customized per project. It serves as the canonical source of truth for review workflows, PR processes, and development skills used across all repos.
+**skill-templates** is a public repository of reusable Claude Code skill templates (`.claude/commands/*.md`) that get customized per project. Public means everything committed here, and every issue, PR and review comment, can be read by anyone. It serves as the canonical source of truth for review workflows, PR processes, and development skills used across all repos.
 
 ## How It Works (pull-based registry)
 
