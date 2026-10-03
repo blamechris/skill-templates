@@ -30,6 +30,15 @@ PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/usage-benchmark-row-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
+# HERMETIC HOME. The script now looks for a session's subagents under
+# ~/.claude/projects/*/<full uuid>/subagents (#254), so any case that does not
+# redirect HOME reads whatever the machine running the suite happens to hold — and
+# $UUID below is a REAL session id on the author's machine (65 real child files,
+# 37.2M), which turned the note-column case in section B into a failure that only
+# that machine could see. Cases that need a populated home still set HOME per
+# command; everything else gets an empty one.
+export HOME="$TMP/nohome"; mkdir -p "$HOME"
+
 UUID=5fc4a59c-394b-4c35-b512-d3a38e4c241c   # -> the id column prints `5fc4a59c`
 
 pass=0; fail=0
@@ -461,6 +470,278 @@ out=$(GH_PRS="$PRS" GH_ISS="$ISS" PATH="$GHBIN:$PATH" env -u CLAUDE_CODE_SESSION
 [ "$(field "$out" 5)" = 10 ] && [ "$(field "$out" 6)" = 0.3 ] \
   && ok "the work suffix leaves the usage columns untouched" \
   || bad "the work suffix leaves the usage columns untouched" "$(flat "$out")"
+
+# ======= G — one session, two project dirs: the subagent scan keys on the id (#254)
+echo; echo "G. subagent scan across project dirs (worktree recycle)"
+
+# The harness can recycle a session's worktree mid-run, and every worktree has its
+# own project dir under ~/.claude/projects/. The main transcript is carried to the
+# NEW dir; the subagent transcripts written before the recycle stay in the OLD one.
+# A scan of only the dir beside the main transcript then undercounts silently —
+# measured on session 5ae4397b: 1 of 22 child files, and a plausible-looking row.
+# The old dir also holds OTHER sessions' transcripts (three, 124 files), so the fix
+# is scoped by the session's full uuid and not by directory: sweeping that dir
+# inflated the figure several-fold (88.4M against 14.3M under the pre-#259 dedup
+# policy; the true session reads 18.2M under today's). Both halves are pinned below,
+# plus a mutant for each property the scan advertises — sibling root, session-scoped
+# glob, exact-uuid match, realpath dedupe, and the empty-dir holder check — so none
+# of them can regress behind a fixture that happens to put everything in one dir.
+#
+# Project dirs are printed as REALPATHS, and $TMP sits under a symlinked /var on
+# macOS, so expected dir strings are built with `pwd -P`, never from $TMP.
+#
+# Section F's last gen_ref REWROTE $A (F="$TMP/$UUID.jsonl" is the same path), so
+# the 100-turn x 3-block main transcript is regenerated here, byte-identical to A.
+
+# gen_distinct <path> <key-prefix> — 100 one-line turns whose message ids no other
+# fixture shares (gen's ids are only unique per file NAME; real ones are global).
+gen_distinct() {
+  "$PY" - "$1" "$2" <<'PY'
+import json, sys
+usage = {"input_tokens": 1000, "cache_read_input_tokens": 100000,
+         "cache_creation_input_tokens": 5000, "output_tokens": 2000}
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    for i in range(100):
+        rec = {"type": "assistant", "timestamp": "2026-08-11T03:00:00.000Z",
+               "message": {"id": "%s%d" % (sys.argv[2], i), "usage": dict(usage)}}
+        f.write(json.dumps(rec) + "\n")
+PY
+}
+
+RECH="$TMP/rechome"; GP="$RECH/.claude/projects"
+OTHER=0d2a7f2c-aaaa-4bbb-8ccc-dddddddddddd    # a different session living in the OLD dir
+mkdir -p "$GP/-demo-new/$UUID/subagents" "$GP/-demo-old/$UUID/subagents/workflows/wf_x" \
+         "$GP/-demo-old/$OTHER/subagents"
+GPR=$(cd "$GP" && pwd -P)    # the realpath form the script prints
+# The NEW dir: the main transcript the recycle carried over, plus the one child
+# written after it. The OLD dir: the children written before it — and NO main
+# transcript, which is the real shape of a recycle.
+gen "$GP/-demo-new/$UUID.jsonl" 100 3 msgid
+gen "$GP/-demo-new/$UUID/subagents/agent-1.jsonl" 100 3 msgid
+gen_distinct "$GP/-demo-old/$UUID/subagents/workflows/wf_x/agent-2.jsonl" wf_msg_
+# A foreign session's children AND main transcript, in the same OLD dir.
+gen "$GP/-demo-old/$OTHER/subagents/agent-x.jsonl" 100 3 msgid
+gen "$GP/-demo-old/$OTHER.jsonl" 100 1 msgid
+
+# Session-id mode is the acceptance mode: nothing names the OLD dir, only the uuid.
+rec_run() { HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$@"; }
+WANT_SPLIT="<workload note> · subagents: 6.2M/2 · work: 0pr/0iss"
+
+out=$(rec_run 5fc4a59c 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "$WANT_SPLIT" ] \
+  && ok "a session split over two project dirs totals 6.2M/2 — section E's single-dir figure for the same messages" \
+  || bad "a session split over two project dirs totals 6.2M/2 — section E's single-dir figure for the same messages" \
+         "rc=$rc $(flat "$out")"
+
+# The other direction. The OLD dir holds a foreign session's children, so a
+# directory sweep inflates this row; and the foreign session, resolved by its own
+# id, must be exactly what it would have been had no recycle ever happened.
+out=$(rec_run 5fc4a59c 2>/dev/null)
+[ "$(field "$out" 9)" = "$WANT_SPLIT" ] \
+  && ok "another session's children in the same old dir are NOT swept in (still 6.2M/2)" \
+  || bad "another session's children in the same old dir are NOT swept in (still 6.2M/2)" "$(flat "$out")"
+out=$(rec_run 0d2a7f2c 2>/dev/null); rc=$?
+err=$(rec_run 0d2a7f2c 2>&1 >/dev/null)
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "<workload note> · subagents: 3.1M/1 · work: 0pr/0iss" ] \
+  && ! printf '%s' "$err" | grep -q 'WARNING: subagent transcripts' \
+  && ok "a non-recycled session in a dir that also holds a recycled one is unchanged (3.1M/1, no warning)" \
+  || bad "a non-recycled session in a dir that also holds a recycled one is unchanged (3.1M/1, no warning)" \
+         "rc=$rc $(flat "$out") stderr=$(flat "$err")"
+
+# The signal a reader needs: the figure is right, but the session was split. It has
+# to name BOTH dirs — sorted, as realpaths, with the transcript's own dir marked so
+# the reader can see where it moved to — and it has to be stderr: End step 2
+# appends stdout verbatim.
+err=$(rec_run 5fc4a59c 2>&1 >/dev/null)
+blk=$(printf '%s\n' "$err" | sed -n '/^WARNING:/,/^  transcript:/p' | sed '1d;$d')
+want_blk=$(printf '  %s\n  %s' "$GPR/-demo-new  (main transcript)" "$GPR/-demo-old")
+printf '%s\n' "$err" | grep -q '^WARNING: subagent transcripts for 5fc4a59c found in 2 project dirs' \
+  && printf '%s\n' "$err" | grep -qF 'skill-templates#254' \
+  && [ "$blk" = "$want_blk" ] \
+  && ok "a two-dir session warns on stderr and names BOTH project dirs (sorted, transcript's dir marked)" \
+  || bad "a two-dir session warns on stderr and names BOTH project dirs (sorted, transcript's dir marked)" \
+         "block='$(flat "$blk")' want='$(flat "$want_blk")' stderr=$(flat "$err")"
+
+full=$(rec_run 5fc4a59c 2>/dev/null)
+[ "$(printf '%s\n' "$full" | wc -l | tr -d ' ')" -eq 1 ] && ! printf '%s' "$full" | grep -q WARNING \
+  && ok "the warning is not on stdout: it is still exactly one row line" \
+  || bad "the warning is not on stdout: it is still exactly one row line" "$(flat "$full")"
+
+err=$(HOME="$SUBH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$SDIR/$UUID.jsonl" 2>&1 >/dev/null)
+printf '%s' "$err" | grep -q 'WARNING: subagent transcripts' \
+  && bad "a single-dir session (section E's fixture) does not warn" "$(flat "$err")" \
+  || ok "a single-dir session (section E's fixture) does not warn"
+
+# THE MUTANT. The same fixture through a copy whose glob is replaced by nothing —
+# the old sibling-only behaviour — must read a DIFFERENT, lower figure with no
+# warning. Without this, case one is also satisfied by a fixture that happens to
+# put everything in one dir.
+sed -e 's|^    roots += glob.glob(os.path.expanduser(f"~/.claude/projects/\*/{sid_full}/subagents"))$|    roots += []|' \
+    "$SUT" > "$TMP/sibling-only.py"
+if grep -q '^    roots += \[\]$' "$TMP/sibling-only.py"; then
+  mrow=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/sibling-only.py" 5fc4a59c 2>/dev/null)
+  merr=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/sibling-only.py" 5fc4a59c 2>&1 >/dev/null)
+  [ "$(field "$mrow" 9)" = "<workload note> · subagents: 3.1M/1 · work: 0pr/0iss" ] \
+    && ! printf '%s' "$merr" | grep -q 'WARNING: subagent transcripts' \
+    && ok "the fixture DISTINGUISHES the two implementations (sibling-only: 3.1M/1, silently)" \
+    || bad "the fixture DISTINGUISHES the two implementations (sibling-only: 3.1M/1, silently)" \
+           "mutant row='$(flat "$mrow")' — a fixture both versions agree on proves nothing"
+else
+  bad "the fixture DISTINGUISHES the two implementations (sibling-only: 3.1M/1, silently)" \
+      "could not build the mutant: the project-glob line is not where this expects it"
+fi
+
+# Messages dedup across dirs by KEY, while FILES are counted as found: the same
+# agent file present in both dirs is one set of messages (3.1M, not 6.2M) read
+# from two files (count 2). The main transcript lives in one dir only.
+DUP=3c3c3c3c-5555-4666-8777-888899990000
+mkdir -p "$GP/-demo-new/$DUP/subagents" "$GP/-demo-old/$DUP/subagents"
+gen "$GP/-demo-new/$DUP.jsonl" 100 1 msgid
+gen "$GP/-demo-new/$DUP/subagents/agent-d.jsonl" 100 3 msgid
+cp "$GP/-demo-new/$DUP/subagents/agent-d.jsonl" "$GP/-demo-old/$DUP/subagents/agent-d.jsonl"
+out=$(rec_run 3c3c3c3c 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "<workload note> · subagents: 3.1M/2 · work: 0pr/0iss" ] \
+  && ok "the same child messages in both dirs dedup by key across dirs (3.1M), files counted as found (2)" \
+  || bad "the same child messages in both dirs dedup by key across dirs (3.1M), files counted as found (2)" \
+         "rc=$rc $(flat "$out")"
+
+# Explicit-path mode for a transcript that lives OUTSIDE ~/.claude/projects: the
+# only place its children can be is beside it, so the sibling root must survive
+# the move to a session-scoped glob. $RECH's projects dir holds no such uuid.
+OUTSIDE="$TMP/outside"; OUTID=a4a4a4a4-9999-4aaa-8bbb-ccccddddeeee
+mkdir -p "$OUTSIDE/$OUTID/subagents"
+gen "$OUTSIDE/$OUTID.jsonl" 100 3 msgid
+gen "$OUTSIDE/$OUTID/subagents/agent.jsonl" 100 3 msgid
+out=$(rec_run "$OUTSIDE/$OUTID.jsonl" 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "<workload note> · subagents: 3.1M/1 · work: 0pr/0iss" ] \
+  && ok "an explicit .jsonl path outside ~/.claude/projects still counts its sibling subagents (3.1M/1)" \
+  || bad "an explicit .jsonl path outside ~/.claude/projects still counts its sibling subagents (3.1M/1)" \
+         "rc=$rc $(flat "$out")"
+# ...and the mutant that proves it: a glob-only copy cannot find them at all.
+sed -e 's|^    roots = \[os.path.join(base, "subagents")\]$|    roots = []|' \
+    "$SUT" > "$TMP/glob-only.py"
+if grep -q '^    roots = \[\]$' "$TMP/glob-only.py"; then
+  mrow=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/glob-only.py" "$OUTSIDE/$OUTID.jsonl" 2>/dev/null)
+  [ "$(field "$mrow" 9)" = "<workload note> · subagents: 0.0M/0 · work: 0pr/0iss" ] \
+    && ok "the fixture DISTINGUISHES the two implementations (glob-only: 0.0M/0 outside projects)" \
+    || bad "the fixture DISTINGUISHES the two implementations (glob-only: 0.0M/0 outside projects)" \
+           "mutant row='$(flat "$mrow")'"
+else
+  bad "the fixture DISTINGUISHES the two implementations (glob-only: 0.0M/0 outside projects)" \
+      "could not build the mutant: the sibling-root line is not where this expects it"
+fi
+
+# subcount <row> — the file-count half of the subagents suffix (`<eff>M/<count>`)
+subcount() { printf '%s' "$1" | sed -n 's/.*subagents: [0-9.]*M\/\([0-9]*\) .*/\1/p'; }
+
+# ---- children ONLY in the old dir: the commonest recycle shape. Every subagent ran
+# before the recycle, so the dir the main transcript moved to holds no children at
+# all. The figure is right either way; the WARNING is the part a holder-only check
+# loses, because it listed only dirs that held children — one dir, so no warning.
+OLDONLY=7e7e7e7e-1111-4222-8333-444455556666
+mkdir -p "$GP/-demo-old/$OLDONLY/subagents"
+gen "$GP/-demo-new/$OLDONLY.jsonl" 100 3 msgid
+gen "$GP/-demo-old/$OLDONLY/subagents/agent-a.jsonl" 100 3 msgid
+gen "$GP/-demo-old/$OLDONLY/subagents/agent-b.jsonl" 100 3 msgid
+out=$(rec_run 7e7e7e7e 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "$WANT_SPLIT" ] \
+  && ok "children found only in the old dir (none beside the transcript) still total 6.2M/2" \
+  || bad "children found only in the old dir (none beside the transcript) still total 6.2M/2" \
+         "rc=$rc $(flat "$out")"
+err=$(rec_run 7e7e7e7e 2>&1 >/dev/null)
+printf '%s\n' "$err" | grep -q '^WARNING: subagent transcripts for 7e7e7e7e found in 2 project dirs' \
+  && printf '%s\n' "$err" | grep -qxF "  $GPR/-demo-new  (main transcript)" \
+  && printf '%s\n' "$err" | grep -qxF "  $GPR/-demo-old" \
+  && ok "children only in the old dir WARN, naming both dirs, the transcript's own dir marked" \
+  || bad "children only in the old dir WARN, naming both dirs, the transcript's own dir marked" "$(flat "$err")"
+
+# ---- a near-miss uuid: the script prints sid[:8] everywhere, so an 8-char-prefix
+# glob is the natural way to get this wrong. A complete foreign session sharing the
+# first 8 chars lives in the old dir, in a home of its own: putting it in $RECH
+# would make every prefix-argument case above resolve between two transcripts by
+# mtime. The target is invoked by its FULL uuid, which matches only itself.
+NEARH="$TMP/nearhome"; NP="$NEARH/.claude/projects"
+NEAR=5fc4a59c-ffff-ffff-ffff-ffffffffffff
+mkdir -p "$NP/-demo-new/$UUID/subagents" "$NP/-demo-old/$UUID/subagents/workflows/wf_x" \
+         "$NP/-demo-old/$NEAR/subagents"
+gen "$NP/-demo-new/$UUID.jsonl" 100 3 msgid
+gen "$NP/-demo-new/$UUID/subagents/agent-1.jsonl" 100 3 msgid
+gen_distinct "$NP/-demo-old/$UUID/subagents/workflows/wf_x/agent-2.jsonl" wf_msg_
+gen "$NP/-demo-old/$NEAR.jsonl" 100 1 msgid
+gen "$NP/-demo-old/$NEAR/subagents/agent.jsonl" 100 3 msgid
+out=$(HOME="$NEARH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$UUID" 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "$WANT_SPLIT" ] \
+  && ok "a foreign session sharing the first 8 uuid chars is NOT swept in (6.2M/2 by full uuid)" \
+  || bad "a foreign session sharing the first 8 uuid chars is NOT swept in (6.2M/2 by full uuid)" \
+         "rc=$rc $(flat "$out")"
+sed -e 's|^    roots += glob.glob(os.path.expanduser(f"~/.claude/projects/\*/{sid_full}/subagents"))$|    roots += glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid_full[:8]}*/subagents"))|' \
+    "$SUT" > "$TMP/prefix-glob.py"
+if grep -qF '{sid_full[:8]}*/subagents' "$TMP/prefix-glob.py"; then
+  mrow=$(HOME="$NEARH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/prefix-glob.py" "$UUID" 2>/dev/null)
+  [ "$(subcount "$mrow")" -gt "$(subcount "$out")" ] 2>/dev/null \
+    && ok "the fixture DISTINGUISHES the two implementations (8-char-prefix glob: sweeps the near-miss, count rises)" \
+    || bad "the fixture DISTINGUISHES the two implementations (8-char-prefix glob: sweeps the near-miss, count rises)" \
+           "real='$(flat "$out")' mutant='$(flat "$mrow")'"
+else
+  bad "the fixture DISTINGUISHES the two implementations (8-char-prefix glob: sweeps the near-miss, count rises)" \
+      "could not build the mutant: the project-glob line is not where this expects it"
+fi
+
+# ---- a relative explicit path: the sibling root (`./<uuid>/subagents`) and the glob
+# hit for the SAME dir (`$HOME/.claude/projects/-demo-new/<uuid>/subagents`) are
+# spelled differently, so only a realpath dedupe walks that dir once. The dir names
+# the warning prints have to be absolute too — a bare `.` names nothing.
+rel_run() { ( cd "$GP/-demo-new" && HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "${1:-$SUT}" "./$UUID.jsonl" ); }
+abs=$(rec_run "$GP/-demo-new/$UUID.jsonl" 2>/dev/null)
+rel=$(rel_run 2>/dev/null); rc=$?
+relerr=$(rel_run 2>&1 >/dev/null)
+[ "$rc" -eq 0 ] && [ "$(subcount "$rel")" = "$(subcount "$abs")" ] && [ "$(field "$rel" 9)" = "$WANT_SPLIT" ] \
+  && ok "a relative explicit path counts the same files as the absolute one (spelling-independent dedupe, 6.2M/2)" \
+  || bad "a relative explicit path counts the same files as the absolute one (spelling-independent dedupe, 6.2M/2)" \
+         "rc=$rc rel='$(flat "$rel")' abs='$(flat "$abs")'"
+printf '%s\n' "$relerr" | grep -q '^WARNING: subagent transcripts for 5fc4a59c' \
+  && printf '%s\n' "$relerr" | grep -qxF "  $GPR/-demo-new  (main transcript)" \
+  && printf '%s\n' "$relerr" | grep -qxF "  $GPR/-demo-old" \
+  && ! printf '%s\n' "$relerr" | grep -q '^  \.' \
+  && ok "a relative explicit path warns with ABSOLUTE project dirs (no bare \`.\`)" \
+  || bad "a relative explicit path warns with ABSOLUTE project dirs (no bare \`.\`)" "$(flat "$relerr")"
+sed -e 's|^        real = os.path.realpath(r)$|        real = r|' "$SUT" > "$TMP/spelling-dedupe.py"
+if grep -q '^        real = r$' "$TMP/spelling-dedupe.py"; then
+  mrow=$(rel_run "$TMP/spelling-dedupe.py" 2>/dev/null)
+  [ "$(subcount "$mrow")" -gt "$(subcount "$rel")" ] 2>/dev/null \
+    && ok "the fixture DISTINGUISHES the two implementations (spelling dedupe: walks the same dir twice, count rises)" \
+    || bad "the fixture DISTINGUISHES the two implementations (spelling dedupe: walks the same dir twice, count rises)" \
+           "real='$(flat "$rel")' mutant='$(flat "$mrow")'"
+else
+  bad "the fixture DISTINGUISHES the two implementations (spelling dedupe: walks the same dir twice, count rises)" \
+      "could not build the mutant: the realpath line is not where this expects it"
+fi
+
+# ---- an EMPTY subagents dir is not a holder: a session that otherwise lives in one
+# dir must not be reported as split because an unrelated dir happens to carry an
+# empty <uuid>/subagents/ (the harness creates them eagerly).
+EMP=9d9d9d9d-aaaa-4bbb-8ccc-eeeeeeeeeeee
+mkdir -p "$GP/-demo-new/$EMP/subagents" "$GP/-demo-empty/$EMP/subagents"
+gen "$GP/-demo-new/$EMP.jsonl" 100 3 msgid
+gen "$GP/-demo-new/$EMP/subagents/agent-e.jsonl" 100 3 msgid
+out=$(rec_run 9d9d9d9d 2>/dev/null); rc=$?
+err=$(rec_run 9d9d9d9d 2>&1 >/dev/null)
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "<workload note> · subagents: 3.1M/1 · work: 0pr/0iss" ] \
+  && ! printf '%s' "$err" | grep -q 'WARNING: subagent transcripts' \
+  && ok "an empty <uuid>/subagents dir elsewhere is not a holder: count unchanged (3.1M/1), no warning" \
+  || bad "an empty <uuid>/subagents dir elsewhere is not a holder: count unchanged (3.1M/1), no warning" \
+         "rc=$rc $(flat "$out") stderr=$(flat "$err")"
+sed -e 's|^        if found:$|        if True:|' "$SUT" > "$TMP/empty-holder.py"
+if grep -q '^        if True:$' "$TMP/empty-holder.py"; then
+  merr=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/empty-holder.py" 9d9d9d9d 2>&1 >/dev/null)
+  printf '%s' "$merr" | grep -q 'WARNING: subagent transcripts for 9d9d9d9d found in 2 project dirs' \
+    && ok "the fixture DISTINGUISHES the two implementations (empty-dir holder: the mutant warns)" \
+    || bad "the fixture DISTINGUISHES the two implementations (empty-dir holder: the mutant warns)" \
+           "mutant stderr=$(flat "$merr")"
+else
+  bad "the fixture DISTINGUISHES the two implementations (empty-dir holder: the mutant warns)" \
+      "could not build the mutant: the found check is not where this expects it"
+fi
 
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
