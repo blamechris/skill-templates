@@ -588,26 +588,30 @@ When a task completes and work remains:
    a follow-on unrecorded.
 
 <!--default:private-advisory-for-exploitable-findings-->
-**In a public repo, an exploitable weakness on the default branch or in a released version goes into a private security advisory, and its detail goes nowhere that is public or will be pushed** (decided 2026-10-03): not an issue, PR, review comment or discussion, and not a committed file (an audit, bug-hunt or review report, a doc), a commit message, a PR title, a branch name or a test name. This overrides items 2 and 3 above and any skill step that files an issue, including an unattended `auto-file`. A repo counts as public unless `gh repo view --json visibility` returns `PRIVATE`.
+**In a public repo, an exploitable weakness on the default branch or in a released version is recorded privately, and its detail goes nowhere public and into nothing in that repo's tree or history**: no issue, PR, review comment or discussion, and no file in the tree, commit message, PR title, branch name or test name. This replaces the public issue or tracked follow-up the protocol above calls for, and it beats any skill step that files an issue or writes, commits or posts a report, an unattended `auto-file` included. Item 1 still decides whether it blocks. A repo is public unless `gh repo view --json visibility` says `PRIVATE`.
 
-- **Exploitable** means someone who lacks the authority could use it now to read a secret, reach a session or a machine, run or approve a command, bypass an auth or permission check, tamper with data, or deny service to others. Where the repo has a `SECURITY.md` or a threat model, that says who holds which authority. When unsure, file privately and say so in the summary: Chris can reclassify a private note, and nobody can unpublish an exploit.
-- **Stays public:** an ordinary bug; hardening with no path to exploit today; a weakness that exists only in the unmerged PR under review (say it there; it never shipped); and one that is already public, such as a published CVE in a dependency.
-- **Who files.** The coordinator, once per weakness. A reviewer or auditor subagent returns the finding to its coordinator marked private and leaves it out of everything it posts or writes into the repo. A draft advisory cannot be deleted, so list the existing ones first and never create one as a test. In a repo Chris does not administer, the finding goes to Chris and not to that repo.
-- **How.** Write the finding (what, where, how to reproduce, suggested fix) to a file outside every working tree, set the five variables, then run:
+- **Exploitable** means someone who lacks the authority could use it now to read a secret, reach a session or a machine, run or approve a command, bypass an auth or permission check, tamper with data, or deny service to others. Where the repo has a `SECURITY.md` or a threat model, that says who holds which authority.
+- **Stays public:** an ordinary bug; hardening with no path to exploit today; a weakness that exists only in the unmerged PR under review (say it there; it never shipped); and a published advisory or CVE in a dependency, which is an ordinary upgrade.
+- **Record it in the vault first.** Before any report is written into the tree, write the finding (what, where, how to reproduce, suggested fix) to a file under `~/Obsidian/no-it-all/security/` (`mkdir -p`), named for the repo and the UTC time, not the weakness. It never holds a secret value: name a leaked credential by commit and path, and tell Chris to revoke it first. A subagent stops here and returns the file's path to its coordinator under a first line `PRIVATE-FINDING`, leaving the finding out of everything it posts or writes into the repo. If unsure whether it is exploitable, stop here too and ask Chris.
+- **Then the coordinator files a draft advisory, once.** A draft has no delete, only close, so never create one as a test. Run the list on its own and read it. If an entry already covers this weakness, create nothing and give Chris its `ghsa_id`.
 
 ```bash
-gh api 'repos/{owner}/{repo}/security-advisories' --jq '.[] | [.ghsa_id, .state, .summary] | @tsv'
-jq -n --arg summary "$SUMMARY" --rawfile description "$FINDING_FILE" --arg severity "$SEVERITY" \
-      --arg ecosystem "$ECOSYSTEM" --arg name "$PACKAGE" \
-  '{summary: $summary, description: $description, severity: $severity,
-    vulnerabilities: [{package: {ecosystem: $ecosystem, name: $name}}]}' \
-  | gh api -X POST 'repos/{owner}/{repo}/security-advisories' --input - --jq .ghsa_id
+gh api --paginate 'repos/{owner}/{repo}/security-advisories' --jq '.[] | [.ghsa_id, .state, .summary] | @tsv'
 ```
 
-  `{owner}` and `{repo}` are filled in by `gh` from the current repo or `GH_REPO`. `SEVERITY` is `low`, `medium`, `high` or `critical`. `ECOSYSTEM` is the package's own (`npm`, `pip`, `go`, `rust` and so on) or `other`, and `PACKAGE` is the package or repo name. The advisory describes the weakness and never holds a secret value: a leaked credential is named by commit and path, and Chris is told to revoke it first.
-- **The trail.** The `ghsa_id` goes to Chris, in the chat status block and in the seed. Nothing posted or committed mentions the finding, with one exception: when it blocks the PR under review (item 1 still applies), that PR says "blocked on a privately filed finding" and no more. If someone else has already posted the weakness publicly, add nothing to it and tell Chris.
-- **If the call fails** after one retry with a corrected body, do not fall back to a public issue. Keep the file under `~/Obsidian/no-it-all/security/` (`mkdir -p`), named for the repo and the UTC time and not for the weakness, and put the failure, that path and "1 finding withheld" in the ⛔ slot.
-- **The fix is the second leak.** From its first push the branch name, PR title, commit messages, changelog entry, test names, diff and CI logs are public, and a release can trail `main` by weeks. Word every one of them as the change in behaviour and not as the weakness: no `ghsa_id`, no `security` label, no steps to exploit. Tell Chris that a release should follow the merge. Publishing the advisory and cutting that release are his.
+  Then, in the same shell call (variables do not survive between calls), set `SUMMARY` (one neutral line), `FINDING_FILE` (the vault file), `SEVERITY` (`low`, `medium`, `high` or `critical`), `ECOSYSTEM` (the package's, such as `npm`, or `other`) and `PACKAGE` (the package or repo name), and run:
+
+```bash
+body=$(jq -n --arg summary "${SUMMARY:?}" --rawfile description "${FINDING_FILE:?}" \
+         --arg severity "${SEVERITY:?}" --arg ecosystem "${ECOSYSTEM:?}" --arg name "${PACKAGE:?}" \
+         '{summary: $summary, description: $description, severity: $severity,
+           vulnerabilities: [{package: {ecosystem: $ecosystem, name: $name}}]}') \
+  && printf '%s' "$body" | gh api -X POST 'repos/{owner}/{repo}/security-advisories' --input - --jq .ghsa_id
+```
+
+  `gh` fills `{owner}` and `{repo}` from the current repo; set `GH_REPO` when the weakness is in another one. A 422 is corrected and retried once, after listing again. Any other failure is final: the vault file is the record, and the ⛔ slot carries the failure, the path and "1 finding withheld". In a repo Chris does not administer, stop at the vault file and tell him.
+- **The trail.** The `ghsa_id`, or the vault path, goes to Chris in the chat status block, the seed and the session ledger, as one neutral line that is never promoted into `docs/`. Nothing posted or committed mentions the finding, and a report that leaves one out does not claim to be complete or clean. When it blocks the PR under review, convert that PR to a draft, give no reason in public, and tell Chris why. If a person has already posted this repo's weakness publicly, add nothing there, record it anyway, and tell Chris.
+- **The fix is the second leak.** Once pushed or opened, the branch name, PR title and description, commit messages, changelog entry, test names, diff, CI logs and every review comment, automated summaries included, are public, and a release can trail `main` by weeks. Word each as the change in behaviour, accurate and silent on the motive: no `ghsa_id`, no `security` label, no steps to exploit, never "refactor" or "cleanup". The regression test asserts the new behaviour on the smallest input. Brief the fix's reviewers the same way. Where the repo publishes releases, tell Chris one should follow the merge; publishing the advisory and that release are his.
 
 ## Waiting on CI (all projects)
 
