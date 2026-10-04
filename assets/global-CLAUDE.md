@@ -266,7 +266,8 @@ mission selects prime mode. A user watching the app does not change the selected
   and partial/final status; at each new capture, aggregate only the latest checkpoint for
   that run/session. The historical effective-unit row in
   `~/Obsidian/no-it-all/briefs/usage-benchmark.md` may be appended once with
-  `usage-benchmark-row.py`; keep its emitted `· subagents:` and `· work:` suffixes. If
+  `usage-benchmark-row.py`; for a delivery package pass its tier (`--tier high-panel`), and
+  keep the emitted `· subagents:`, `· work:` and `· cost:` suffixes. If
   it already has a row, leave that row intact and still capture the continuation.
   ② The next-session seed, below. Full commands are in `/session-lifecycle`.
 
@@ -554,10 +555,12 @@ test gates). Depth scales with blast radius:
   run. Every other HIGH change, doctrine included, keeps the panel.
 Nitpick-severity findings never get refuter panels. Ultracode stays on for repo
 marathon sessions only; planning/chat/fleet sessions run without it (invoke
-per-task when wanted). Benchmark rows carry two measured suffixes —
-`· subagents: <eff>M/<count>` (weighted eff units, e.g. `4.5M/61`, `0.0M/0`) and
+per-task when wanted). Benchmark rows carry three measured suffixes —
+`· subagents: <eff>M/<count>` (weighted eff units, e.g. `4.5M/61`, `0.0M/0`),
 `· work: <n>pr/<n>iss` (merged PRs and closed issues the session is credited
-with) — both emitted by `usage-benchmark-row.py`; keep the emitted values, never
+with) and `· cost: $<lower>–<upper>` (the session's priced range, set against
+its tier's reference figure when a tier is passed; see the next rule) — all
+emitted by `usage-benchmark-row.py`; keep the emitted values, never
 hand-type them. **`work: n/a` is not a zero.** It means GitHub could not be
 asked, and replacing it with `0` understates a column that is read across
 sessions. The work suffix exists because this ledger could state spend to four
@@ -566,6 +569,25 @@ $34** across the five weeks in which wave restarts, subagent tiering and the pac
 check were all built, and not one of those mechanisms measured the thing it was
 built to improve. A numerator living in prose workload notes is not a numerator —
 parsing those notes returns 7,587 PRs for a single week.
+
+<!--default:reference-figures-->
+**Each tier has a reference figure for what one package costs, and it stops
+nothing** (decided 2026-10-03; recomputed 2026-10-04). A LOW or MEDIUM package:
+**$15**. A HIGH package under the one-reviewer exception: **$30**. A HIGH package
+at panel depth: **$45**. A figure is the cost of the package's whole session up
+to its close-out, coordinator and subagents together, as the row measures it: the
+lower bound of the range `usage-benchmark-row.py` prices from the transcripts.
+The harness's own total is not the basis, because it is written only when a
+session exits and a close-out row cannot read it; over 19 sessions it ran a
+median 10% above that lower bound (1% to 22%), mostly subagent output that
+transcripts never record (skill-templates#385). The figures are medians of past
+sessions repriced on the installed rate card: $15.43 over 12 ordinary packages,
+$46.54 over seven HIGH packages that ranged from $17 to $76, and $29.98 for the
+one package on record under the one-reviewer exception. Pass the tier when the
+row is made, `usage-benchmark-row.py --tier high-panel` (the tiers are `low`,
+`medium`, `high-single` and `high-panel`), and the row's `· cost:` suffix sets
+the cost against the figure. A package that passes **1.5 times** its figure says
+why in its row. A blocking finding is still fixed whatever the figure says.
 
 <!--default:review-on-a-stable-head-->
 **A review starts only on a stable head** (decided 2026-10-03): a commit nothing

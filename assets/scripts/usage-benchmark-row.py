@@ -4,10 +4,14 @@
 # Canonical copy (skill-templates). Bootstrap: cp assets/scripts/usage-benchmark-row.py ~/.claude/scripts/
 
 Usage:
-  python3 ~/.claude/scripts/usage-benchmark-row.py [session-id-or-jsonl-path]
+  python3 ~/.claude/scripts/usage-benchmark-row.py [session-id-or-jsonl-path] [--tier TIER]
+  python3 ~/.claude/scripts/usage-benchmark-row.py --figures
 
-With no argument, targets $CLAUDE_CODE_SESSION_ID's transcript — the session
-actually running this. There is no other resolution path.
+With no session argument, targets $CLAUDE_CODE_SESSION_ID's transcript — the
+session actually running this. There is no other resolution path. `--tier` goes
+before or after the session argument, or as `--tier=TIER`; a delivery package
+names its risk tier (see the `· cost:` paragraph below). `--figures` prints the
+reference table and exits before any transcript is resolved.
 
 WHAT IT REFUSES TO GUESS (a REFUSE prints `REFUSE: ...` on stderr and exits 1;
 nothing is emitted, so nothing wrong can be appended):
@@ -23,17 +27,41 @@ nothing is emitted, so nothing wrong can be appended):
   - $CLAUDE_CODE_SESSION_ID set but matching no transcript — set-but-stale is
     not a licence to fall through to the same heuristic.
   - an explicit argument matching no transcript.
+  - an argument shape that cannot be read one way: an unknown tier, `--tier` with
+    no value or given twice, an unknown option, more than one session argument,
+    `--figures` beside anything else.
 
-The row's workload-note cell is emitted with TWO measured suffixes already
+The row's workload-note cell is emitted with THREE measured suffixes already
 filled in — `· subagents: <eff>M/<count>` (from the session's subagents/
-transcripts, same dedup and weights) and `· work: <n>pr/<n>iss` (merged PRs and
-closed issues this session is credited with, see scan_work). Replace only the
-`<workload note>` text and KEEP both suffixes — hand-typed subagent figures
-produced 12+ unparseable formats in one week, and the work figures exist
+transcripts, same dedup and weights), `· work: <n>pr/<n>iss` (merged PRs and
+closed issues this session is credited with, see scan_work) and
+`· cost: $<lower>–<upper>` (the session's all-in priced range in USD, parent and
+children, the same range the `model-priced USD` line on stderr gives). Replace
+only the `<workload note>` text and KEEP all three suffixes — hand-typed subagent
+figures produced 12+ unparseable formats in one week, and the work figures exist
 precisely so the numerator stops living in unparseable prose: a scan of the
-ledger's own workload notes returned 7,587 PRs for a single week.
+ledger's own workload notes returned 7,587 PRs for a single week. The dollars
+used to be on stderr only and were copied into the row by hand, which is the same
+defect a third time.
 
 `work:` may read `n/a`, which is NOT the same as `0pr/0iss` — see scan_work.
+
+`--tier TIER` (`low`, `medium`, `high-single` or `high-panel`) sets the cost against
+that tier's reference figure: `· cost: $72.62–79.88 vs $45 high-panel (1.61x)`, with
+`, over 1.5x` inside the parentheses when the package passed 1.5 times its figure. The
+comparison is on the all-in LOWER bound, so the figures are lower-bound figures; the
+ratio is that bound over the figure, rounded half up to two places, and "over" is
+decided on the unrounded values and is strict (exactly 1.5 times is not over). A figure
+is a number to look at and this script never stops on one: it says so on stderr and
+the workload note is where the package says why. With no `--tier` the row still
+carries its cost and says on stderr that nothing was compared. The figures are
+decided in the `reference-figures` rule of assets/global-CLAUDE.md and live here in
+TIER_FIGURES, one table that `--figures`, the suffix and the stderr line all read;
+usage-benchmark-row.test.sh holds the rule's prose to it.
+
+A response the rate card cannot price (unknown model) is left out of the range and
+counted, so the range is then a SUBTOTAL: ` (N unpriced)` follows it and the ratio
+reads `≥`. A subtotal that looks like a total understates a column read across sessions.
 
 Which transcript was chosen, and how, is printed to stderr so a wrong pick is
 visible instead of silent.
@@ -81,18 +109,75 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from usage_accounting import (RATE_CARD_VERSION, Responses, price_usage, session_child_files,
                               session_subagent_roots, split_project_dirs)
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 W_IN, W_CR, W_CW, W_OUT = 1.0, 0.1, 2.0, 5.0
+
+# What one package of each risk tier costs, in USD, against the row's all-in LOWER
+# bound. The only place these numbers live: `--figures`, the cost suffix and the
+# stderr line read this table, and the tests read `--figures`. The rule that decides
+# them is `reference-figures` in assets/global-CLAUDE.md. A figure stops nothing.
+TIER_FIGURES = {"low": Decimal("15"), "medium": Decimal("15"),
+                "high-single": Decimal("30"), "high-panel": Decimal("45")}
+OVER_FACTOR = Decimal("1.5")   # a package past this multiple of its figure says why
+CENT = Decimal("0.01")
+
+def fmt(d):
+    """A Decimal as the table spells it: 15, 1.5, never 1.5E+1."""
+    return format(d, "f")
+
+def cents(d):
+    return d.quantize(CENT, rounding=ROUND_HALF_UP)
 
 def die(msg):
     """REFUSE and stop. Nothing was printed to stdout, so nothing can be appended."""
     print("REFUSE: " + msg, file=sys.stderr)
     sys.exit(1)
 
-def pick_transcript():
-    if len(sys.argv) > 1:
-        a = sys.argv[1]
+def parse_args(args):
+    """Return (session argument or None, tier or None). Every shape that cannot be read
+    one way is a REFUSE, so no row is made from a guess. `--figures` prints the table
+    and exits here, before any transcript is looked for."""
+    target = tier = None
+    figures = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if a == "--figures":
+            figures = True
+        elif a == "--tier" or a.startswith("--tier="):
+            if tier is not None:
+                die("--tier given twice — name one tier.")
+            if a == "--tier":
+                # A following option is not a value: `--tier --figures` names no tier.
+                value = args[i] if i < len(args) and not args[i].startswith("-") else ""
+                i += 1 if value else 0
+            else:
+                value = a[len("--tier="):]
+            if not value:
+                die("--tier needs a value: one of " + ", ".join(TIER_FIGURES) + ".")
+            if value not in TIER_FIGURES:
+                die(f"unknown tier {value!r} — the tiers are " + ", ".join(TIER_FIGURES) + ".")
+            tier = value
+        elif a.startswith("-"):
+            die(f"unknown option {a!r} — usage: usage-benchmark-row.py "
+                "[session-id-or-jsonl-path] [--tier TIER] | --figures.")
+        elif target is not None:
+            die(f"more than one session argument ({target!r} and {a!r}) — pass one id or path.")
+        else:
+            target = a
+    if figures:
+        if target is not None or tier is not None:
+            die("--figures takes no other argument.")
+        for name, figure in TIER_FIGURES.items():
+            print(f"{name} {fmt(figure)}")
+        print(f"over {fmt(OVER_FACTOR)}")
+        sys.exit(0)
+    return target, tier
+
+def pick_transcript(a):
+    if a is not None:
         # An empty or glob-metachar argument would wildcard the id glob below into
         # "every transcript, newest wins" — the removed fallback through a side door.
         if not a.strip() or any(c in a for c in "*?["):
@@ -264,7 +349,8 @@ def scan_work(transcript_path, t0, t1):
     return f"{credited(prs)}pr/{credited(iss)}iss"
 
 
-path, how = pick_transcript()
+target, tier = parse_args(sys.argv[1:])
+path, how = pick_transcript(target)
 n = 0; eff = 0.0; out = 0; t0 = t1 = None
 selected = Responses()
 with open(path, errors="replace") as f:
@@ -327,12 +413,27 @@ if not (n and t0 and t1):
 # is the hand-typed drift this suffix replaces, in miniature.
 sub_note = f"{sub_eff/1e6:.1f}M/{sub_count}"
 work_note = scan_work(path, t0, t1)
+# The all-in range, parent plus children. Unpriced responses are in neither bound, so
+# when there are any the range is a subtotal and must read as one.
+lower, upper = parent_cost + child_cost, parent_upper + child_upper
+cost_note = f"${cents(lower)}–{cents(upper)}"
+if unpriced:
+    cost_note += f" ({unpriced} unpriced)"
+if tier:
+    figure = TIER_FIGURES[tier]
+    ratio = cents(lower / figure)             # two places, half up
+    # Decided on the unrounded values, and strictly: exactly 1.5 times is not over.
+    over = lower > OVER_FACTOR * figure
+    ratio_note = ("≥" if unpriced else "") + f"{fmt(ratio)}x"
+    if over:
+        ratio_note += f", over {fmt(OVER_FACTOR)}x"
+    cost_note += f" vs ${fmt(figure)} {tier} ({ratio_note})"
 dur = (datetime.fromisoformat(t1.replace("Z", "+00:00"))
        - datetime.fromisoformat(t0.replace("Z", "+00:00"))).total_seconds() / 3600
 sid = os.path.basename(path)[:8]
 date = t0[5:10]
 print(f"| {date} | {sid} | {dur:.1f} | {n} | {eff/1e6:.1f} | {out/1e3:.0f} | {eff/n/1e3:.1f} "
-      f"| <workload note> · subagents: {sub_note} · work: {work_note} |")
+      f"| <workload note> · subagents: {sub_note} · work: {work_note} · cost: {cost_note} |")
 print(f"\nresolved {sid} via {how}", file=sys.stderr)
 if split:
     # stderr only: End step 2 appends stdout to a shared table verbatim.
@@ -347,9 +448,22 @@ print(f"  selected responses: parent {n}, children {child_responses}; "
 print(f"  model-priced USD ({RATE_CARD_VERSION}): parent {parent_cost}–{parent_upper}; "
       f"children {child_cost}–{child_upper}; all-in {parent_cost + child_cost}–"
       f"{parent_upper + child_upper}; {unpriced} unpriced responses", file=sys.stderr)
+if tier:
+    line = (f"  reference: {tier} figure ${fmt(figure)}; all-in lower bound ${cents(lower)}; "
+            f"ratio {'≥' if unpriced else ''}{fmt(ratio)}x")
+    if unpriced:
+        line += f" ({unpriced} unpriced, so the lower bound is a subtotal)"
+    if over:
+        line += (f". This package passed {fmt(OVER_FACTOR)} times its reference figure: "
+                 "the workload note must say why.")
+    print(line, file=sys.stderr)
+else:
+    print("  no --tier given: the row carries its cost with no reference comparison. For a "
+          "delivery package pass --tier with one of " + ", ".join(TIER_FIGURES) + ".",
+          file=sys.stderr)
 print(f"  If that is not the session you are ending, STOP — pass the id explicitly.", file=sys.stderr)
 print(f"\n(append to ~/Obsidian/no-it-all/briefs/usage-benchmark.md; replace only the "
-      f"<workload note> text — the measured subagents and work suffixes stay)", file=sys.stderr)
+      f"<workload note> text — the three measured suffixes (subagents, work, cost) stay)", file=sys.stderr)
 if work_note == "n/a":
     print("  work: n/a — GitHub could not be asked (gh missing, unauthenticated, or "
           "offline). This is NOT a measured zero; do not replace it with one.", file=sys.stderr)
