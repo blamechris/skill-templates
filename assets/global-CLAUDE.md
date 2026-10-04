@@ -228,10 +228,10 @@ For delegated implementation, complete this proportional cycle: scope/design and
 Delegating implementation grants routine gated merge authority for that work in **both normal and prime-directive modes**. Do not request the same authorization again because the user is present. This grant excludes review-only/planning-only requests, unrelated PRs and explicit user merge holds; actual required external approvals and permission restrictions still apply. Merge prerequisite PRs within the delegated scope in dependency order, then refresh and verify dependent PRs before merging. A failed gate calls for diagnosis and authorized repair, not automatically a user merge task. Never bypass protections or use `--admin`/`--auto`; verify the gates and merge synchronously. Record a precise owner prerequisite only when the agent cannot supply it within its authority.
 
 <!--default:default-roles-->
-**Default roles for a single package** (decided 2026-10-03): one Claude coordinator that owns delivery through the verified merge, one sonnet implementer, and sonnet review agents that are fresh each round, never a previous round's reviewer resumed. The coordinator's model follows the package's risk tier (see "Review intensity is risk-tiered"): Opus for LOW and MEDIUM, Fable only for HIGH. A coordinator that finds itself on Fable for LOW or MEDIUM work says so in its first reply.
+**Default roles for a single package** (decided 2026-10-03): one Claude coordinator that owns delivery through the verified merge, one Sonnet implementer, and Sonnet review agents that are fresh each round, never a previous round's reviewer resumed. The coordinator's model follows the package's risk tier (see "Review intensity is risk-tiered"): Opus for LOW and MEDIUM, Fable only for HIGH.
 
 <!--default:in-effect-line-->
-**Merged is not in effect, and every close-out says which one it is.** A package's final report carries one `In effect:` line directly above the status block, and its benchmark row carries the same line in the workload note: whether the change is in effect for the people or sessions that use it, whether anyone has seen it work outside a test, and if not, the one action that makes it so and who owns it. It reports and does not gate; nothing waits on it.
+**Merged is not in effect: every package close-out carries an `In effect:` line.** It goes directly above the status block in the final report and in the workload note of the benchmark row. It says whether the change is in effect for the people or sessions that use it, whether anyone has seen it work outside a test, and, if it is not in effect, the one action that makes it so and who owns it. It reports and does not gate.
 
 ## Session boundaries (all projects)
 
@@ -549,9 +549,9 @@ test gates). Depth scales with blast radius:
   the fan-out past the cap — when findings are many, queue refutation rounds
   instead of widening (the "~20" tilde was read as panel-only and breached six
   times, 27–70 agents, in its first week; hence no tilde). **One exception:**
-  security code with an executable test suite gets one fresh reviewer per round
-  plus the Codex pass below, and no panel. Doctrine, and any HIGH change with no
-  executable tests, keeps the panel.
+  a security change that executable tests cover gets one fresh reviewer per round
+  plus the Codex pass below, and no panel unless Codex cannot run. Every other
+  HIGH change, doctrine included, keeps the panel.
 Nitpick-severity findings never get refuter panels. Ultracode stays on for repo
 marathon sessions only; planning/chat/fleet sessions run without it (invoke
 per-task when wanted). Benchmark rows carry two measured suffixes —
@@ -573,22 +573,20 @@ will be pushed on top of until every review running on it has reported. Findings
 from parallel sources — a reviewer, Codex, Copilot — are folded into one push. A
 package gets at most two full review rounds and one delta round, a delta round
 reading only the diff since the last reviewed head. A further round needs its
-reason written in the PR before it starts; it does not need permission. A
-blocking finding is still fixed whatever the count.
+reason written in the PR before it starts, and no permission. A blocking finding
+is still fixed, cap or not.
 
 <!--default:codex-pass-->
 **Codex reviews one kind of change** (decided 2026-10-03): a HIGH-tier change to
 security, permissions or persistence gets one Codex pass, run before any other
 reviewer on the first stable head, and at most one delta pass after the fixes;
-these are counted apart from the rounds above. Nothing else names Codex by
-default. The coordinator calls it as a read-only CLI (`codex exec -s read-only`)
-and relays its findings like any reviewer's. Every call carries two flags it
-fails without: `-m` naming a model, because the configured default can be one
-the login rejects (`gpt-6-astra` ran on 2026-10-03), and
-`--skip-git-repo-check`, because it refuses a directory that is not a git
-checkout. If Codex cannot run, say so and review at panel depth instead. Revisit
-this rule after four more such packages, on the whole picture and not a count of
-findings.
+these are counted apart from the rounds above. The coordinator calls it as a
+read-only CLI (`codex exec -s read-only`) and relays its findings like any
+reviewer's. Every call carries `-m` naming a model (`gpt-6-astra` ran on
+2026-10-03; the configured default can be one the login rejects) and
+`--skip-git-repo-check` (Codex refuses a directory that is not a git checkout).
+If Codex cannot run, say so and review at panel depth instead. Revisit this rule
+after four more such packages, on the whole picture and not a count of findings.
 
 ## Follow-on protocol (all projects)
 
