@@ -549,9 +549,9 @@ test gates). Depth scales with blast radius:
   the fan-out past the cap — when findings are many, queue refutation rounds
   instead of widening (the "~20" tilde was read as panel-only and breached six
   times, 27–70 agents, in its first week; hence no tilde). **One exception:**
-  security code that executable tests cover gets one fresh reviewer per round
-  plus the Codex pass below, and no panel unless Codex cannot run. Every other
-  HIGH change, doctrine included, keeps the panel.
+  security or permissions code that executable tests cover gets one fresh
+  reviewer per round plus the Codex pass below, and no panel unless Codex cannot
+  run. Every other HIGH change, doctrine included, keeps the panel.
 Nitpick-severity findings never get refuter panels. Ultracode stays on for repo
 marathon sessions only; planning/chat/fleet sessions run without it (invoke
 per-task when wanted). Benchmark rows carry two measured suffixes —
