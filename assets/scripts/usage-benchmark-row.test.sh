@@ -487,6 +487,11 @@ echo; echo "G. subagent scan across project dirs (worktree recycle)"
 # glob, exact-uuid match, realpath dedupe, and the empty-dir holder check — so none
 # of them can regress behind a fixture that happens to put everything in one dir.
 #
+# The discovery (which dirs to scan) and the split rule (when to warn) now live in
+# usage_accounting.py, shared with usage-checkpoint.py (#377), so the mutants that
+# edit them are built from a scratch copy of the script plus the helper — `mutant`
+# below — and never from the real files.
+#
 # Project dirs are printed as REALPATHS, and $TMP sits under a symlinked /var on
 # macOS, so expected dir strings are built with `pwd -P`, never from $TMP.
 #
@@ -522,6 +527,19 @@ gen_distinct "$GP/-demo-old/$UUID/subagents/workflows/wf_x/agent-2.jsonl" wf_msg
 # A foreign session's children AND main transcript, in the same OLD dir.
 gen "$GP/-demo-old/$OTHER/subagents/agent-x.jsonl" 100 3 msgid
 gen "$GP/-demo-old/$OTHER.jsonl" 100 1 msgid
+
+# mutant <name> <file> <sed-expr> — a scratch copy of the row script AND its helper
+# (the script imports usage_accounting from its own directory, so the copy sees the
+# edited one) with one sed edit applied to <file>. Prints the copy's row-script path;
+# fails when the edit changed nothing, so a drifted pattern is a loud "could not build
+# the mutant" and not a mutant that silently equals the original.
+mutant() {
+  local d="$TMP/mut-$1"
+  mkdir -p "$d" && cp "$HERE/usage-benchmark-row.py" "$HERE/usage_accounting.py" "$d/" || return 1
+  sed -e "$3" "$d/$2" > "$d/$2.new" && mv "$d/$2.new" "$d/$2" || return 1
+  cmp -s "$d/$2" "$HERE/$2" && return 1
+  printf '%s' "$d/usage-benchmark-row.py"
+}
 
 # Session-id mode is the acceptance mode: nothing names the OLD dir, only the uuid.
 rec_run() { HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$@"; }
@@ -576,11 +594,9 @@ printf '%s' "$err" | grep -q 'WARNING: subagent transcripts' \
 # the old sibling-only behaviour — must read a DIFFERENT, lower figure with no
 # warning. Without this, case one is also satisfied by a fixture that happens to
 # put everything in one dir.
-sed -e 's|^    roots += glob.glob(os.path.expanduser(f"~/.claude/projects/\*/{sid_full}/subagents"))$|    roots += []|' \
-    "$SUT" > "$TMP/sibling-only.py"
-if grep -q '^    roots += \[\]$' "$TMP/sibling-only.py"; then
-  mrow=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/sibling-only.py" 5fc4a59c 2>/dev/null)
-  merr=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/sibling-only.py" 5fc4a59c 2>&1 >/dev/null)
+if MUT=$(mutant sibling-only usage_accounting.py 's|^    roots += sorted(glob.glob(.*$|    roots += []|'); then
+  mrow=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" 5fc4a59c 2>/dev/null)
+  merr=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" 5fc4a59c 2>&1 >/dev/null)
   [ "$(field "$mrow" 9)" = "<workload note> · subagents: 3.1M/1 · work: 0pr/0iss" ] \
     && ! printf '%s' "$merr" | grep -q 'WARNING: subagent transcripts' \
     && ok "the fixture DISTINGUISHES the two implementations (sibling-only: 3.1M/1, silently)" \
@@ -588,7 +604,7 @@ if grep -q '^    roots += \[\]$' "$TMP/sibling-only.py"; then
            "mutant row='$(flat "$mrow")' — a fixture both versions agree on proves nothing"
 else
   bad "the fixture DISTINGUISHES the two implementations (sibling-only: 3.1M/1, silently)" \
-      "could not build the mutant: the project-glob line is not where this expects it"
+      "could not build the mutant: the project-glob line is not where this expects it in usage_accounting.py"
 fi
 
 # Messages dedup across dirs by KEY, while FILES are counted as found: the same
@@ -618,17 +634,15 @@ out=$(rec_run "$OUTSIDE/$OUTID.jsonl" 2>/dev/null); rc=$?
   || bad "an explicit .jsonl path outside ~/.claude/projects still counts its sibling subagents (3.1M/1)" \
          "rc=$rc $(flat "$out")"
 # ...and the mutant that proves it: a glob-only copy cannot find them at all.
-sed -e 's|^    roots = \[os.path.join(base, "subagents")\]$|    roots = []|' \
-    "$SUT" > "$TMP/glob-only.py"
-if grep -q '^    roots = \[\]$' "$TMP/glob-only.py"; then
-  mrow=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/glob-only.py" "$OUTSIDE/$OUTID.jsonl" 2>/dev/null)
+if MUT=$(mutant glob-only usage_accounting.py 's|^    roots = \[os.path.join(base, "subagents")\]$|    roots = []|'); then
+  mrow=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" "$OUTSIDE/$OUTID.jsonl" 2>/dev/null)
   [ "$(field "$mrow" 9)" = "<workload note> · subagents: 0.0M/0 · work: 0pr/0iss" ] \
     && ok "the fixture DISTINGUISHES the two implementations (glob-only: 0.0M/0 outside projects)" \
     || bad "the fixture DISTINGUISHES the two implementations (glob-only: 0.0M/0 outside projects)" \
            "mutant row='$(flat "$mrow")'"
 else
   bad "the fixture DISTINGUISHES the two implementations (glob-only: 0.0M/0 outside projects)" \
-      "could not build the mutant: the sibling-root line is not where this expects it"
+      "could not build the mutant: the sibling-root line is not where this expects it in usage_accounting.py"
 fi
 
 # subcount <row> — the file-count half of the subagents suffix (`<eff>M/<count>`)
@@ -674,17 +688,15 @@ out=$(HOME="$NEARH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$UUID" 2>/dev/nu
   && ok "a foreign session sharing the first 8 uuid chars is NOT swept in (6.2M/2 by full uuid)" \
   || bad "a foreign session sharing the first 8 uuid chars is NOT swept in (6.2M/2 by full uuid)" \
          "rc=$rc $(flat "$out")"
-sed -e 's|^    roots += glob.glob(os.path.expanduser(f"~/.claude/projects/\*/{sid_full}/subagents"))$|    roots += glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid_full[:8]}*/subagents"))|' \
-    "$SUT" > "$TMP/prefix-glob.py"
-if grep -qF '{sid_full[:8]}*/subagents' "$TMP/prefix-glob.py"; then
-  mrow=$(HOME="$NEARH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/prefix-glob.py" "$UUID" 2>/dev/null)
+if MUT=$(mutant prefix-glob usage_accounting.py 's|glob.escape(sid), "subagents"|glob.escape(sid[:8]) + "*", "subagents"|'); then
+  mrow=$(HOME="$NEARH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" "$UUID" 2>/dev/null)
   [ "$(subcount "$mrow")" -gt "$(subcount "$out")" ] 2>/dev/null \
     && ok "the fixture DISTINGUISHES the two implementations (8-char-prefix glob: sweeps the near-miss, count rises)" \
     || bad "the fixture DISTINGUISHES the two implementations (8-char-prefix glob: sweeps the near-miss, count rises)" \
            "real='$(flat "$out")' mutant='$(flat "$mrow")'"
 else
   bad "the fixture DISTINGUISHES the two implementations (8-char-prefix glob: sweeps the near-miss, count rises)" \
-      "could not build the mutant: the project-glob line is not where this expects it"
+      "could not build the mutant: the project-glob line is not where this expects it in usage_accounting.py"
 fi
 
 # ---- a relative explicit path: the sibling root (`./<uuid>/subagents`) and the glob
@@ -705,16 +717,15 @@ printf '%s\n' "$relerr" | grep -q '^WARNING: subagent transcripts for 5fc4a59c' 
   && ! printf '%s\n' "$relerr" | grep -q '^  \.' \
   && ok "a relative explicit path warns with ABSOLUTE project dirs (no bare \`.\`)" \
   || bad "a relative explicit path warns with ABSOLUTE project dirs (no bare \`.\`)" "$(flat "$relerr")"
-sed -e 's|^        real = os.path.realpath(r)$|        real = r|' "$SUT" > "$TMP/spelling-dedupe.py"
-if grep -q '^        real = r$' "$TMP/spelling-dedupe.py"; then
-  mrow=$(rel_run "$TMP/spelling-dedupe.py" 2>/dev/null)
+if MUT=$(mutant spelling-dedupe usage_accounting.py 's|^        real = os.path.realpath(root)$|        real = root|'); then
+  mrow=$(rel_run "$MUT" 2>/dev/null)
   [ "$(subcount "$mrow")" -gt "$(subcount "$rel")" ] 2>/dev/null \
     && ok "the fixture DISTINGUISHES the two implementations (spelling dedupe: walks the same dir twice, count rises)" \
     || bad "the fixture DISTINGUISHES the two implementations (spelling dedupe: walks the same dir twice, count rises)" \
            "real='$(flat "$rel")' mutant='$(flat "$mrow")'"
 else
   bad "the fixture DISTINGUISHES the two implementations (spelling dedupe: walks the same dir twice, count rises)" \
-      "could not build the mutant: the realpath line is not where this expects it"
+      "could not build the mutant: the realpath line is not where this expects it in usage_accounting.py"
 fi
 
 # ---- an EMPTY subagents dir is not a holder: a session that otherwise lives in one
@@ -731,16 +742,94 @@ err=$(rec_run 9d9d9d9d 2>&1 >/dev/null)
   && ok "an empty <uuid>/subagents dir elsewhere is not a holder: count unchanged (3.1M/1), no warning" \
   || bad "an empty <uuid>/subagents dir elsewhere is not a holder: count unchanged (3.1M/1), no warning" \
          "rc=$rc $(flat "$out") stderr=$(flat "$err")"
-sed -e 's|^        if found:$|        if True:|' "$SUT" > "$TMP/empty-holder.py"
-if grep -q '^        if True:$' "$TMP/empty-holder.py"; then
-  merr=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$TMP/empty-holder.py" 9d9d9d9d 2>&1 >/dev/null)
+if MUT=$(mutant empty-holder usage_accounting.py 's|^        if len(files) > before:$|        if True:|'); then
+  merr=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" 9d9d9d9d 2>&1 >/dev/null)
   printf '%s' "$merr" | grep -q 'WARNING: subagent transcripts for 9d9d9d9d found in 2 project dirs' \
     && ok "the fixture DISTINGUISHES the two implementations (empty-dir holder: the mutant warns)" \
     || bad "the fixture DISTINGUISHES the two implementations (empty-dir holder: the mutant warns)" \
            "mutant stderr=$(flat "$merr")"
 else
   bad "the fixture DISTINGUISHES the two implementations (empty-dir holder: the mutant warns)" \
-      "could not build the mutant: the found check is not where this expects it"
+      "could not build the mutant: the holder check is not where this expects it in usage_accounting.py"
+fi
+
+# ---- three dirs: the WHOLE listing, in sorted order (#377). Every fixture above has
+# two dirs, so none of them can tell a listing truncated to two entries from the real
+# one, and with two dirs a missing sort() shows only when the hash order happens to
+# invert (7 runs in 8). Three dirs, with the transcript's own dir the MIDDLE one
+# alphabetically, pin the full list, the order and the marker's position at once.
+# The order is a property of set iteration, which varies with the hash seed — and the
+# paths carry a random mktemp suffix — so the listing is read under 12 seeds: a
+# sort-less mutant then comes out sorted in all 12 with probability 6^-12, not 1/6.
+TRI=2b2b2b2b-6666-4777-8888-999900001111
+TRIH="$TMP/trihome"; TP="$TRIH/.claude/projects"
+mkdir -p "$TP/-demo-mid/$TRI" "$TP/-demo-zzz/$TRI/subagents" "$TP/-demo-aaa/$TRI/subagents"
+gen "$TP/-demo-mid/$TRI.jsonl" 100 3 msgid
+gen_distinct "$TP/-demo-zzz/$TRI/subagents/agent-1.jsonl" z_msg_
+gen_distinct "$TP/-demo-aaa/$TRI/subagents/agent-2.jsonl" a_msg_
+TPR=$(cd "$TP" && pwd -P)
+WANT_TRI=$(printf '  %s\n  %s\n  %s' "$TPR/-demo-aaa" "$TPR/-demo-mid  (main transcript)" "$TPR/-demo-zzz")
+
+# tri_scan <row-script> — run the three-dir session under 12 hash seeds and sort each
+# seed's outcome into four lists of seeds (space-separated, set as globals):
+#   TRI_BAD       exit status not 0, or the row's workload cell is not WANT_SPLIT
+#   TRI_INEXACT   the warning's dir lines are not WANT_TRI (all three, sorted, main marked)
+#   TRI_NOTSET    the dir lines are not the three expected lines in SOME order
+#   TRI_NOTFIRST2 the dir lines are not the first two expected lines, in order
+# A mutant that merely crashes lands in TRI_BAD, so it cannot pass for a mutant that
+# misbehaves in the specific way a case is about.
+WANT_TRI_SET=$(printf '%s\n' "$WANT_TRI" | LC_ALL=C sort)
+WANT_TRI_FIRST2=$(printf '%s\n' "$WANT_TRI" | head -2)
+tri_scan() {
+  local seed out rc err list
+  TRI_BAD=""; TRI_INEXACT=""; TRI_NOTSET=""; TRI_NOTFIRST2=""
+  for seed in 0 1 2 3 4 5 6 7 8 9 10 11; do
+    out=$(PYTHONHASHSEED=$seed HOME="$TRIH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$1" "$TRI" 2>/dev/null); rc=$?
+    err=$(PYTHONHASHSEED=$seed HOME="$TRIH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$1" "$TRI" 2>&1 >/dev/null)
+    list=$(printf '%s\n' "$err" | sed -n '/^WARNING:/,/^  transcript:/p' | sed '1d;$d')
+    { [ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "$WANT_SPLIT" ]; } || TRI_BAD="$TRI_BAD $seed"
+    [ "$list" = "$WANT_TRI" ] || TRI_INEXACT="$TRI_INEXACT $seed"
+    [ "$(printf '%s\n' "$list" | LC_ALL=C sort)" = "$WANT_TRI_SET" ] || TRI_NOTSET="$TRI_NOTSET $seed"
+    [ "$list" = "$WANT_TRI_FIRST2" ] || TRI_NOTFIRST2="$TRI_NOTFIRST2 $seed"
+  done
+}
+
+out=$(HOME="$TRIH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$TRI" 2>/dev/null); rc=$?
+err=$(HOME="$TRIH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$TRI" 2>&1 >/dev/null)
+[ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "$WANT_SPLIT" ] \
+  && printf '%s\n' "$err" | grep -q '^WARNING: subagent transcripts for 2b2b2b2b found in 3 project dirs' \
+  && ok "a three-dir session totals 6.2M/2 and the warning says 3 project dirs" \
+  || bad "a three-dir session totals 6.2M/2 and the warning says 3 project dirs" \
+         "rc=$rc $(flat "$out") stderr=$(flat "$err")"
+tri_scan "$SUT"
+[ -z "$TRI_BAD$TRI_INEXACT" ] \
+  && ok "all three dirs are listed, sorted, the transcript's own (middle) dir marked — under 12 hash seeds" \
+  || bad "all three dirs are listed, sorted, the transcript's own (middle) dir marked — under 12 hash seeds" \
+         "bad seeds:$TRI_BAD; inexact seeds:$TRI_INEXACT; want='$(flat "$WANT_TRI")'"
+
+# The mutants this pins. Each must still exit 0 and report the right total under EVERY
+# seed (a crash is not the defect these are about), and then show its own defect:
+# truncating the loop to two dirs lists the first two lines under every seed and never
+# the third; removing the sort lists all three dirs, in an order the hash seed picks.
+if MUT=$(mutant truncated-listing usage-benchmark-row.py 's|^    for d in split:$|    for d in split[:2]:|'); then
+  tri_scan "$MUT"
+  [ -z "$TRI_BAD" ] && [ -z "$TRI_NOTFIRST2" ] && [ -n "$TRI_INEXACT" ] \
+    && ok "the fixture DISTINGUISHES the two implementations (listing truncated to 2 dirs: exit 0, right total, the third line lost under every seed)" \
+    || bad "the fixture DISTINGUISHES the two implementations (listing truncated to 2 dirs: exit 0, right total, the third line lost under every seed)" \
+           "bad seeds:$TRI_BAD; not-first-two seeds:$TRI_NOTFIRST2; inexact seeds:$TRI_INEXACT"
+else
+  bad "the fixture DISTINGUISHES the two implementations (listing truncated to 2 dirs: exit 0, right total, the third line lost under every seed)" \
+      "could not build the mutant: the listing loop is not where this expects it"
+fi
+if MUT=$(mutant unsorted-listing usage_accounting.py 's#sorted(holders | {main_dir})#list(holders | {main_dir})#'); then
+  tri_scan "$MUT"
+  [ -z "$TRI_BAD" ] && [ -z "$TRI_NOTSET" ] && [ -n "$TRI_INEXACT" ] \
+    && ok "the fixture DISTINGUISHES the two implementations (no sort: exit 0, right total, all three dirs listed, in an order the hash seed picks)" \
+    || bad "the fixture DISTINGUISHES the two implementations (no sort: exit 0, right total, all three dirs listed, in an order the hash seed picks)" \
+           "bad seeds:$TRI_BAD; not-the-three-dirs seeds:$TRI_NOTSET; inexact seeds:$TRI_INEXACT (empty = sorted under all 12, about a 6^-12 chance)"
+else
+  bad "the fixture DISTINGUISHES the two implementations (no sort: exit 0, right total, all three dirs listed, in an order the hash seed picks)" \
+      "could not build the mutant: the split rule's return line is not where this expects it in usage_accounting.py"
 fi
 
 

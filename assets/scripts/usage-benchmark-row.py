@@ -62,17 +62,24 @@ scan of only the dir beside the main transcript silently undercounts (measured: 
 of 22 files for session 5ae4397b). The OLD dir also holds other sessions'
 transcripts, so sweeping it is wrong the other way (88.4M against 14.3M, both under
 the pre-#259 first-record dedup; the same 22 files read 18.2M under today's
-complete-record policy). The scan reads exactly two roots: the session's own
-<full uuid>/subagents under every ~/.claude/projects/* dir, and the sibling of the
-main transcript (which keeps an explicit .jsonl path outside ~/.claude/projects
-working). Roots dedupe by realpath, messages by key across every dir. A WARNING on
-stderr fires when children sit in a project dir other than the transcript's own, and
-lists every dir: the figure is right, but the session was split. skill-templates#254.
+complete-record policy). Which roots are scanned is decided by
+usage_accounting.session_subagent_roots, which files they hold by
+usage_accounting.session_child_files, and when a session counts as split by
+usage_accounting.split_project_dirs: all three are shared with usage-checkpoint.py, so
+the two scripts read the same child FILES (what each does with a file's records is its
+own). The rules live in those docstrings: the full-uuid scoping, the sibling root that
+keeps an explicit .jsonl path outside ~/.claude/projects working, the realpath dedupe.
+Two limits, shared: a symlink to a directory is not followed, and an unreadable ANCESTOR
+of a root hides that root from both scripts. Messages dedupe by key across every dir. A
+WARNING on stderr fires when children sit in a project dir other than the transcript's
+own, and lists every dir: the figure is right, but the session was split.
+skill-templates#254, #377.
 """
 import json, glob, os, re, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from usage_accounting import RATE_CARD_VERSION, Responses, price_usage
+from usage_accounting import (RATE_CARD_VERSION, Responses, price_usage, session_child_files,
+                              session_subagent_roots, split_project_dirs)
 from datetime import datetime
 from decimal import Decimal
 
@@ -110,52 +117,33 @@ def pick_transcript():
     die("no session id: pass one explicitly, or run from inside a Claude session "
         "(where $CLAUDE_CODE_SESSION_ID is set).")
 
-def scan_subagents(transcript_path, selected):
+def scan_subagents(roots, selected):
     """Add child records to the same global selection as the parent.
 
-    Returns (files counted, sorted realpaths of the project dirs that held any).
-    Reads the session's own <uuid>/subagents in every project dir plus the sibling
-    root beside the transcript — scoped by the FULL uuid, never a directory sweep;
-    see the SCOPE paragraph in the module docstring."""
-    base = transcript_path[:-len(".jsonl")] if transcript_path.endswith(".jsonl") else transcript_path
-    sid_full = os.path.basename(base)
-    roots = [os.path.join(base, "subagents")]
-    roots += glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid_full}/subagents"))
-    seen, scan_roots = set(), []
-    for r in roots:
-        real = os.path.realpath(r)
-        if real not in seen and os.path.isdir(r):
-            seen.add(real)
-            scan_roots.append(r)
-    count = 0
-    dirs = []
-    def walk_err(e):
+    Returns (files counted, the roots that held any). `roots` come from
+    usage_accounting.session_subagent_roots — scoped by the FULL uuid, never a
+    directory sweep; see the SCOPE paragraph in the module docstring. The files come
+    from usage_accounting.session_child_files; an unreadable directory or file is a
+    REFUSE here, never an undercount."""
+    try:
+        files, held = session_child_files(roots)
+    except OSError as e:
         die(f"cannot measure subagents: {e}")
-    for subdir in scan_roots:
-        found = 0
-        for root, _dirs, names in os.walk(subdir, onerror=walk_err):
-            for name in names:
-                if not name.endswith(".jsonl"):
-                    continue
-                source = os.path.join(root, name)
+    count = 0
+    for source in files:
+        try:
+            fh = open(source, errors="replace")
+        except OSError as e:
+            die(f"cannot measure subagents: {e}")
+        count += 1
+        with fh:
+            for line_no, line in enumerate(fh, 1):
                 try:
-                    fh = open(source, errors="replace")
-                except OSError as e:
-                    die(f"cannot measure subagents: {e}")
-                count += 1
-                found += 1
-                with fh:
-                    for line_no, line in enumerate(fh, 1):
-                        try:
-                            rec = json.loads(line)
-                        except ValueError:
-                            continue
-                        selected.add(rec, source, line_no, "child")
-        if found:
-            proj = os.path.realpath(os.path.dirname(os.path.dirname(subdir)))
-            if proj not in dirs:
-                dirs.append(proj)
-    return count, sorted(dirs)
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                selected.add(rec, source, line_no, "child")
+    return count, held
 
 # --- work numerator -------------------------------------------------------
 # The ledger could state spend to four significant figures and could not state
@@ -297,12 +285,9 @@ with open(path, errors="replace") as f:
         if key is None:
             rec = dict(rec, requestId=None, message=dict(msg, id=None))
         selected.add(rec, path, line_no, "main")
-sub_count, sub_dirs = scan_subagents(path, selected)
-# A session is SPLIT when any child sits in a project dir other than the main
-# transcript's own. The transcript's dir counts as a holder then even if it has no
-# children of its own — the commonest recycle shape is every child in the old dir.
-main_dir = os.path.realpath(os.path.dirname(path))
-split = sorted(set(sub_dirs) | {main_dir}) if any(d != main_dir for d in sub_dirs) else []
+roots, main_dir = session_subagent_roots(path)
+sub_count, held = scan_subagents(roots, selected)
+split = split_project_dirs(held, main_dir)
 sub_eff = 0.0
 child_responses = 0
 parent_cost = child_cost = Decimal(0)

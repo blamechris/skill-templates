@@ -1,6 +1,9 @@
 """Shared, versioned Claude transcript accounting. No transcript text is retained."""
+import glob
+import os
 from decimal import Decimal
 from datetime import datetime
+from pathlib import Path
 
 RATE_CARD_VERSION = "anthropic-standard-global-2026-10-01-geo-bounds"
 # USD per million: uncached input, output, 5m write, 1h write, cache read.
@@ -95,6 +98,81 @@ def price_usage(usage, model):
             "speed": speed or "unknown", "service_tier": service_tier or "unknown",
             "inference_geo": geography or "unknown",
             "geography_uncertain": geography_uncertain}
+
+
+def session_subagent_roots(transcript):
+    """Return (roots, main_dir) for the session whose main transcript is `transcript`.
+
+    roots: every existing `subagents` directory that can hold this session's children.
+    The harness can recycle a session's worktree mid-run, and every worktree has its own
+    project dir under ~/.claude/projects: the main transcript moves to the NEW dir while
+    the children written earlier stay in the OLD one, so the dir beside the transcript is
+    not enough. The roots are that sibling (first, which keeps an explicit .jsonl path
+    outside ~/.claude/projects working) and `<full uuid>/subagents` under every project
+    dir, sorted. The scan is keyed by the FULL uuid, escaped so a metacharacter in a
+    filename cannot widen it, and is never a directory sweep: the old dir also holds other
+    sessions' transcripts. Roots dedupe by realpath, the first spelling surviving.
+
+    main_dir: the realpath of the directory holding the main transcript.
+    A transcript with no id in its name (a file literally called `.jsonl`) has no roots:
+    an empty id would widen the glob to every `projects/*/subagents`.
+    Used by usage-benchmark-row.py and usage-checkpoint.py; skill-templates#254, #377."""
+    base = os.fspath(transcript)
+    if base.endswith(".jsonl"):
+        base = base[:-len(".jsonl")]
+    main_dir = os.path.realpath(os.path.dirname(os.fspath(transcript)))
+    sid = os.path.basename(base)
+    if not sid:
+        return [], main_dir
+    projects = os.path.expanduser("~/.claude/projects")
+    roots = [os.path.join(base, "subagents")]
+    roots += sorted(glob.glob(os.path.join(glob.escape(projects), "*", glob.escape(sid), "subagents")))
+    seen, found = set(), []
+    for root in roots:
+        real = os.path.realpath(root)
+        if real not in seen and os.path.isdir(root):
+            seen.add(real)
+            found.append(root)
+    return found, main_dir
+
+
+def session_child_files(roots):
+    """Return (files, holding_roots): every child transcript under `roots`, and the roots
+    that held at least one (an empty `subagents` dir is no holder).
+
+    The one walker both usage-benchmark-row.py and usage-checkpoint.py read children
+    through, so the two scripts read the same child FILES. Every name `os.walk` lists as a
+    non-directory and ending in `.jsonl` counts, with no is-a-regular-file filter: a
+    dangling symlink must still reach the caller's `open()` and refuse there. An unreadable
+    directory raises OSError (a REFUSE for the callers), never a silent undercount.
+    Files come back as strings in ONE global order over all roots, by path components,
+    which is the order `sorted(Path)` gives.
+
+    Two limits, shared by both scripts: a symlink to a directory is not followed, and an
+    unreadable ANCESTOR of a root (the old project dir, or the `<uuid>` dir) makes
+    `session_subagent_roots` drop that root, which no walker can see."""
+    def refuse(error):
+        raise error
+    files, holding = [], []
+    for root in roots:
+        before = len(files)
+        for dirpath, _dirs, names in os.walk(root, onerror=refuse):
+            files += [os.path.join(dirpath, name) for name in names if name.endswith(".jsonl")]
+        if len(files) > before:
+            holding.append(root)
+    return sorted(files, key=lambda f: Path(f).parts), holding
+
+
+def split_project_dirs(holding_roots, main_dir):
+    """The session's project dirs, sorted, when it is split across more than one; else [].
+
+    `holding_roots` are the roots (from session_subagent_roots) that actually held at
+    least one .jsonl child: an empty `<uuid>/subagents` folder is no holder, because the
+    harness creates them eagerly. A session is SPLIT when any child sits in a project dir
+    other than `main_dir`. The transcript's own dir is then listed even if it holds no
+    children: the commonest recycle shape is every child in the old dir."""
+    holders = {os.path.realpath(os.path.dirname(os.path.dirname(root))) for root in holding_roots}
+    return sorted(holders | {main_dir}) if any(d != main_dir for d in holders) else []
 
 
 def response_key(record, source, line):

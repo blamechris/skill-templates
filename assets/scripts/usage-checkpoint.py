@@ -2,6 +2,18 @@
 """Capture immutable cumulative Claude session usage, or aggregate latest captures.
 
 No prompt or tool content is copied. Without --out-dir, capture prints JSON only.
+
+SCOPE: children are found by session id across every project dir, not only beside the
+transcript: a worktree recycle moves the main transcript and leaves earlier children in
+the old dir (#377). The roots come from usage_accounting.session_subagent_roots and the
+files under them from usage_accounting.session_child_files, both shared with
+usage-benchmark-row.py, so the two scripts read the same child files; an unreadable
+directory or file is a REFUSE. Two limits, shared: a symlink to a directory is not
+followed, and an unreadable ancestor of a root hides that root. A line with a bad byte (or
+one a live writer cut inside a multi-byte character) is parsed with replacement characters
+and still hashed as raw bytes. `session_project_dirs` lists the dirs that held the
+transcript or a child; `quality.split_project_dirs` is 0 for a one-dir session, else the
+dir count, and a split also prints one WARNING on stderr.
 """
 import argparse
 import glob
@@ -14,7 +26,8 @@ from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from usage_accounting import RATE_CARD_VERSION, Responses, price_usage, token_split
+from usage_accounting import (RATE_CARD_VERSION, Responses, price_usage, session_child_files,
+                              session_subagent_roots, split_project_dirs, token_split)
 
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_5m_tokens",
                 "cache_1h_tokens", "cache_read_input_tokens", "cache_ttl_unknown_tokens")
@@ -56,10 +69,15 @@ def resolve_session(value):
 
 
 def capture(path, run_id, captured_at, status):
-    paths = [path]
-    subdir = path.with_suffix("") / "subagents"
-    if subdir.is_dir():
-        paths += sorted(subdir.rglob("*.jsonl"))
+    return capture_session(path, run_id, captured_at, status)[0]
+
+
+def capture_session(path, run_id, captured_at, status):
+    """Return (checkpoint document, the main transcript's project dir)."""
+    roots, main_dir = session_subagent_roots(path)
+    children, held = session_child_files(roots)
+    split = split_project_dirs(held, main_dir)
+    paths = [path] + [Path(child) for child in children]
     selected = Responses()
     coverage = []
     for source in paths:
@@ -70,7 +88,13 @@ def capture(path, run_id, captured_at, status):
                 digest.update(raw)
                 byte_count += len(raw)
                 try:
-                    selected.add(json.loads(raw), str(source), line_no,
+                    try:
+                        record = json.loads(raw)
+                    except UnicodeDecodeError:
+                        # a bad byte, or a line a live writer cut inside a multi-byte
+                        # character: the digest above still covers the raw bytes
+                        record = json.loads(raw.decode("utf-8", errors="replace"))
+                    selected.add(record, str(source), line_no,
                                  "child" if source != path else "main")
                 except json.JSONDecodeError:
                     continue
@@ -80,12 +104,14 @@ def capture(path, run_id, captured_at, status):
     out = {"run_id": run_id, "session_id": path.stem, "captured_at": captured_at,
            "status": status, "rate_card": RATE_CARD_VERSION,
            "source_coverage": coverage,
+           "session_project_dirs": split or [main_dir],
            "quality": {"conflicting_response_pairs": selected.conflicts,
                        "cross_role_pairs": selected.cross_role_pairs,
                        "ambiguous_identities": selected.ambiguous_identities,
                        "selected_without_terminal_metadata": selected.without_terminal_metadata(),
                        "unidentified_records": selected.unidentified,
                        "synthetic_records": selected.synthetic,
+                       "split_project_dirs": len(split),
                        "speed_unknown_responses": 0,
                        "geography_unknown_responses": 0,
                        "service_tier_unknown_responses": 0,
@@ -146,7 +172,7 @@ def capture(path, run_id, captured_at, status):
         for detail in out[part]["by_model"].values():
             for key in ("lower_usd", "upper_usd"):
                 detail[key] = str(detail[key])
-    return out
+    return out, main_dir
 
 
 def latest_totals(directory):
@@ -273,7 +299,15 @@ def main():
         if instant.tzinfo is None:
             raise ValueError("capture timestamp needs a timezone")
         at = instant.astimezone(timezone.utc).isoformat()
-        doc = capture(path, args.run_id or path.stem, at, args.status)
+        doc, main_dir = capture_session(path, args.run_id or path.stem, at, args.status)
+        if doc["quality"]["split_project_dirs"]:
+            # stderr only: stdout is the JSON, or the written path.
+            print(f"WARNING: subagent transcripts for {doc['session_id']} found in "
+                  f"{doc['quality']['split_project_dirs']} project dirs — the harness most likely "
+                  f"recycled this session's worktree mid-run; every dir's subagent transcripts "
+                  f"are counted (skill-templates#377):", file=sys.stderr)
+            for d in doc["session_project_dirs"]:
+                print(f"  {d}" + ("  (main transcript)" if d == main_dir else ""), file=sys.stderr)
         encoded = json.dumps(doc, indent=2) + "\n"
         if args.out_dir:
             args.out_dir.mkdir(parents=True, exist_ok=True)
