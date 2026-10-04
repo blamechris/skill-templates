@@ -28,6 +28,11 @@ names unique across machines.
 Costs are dated API-list-rate equivalents (subscription users: a proxy figure,
 not a bill). Cache reads use the exact model rate; unknown write duration is
 reported as a lower/upper valuation, never silently called a 5m write.
+
+Partial periods (skill-templates#392): transcripts are pruned, so after a rate-card
+change a past day or week is repriced from whatever transcripts are left. A period whose
+scan read under 98% of the requests an earlier snapshot recorded is marked with `!`
+(console) or `(partial N%)` (vault), with both counts. See "partial periods" below.
 """
 import json
 import re
@@ -35,6 +40,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
+from fractions import Fraction
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from usage_accounting import RATES, RATE_CARD_VERSION, Responses, price_usage, token_split
@@ -171,13 +177,123 @@ def scan():
     return result
 
 
-def merge_own(fresh, own_file):
+# ---------------- partial periods (#392) ----------------
+# A rate-card change starts new v2 files, so the first scan under a card is the only
+# source of dollars for every past period. Transcripts are pruned whole files at a time
+# (not on a clean time horizon), so a past period can be repriced from a fraction of its
+# responses and shown as if it were whole. Dollars are not comparable across rate cards;
+# COUNTS of responses are. So the largest count any earlier snapshot recorded for a
+# period is a high-water mark, and the shortfall against what the scan read is persisted
+# in the v2 record as `requests_not_rescanned` (absent when 0) and shown. A shortfall
+# sums across machines; a raw high-water would not. Dollars are never carried over.
+#
+# A period is marked partial when the scan read under PARTIAL_BELOW of the requests on
+# record. The tolerance exists because the two series count slightly differently for
+# reasons other than pruning: on the three most recent closed weeks, whose transcripts
+# are all still on disk, the counts differ by 0.00% to 0.05%.
+PARTIAL_BELOW = 0.98
+
+
+def _count(rec, field):
+    """A non-negative whole count from a persisted record; 0 when absent or malformed."""
+    try:
+        return max(0, int(round(float(rec.get(field) or 0))))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return 0
+
+
+def responses_read(rec):
+    """Responses a record's dollars are built from: priced plus unpriced.
+
+    Compared like with like: a pre-v2 record has only `requests`, and a v2 `requests`
+    counts priced responses only, so `unpriced_responses` is added (on real data pre-v2
+    `requests` equals v2 `requests + unpriced_responses` to within one).
+    `token_observed_responses` is not used: pre-v2 records lack it, and it leaves out
+    responses whose token counters are invalid."""
+    return _count(rec, "requests") + _count(rec, "unpriced_responses")
+
+
+def responses_on_record(rec):
+    """Responses a record accounts for: those it read plus those it already knew it did not."""
+    return responses_read(rec) + _count(rec, "requests_not_rescanned")
+
+
+def read_records(path):
+    """Persisted {period: record} from a snapshot file; {} when absent or unreadable."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict)} if isinstance(data, dict) else {}
+
+
+def merge_period_records(own_hist, fresh, earlier_hist):
+    """Fold a scan into this machine's persisted v2 records, in place.
+
+    Dollars and the read count follow the existing rule: transcripts prune whole files,
+    so the same-card record that saw more requests wins, and a record under another
+    card is replaced. The shortfall is then set against the high-water mark: the largest
+    count among the pre-v2 snapshot (`earlier_hist`) and the persisted record being
+    merged, whatever its card, which hands its own count on instead of losing it."""
+    for period in sorted(set(fresh) | set(own_hist)):
+        new, old = fresh.get(period), own_hist.get(period)
+        same_card = old is not None and old.get("rate_card") == RATE_CARD_VERSION
+        if new is not None and (not same_card or new.get("requests", 0) >= old.get("requests", 0)):
+            chosen = dict(new)
+        elif same_card:
+            chosen = old
+        else:
+            continue   # another card's record and nothing fresh: left as it is
+        recorded = [responses_on_record(r) for r in (old, earlier_hist.get(period)) if r is not None]
+        short = max(0, max(recorded, default=0) - responses_read(chosen))
+        if short:
+            chosen["requests_not_rescanned"] = short
+        else:
+            chosen.pop("requests_not_rescanned", None)
+        own_hist[period] = chosen
+
+
+def unread_periods(own_hist, earlier_hist):
+    """{period: count} for periods an earlier snapshot recorded that no v2 record of this
+    machine covers (every transcript is gone). Derived on each run from the earlier
+    snapshots, never persisted, and never carrying a dollar."""
+    out = {}
+    for period in set(own_hist) | set(earlier_hist):
+        rec = own_hist.get(period)
+        if isinstance(rec, dict) and rec.get("rate_card") == RATE_CARD_VERSION:
+            continue
+        count = max((responses_on_record(r) for r in (rec, earlier_hist.get(period))
+                     if isinstance(r, dict)), default=0)
+        if count:
+            out[period] = count
+    return out
+
+
+def has_earlier_card(kind, machine):
+    """True when this machine has records under another rate card: its pre-v2 snapshot,
+    or v2 records stamped with a different card."""
+    return bool(read_records(HIST_DIR / f"{kind}-{machine}.json")) or any(
+        rec.get("rate_card") != RATE_CARD_VERSION
+        for rec in read_records(HIST_DIR / f"{kind}-v2-{machine}.json").values())
+
+
+def is_unread(rec):
+    """A merged period with requests on record and nothing read: it has no row."""
+    return responses_read(rec) == 0 and _count(rec, "requests_not_rescanned") > 0
+
+
+def period_coverage(rec):
+    """How much of the requests on record the scan read, for one merged day or week."""
+    read, short = responses_read(rec), _count(rec, "requests_not_rescanned")
+    on_record = read + short
+    return {"read": read, "short": short, "on_record": on_record,
+            "read_pct": 100 * read / on_record if on_record else 100.0,
+            "partial": short > 0 and Fraction(read) < Fraction(str(PARTIAL_BELOW)) * on_record}
+
+
+def merge_own(fresh, own_file, earlier_file=None):
     hist = json.loads(own_file.read_text()) if own_file.exists() else {}
-    for day, rec in fresh.items():
-        old = hist.get(day)
-        # transcripts prune whole files: keep whichever snapshot saw more requests
-        if old is None or old.get("rate_card") != RATE_CARD_VERSION or rec.get("requests", 0) >= old.get("requests", 0):
-            hist[day] = rec
+    merge_period_records(hist, fresh, read_records(earlier_file) if earlier_file else {})
     own_file.write_text(json.dumps(dict(sorted(hist.items())), indent=1))
     return hist
 
@@ -234,7 +350,7 @@ def _day_bucket() -> dict:
     }
 
 
-def merged_history():
+def merged_history(machine=None):
     merged = defaultdict(_day_bucket)
     for f in sorted(HIST_DIR.glob("daily-v2-*.json")):
         m = f.stem[len("daily-v2-"):]
@@ -261,6 +377,15 @@ def merged_history():
             for t, c in (r.get("tier_cost") or {}).items():
                 g["tier_cost"][t] += c
             g["machines"].append(m)
+            if _count(r, "requests_not_rescanned"):
+                g["requests_not_rescanned"] = (g.get("requests_not_rescanned", 0) +
+                                               _count(r, "requests_not_rescanned"))
+    if machine:
+        # days this machine's earlier snapshots recorded and no transcript still covers
+        for day, count in unread_periods(read_records(HIST_DIR / f"daily-v2-{machine}.json"),
+                                         read_records(HIST_DIR / f"daily-{machine}.json")).items():
+            g = merged[day]
+            g["requests_not_rescanned"] = g.get("requests_not_rescanned", 0) + count
     return dict(sorted(merged.items()))
 
 
@@ -342,10 +467,8 @@ def merged_weekly(fresh, machine, write):
             own_hist = {}
     # this machine's record for a week = whichever of (persisted, fresh scan) saw
     # more requests — transcripts prune whole files, so a shrunken re-scan must not win
-    for wk, rec in fresh.items():
-        old = own_hist.get(wk)
-        if old is None or old.get("rate_card") != RATE_CARD_VERSION or rec.get("requests", 0) >= old.get("requests", 0):
-            own_hist[wk] = rec
+    earlier = read_records(HIST_DIR / f"weekly-{machine}.json")
+    merge_period_records(own_hist, fresh, earlier)
     if write:
         own_file.write_text(json.dumps(dict(sorted(own_hist.items())), indent=1))
     # printed view = other machines' persisted snapshots + this machine's best record.
@@ -372,14 +495,17 @@ def merged_weekly(fresh, machine, write):
         for field, v in rec.items():
             if field != "rate_card":
                 g[field] += v
+    # weeks this machine's earlier snapshots recorded and no transcript still covers
+    for wk, count in unread_periods(own_hist, earlier).items():
+        merged.setdefault(wk, defaultdict(float))["requests_not_rescanned"] += count
     return dict(sorted(merged.items()))
 
 
 def week_rows(hist, n):
     rows = []
-    for wk, r in list(hist.items())[-n:]:
+    for wk, r in [(k, v) for k, v in hist.items() if not is_unread(v)][-n:]:
         cost = r.get("cost", 0)
-        rows.append({
+        rows.append({**period_coverage(r),
             "close": wk, "cost": cost, "cost_upper": r.get("cost_upper", cost),
             "cache_ttl_unknown_tokens": r.get("cache_ttl_unknown_tokens", 0),
             "unpriced_responses": r.get("unpriced_responses", 0),
@@ -394,6 +520,11 @@ def week_rows(hist, n):
             "fable_cap": 100 * r.get("tier_fable", 0) / CAP_EST["fable"],
         })
     return rows
+
+
+def unread_weeks(hist):
+    """[(week close, requests on record)] for weeks with nothing left to read."""
+    return [(wk, _count(r, "requests_not_rescanned")) for wk, r in hist.items() if is_unread(r)]
 
 
 def week_amount(lower, upper):
@@ -412,7 +543,7 @@ def week_amount(lower, upper):
     return f"${lower:,.2f}" if lower < 1 else f"${lower:,.0f}"
 
 
-def write_vault_weeks(rows, open_close=None):
+def write_vault_weeks(rows, open_close=None, unread=(), earlier_card=False, machine="<machine>"):
     lines = [
         "---", "tags: [usage, meter-week]",
         "generated: regenerated in full by usage-trend.py --week --write; do not hand-edit", "---", "",
@@ -421,12 +552,19 @@ def write_vault_weeks(rows, open_close=None):
         "this machine's scan merged with any other machines' snapshots). cap% columns are",
         "against the 2026-08-06 calibration ESTIMATES (~$1.9K all-models / ~$0.94K Fable),",
         "which the weekly meter reading (meter-readings.md) exists to recalibrate.",
-        "A week marked (open) is still accumulating.", "",
+        "A week marked (open) is still accumulating.",
+    ]
+    if earlier_card:
+        lines.append(f"Priced under rate card {RATE_CARD_VERSION}; figures under an earlier rate card "
+                     f"remain in weekly-{machine}.json and are not comparable with these.")
+    lines += [
+        "",
         "| week close | total | main | subagents | sub% | fable | opus | reqs | ctx/req(main) | cacheR% | all-cap% | fable-cap% |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
-        label = r["close"] + (" (open)" if r["close"] == open_close else "")
+        label = (r["close"] + (" (open)" if r["close"] == open_close else "") +
+                 (f" (partial {r['read_pct']:.0f}%)" if r.get("partial") else ""))
         total = week_amount(r["cost"], r["cost_upper"])
         lines.append(
             f"| {label} | {total} | ${r['main']:,.0f} | ${r['sub']:,.0f} "
@@ -441,6 +579,16 @@ def write_vault_weeks(rows, open_close=None):
                   f"tokens; {r['unpriced_responses']:,.0f} unpriced responses; "
                   f"{r['geo_unknown_responses']:,.0f} geography-unknown responses"
                   for r in uncertain]
+    short = [(r["close"], f"read {r['read']:,} of {r['on_record']:,} requests on record "
+              f"({r['read_pct']:.1f}%)" + ("; partial" if r["partial"] else ""))
+             for r in rows if r.get("short")]
+    short += [(wk, f"not rescanned: {count:,} requests on record and no transcripts left "
+               "(no row: no dollars on this card)") for wk, count in unread]
+    if short:
+        lines += ["", "Requests on record that the scan did not read (response counts, never dollars; "
+                  f"a week is marked partial when the scan read under {PARTIAL_BELOW:.0%} of them, "
+                  "and the dollars above cover only what was read):", ""]
+        lines += [f"- {wk}: {text}" for wk, text in sorted(short)]
     VAULT_WEEKS_MD.parent.mkdir(parents=True, exist_ok=True)
     VAULT_WEEKS_MD.write_text("\n".join(lines) + "\n")
 
@@ -459,6 +607,7 @@ def week_main():
         except (IndexError, ValueError):
             sys.exit("--weeks needs a number")
     write = "--write" in sys.argv
+    earlier_card = has_earlier_card("weekly", machine)   # before the merge can replace any record
     fresh = scan_weeks()
     hist = merged_weekly(fresh, machine, write)
     rows = week_rows(hist, n)
@@ -471,19 +620,27 @@ def week_main():
                   f"= {r['fable_cap']:.0f}% of est. cap; "
                   f"{r['cache_ttl_unknown_tokens']:,.0f} unknown-TTL tokens, "
                   f"{r['unpriced_responses']:,.0f} unpriced responses, "
-                  f"{r['geo_unknown_responses']:,.0f} geography-unknown responses")
+                  f"{r['geo_unknown_responses']:,.0f} geography-unknown responses"
+                  + (f"; partial: the scan read {r['read_pct']:.0f}% of the {r['on_record']:,} "
+                     "requests on record" if r["partial"] else ""))
         else:
             print(f"week closing {now_close}: no activity recorded yet")
         return
     print(f"{'week close':<14}{'total$':>17}{'main$':>8}{'sub$':>7}{'sub%':>6}"
           f"{'fable$':>8}{'opus$':>7}{'reqs':>7}{'ctx/req':>9}{'cacheR%':>9}{'all-cap%':>10}{'fbl-cap%':>10}")
     for r in rows:
-        label = r["close"] + (" *" if r["close"] == now_close else "")
+        label = r["close"] + (" *" if r["close"] == now_close else "") + (" !" if r["partial"] else "")
         print(f"{label:<14}{week_amount(r['cost'], r['cost_upper']):>17}{r['main']:>8.0f}{r['sub']:>7.0f}{r['sub_pct']:>5.0f}%"
               f"{r['fable']:>8.0f}{r['opus']:>7.0f}{r['reqs']:>7}{r['ctx']:>8.0f}K{r['crp']:>8.0f}%"
               f"{r['all_cap']:>9.0f}%{r['fable_cap']:>9.0f}%")
     print("\n* = open (still accumulating). cap% vs 2026-08-06 ESTIMATES "
           "(~$1.9K all / ~$0.94K fable) — recalibrate from meter-readings.md")
+    marked = [r for r in rows if r["partial"]]
+    if marked:
+        print(f"! = partial: the scan read under {PARTIAL_BELOW:.0%} of the requests on record "
+              "(transcripts pruned since; the dollars cover only what was read): " +
+              "; ".join(f"{r['close']} {r['read_pct']:.0f}% ({r['read']:,} of {r['on_record']:,})"
+                        for r in marked))
     ttl = sum(r["cache_ttl_unknown_tokens"] for r in rows)
     unpriced = sum(r["unpriced_responses"] for r in rows)
     geo_unknown = sum(r["geo_unknown_responses"] for r in rows)
@@ -491,7 +648,8 @@ def week_main():
           f"{geo_unknown:,.0f} geography-unknown responses; displayed dollars are "
           "lower bounds where coverage is uncertain")
     if write:
-        write_vault_weeks(week_rows(hist, len(hist)), now_close)  # vault gets FULL history
+        write_vault_weeks(week_rows(hist, len(hist)), now_close, unread_weeks(hist),
+                          earlier_card, machine)  # vault gets FULL history
         print(f"persisted weekly-v2-{machine}.json and regenerated {VAULT_WEEKS_MD}")
 
 
@@ -503,23 +661,25 @@ def main():
     do_sync = "--no-sync" not in sys.argv and has_remote()
     if do_sync:
         sync_pull()
-    merge_own(scan(), own_file)
+    merge_own(scan(), own_file, HIST_DIR / f"daily-{machine}.json")
     if do_sync:
         sync_push(own_file, machine)
 
-    hist = merged_history()
+    hist = merged_history(machine)
     n_machines = len(set(m for r in hist.values() for m in r["machines"]))
     if "--json" in sys.argv:
         print(json.dumps({d: {**r, "tier_cost": dict(r["tier_cost"])}
                           for d, r in hist.items()}, indent=1))
         return
-    rows = list(hist.items())
+    rows = [(d, r) for d, r in hist.items() if not is_unread(r)]
     if "--all" not in sys.argv:
         rows = rows[-30:]
+    unread_days = [d for d, r in hist.items() if is_unread(r)]   # whole history: they never have a row
     mach_col = "mach" if n_machines > 1 else ""
     print(f"{'day':<12}{'cost$':>8}{'reqs':>7}{'sess':>6}{'cacheR%':>9}"
           f"{'ctx/req':>9}{'fable%':>8}{'opus%':>7}{'sonnet%':>8}"
           + (f"{mach_col:>6}" if mach_col else ""))
+    marked_days = 0
     for day, r in rows:
         cost = r["cost"]
         crp = 100 * r["cache_read_cost"] / cost if cost else 0
@@ -528,7 +688,9 @@ def main():
         tc = r["tier_cost"]
         def pct(t):
             return 100 * tc.get(t, 0) / cost if cost else 0
-        line = (f"{day:<12}{cost:>8.2f}{r['requests']:>7}{r['sessions']:>6}"
+        partial = period_coverage(r)["partial"]
+        marked_days += partial
+        line = (f"{day + '!' * partial:<12}{cost:>8.2f}{r['requests']:>7}{r['sessions']:>6}"
                 f"{crp:>8.0f}%{ctx:>8.0f}K"
                 f"{pct('fable'):>7.0f}%{pct('opus'):>6.0f}%{pct('sonnet'):>7.0f}%")
         if mach_col:
@@ -544,6 +706,9 @@ def main():
     geo_unknown = sum(r["geo_unknown_responses"] for _, r in rows)
     print(f"coverage: {ttl:,.0f} unknown-TTL tokens; {unpriced:,.0f} unpriced responses; "
           f"{geo_unknown:,.0f} geography-unknown responses")
+    if marked_days or unread_days:
+        print(f"! = partial: {marked_days} day(s) rescanned at under {PARTIAL_BELOW:.0%} of the "
+              f"requests on record; {len(unread_days)} recorded day(s) have no transcripts left")
     print(f"this machine: {machine} -> {own_file.name}; history dir: {HIST_DIR}")
 
 

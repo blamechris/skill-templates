@@ -7,7 +7,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -927,6 +928,261 @@ class SplitRuleTests(SessionFixture):
         old = self.holder("-old")
         self.assertEqual(usage_accounting.split_project_dirs([old, old, via_link], main),
                          sorted([main, self.main_dir("-old")]))
+
+
+class TrendPartialPeriodTests(SessionFixture):
+    """usage-trend.py after a rate-card change (skill-templates#392): a period whose transcripts
+    are partly pruned is repriced from what is left, and must say so. The module is loaded under
+    the temporary HOME, so its ROOT, HIST_DIR, vault file and machine name all live in it."""
+    WEEK = "2026-09-02"                  # 2026-09-01 and 2026-09-02 (before 15:59 PT) are inside it
+    TS = "2026-09-01T12:00:00Z"
+    OLD_DOLLARS = 987654.5               # sentinel: this figure appearing anywhere is a bug
+
+    def setUp(self):
+        super().setUp()
+        (self.home / ".claude" / "machine-name").write_text("test\n")
+        self.trend = load("usage_trend_partial_periods", HERE / "usage-trend.py")
+        self.assertEqual(self.trend.HIST_DIR, self.home / ".claude" / "usage-history")
+        self.hist = self.trend.HIST_DIR
+        self.hist.mkdir(parents=True)
+        self.day = datetime.fromisoformat(self.TS.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+
+    def transcript(self, name, count, ts=None):
+        write_records(self.trend.ROOT / "-demo" / (name + ".jsonl"),
+                      [rec(ts or self.TS, "r-%s-%d" % (name, i), "m-%s-%d" % (name, i),
+                           "claude-opus-5-5", 100, stop="end_turn") for i in range(count)])
+
+    def earlier(self, kind, periods):
+        """The pre-v2 snapshot file: no rate_card, only `requests`, and dollars from another card."""
+        old = self.OLD_DOLLARS
+        (self.hist / ("%s-test.json" % kind)).write_text(json.dumps({
+            period: {"requests": float(count), "cost": old, "cost_main": old, "cost_sub": 0.0,
+                     "tier_opus": old, "output_tokens": 1.0}
+            for period, count in periods.items()}))
+
+    def persisted(self, kind):
+        return json.loads((self.hist / ("%s-v2-test.json" % kind)).read_text())
+
+    def run_trend(self, entry, *argv):
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["usage-trend.py", *argv]), \
+                redirect_stdout(out), redirect_stderr(io.StringIO()):
+            getattr(self.trend, entry)()
+        return out.getvalue()
+
+    def week(self, *argv):
+        return self.run_trend("week_main", "--week", *argv)
+
+    def daily(self, *argv):
+        return self.run_trend("main", "--no-sync", *argv)
+
+    def vault(self):
+        return self.trend.VAULT_WEEKS_MD.read_text()
+
+    def row(self, out, label):
+        return next(line for line in out.splitlines() if line.startswith(label))
+
+    def test_a_week_rescanned_from_pruned_transcripts_is_marked_with_both_counts(self):
+        self.transcript("s1", 40)
+        self.earlier("weekly", {self.WEEK: 100})
+        out = self.week("--write")
+        self.assertTrue(self.row(out, self.WEEK).startswith(self.WEEK + " !"))
+        self.assertIn("$0.08", self.row(out, self.WEEK))
+        self.assertIn("! = partial: the scan read under 98% of the requests on record", out)
+        self.assertIn(self.WEEK + " 40% (40 of 100)", out)
+        saved = self.persisted("weekly")[self.WEEK]
+        self.assertEqual(saved["requests_not_rescanned"], 60)
+        self.assertEqual((saved["requests"], saved["rate_card"]), (40, RATE_CARD_VERSION))
+        self.assertAlmostEqual(saved["cost"], 0.08)
+        vault = self.vault()
+        self.assertIn("| %s (partial 40%%) |" % self.WEEK, vault)
+        self.assertIn("- %s: read 40 of 100 requests on record" % self.WEEK, vault)
+        self.assertIn(RATE_CARD_VERSION, vault)
+        self.assertIn("weekly-test.json", vault)
+        for text in (out, vault, json.dumps(saved)):
+            self.assertNotIn("9876", text)
+
+    def test_a_day_rescanned_from_pruned_transcripts_is_marked_with_both_counts(self):
+        self.transcript("s1", 40)
+        self.earlier("daily", {self.day: 100})
+        out = self.daily()
+        self.assertTrue(self.row(out, self.day).startswith(self.day + "!"))
+        self.assertIn("! = partial: 1 day(s) rescanned at under 98% of the requests on record; "
+                      "0 recorded day(s) have no transcripts left", out)
+        saved = self.persisted("daily")[self.day]
+        self.assertEqual(saved["requests_not_rescanned"], 60)
+        self.assertAlmostEqual(saved["cost"], 0.08)
+        self.assertNotIn("9876", out + json.dumps(saved))
+        merged = json.loads(self.daily("--json"))
+        self.assertEqual(merged[self.day]["requests_not_rescanned"], 60)
+        self.assertAlmostEqual(merged[self.day]["cost"], 0.08)
+
+    def test_a_period_read_in_full_is_not_marked_and_prints_as_before(self):
+        self.transcript("s1", 40)
+        def outputs():
+            return (self.week("--write"), self.daily(), self.vault(),
+                    self.persisted("weekly"), self.persisted("daily"))
+        without = outputs()
+        for path in self.hist.glob("*.json"):
+            path.unlink()
+        self.earlier("weekly", {self.WEEK: 40})
+        self.earlier("daily", {self.day: 40})
+        with_earlier = outputs()
+        self.assertEqual(with_earlier[0], without[0])
+        self.assertEqual(with_earlier[1], without[1])
+        self.assertEqual(with_earlier[3:], without[3:])
+        self.assertNotIn("requests_not_rescanned", json.dumps(with_earlier[3:]))
+        self.assertNotIn("!", with_earlier[0] + with_earlier[1])
+        # An earlier-card snapshot exists, so the vault says which card the figures are on.
+        added = [line for line in with_earlier[2].splitlines() if line not in without[2].splitlines()]
+        self.assertEqual(len(added), 1)
+        self.assertIn(RATE_CARD_VERSION, added[0])
+        self.assertNotIn("partial", with_earlier[2])
+
+    def test_a_history_with_no_earlier_snapshot_never_mentions_coverage(self):
+        self.transcript("s1", 40)
+        vault_out = self.week("--write") + self.daily() + self.vault()
+        for word in ("partial", "not rescanned", "on record", RATE_CARD_VERSION):
+            self.assertNotIn(word, vault_out)
+
+    def test_between_98_and_100_percent_is_listed_with_counts_but_not_marked(self):
+        # read 98 of 100 sits exactly on the threshold (not marked); 99 is above it; 97 is below.
+        for name, ts, count in (("a", "2026-09-01T12:00:00Z", 98), ("b", "2026-09-08T12:00:00Z", 99),
+                                ("c", "2026-09-15T12:00:00Z", 97)):
+            self.transcript(name, count, ts)
+        self.earlier("weekly", {"2026-09-02": 100, "2026-09-09": 100, "2026-09-16": 100})
+        out = self.week("--write")
+        self.assertNotIn(" !", self.row(out, "2026-09-02"))
+        self.assertNotIn(" !", self.row(out, "2026-09-09"))
+        self.assertIn(" !", self.row(out, "2026-09-16"))
+        footer = next(line for line in out.splitlines() if line.startswith("! = partial"))
+        self.assertIn("2026-09-16 97% (97 of 100)", footer)
+        self.assertNotIn("2026-09-02", footer)
+        self.assertNotIn("2026-09-09", footer)
+        vault = self.vault()
+        for week, count in (("2026-09-02", 98), ("2026-09-09", 99), ("2026-09-16", 97)):
+            self.assertIn("- %s: read %d of 100 requests on record" % (week, count), vault)
+        self.assertIn("| 2026-09-02 |", vault)
+        self.assertIn("| 2026-09-09 |", vault)
+        self.assertIn("| 2026-09-16 (partial 97%) |", vault)
+
+    def test_a_week_recorded_earlier_with_no_transcripts_left_is_listed_without_a_row(self):
+        self.transcript("s1", 40)
+        self.earlier("weekly", {"2026-07-08": 4198, self.WEEK: 40})
+        out = self.week("--write")
+        self.assertFalse([line for line in out.splitlines() if line.startswith("2026-07-08")])
+        vault = self.vault()
+        self.assertNotIn("| 2026-07-08", vault)
+        self.assertIn("- 2026-07-08: not rescanned: 4,198 requests on record", vault)
+        self.assertNotIn("2026-07-08", self.persisted("weekly"))
+        # --oneline still reports only the open week, whose wording is untouched.
+        self.assertNotIn("not rescanned", self.week("--oneline"))
+
+    def test_a_day_recorded_earlier_with_no_transcripts_left_is_counted_without_a_row(self):
+        self.transcript("s1", 40)
+        self.earlier("daily", {"2026-07-08": 120, "2026-07-09": 80, self.day: 40})
+        out = self.daily()
+        self.assertFalse([line for line in out.splitlines() if line.startswith("2026-07-0")])
+        self.assertIn("! = partial: 0 day(s) rescanned at under 98% of the requests on record; "
+                      "2 recorded day(s) have no transcripts left", out)
+        self.assertIn("1 days shown", out)
+        merged = json.loads(self.daily("--json"))
+        self.assertEqual(merged["2026-07-08"]["requests_not_rescanned"], 120)
+        self.assertEqual(merged["2026-07-08"]["cost"], 0)
+        self.assertNotIn("2026-07-08", self.persisted("daily"))
+
+    def test_the_mark_survives_a_second_scan_without_the_earlier_file(self):
+        self.transcript("s1", 40)
+        self.earlier("weekly", {self.WEEK: 100})
+        self.earlier("daily", {self.day: 100})
+        self.week("--write")
+        self.daily()
+        for kind in ("weekly", "daily"):
+            (self.hist / ("%s-test.json" % kind)).unlink()   # only the v2 records carry the count now
+        out = self.week("--write")
+        self.assertIn(self.WEEK + " 40% (40 of 100)", out)
+        self.assertTrue(self.row(self.daily(), self.day).startswith(self.day + "!"))
+        # Further pruning: the same-card rule keeps the record that read more, and its mark.
+        (self.trend.ROOT / "-demo" / "s1.jsonl").unlink()
+        self.transcript("s2", 10)
+        out = self.week("--write")
+        self.assertIn(self.WEEK + " 40% (40 of 100)", out)
+        self.assertEqual(self.persisted("weekly")[self.WEEK]["requests_not_rescanned"], 60)
+        self.daily()
+        self.assertEqual(self.persisted("daily")[self.day]["requests_not_rescanned"], 60)
+
+    def test_the_open_week_says_partial_in_its_oneline_only_when_it_is(self):
+        now = datetime.now().astimezone()
+        week = self.trend.meter_week_close(now)
+        self.transcript("s1", 40, now.isoformat())
+        plain = self.week("--oneline")
+        self.assertTrue(plain.startswith("week closing %s: " % week))
+        self.assertNotIn("partial", plain)
+        self.earlier("weekly", {week: 40})
+        self.assertEqual(self.week("--oneline"), plain)
+        self.earlier("weekly", {week: 100})
+        self.assertEqual(self.week("--oneline"),
+                         plain.rstrip("\n") + "; partial: the scan read 40% of the 100 requests on record\n")
+        self.assertTrue(self.row(self.week(), week).startswith(week + " * !"))
+
+    def test_a_v2_record_under_another_card_hands_its_count_on(self):
+        older = {"rate_card": "older-card", "requests": 80, "requests_not_rescanned": 20,
+                 "cost": self.OLD_DOLLARS, "cost_upper": self.OLD_DOLLARS,
+                 "cost_main": self.OLD_DOLLARS, "cost_sub": self.OLD_DOLLARS,
+                 "tier_fable": self.OLD_DOLLARS}   # fields the fresh record lacks must not survive
+        (self.hist / "weekly-v2-test.json").write_text(json.dumps({
+            self.WEEK: older, "2026-08-05": dict(older, requests_not_rescanned=0)}))
+        self.transcript("s1", 40)
+        out = self.week("--write")
+        saved = self.persisted("weekly")
+        self.assertEqual(saved[self.WEEK]["rate_card"], RATE_CARD_VERSION)
+        self.assertEqual(saved[self.WEEK]["requests_not_rescanned"], 60)
+        self.assertAlmostEqual(saved[self.WEEK]["cost"], 0.08)
+        self.assertIn(self.WEEK + " 40% (40 of 100)", out)
+        # A week with no fresh scan keeps the other card's record untouched and is listed unread.
+        self.assertEqual(saved["2026-08-05"]["rate_card"], "older-card")
+        self.assertIn("- 2026-08-05: not rescanned: 80 requests on record", self.vault())
+        self.assertNotIn("9876", out + self.vault() + json.dumps(saved[self.WEEK]))
+
+    def test_machines_sum_their_shortfalls_and_never_a_high_water_mark(self):
+        self.transcript("s1", 100)
+        self.earlier("weekly", {self.WEEK: 150})            # this machine: read 100 of 150
+        self.earlier("daily", {self.day: 150})
+        other = {"rate_card": RATE_CARD_VERSION, "requests": 100, "requests_not_rescanned": 100,
+                 "cost": 1.0, "cost_main": 1.0}
+        (self.hist / "weekly-v2-other.json").write_text(json.dumps({self.WEEK: other}))
+        (self.hist / "daily-v2-other.json").write_text(json.dumps({self.day: other}))
+        # read 200; short 50 + 100 = 150; on record 350 (a max-based mark would say 200 or 150)
+        self.assertIn(self.WEEK + " 57% (200 of 350)", self.week())
+        self.daily()
+        merged = self.trend.merged_history("test")[self.day]
+        self.assertEqual((merged["requests"], merged["requests_not_rescanned"]), (200, 150))
+        self.assertIn("1 day(s) rescanned", self.daily())
+
+    def test_no_dollar_from_another_rate_card_enters_a_v2_total(self):
+        # Nothing was scanned: every dollar on offer belongs to another card.
+        self.earlier("weekly", {self.WEEK: 100})
+        self.earlier("daily", {self.day: 100})
+        older = {"rate_card": "older-card", "requests": 70, "cost": self.OLD_DOLLARS,
+                 "cost_upper": self.OLD_DOLLARS, "cost_main": self.OLD_DOLLARS,
+                 "tier_opus": self.OLD_DOLLARS, "tier_cost": {"opus": self.OLD_DOLLARS}}
+        (self.hist / "weekly-v2-other.json").write_text(json.dumps({"2026-08-05": older}))
+        (self.hist / "daily-v2-other.json").write_text(json.dumps({"2026-08-05": older}))
+        weekly = self.trend.merged_weekly({}, "test", False)
+        daily = self.trend.merged_history("test")
+        self.assertEqual(set(weekly[self.WEEK]), {"requests_not_rescanned"})
+        self.assertEqual(set(daily[self.day]) - {"requests_not_rescanned"},
+                         set(self.trend._day_bucket()))
+        self.assertNotIn("2026-08-05", weekly)
+        self.assertNotIn("2026-08-05", daily)
+        for bucket in list(weekly.values()) + list(daily.values()):
+            for field in ("cost", "cost_upper", "cost_main", "cost_sub", "tier_opus"):
+                self.assertEqual(bucket.get(field, 0), 0, field)
+            self.assertEqual(sum(bucket.get("tier_cost", {}).values()), 0)
+        self.assertEqual(self.week("--write") + self.daily() + self.vault() + self.daily("--json"),
+                         self.week("--write") + self.daily() + self.vault() + self.daily("--json"))
+        for text in (self.week("--write"), self.daily(), self.vault(), self.daily("--json")):
+            self.assertNotIn("9876", text)
 
 
 if __name__ == "__main__":
