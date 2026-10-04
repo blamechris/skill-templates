@@ -1251,7 +1251,7 @@ for c in "U:$REFU:$SHOWN_U::0:ok:under the factor and fully priced" \
   if ref_exact "$SUT" "$fx" "$sh" "$gq" "$un" "$ov"; then
     ok "the whole stderr reference line is exact: $label"
   else
-    bad "the whole stderr reference line is exact: $label" "got  '$REF_GOT'" 
+    bad "the whole stderr reference line is exact: $label" "got  '$REF_GOT'"
     printf '       want %s\n' "'$REF_WANT'"
   fi
 done
@@ -1307,9 +1307,19 @@ for name in want:
         print("tier name: `%s` (a tier --figures prints) does not appear backticked in the rule's first paragraph" % name)
 if "usage-benchmark-row.py --tier" not in para:
     print("flag: the literal 'usage-benchmark-row.py --tier' does not appear in the rule's first paragraph")
+# Which tier name sits beside which label. The two names being present is not enough: a
+# paragraph reading "`high-panel` (the one-reviewer exception) or `high-single` (panel depth)"
+# has every name and the flag and tells a session to pass the wrong tier. These two strings
+# are the doctrine's own wording, pinned as literals on purpose (they are not in --figures);
+# whitespace runs, line breaks included, are one space, so re-wrapping the prose cannot fail it.
+flat = re.sub(r"\s+", " ", para)
+for label in ("`high-single` (the one-reviewer exception)", "`high-panel` (panel depth)"):
+    if label not in flat:
+        print("pairing: the literal %s does not appear in the rule's first paragraph" % label)
 PY
 }
 # mutate_doc <in> <out> <which> [<tier name>] — a copy of the rule with ONE thing broken
+# (swap trades `high-single` and `high-panel` in the first paragraph; the others are named below)
 mutate_doc() {
   "$PY" - "$1" "$2" "$3" "${4:-}" <<'PY'
 import re, sys
@@ -1324,12 +1334,18 @@ def bump(m):
     return m.group(1) + format(Decimal(m.group(2)) + 1, "f") + m.group(3)
 if what == "token":
     out = head + "<!--default:reference-figure-->" + rest
-elif what in ("tier", "flag"):
+elif what in ("tier", "flag", "swap"):
     # every occurrence inside the first paragraph (up to the first blank line)
     cut = rest.find("\n\n")
     first, after = (rest, "") if cut < 0 else (rest[:cut], rest[cut:])
     if what == "tier":
         new = first.replace("`%s`" % tier, "`%s-renamed`" % tier)
+    elif what == "swap":
+        # the two names trade places, so each label now sits beside the other's tier
+        if "`high-single`" not in first or "`high-panel`" not in first:
+            sys.exit(2)
+        new = (first.replace("`high-single`", "`@swap@`").replace("`high-panel`", "`high-single`")
+                    .replace("`@swap@`", "`high-panel`"))
     else:
         new = first.replace("usage-benchmark-row.py --tier", "usage-benchmark-row.py --level")
     if new == first:
@@ -1491,13 +1507,26 @@ if MUT=$(mutant figures-twice usage-benchmark-row.py 's/^            if figures:
 else
   bad "the fixture DISTINGUISHES the two implementations (--figures --figures let through: it prints the table)" "could not build the mutant: the repeat check is not where this expects it"
 fi
-# the doctrine sync: the rule's paragraph, broken six ways, and the table, broken two
+# the doctrine sync: the rule's paragraph broken one property at a time (token, each amount,
+# the factor, an anchor phrase, a tier name, the flag, and the two tier names swapped), then
+# the script's table changed one property at a time (an amount, a name, the factor). Each
+# must be flagged, and where the break has its own message the check must carry it. The swap
+# is the one that keeps every name, amount and the flag in place, so it must be caught by the
+# pairing check alone: exactly its two messages and nothing else.
 LASTTIER=${TIERS##* }
-for what in token low single panel factor anchor tier flag; do
-  case "$what" in tier) must="tier name: \`$LASTTIER\`" ;; flag) must="flag: " ;; *) must="" ;; esac
+for what in token low single panel factor anchor tier flag swap; do
+  must=""; only=""
+  case "$what" in
+    tier) must="tier name: \`$LASTTIER\`" ;;
+    flag) must="flag: " ;;
+    swap) must="pairing: "; only="pairing" ;;
+  esac
   if mutate_doc "$DOC" "$TMP/doc-$what.md" "$what" "$LASTTIER"; then
     got=$(doctrine_problems "$TMP/doc-$what.md" "$FIG")
     [ -n "$got" ] && printf '%s\n' "$got" | grep -qF -- "$must" \
+      && { [ -z "$only" ] || { ! printf '%s\n' "$got" | grep -q -v "^$only: " \
+                               && [ "$(printf '%s\n' "$got" | grep -c "^$only: ")" = 2 ] \
+                               && [ -z "$(doctrine_problems "$DOC" "$FIG")" ]; }; } \
       && ok "the fixture DISTINGUISHES the two implementations (rule paragraph broken: $what)" \
       || bad "the fixture DISTINGUISHES the two implementations (rule paragraph broken: $what)" "the sync check passed a broken rule, or did not name it: '$(flat "$got")'"
   else
