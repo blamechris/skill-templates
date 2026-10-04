@@ -3,6 +3,7 @@ import glob
 import os
 from decimal import Decimal
 from datetime import datetime
+from pathlib import Path
 
 RATE_CARD_VERSION = "anthropic-standard-global-2026-10-01-geo-bounds"
 # USD per million: uncached input, output, 5m write, 1h write, cache read.
@@ -113,11 +114,16 @@ def session_subagent_roots(transcript):
     sessions' transcripts. Roots dedupe by realpath, the first spelling surviving.
 
     main_dir: the realpath of the directory holding the main transcript.
+    A transcript with no id in its name (a file literally called `.jsonl`) has no roots:
+    an empty id would widen the glob to every `projects/*/subagents`.
     Used by usage-benchmark-row.py and usage-checkpoint.py; skill-templates#254, #377."""
     base = os.fspath(transcript)
     if base.endswith(".jsonl"):
         base = base[:-len(".jsonl")]
+    main_dir = os.path.realpath(os.path.dirname(os.fspath(transcript)))
     sid = os.path.basename(base)
+    if not sid:
+        return [], main_dir
     projects = os.path.expanduser("~/.claude/projects")
     roots = [os.path.join(base, "subagents")]
     roots += sorted(glob.glob(os.path.join(glob.escape(projects), "*", glob.escape(sid), "subagents")))
@@ -127,7 +133,34 @@ def session_subagent_roots(transcript):
         if real not in seen and os.path.isdir(root):
             seen.add(real)
             found.append(root)
-    return found, os.path.realpath(os.path.dirname(os.fspath(transcript)))
+    return found, main_dir
+
+
+def session_child_files(roots):
+    """Return (files, holding_roots): every child transcript under `roots`, and the roots
+    that held at least one (an empty `subagents` dir is no holder).
+
+    The one walker both usage-benchmark-row.py and usage-checkpoint.py read children
+    through, so the two scripts read the same child FILES. Every name `os.walk` lists as a
+    non-directory and ending in `.jsonl` counts, with no is-a-regular-file filter: a
+    dangling symlink must still reach the caller's `open()` and refuse there. An unreadable
+    directory raises OSError (a REFUSE for the callers), never a silent undercount.
+    Files come back as strings in ONE global order over all roots, by path components,
+    which is the order `sorted(Path)` gives.
+
+    Two limits, shared by both scripts: a symlink to a directory is not followed, and an
+    unreadable ANCESTOR of a root (the old project dir, or the `<uuid>` dir) makes
+    `session_subagent_roots` drop that root, which no walker can see."""
+    def refuse(error):
+        raise error
+    files, holding = [], []
+    for root in roots:
+        before = len(files)
+        for dirpath, _dirs, names in os.walk(root, onerror=refuse):
+            files += [os.path.join(dirpath, name) for name in names if name.endswith(".jsonl")]
+        if len(files) > before:
+            holding.append(root)
+    return sorted(files, key=lambda f: Path(f).parts), holding
 
 
 def split_project_dirs(holding_roots, main_dir):

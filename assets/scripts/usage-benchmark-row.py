@@ -63,19 +63,22 @@ of 22 files for session 5ae4397b). The OLD dir also holds other sessions'
 transcripts, so sweeping it is wrong the other way (88.4M against 14.3M, both under
 the pre-#259 first-record dedup; the same 22 files read 18.2M under today's
 complete-record policy). Which roots are scanned is decided by
-usage_accounting.session_subagent_roots, and when a session counts as split by
-usage_accounting.split_project_dirs: both are shared with usage-checkpoint.py so the
-two scripts cannot disagree about which files belong to a session (#377), and their
-docstrings hold the rules (the full-uuid scoping, the sibling root that keeps an
-explicit .jsonl path outside ~/.claude/projects working, the realpath dedupe). Messages
-dedupe by key across every dir. A WARNING on stderr fires when children sit in a
-project dir other than the transcript's own, and lists every dir: the figure is right,
-but the session was split. skill-templates#254.
+usage_accounting.session_subagent_roots, which files they hold by
+usage_accounting.session_child_files, and when a session counts as split by
+usage_accounting.split_project_dirs: all three are shared with usage-checkpoint.py, so
+the two scripts read the same child FILES (what each does with a file's records is its
+own). The rules live in those docstrings: the full-uuid scoping, the sibling root that
+keeps an explicit .jsonl path outside ~/.claude/projects working, the realpath dedupe.
+Two limits, shared: a symlink to a directory is not followed, and an unreadable ANCESTOR
+of a root hides that root from both scripts. Messages dedupe by key across every dir. A
+WARNING on stderr fires when children sit in a project dir other than the transcript's
+own, and lists every dir: the figure is right, but the session was split.
+skill-templates#254, #377.
 """
 import json, glob, os, re, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from usage_accounting import (RATE_CARD_VERSION, Responses, price_usage,
+from usage_accounting import (RATE_CARD_VERSION, Responses, price_usage, session_child_files,
                               session_subagent_roots, split_project_dirs)
 from datetime import datetime
 from decimal import Decimal
@@ -119,33 +122,27 @@ def scan_subagents(roots, selected):
 
     Returns (files counted, the roots that held any). `roots` come from
     usage_accounting.session_subagent_roots — scoped by the FULL uuid, never a
-    directory sweep; see the SCOPE paragraph in the module docstring."""
-    count = 0
-    held = []
-    def walk_err(e):
+    directory sweep; see the SCOPE paragraph in the module docstring. The files come
+    from usage_accounting.session_child_files; an unreadable directory or file is a
+    REFUSE here, never an undercount."""
+    try:
+        files, held = session_child_files(roots)
+    except OSError as e:
         die(f"cannot measure subagents: {e}")
-    for subdir in roots:
-        found = 0
-        for root, _dirs, names in os.walk(subdir, onerror=walk_err):
-            for name in names:
-                if not name.endswith(".jsonl"):
-                    continue
-                source = os.path.join(root, name)
+    count = 0
+    for source in files:
+        try:
+            fh = open(source, errors="replace")
+        except OSError as e:
+            die(f"cannot measure subagents: {e}")
+        count += 1
+        with fh:
+            for line_no, line in enumerate(fh, 1):
                 try:
-                    fh = open(source, errors="replace")
-                except OSError as e:
-                    die(f"cannot measure subagents: {e}")
-                count += 1
-                found += 1
-                with fh:
-                    for line_no, line in enumerate(fh, 1):
-                        try:
-                            rec = json.loads(line)
-                        except ValueError:
-                            continue
-                        selected.add(rec, source, line_no, "child")
-        if found:
-            held.append(subdir)
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                selected.add(rec, source, line_no, "child")
     return count, held
 
 # --- work numerator -------------------------------------------------------

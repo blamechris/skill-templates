@@ -742,7 +742,7 @@ err=$(rec_run 9d9d9d9d 2>&1 >/dev/null)
   && ok "an empty <uuid>/subagents dir elsewhere is not a holder: count unchanged (3.1M/1), no warning" \
   || bad "an empty <uuid>/subagents dir elsewhere is not a holder: count unchanged (3.1M/1), no warning" \
          "rc=$rc $(flat "$out") stderr=$(flat "$err")"
-if MUT=$(mutant empty-holder usage-benchmark-row.py 's|^        if found:$|        if True:|'); then
+if MUT=$(mutant empty-holder usage_accounting.py 's|^        if len(files) > before:$|        if True:|'); then
   merr=$(HOME="$RECH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" 9d9d9d9d 2>&1 >/dev/null)
   printf '%s' "$merr" | grep -q 'WARNING: subagent transcripts for 9d9d9d9d found in 2 project dirs' \
     && ok "the fixture DISTINGUISHES the two implementations (empty-dir holder: the mutant warns)" \
@@ -750,7 +750,7 @@ if MUT=$(mutant empty-holder usage-benchmark-row.py 's|^        if found:$|     
            "mutant stderr=$(flat "$merr")"
 else
   bad "the fixture DISTINGUISHES the two implementations (empty-dir holder: the mutant warns)" \
-      "could not build the mutant: the found check is not where this expects it"
+      "could not build the mutant: the holder check is not where this expects it in usage_accounting.py"
 fi
 
 # ---- three dirs: the WHOLE listing, in sorted order (#377). Every fixture above has
@@ -770,19 +770,28 @@ gen_distinct "$TP/-demo-aaa/$TRI/subagents/agent-2.jsonl" a_msg_
 TPR=$(cd "$TP" && pwd -P)
 WANT_TRI=$(printf '  %s\n  %s\n  %s' "$TPR/-demo-aaa" "$TPR/-demo-mid  (main transcript)" "$TPR/-demo-zzz")
 
-# tri_listing <row-script> <seed> — the warning's dir lines under one hash seed
-tri_listing() {
-  local e
-  e=$(PYTHONHASHSEED=$2 HOME="$TRIH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$1" "$TRI" 2>&1 >/dev/null)
-  printf '%s\n' "$e" | sed -n '/^WARNING:/,/^  transcript:/p' | sed '1d;$d'
-}
-# tri_misses <row-script> — the seeds (of 12) under which the listing is not WANT_TRI
-tri_misses() {
-  local s misses=""
-  for s in 0 1 2 3 4 5 6 7 8 9 10 11; do
-    [ "$(tri_listing "$1" "$s")" = "$WANT_TRI" ] || misses="$misses $s"
+# tri_scan <row-script> — run the three-dir session under 12 hash seeds and sort each
+# seed's outcome into four lists of seeds (space-separated, set as globals):
+#   TRI_BAD       exit status not 0, or the row's workload cell is not WANT_SPLIT
+#   TRI_INEXACT   the warning's dir lines are not WANT_TRI (all three, sorted, main marked)
+#   TRI_NOTSET    the dir lines are not the three expected lines in SOME order
+#   TRI_NOTFIRST2 the dir lines are not the first two expected lines, in order
+# A mutant that merely crashes lands in TRI_BAD, so it cannot pass for a mutant that
+# misbehaves in the specific way a case is about.
+WANT_TRI_SET=$(printf '%s\n' "$WANT_TRI" | LC_ALL=C sort)
+WANT_TRI_FIRST2=$(printf '%s\n' "$WANT_TRI" | head -2)
+tri_scan() {
+  local seed out rc err list
+  TRI_BAD=""; TRI_INEXACT=""; TRI_NOTSET=""; TRI_NOTFIRST2=""
+  for seed in 0 1 2 3 4 5 6 7 8 9 10 11; do
+    out=$(PYTHONHASHSEED=$seed HOME="$TRIH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$1" "$TRI" 2>/dev/null); rc=$?
+    err=$(PYTHONHASHSEED=$seed HOME="$TRIH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$1" "$TRI" 2>&1 >/dev/null)
+    list=$(printf '%s\n' "$err" | sed -n '/^WARNING:/,/^  transcript:/p' | sed '1d;$d')
+    { [ "$rc" -eq 0 ] && [ "$(field "$out" 9)" = "$WANT_SPLIT" ]; } || TRI_BAD="$TRI_BAD $seed"
+    [ "$list" = "$WANT_TRI" ] || TRI_INEXACT="$TRI_INEXACT $seed"
+    [ "$(printf '%s\n' "$list" | LC_ALL=C sort)" = "$WANT_TRI_SET" ] || TRI_NOTSET="$TRI_NOTSET $seed"
+    [ "$list" = "$WANT_TRI_FIRST2" ] || TRI_NOTFIRST2="$TRI_NOTFIRST2 $seed"
   done
-  printf '%s' "$misses"
 }
 
 out=$(HOME="$TRIH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$TRI" 2>/dev/null); rc=$?
@@ -792,32 +801,34 @@ err=$(HOME="$TRIH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$TRI" 2>&1 >/dev/
   && ok "a three-dir session totals 6.2M/2 and the warning says 3 project dirs" \
   || bad "a three-dir session totals 6.2M/2 and the warning says 3 project dirs" \
          "rc=$rc $(flat "$out") stderr=$(flat "$err")"
-miss=$(tri_misses "$SUT")
-[ -z "$miss" ] \
+tri_scan "$SUT"
+[ -z "$TRI_BAD$TRI_INEXACT" ] \
   && ok "all three dirs are listed, sorted, the transcript's own (middle) dir marked — under 12 hash seeds" \
   || bad "all three dirs are listed, sorted, the transcript's own (middle) dir marked — under 12 hash seeds" \
-         "seeds that differ:$miss want='$(flat "$WANT_TRI")' got(seed 0)='$(flat "$(tri_listing "$SUT" 0)")'"
+         "bad seeds:$TRI_BAD; inexact seeds:$TRI_INEXACT; want='$(flat "$WANT_TRI")'"
 
-# The mutants this pins. Truncating the loop to two dirs drops the third line under
-# every seed; removing the sort leaves the order to the hash seed.
+# The mutants this pins. Each must still exit 0 and report the right total under EVERY
+# seed (a crash is not the defect these are about), and then show its own defect:
+# truncating the loop to two dirs lists the first two lines under every seed and never
+# the third; removing the sort lists all three dirs, in an order the hash seed picks.
 if MUT=$(mutant truncated-listing usage-benchmark-row.py 's|^    for d in split:$|    for d in split[:2]:|'); then
-  miss=$(tri_misses "$MUT")
-  [ -n "$miss" ] \
-    && ok "the fixture DISTINGUISHES the two implementations (listing truncated to 2 dirs: the third line is lost)" \
-    || bad "the fixture DISTINGUISHES the two implementations (listing truncated to 2 dirs: the third line is lost)" \
-           "the three-dir listing was unchanged under all 12 seeds"
+  tri_scan "$MUT"
+  [ -z "$TRI_BAD" ] && [ -z "$TRI_NOTFIRST2" ] && [ -n "$TRI_INEXACT" ] \
+    && ok "the fixture DISTINGUISHES the two implementations (listing truncated to 2 dirs: exit 0, right total, the third line lost under every seed)" \
+    || bad "the fixture DISTINGUISHES the two implementations (listing truncated to 2 dirs: exit 0, right total, the third line lost under every seed)" \
+           "bad seeds:$TRI_BAD; not-first-two seeds:$TRI_NOTFIRST2; inexact seeds:$TRI_INEXACT"
 else
-  bad "the fixture DISTINGUISHES the two implementations (listing truncated to 2 dirs: the third line is lost)" \
+  bad "the fixture DISTINGUISHES the two implementations (listing truncated to 2 dirs: exit 0, right total, the third line lost under every seed)" \
       "could not build the mutant: the listing loop is not where this expects it"
 fi
 if MUT=$(mutant unsorted-listing usage_accounting.py 's#sorted(holders | {main_dir})#list(holders | {main_dir})#'); then
-  miss=$(tri_misses "$MUT")
-  [ -n "$miss" ] \
-    && ok "the fixture DISTINGUISHES the two implementations (no sort: the order varies with the hash seed)" \
-    || bad "the fixture DISTINGUISHES the two implementations (no sort: the order varies with the hash seed)" \
-           "the three-dir listing came out sorted under all 12 seeds (about a 6^-12 chance — or the mutant is not a mutant)"
+  tri_scan "$MUT"
+  [ -z "$TRI_BAD" ] && [ -z "$TRI_NOTSET" ] && [ -n "$TRI_INEXACT" ] \
+    && ok "the fixture DISTINGUISHES the two implementations (no sort: exit 0, right total, all three dirs listed, in an order the hash seed picks)" \
+    || bad "the fixture DISTINGUISHES the two implementations (no sort: exit 0, right total, all three dirs listed, in an order the hash seed picks)" \
+           "bad seeds:$TRI_BAD; not-the-three-dirs seeds:$TRI_NOTSET; inexact seeds:$TRI_INEXACT (empty = sorted under all 12, about a 6^-12 chance)"
 else
-  bad "the fixture DISTINGUISHES the two implementations (no sort: the order varies with the hash seed)" \
+  bad "the fixture DISTINGUISHES the two implementations (no sort: exit 0, right total, all three dirs listed, in an order the hash seed picks)" \
       "could not build the mutant: the split rule's return line is not where this expects it in usage_accounting.py"
 fi
 

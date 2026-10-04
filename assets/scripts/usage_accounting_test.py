@@ -1,14 +1,17 @@
 """Synthetic edge cases and the preserved, sanitized recent-cohort arithmetic."""
+import hashlib
 import json
 import importlib.util
 import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -678,19 +681,30 @@ class SessionFixture(unittest.TestCase):
         self.addCleanup(patch.stop)
 
 
-class SessionScopedCheckpointTests(SessionFixture):
-    def recycled_session(self):
+def unreadable(test, path):
+    """chmod `path` to 0 for the test, restoring it so the temporary tree can be removed."""
+    mode = path.stat().st_mode & 0o777
+    path.chmod(0)
+    test.addCleanup(path.chmod, mode)
+
+
+needs_non_root = unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any file")
+
+
+class ScanFixture(SessionFixture):
+    """Both scripts that read a session's children, run against the temporary HOME."""
+    def recycled_session(self, sid=SPLIT):
         """Main transcript and one child in the NEW dir, the earlier children in the OLD
         dir (no main transcript there), and a foreign session living in the old dir."""
         # The NEW dir sorts AFTER the old one, so discovery order (the transcript's own
         # dir first) and sorted order differ and the coverage sort is observable.
         new, old = self.projects / "-demo-zzz-new", self.projects / "-demo-aaa-old"
-        write_records(new / (SPLIT + ".jsonl"), [priced_parent("p1"), priced_parent("p2")])
-        write_records(new / SPLIT / "subagents" / "agent-new.jsonl", [priced_child("n1")])
-        write_records(old / SPLIT / "subagents" / "agent-a.jsonl",
-                      [priced_child("a1"), priced_child("a2")])
-        write_records(old / SPLIT / "subagents" / "workflows" / "wf_x" / "agent-b.jsonl",
-                      [priced_child("b1")])
+        write_records(new / (sid + ".jsonl"), [priced_parent(sid + "p1"), priced_parent(sid + "p2")])
+        write_records(new / sid / "subagents" / "agent-new.jsonl", [priced_child(sid + "n1")])
+        write_records(old / sid / "subagents" / "agent-a.jsonl",
+                      [priced_child(sid + "a1"), priced_child(sid + "a2")])
+        write_records(old / sid / "subagents" / "workflows" / "wf_x" / "agent-b.jsonl",
+                      [priced_child(sid + "b1")])
         write_records(old / (FOREIGN + ".jsonl"), [priced_parent("fp")])
         write_records(old / FOREIGN / "subagents" / "agent-x.jsonl", [priced_child("fx")])
         return new, old
@@ -699,11 +713,34 @@ class SessionScopedCheckpointTests(SessionFixture):
         return subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"), *args],
                               capture_output=True, text=True)
 
+    def run_row(self, session):
+        # no gh on the PATH: a fixture with no PR references never asks, and must not
+        env = dict(os.environ, PATH="/usr/bin:/bin")
+        return subprocess.run([sys.executable, str(HERE / "usage-benchmark-row.py"), str(session)],
+                              capture_output=True, text=True, env=env)
+
     def capture(self, session):
         done = self.run_checkpoint("--session", str(session))
         self.assertEqual(done.returncode, 0, done.stderr)
         return json.loads(done.stdout), done.stderr
 
+    @staticmethod
+    def checkpoint_figures(doc):
+        return {"files": len(doc["source_coverage"]) - 1,
+                "parent": doc["parent"]["responses"], "children": doc["children"]["responses"],
+                "lower": Decimal(doc["children"]["lower_usd"]),
+                "upper": Decimal(doc["children"]["upper_usd"])}
+
+    @staticmethod
+    def row_figures(done):
+        counts = re.search(r"parent (\d+), children (\d+); child transcript files (\d+)", done.stderr)
+        usd = re.search(r"children ([0-9.]+)–([0-9.]+); all-in", done.stderr)
+        return {"files": int(counts.group(3)), "parent": int(counts.group(1)),
+                "children": int(counts.group(2)),
+                "lower": Decimal(usd.group(1)), "upper": Decimal(usd.group(2))}
+
+
+class SessionScopedCheckpointTests(ScanFixture):
     def test_children_in_every_project_dir_are_priced(self):
         new, old = self.recycled_session()
         doc, err = self.capture(SPLIT)
@@ -713,7 +750,8 @@ class SessionScopedCheckpointTests(SessionFixture):
         self.assertEqual(paths[1:], sorted([
             str(new / SPLIT / "subagents" / "agent-new.jsonl"),
             str(old / SPLIT / "subagents" / "agent-a.jsonl"),
-            str(old / SPLIT / "subagents" / "workflows" / "wf_x" / "agent-b.jsonl")]))
+            str(old / SPLIT / "subagents" / "workflows" / "wf_x" / "agent-b.jsonl")],
+            key=lambda f: Path(f).parts))
         self.assertEqual((doc["parent"]["responses"], doc["children"]["responses"]), (2, 4))
         self.assertEqual(Decimal(doc["children"]["lower_usd"]), Decimal("10.004"))
         self.assertEqual(Decimal(doc["children"]["upper_usd"]), Decimal("10.004"))
@@ -741,7 +779,7 @@ class SessionScopedCheckpointTests(SessionFixture):
         self.assertEqual(doc["quality"]["split_project_dirs"], 0)
         self.assertNotIn("WARNING", err)
 
-    def test_split_warning_stays_off_stdout_and_aggregate_reads_new_fields(self):
+    def test_a_split_warning_goes_to_stderr_only_and_checkpoints_with_session_project_dirs_still_aggregate(self):
         self.recycled_session()
         out = self.root / "checkpoints"
         for session in (SPLIT, FOREIGN):
@@ -797,16 +835,234 @@ class SessionScopedCheckpointTests(SessionFixture):
         self.assertEqual(doc["quality"]["split_project_dirs"], 0)
         self.assertNotIn("WARNING", err)
 
-    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any file")
-    def test_unreadable_child_in_another_dir_refuses(self):
-        new, old = self.recycled_session()
-        locked = old / SPLIT / "subagents" / "agent-a.jsonl"
-        locked.chmod(0)
-        self.addCleanup(locked.chmod, 0o600)
-        done = self.run_checkpoint("--session", SPLIT)
-        self.assertEqual(done.returncode, 1)
-        self.assertTrue(done.stderr.startswith("REFUSE:"), done.stderr)
-        self.assertEqual(done.stdout, "")
+    def test_children_only_in_the_old_dir_still_split_and_count_every_file(self):
+        # the commonest recycle shape: the dir the transcript moved to holds no child at all
+        new, old = self.projects / "-demo-new", self.projects / "-demo-old"
+        write_records(new / (SPLIT + ".jsonl"), [priced_parent("p1")])
+        write_records(old / SPLIT / "subagents" / "agent-a.jsonl", [priced_child("a1")])
+        write_records(old / SPLIT / "subagents" / "agent-b.jsonl",
+                      [priced_child("b1"), priced_child("b2")])
+        doc, err = self.capture(SPLIT)
+        self.assertEqual(len(doc["source_coverage"]), 3)
+        self.assertEqual(doc["children"]["responses"], 3)
+        dirs = sorted(os.path.realpath(d) for d in (new, old))
+        self.assertEqual(doc["session_project_dirs"], dirs)
+        self.assertEqual(doc["quality"]["split_project_dirs"], 2)
+        self.assertIn("found in 2 project dirs", err)
+        self.assertEqual(err.splitlines()[1:3],
+                         [f"  {d}" + ("  (main transcript)" if d == os.path.realpath(new) else "")
+                          for d in dirs])
+
+    def test_a_three_dir_session_lists_every_dir_and_says_three(self):
+        mid, aaa, zzz = (self.projects / n for n in ("-demo-mid", "-demo-aaa", "-demo-zzz"))
+        write_records(mid / (SPLIT + ".jsonl"), [priced_parent("p1")])
+        write_records(aaa / SPLIT / "subagents" / "agent-a.jsonl", [priced_child("a1")])
+        write_records(zzz / SPLIT / "subagents" / "agent-z.jsonl", [priced_child("z1")])
+        doc, err = self.capture(SPLIT)
+        dirs = [os.path.realpath(d) for d in (aaa, mid, zzz)]
+        self.assertEqual(doc["session_project_dirs"], dirs)
+        self.assertEqual(doc["quality"]["split_project_dirs"], 3)
+        self.assertIn("found in 3 project dirs", err)
+        self.assertEqual(err.splitlines()[1:4],
+                         [f"  {dirs[0]}", f"  {dirs[1]}  (main transcript)", f"  {dirs[2]}"])
+
+    def test_coverage_is_in_path_component_order_not_string_order(self):
+        # `-Users-x-repo` beside `-Users-x-repo--claude-worktrees-w1`: by components the
+        # shorter name comes first, as a string the worktree does ("-" sorts below "/")
+        repo = self.projects / "-Users-x-repo"
+        worktree = self.projects / "-Users-x-repo--claude-worktrees-w1"
+        write_records(repo / (SPLIT + ".jsonl"), [priced_parent("p1")])
+        write_records(repo / SPLIT / "subagents" / "agent-r.jsonl", [priced_child("r1")])
+        write_records(worktree / SPLIT / "subagents" / "agent-w.jsonl", [priced_child("w1")])
+        write_records(worktree / SPLIT / "subagents" / "agent-w2.jsonl", [priced_child("w2")])
+        doc, _ = self.capture(SPLIT)
+        paths = [c["path"] for c in doc["source_coverage"]][1:]
+        self.assertEqual(paths, [str(repo / SPLIT / "subagents" / "agent-r.jsonl"),
+                                 str(worktree / SPLIT / "subagents" / "agent-w.jsonl"),
+                                 str(worktree / SPLIT / "subagents" / "agent-w2.jsonl")])
+        self.assertNotEqual(paths, sorted(paths))      # the fixture can tell the two orders apart
+        self.assertEqual(paths, sorted(paths, key=lambda f: Path(f).parts))
+
+    def test_a_bad_byte_is_parsed_with_replacement_and_the_file_still_hashes_as_raw_bytes(self):
+        main = self.projects / "-demo-new" / (SPLIT + ".jsonl")
+        write_records(main, [priced_parent("p1")])
+        child = main.with_suffix("") / "subagents" / "agent.jsonl"
+        child.parent.mkdir(parents=True)
+        good = lambda tag: (json.dumps(priced_child(tag)) + "\n").encode()
+        raw = good("c1") + b"\xff\xfe not json\n" + good("c2") + b'{"x": "\xc3'   # cut inside a 2-byte char
+        child.write_bytes(raw)
+        doc, _ = self.capture(main)
+        self.assertEqual(doc["children"]["responses"], 2)
+        entry = doc["source_coverage"][1]
+        self.assertEqual((entry["bytes"], entry["sha256"]),
+                         (len(raw), hashlib.sha256(raw).hexdigest()))
+
+
+class ChildScanAgreementTests(ScanFixture):
+    """usage-checkpoint.py and usage-benchmark-row.py read children through one walker, so
+    for the same session they read the same files and price the same children, or both
+    refuse (skill-templates#377, first acceptance item)."""
+    def sid(self, index):
+        return "7e7e7e7e-0000-4000-8000-%012d" % index
+
+    def main_transcript(self, sid, project="-demo-new", parents=("p1",)):
+        main = self.projects / project / (sid + ".jsonl")
+        write_records(main, [priced_parent(sid + tag) for tag in parents])
+        return main
+
+    def subagents(self, sid, project="-demo-new"):
+        path = self.projects / project / sid / "subagents"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def build_recycled(self, sid):
+        return self.recycled_session(sid)[0] / (sid + ".jsonl")
+
+    def build_old_only(self, sid):
+        main = self.main_transcript(sid)
+        write_records(self.subagents(sid, "-demo-old") / "agent-a.jsonl", [priced_child(sid + "a")])
+        write_records(self.subagents(sid, "-demo-old") / "agent-b.jsonl",
+                      [priced_child(sid + "b1"), priced_child(sid + "b2")])
+        return main
+
+    def build_three_dirs(self, sid):
+        main = self.main_transcript(sid, "-demo-mid")
+        write_records(self.subagents(sid, "-demo-aaa") / "agent-a.jsonl", [priced_child(sid + "a")])
+        write_records(self.subagents(sid, "-demo-zzz") / "agent-z.jsonl", [priced_child(sid + "z")])
+        return main
+
+    def build_dir_named_jsonl(self, sid):
+        main = self.main_transcript(sid)
+        write_records(self.subagents(sid) / "nested.jsonl" / "agent.jsonl", [priced_child(sid + "n")])
+        return main
+
+    def build_symlinked_dir(self, sid):
+        main = self.main_transcript(sid)
+        write_records(self.subagents(sid) / "agent-real.jsonl", [priced_child(sid + "r")])
+        write_records(self.root / "elsewhere" / "x.jsonl", [priced_child(sid + "x")])
+        os.symlink(self.root / "elsewhere", self.subagents(sid) / "link.jsonl")
+        return main
+
+    def build_symlinked_file(self, sid):
+        main = self.main_transcript(sid)
+        write_records(self.subagents(sid) / "agent-real.jsonl", [priced_child(sid + "r")])
+        write_records(self.root / "elsewhere" / "target.jsonl", [priced_child(sid + "t")])
+        os.symlink(self.root / "elsewhere" / "target.jsonl", self.subagents(sid) / "alias.jsonl")
+        return main
+
+    def build_dangling_symlink(self, sid):
+        main = self.main_transcript(sid)
+        write_records(self.subagents(sid) / "agent-real.jsonl", [priced_child(sid + "r")])
+        os.symlink(self.root / "missing.jsonl", self.subagents(sid) / "dangling.jsonl")
+        return main
+
+    def build_bad_byte(self, sid):
+        main = self.main_transcript(sid)
+        child = self.subagents(sid) / "agent.jsonl"
+        good = lambda tag: (json.dumps(priced_child(sid + tag)) + "\n").encode()
+        child.write_bytes(good("c1") + b"\xff\xfe\n" + good("c2"))
+        return main
+
+    def build_cut_tail(self, sid):
+        main = self.projects / "-demo-new" / (sid + ".jsonl")
+        write_records(main, [priced_parent(sid + "p1")])
+        main.write_bytes(main.read_bytes() + b'{"type": "assistant", "x": "\xc3')
+        child = self.subagents(sid) / "agent.jsonl"
+        write_records(child, [priced_child(sid + "c1")])
+        child.write_bytes(child.read_bytes() + b'{"x": "\xe2\x82')
+        return main
+
+    def build_unreadable_subdir(self, sid):
+        main = self.main_transcript(sid)
+        write_records(self.subagents(sid) / "agent-real.jsonl", [priced_child(sid + "r")])
+        write_records(self.subagents(sid) / "workflows" / "agent-w.jsonl", [priced_child(sid + "w")])
+        unreadable(self, self.subagents(sid) / "workflows")
+        return main
+
+    def build_unreadable_root(self, sid):
+        main = self.main_transcript(sid)
+        write_records(self.subagents(sid) / "agent-real.jsonl", [priced_child(sid + "r")])
+        unreadable(self, self.subagents(sid))
+        return main
+
+    def build_unreadable_old_root(self, sid):
+        main = self.build_recycled(sid)
+        unreadable(self, self.projects / "-demo-aaa-old" / sid / "subagents")
+        return main
+
+    def test_both_scripts_read_the_same_files_and_agree_on_the_children(self):
+        agree = [("recycled", self.build_recycled, 3, 4), ("old dir only", self.build_old_only, 2, 3),
+                 ("three dirs", self.build_three_dirs, 2, 2),
+                 ("a directory named x.jsonl is descended", self.build_dir_named_jsonl, 1, 1),
+                 ("a symlinked directory is not followed", self.build_symlinked_dir, 1, 1),
+                 ("a symlinked file counts", self.build_symlinked_file, 2, 2),
+                 ("a bad byte is not a refusal", self.build_bad_byte, 1, 2),
+                 ("a line cut inside a multi-byte character", self.build_cut_tail, 1, 1)]
+        refuse = [("a dangling symlink", self.build_dangling_symlink, False),
+                  ("an unreadable subdirectory", self.build_unreadable_subdir, True),
+                  ("an unreadable root", self.build_unreadable_root, True),
+                  ("an unreadable root in the old dir", self.build_unreadable_old_root, True)]
+        for index, (name, build, files, children) in enumerate(agree):
+            with self.subTest(name):
+                main = build(self.sid(index))
+                cp, row = self.run_checkpoint("--session", str(main)), self.run_row(main)
+                self.assertEqual((cp.returncode, row.returncode), (0, 0), (cp.stderr, row.stderr))
+                figures = self.checkpoint_figures(json.loads(cp.stdout))
+                self.assertEqual(figures, self.row_figures(row))
+                self.assertEqual((figures["files"], figures["children"]), (files, children))
+        for index, (name, build, needs_chmod) in enumerate(refuse, len(agree)):
+            if needs_chmod and hasattr(os, "geteuid") and os.geteuid() == 0:
+                continue                       # root reads any file
+            with self.subTest(name):
+                main = build(self.sid(index))
+                cp, row = self.run_checkpoint("--session", str(main)), self.run_row(main)
+                self.assertEqual((cp.returncode, cp.stdout), (1, ""))
+                self.assertTrue(cp.stderr.startswith("REFUSE:"), cp.stderr)
+                self.assertEqual((row.returncode, row.stdout), (1, ""))
+                self.assertIn("REFUSE: cannot measure subagents:", row.stderr)
+
+
+class SessionChildFilesTests(SessionFixture):
+    def tree(self, *names):
+        for name in names:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}\n")
+        return [str(self.root / n) for n in names]
+
+    def test_files_sort_globally_by_path_components_across_every_root(self):
+        self.tree("z-root/m.jsonl", "a-root/a/x.jsonl", "a-root/a-b.jsonl")
+        roots = [str(self.root / "z-root"), str(self.root / "a-root")]      # not in sorted order
+        files, holding = usage_accounting.session_child_files(roots)
+        self.assertEqual(files, [str(self.root / "a-root" / "a" / "x.jsonl"),
+                                 str(self.root / "a-root" / "a-b.jsonl"),
+                                 str(self.root / "z-root" / "m.jsonl")])
+        self.assertEqual(files, sorted(files, key=lambda f: Path(f).parts))
+        self.assertNotEqual(files, sorted(files))      # string order would swap the first two
+        self.assertEqual(holding, roots)
+
+    def test_only_roots_holding_a_jsonl_file_are_holders_in_input_order(self):
+        self.tree("held-b/x.jsonl", "notes/readme.txt", "held-a/deep/er/y.jsonl")
+        (self.root / "empty").mkdir()
+        roots = [str(self.root / n) for n in ("held-b", "empty", "notes", "held-a")]
+        files, holding = usage_accounting.session_child_files(roots)
+        self.assertEqual(holding, [roots[0], roots[3]])
+        self.assertEqual(len(files), 2)
+        self.assertEqual(usage_accounting.session_child_files([]), ([], []))
+
+    def test_a_dangling_symlink_is_listed_and_a_symlinked_directory_is_not_followed(self):
+        self.tree("root/real.jsonl", "elsewhere/x.jsonl")
+        os.symlink(self.root / "missing.jsonl", self.root / "root" / "dangling.jsonl")
+        os.symlink(self.root / "elsewhere", self.root / "root" / "link.jsonl")
+        files, _ = usage_accounting.session_child_files([str(self.root / "root")])
+        self.assertEqual([Path(f).name for f in files], ["dangling.jsonl", "real.jsonl"])
+
+    @needs_non_root
+    def test_an_unreadable_directory_raises_instead_of_undercounting(self):
+        self.tree("root/real.jsonl", "root/locked/hidden.jsonl")
+        unreadable(self, self.root / "root" / "locked")
+        with self.assertRaises(OSError):
+            usage_accounting.session_child_files([str(self.root / "root")])
 
 
 class SessionDiscoveryTests(SessionFixture):
@@ -876,6 +1132,15 @@ class SessionDiscoveryTests(SessionFixture):
                 roots, _ = self.roots(self.projects / "-p" / (stem + ".jsonl"))
                 self.assertEqual(roots, [literal, other])
 
+    def test_a_transcript_with_no_id_in_its_name_has_no_roots(self):
+        # a file literally called `.jsonl` has an empty id, which would widen the glob to
+        # every projects/*/subagents
+        (self.projects / "-p" / "subagents").mkdir(parents=True)
+        (self.projects / "-q" / "subagents").mkdir(parents=True)
+        roots, main_dir = self.roots(self.projects / "-p" / ".jsonl")
+        self.assertEqual(roots, [])
+        self.assertEqual(main_dir, os.path.realpath(self.projects / "-p"))
+
     def test_a_home_with_glob_metacharacters_still_finds_the_projects(self):
         home = self.root / "h[1]*"
         for project in ("-a", "-b"):
@@ -936,7 +1201,8 @@ class TrendPartialPeriodTests(SessionFixture):
     the temporary HOME, so its ROOT, HIST_DIR, vault file and machine name all live in it."""
     WEEK = "2026-09-02"                  # 2026-09-01 and 2026-09-02 (before 15:59 PT) are inside it
     TS = "2026-09-01T12:00:00Z"
-    OLD_DOLLARS = 987654.5               # sentinel: this figure appearing anywhere is a bug
+    OLD_DOLLARS = 987654.5               # sentinel: a leak prints as $987,654 or 987654.50
+    UNKNOWN_MODEL = "claude-unknown-9"   # not in RATES: its responses are read but unpriced
 
     def setUp(self):
         super().setUp()
@@ -945,12 +1211,22 @@ class TrendPartialPeriodTests(SessionFixture):
         self.assertEqual(self.trend.HIST_DIR, self.home / ".claude" / "usage-history")
         self.hist = self.trend.HIST_DIR
         self.hist.mkdir(parents=True)
-        self.day = datetime.fromisoformat(self.TS.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+        self.day = self.local_day(self.TS)
 
-    def transcript(self, name, count, ts=None):
+    @staticmethod
+    def local_day(ts):
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+
+    def transcript(self, name, count, ts=None, model="claude-opus-5-5"):
         write_records(self.trend.ROOT / "-demo" / (name + ".jsonl"),
                       [rec(ts or self.TS, "r-%s-%d" % (name, i), "m-%s-%d" % (name, i),
-                           "claude-opus-5-5", 100, stop="end_turn") for i in range(count)])
+                           model, 100, stop="end_turn") for i in range(count)])
+
+    def transcript_days(self, name, stamps):
+        """One priced response at each timestamp."""
+        write_records(self.trend.ROOT / "-demo" / (name + ".jsonl"),
+                      [rec(ts, "r-%s-%d" % (name, i), "m-%s-%d" % (name, i), "claude-opus-5-5",
+                           100, stop="end_turn") for i, ts in enumerate(stamps)])
 
     def earlier(self, kind, periods):
         """The pre-v2 snapshot file: no rate_card, only `requests`, and dollars from another card."""
@@ -959,6 +1235,9 @@ class TrendPartialPeriodTests(SessionFixture):
             period: {"requests": float(count), "cost": old, "cost_main": old, "cost_sub": 0.0,
                      "tier_opus": old, "output_tokens": 1.0}
             for period, count in periods.items()}))
+
+    def v2_file(self, kind, machine, records):
+        (self.hist / ("%s-v2-%s.json" % (kind, machine))).write_text(json.dumps(records))
 
     def persisted(self, kind):
         return json.loads((self.hist / ("%s-v2-test.json" % kind)).read_text())
@@ -982,40 +1261,69 @@ class TrendPartialPeriodTests(SessionFixture):
     def row(self, out, label):
         return next(line for line in out.splitlines() if line.startswith(label))
 
+    def footer(self, out):
+        return next(line for line in out.splitlines() if line.startswith("! = partial"))
+
+    def block(self, out, heading):
+        """The indented lines under `heading` (a console list)."""
+        lines = out.splitlines()
+        start = lines.index(heading) + 1
+        end = start
+        while end < len(lines) and lines[end].startswith("  "):
+            end += 1
+        return lines[start:end]
+
+    def assertNoOldDollars(self, text):
+        for needle in ("987,65", "987654"):
+            self.assertNotIn(needle, text)
+
+    # ---- both counts, in every view
+
     def test_a_week_rescanned_from_pruned_transcripts_is_marked_with_both_counts(self):
         self.transcript("s1", 40)
         self.earlier("weekly", {self.WEEK: 100})
         out = self.week("--write")
         self.assertTrue(self.row(out, self.WEEK).startswith(self.WEEK + " !"))
         self.assertIn("$0.08", self.row(out, self.WEEK))
-        self.assertIn("! = partial: the scan read under 98% of the requests on record", out)
-        self.assertIn(self.WEEK + " 40% (40 of 100)", out)
+        self.assertIn("! = partial: the scan read under 99.5% of the requests on record",
+                      self.footer(out))
+        self.assertIn(self.WEEK + " 40.0% (40 of 100)", self.footer(out))
+        self.assertEqual(out.count(self.trend.READ_NOTE), 1)
         saved = self.persisted("weekly")[self.WEEK]
         self.assertEqual(saved["requests_not_rescanned"], 60)
         self.assertEqual((saved["requests"], saved["rate_card"]), (40, RATE_CARD_VERSION))
         self.assertAlmostEqual(saved["cost"], 0.08)
         vault = self.vault()
-        self.assertIn("| %s (partial 40%%) |" % self.WEEK, vault)
-        self.assertIn("- %s: read 40 of 100 requests on record" % self.WEEK, vault)
+        self.assertIn("| %s (partial 40.0%%) |" % self.WEEK, vault)
+        self.assertIn("- %s: read 40 of 100 requests on record (40.0%%); partial" % self.WEEK, vault)
         self.assertIn(RATE_CARD_VERSION, vault)
         self.assertIn("weekly-test.json", vault)
         for text in (out, vault, json.dumps(saved)):
-            self.assertNotIn("9876", text)
+            self.assertNoOldDollars(text)
 
     def test_a_day_rescanned_from_pruned_transcripts_is_marked_with_both_counts(self):
         self.transcript("s1", 40)
         self.earlier("daily", {self.day: 100})
         out = self.daily()
         self.assertTrue(self.row(out, self.day).startswith(self.day + "!"))
-        self.assertIn("! = partial: 1 day(s) rescanned at under 98% of the requests on record; "
-                      "0 recorded day(s) have no transcripts left", out)
+        footer = self.footer(out)
+        self.assertIn("1 of the 1 day(s) shown were read at under 99.5% of the responses an earlier "
+                      "snapshot recorded for that local day; 0 recorded day(s) in the whole history "
+                      "have nothing read", footer)
+        self.assertIn("transcripts were pruned", footer)
+        self.assertIn("another timezone", footer)
+        self.assertNotIn("no transcripts left", out)
+        self.assertEqual(self.block(out, "partial days shown:"),
+                         ["  %s: read 40 of 100 requests on record (40.0%%)" % self.day])
+        self.assertEqual(out.count(self.trend.READ_NOTE), 1)
+        self.assertEqual(out.splitlines()[-1].split(":")[0], "this machine")
         saved = self.persisted("daily")[self.day]
         self.assertEqual(saved["requests_not_rescanned"], 60)
         self.assertAlmostEqual(saved["cost"], 0.08)
-        self.assertNotIn("9876", out + json.dumps(saved))
-        merged = json.loads(self.daily("--json"))
-        self.assertEqual(merged[self.day]["requests_not_rescanned"], 60)
-        self.assertAlmostEqual(merged[self.day]["cost"], 0.08)
+        self.assertNoOldDollars(out + json.dumps(saved))
+        merged = json.loads(self.daily("--json"))[self.day]
+        self.assertEqual(merged["requests_not_rescanned"], 60)
+        self.assertAlmostEqual(merged["cost"], 0.08)
 
     def test_a_period_read_in_full_is_not_marked_and_prints_as_before(self):
         self.transcript("s1", 40)
@@ -1041,55 +1349,178 @@ class TrendPartialPeriodTests(SessionFixture):
 
     def test_a_history_with_no_earlier_snapshot_never_mentions_coverage(self):
         self.transcript("s1", 40)
-        vault_out = self.week("--write") + self.daily() + self.vault()
-        for word in ("partial", "not rescanned", "on record", RATE_CARD_VERSION):
-            self.assertNotIn(word, vault_out)
+        text = (self.week("--write") + self.daily() + self.daily("--all") + self.daily("--json") +
+                self.vault() + self.week("--oneline"))
+        for word in ("partial", "not rescanned", "on record", "nothing read", "before", "!",
+                     "requests_not_rescanned", "transcripts_left", "requests_read", RATE_CARD_VERSION):
+            self.assertNotIn(word, text)
 
-    def test_between_98_and_100_percent_is_listed_with_counts_but_not_marked(self):
-        # read 98 of 100 sits exactly on the threshold (not marked); 99 is above it; 97 is below.
-        for name, ts, count in (("a", "2026-09-01T12:00:00Z", 98), ("b", "2026-09-08T12:00:00Z", 99),
-                                ("c", "2026-09-15T12:00:00Z", 97)):
-            self.transcript(name, count, ts)
-        self.earlier("weekly", {"2026-09-02": 100, "2026-09-09": 100, "2026-09-16": 100})
+    # ---- the threshold
+
+    def test_the_threshold_is_99_5_percent_and_a_marked_period_never_prints_as_it(self):
+        weeks = (("a", "2026-09-01", 995), ("b", "2026-09-08", 998), ("c", "2026-09-15", 986),
+                 ("d", "2026-09-22", 994))
+        for name, day, count in weeks:
+            self.transcript(name, count, day + "T12:00:00Z")
+        self.earlier("weekly", {"2026-09-02": 1000, "2026-09-09": 1000, "2026-09-16": 1000,
+                                "2026-09-23": 1000})
         out = self.week("--write")
-        self.assertNotIn(" !", self.row(out, "2026-09-02"))
-        self.assertNotIn(" !", self.row(out, "2026-09-09"))
-        self.assertIn(" !", self.row(out, "2026-09-16"))
-        footer = next(line for line in out.splitlines() if line.startswith("! = partial"))
-        self.assertIn("2026-09-16 97% (97 of 100)", footer)
+        for week in ("2026-09-02", "2026-09-09"):         # 995 sits ON the threshold, 998 above it
+            self.assertNotIn(" !", self.row(out, week))
+        for week in ("2026-09-16", "2026-09-23"):
+            self.assertIn(" !", self.row(out, week))
+        footer = self.footer(out)
+        self.assertIn("under 99.5% of the requests", footer)
+        self.assertNotIn("under 100%", footer)
+        self.assertIn("2026-09-16 98.6% (986 of 1,000)", footer)
+        self.assertIn("2026-09-23 99.4% (994 of 1,000)", footer)    # floored: never "99.5%"
         self.assertNotIn("2026-09-02", footer)
-        self.assertNotIn("2026-09-09", footer)
+        self.assertEqual(self.block(out, "shown weeks with a shortfall too small to mark:"),
+                         ["  2026-09-02: read 995 of 1,000 requests on record (99.5%)",
+                          "  2026-09-09: read 998 of 1,000 requests on record (99.8%)"])
         vault = self.vault()
-        for week, count in (("2026-09-02", 98), ("2026-09-09", 99), ("2026-09-16", 97)):
-            self.assertIn("- %s: read %d of 100 requests on record" % (week, count), vault)
+        self.assertIn("| 2026-09-16 (partial 98.6%) |", vault)
+        self.assertIn("| 2026-09-23 (partial 99.4%) |", vault)
         self.assertIn("| 2026-09-02 |", vault)
-        self.assertIn("| 2026-09-09 |", vault)
-        self.assertIn("| 2026-09-16 (partial 97%) |", vault)
+        self.assertIn("- 2026-09-02: read 995 of 1,000 requests on record (99.5%)\n", vault)
+        self.assertIn("under 99.5% of them", vault)
+        self.assertNotIn("under 100%", vault)
+
+    def test_percent_labels_floor_to_one_decimal_and_never_round_a_shortfall_up(self):
+        trend = self.trend
+        self.assertEqual(trend.read_pct_label(1989, 2000), "99.4%")      # 99.45%
+        self.assertEqual(trend.read_pct_label(29999, 30000), "99.9%")    # not 100.0%
+        self.assertEqual(trend.read_pct_label(29238, 29651), "98.6%")    # not 99%
+        self.assertEqual(trend.read_pct_label(0, 0), "100.0%")
+        for read, short, partial in ((995, 5, False), (994, 6, True), (1989, 11, True),
+                                     (29999, 1, False), (10, 0, False)):
+            self.assertIs(trend.period_coverage({"requests": read, "requests_not_rescanned": short})
+                          ["partial"], partial, (read, short))
+        coverage = trend.period_coverage({"requests": 29999, "requests_not_rescanned": 1})
+        self.assertIn("(99.9%)", trend.coverage_text(coverage))
+
+    def test_a_shortfall_under_the_threshold_is_persisted_and_a_day_just_over_it_is_marked(self):
+        t1, t2 = "2026-09-01T12:00:00Z", "2026-09-02T12:00:00Z"
+        self.transcript("a", 998, t1)
+        self.transcript("b", 994, t2)
+        self.earlier("daily", {self.local_day(t1): 1000, self.local_day(t2): 1000})
+        out = self.daily()
+        self.assertNotIn("!", self.row(out, self.local_day(t1)))
+        self.assertTrue(self.row(out, self.local_day(t2)).startswith(self.local_day(t2) + "!"))
+        self.assertIn("1 of the 2 day(s) shown", self.footer(out))
+        self.assertIn("under 99.5% of the responses", self.footer(out))
+        self.assertNotIn("under 100%", self.footer(out))
+        saved = self.persisted("daily")
+        self.assertEqual(saved[self.local_day(t1)]["requests_not_rescanned"], 2)   # persisted, not marked
+        self.assertEqual(saved[self.local_day(t2)]["requests_not_rescanned"], 6)
+
+    # ---- periods with nothing read
 
     def test_a_week_recorded_earlier_with_no_transcripts_left_is_listed_without_a_row(self):
         self.transcript("s1", 40)
         self.earlier("weekly", {"2026-07-08": 4198, self.WEEK: 40})
         out = self.week("--write")
         self.assertFalse([line for line in out.splitlines() if line.startswith("2026-07-08")])
+        # listed on every run, not only when it falls in the shown span
+        self.assertEqual(self.block(out, "weeks with nothing read (no row: no dollars on this card):"),
+                         ["  2026-07-08: 4,198 requests on record, no transcripts left"])
         vault = self.vault()
         self.assertNotIn("| 2026-07-08", vault)
-        self.assertIn("- 2026-07-08: not rescanned: 4,198 requests on record", vault)
+        self.assertIn("- 2026-07-08: not rescanned: 4,198 requests on record and no transcripts "
+                      "left (no row: no dollars on this card)", vault)
         self.assertNotIn("2026-07-08", self.persisted("weekly"))
         # --oneline still reports only the open week, whose wording is untouched.
         self.assertNotIn("not rescanned", self.week("--oneline"))
 
-    def test_a_day_recorded_earlier_with_no_transcripts_left_is_counted_without_a_row(self):
-        self.transcript("s1", 40)
-        self.earlier("daily", {"2026-07-08": 120, "2026-07-09": 80, self.day: 40})
+    def test_a_day_with_nothing_read_is_listed_inside_the_shown_span_and_counted_before_it(self):
+        t1, t2 = "2026-08-10T12:00:00Z", "2026-08-20T12:00:00Z"
+        self.transcript_days("a", [t1] * 40)
+        self.transcript_days("b", [t2] * 40)
+        d1, d2 = self.local_day(t1), self.local_day(t2)
+        self.earlier("daily", {d1: 40, d2: 40, "2026-08-15": 70, "2026-07-08": 120, "2026-07-09": 80})
         out = self.daily()
-        self.assertFalse([line for line in out.splitlines() if line.startswith("2026-07-0")])
-        self.assertIn("! = partial: 0 day(s) rescanned at under 98% of the requests on record; "
-                      "2 recorded day(s) have no transcripts left", out)
-        self.assertIn("1 days shown", out)
+        heading = "recorded days with nothing read (no row: no dollars on this card):"
+        self.assertEqual(self.block(out, heading), [
+            "  2026-08-15: 70 requests on record, nothing read",
+            "  2 more before %s (--all lists them)" % d1])
+        self.assertIn("0 of the 2 day(s) shown", self.footer(out))
+        self.assertIn("3 recorded day(s) in the whole history have nothing read", self.footer(out))
+        self.assertFalse([l for l in out.splitlines() if l.startswith(("2026-07-08", "2026-08-15"))])
+        every = self.daily("--all")
+        self.assertEqual(self.block(every, heading), [
+            "  2026-07-08: 120 requests on record, nothing read",
+            "  2026-07-09: 80 requests on record, nothing read",
+            "  2026-08-15: 70 requests on record, nothing read"])
+        self.assertNotIn("more before", every)
+
+    def test_the_daily_view_takes_unread_days_out_before_it_keeps_the_last_30(self):
+        skip = datetime(2026, 7, 20)
+        stamps = [(datetime(2026, 7, 1) + timedelta(days=i)).strftime("%Y-%m-%dT12:00:00Z")
+                  for i in range(36) if datetime(2026, 7, 1) + timedelta(days=i) != skip]
+        self.transcript_days("a", stamps)
+        read_days = [self.local_day(ts) for ts in stamps]
+        gap = self.local_day("2026-07-20T12:00:00Z")
+        before = [self.local_day("2026-06-10T12:00:00Z"), self.local_day("2026-06-11T12:00:00Z")]
+        self.earlier("daily", {gap: 50, before[0]: 20, before[1]: 30})
+        out = self.daily()
+        shown = read_days[-30:]
+        self.assertIn("\n30 days shown,", out)
+        self.assertTrue(out.splitlines()[1].startswith(shown[0]))
+        heading = "recorded days with nothing read (no row: no dollars on this card):"
+        self.assertEqual(self.block(out, heading), [
+            "  %s: 50 requests on record, nothing read" % gap,
+            "  2 more before %s (--all lists them)" % shown[0]])
+        every = self.daily("--all")
+        self.assertIn("\n35 days shown,", every)
+        self.assertEqual(len(self.block(every, heading)), 3)
+
+    def test_each_console_list_is_capped_at_ten_lines_worst_first(self):
+        stamps = ["2026-08-%02dT12:00:00Z" % d for d in range(1, 13)]
+        for i, ts in enumerate(stamps):
+            self.transcript("d%d" % i, 10 + i, ts)
+        self.earlier("daily", {self.local_day(ts): 100 for ts in stamps})
+        out = self.daily()
+        lines = self.block(out, "partial days shown:")
+        self.assertEqual(len(lines), 11)
+        self.assertEqual(lines[-1], "  ... and 2 more")
+        self.assertIn("read 10 of 100 requests on record (10.0%)", lines[0])     # worst first
+        self.assertIn("read 19 of 100 requests on record (19.0%)", lines[9])
+        self.assertIn("12 of the 12 day(s) shown", self.footer(out))
+        # weeks with nothing read: the same cap, largest first
+        self.transcript("w", 40)
+        self.earlier("weekly", dict({"2026-05-%02d" % d: 100 + d for d in range(1, 13)},
+                                    **{self.WEEK: 40}))
+        lines = self.block(self.week(), "weeks with nothing read (no row: no dollars on this card):")
+        self.assertEqual(len(lines), 11)
+        self.assertEqual(lines[0], "  2026-05-12: 112 requests on record, no transcripts left")
+        self.assertEqual(lines[-1], "  ... and 2 more")
+
+    def test_json_days_with_a_shortfall_carry_derived_counts_and_the_rest_keep_their_keys(self):
+        stamps = {"a": "2026-08-10T12:00:00Z", "b": "2026-08-11T12:00:00Z", "c": "2026-08-12T12:00:00Z"}
+        self.transcript("a", 40, stamps["a"])
+        self.transcript("b", 200, stamps["b"])
+        self.transcript("c", 10, stamps["c"])
+        days = {k: self.local_day(v) for k, v in stamps.items()}
+        self.earlier("daily", {days["a"]: 100, days["b"]: 201, days["c"]: 10, "2026-08-01": 50})
+        out = self.daily()
         merged = json.loads(self.daily("--json"))
-        self.assertEqual(merged["2026-07-08"]["requests_not_rescanned"], 120)
-        self.assertEqual(merged["2026-07-08"]["cost"], 0)
-        self.assertNotIn("2026-07-08", self.persisted("daily"))
+        a, b, c, d = merged[days["a"]], merged[days["b"]], merged[days["c"]], merged["2026-08-01"]
+        self.assertEqual((a["requests_read"], a["requests_on_record"], a["read_pct"], a["partial"],
+                          a["transcripts_left"], a["requests_not_rescanned"]), (40, 100, 40.0, True, True, 60))
+        self.assertEqual((b["read_pct"], b["partial"], b["requests_not_rescanned"]), (99.5, False, 1))
+        self.assertEqual(set(c), set(self.trend._day_bucket()))        # no shortfall: today's keys
+        self.assertEqual((d["transcripts_left"], d["requests_on_record"], d["cost"], d["partial"]),
+                         (False, 50, 0, True))
+        total = re.search(r"\$([0-9,.]+) total", out).group(1)
+        self.assertEqual(round(sum(day["cost"] for day in merged.values()), 2), float(total.replace(",", "")))
+        self.assertEqual(sum(day["requests"] for day in merged.values()),
+                         sum(day["requests"] for day in merged.values() if day.get("transcripts_left", True)))
+        # derived, never persisted: the weekly merge sums every persisted field
+        for record in self.persisted("daily").values():
+            self.assertNotIn("read_pct", record)
+            self.assertNotIn("transcripts_left", record)
+
+    # ---- the high-water mark
 
     def test_the_mark_survives_a_second_scan_without_the_earlier_file(self):
         self.transcript("s1", 40)
@@ -1100,49 +1531,116 @@ class TrendPartialPeriodTests(SessionFixture):
         for kind in ("weekly", "daily"):
             (self.hist / ("%s-test.json" % kind)).unlink()   # only the v2 records carry the count now
         out = self.week("--write")
-        self.assertIn(self.WEEK + " 40% (40 of 100)", out)
+        self.assertIn(self.WEEK + " 40.0% (40 of 100)", out)
         self.assertTrue(self.row(self.daily(), self.day).startswith(self.day + "!"))
         # Further pruning: the same-card rule keeps the record that read more, and its mark.
         (self.trend.ROOT / "-demo" / "s1.jsonl").unlink()
         self.transcript("s2", 10)
         out = self.week("--write")
-        self.assertIn(self.WEEK + " 40% (40 of 100)", out)
+        self.assertIn(self.WEEK + " 40.0% (40 of 100)", out)
         self.assertEqual(self.persisted("weekly")[self.WEEK]["requests_not_rescanned"], 60)
         self.daily()
         self.assertEqual(self.persisted("daily")[self.day]["requests_not_rescanned"], 60)
 
-    def test_the_open_week_says_partial_in_its_oneline_only_when_it_is(self):
-        now = datetime.now().astimezone()
-        week = self.trend.meter_week_close(now)
-        self.transcript("s1", 40, now.isoformat())
-        plain = self.week("--oneline")
-        self.assertTrue(plain.startswith("week closing %s: " % week))
-        self.assertNotIn("partial", plain)
-        self.earlier("weekly", {week: 40})
-        self.assertEqual(self.week("--oneline"), plain)
-        self.earlier("weekly", {week: 100})
-        self.assertEqual(self.week("--oneline"),
-                         plain.rstrip("\n") + "; partial: the scan read 40% of the 100 requests on record\n")
-        self.assertTrue(self.row(self.week(), week).startswith(week + " * !"))
+    def test_a_same_card_record_with_no_mark_gains_one_from_an_earlier_snapshot_with_no_transcripts_left(self):
+        # the upgrade path: v2 records written before any shortfall was tracked
+        record = {"rate_card": RATE_CARD_VERSION, "requests": 40, "cost": 0.08, "cost_upper": 0.08}
+        self.v2_file("weekly", "test", {self.WEEK: dict(record)})
+        self.v2_file("daily", "test", {self.day: dict(record)})
+        self.earlier("weekly", {self.WEEK: 100})
+        self.earlier("daily", {self.day: 100})
+        out = self.week("--write")
+        self.assertTrue(self.row(out, self.WEEK).startswith(self.WEEK + " !"))
+        self.assertEqual(self.persisted("weekly")[self.WEEK]["requests_not_rescanned"], 60)
+        self.assertTrue(self.row(self.daily(), self.day).startswith(self.day + "!"))
+        self.assertEqual(self.persisted("daily")[self.day]["requests_not_rescanned"], 60)
+
+    def test_an_inherited_mark_shrinks_and_clears_as_the_scan_reads_more(self):
+        self.transcript("s1", 40)
+        self.earlier("weekly", {self.WEEK: 100})
+        self.week("--write")
+        self.assertEqual(self.persisted("weekly")[self.WEEK]["requests_not_rescanned"], 60)
+        self.transcript("s2", 30)
+        out = self.week("--write")
+        self.assertIn(self.WEEK + " 70.0% (70 of 100)", out)
+        self.assertEqual(self.persisted("weekly")[self.WEEK]["requests_not_rescanned"], 30)
+        self.transcript("s3", 50)
+        out = self.week("--write")
+        self.assertNotIn("on record", out)
+        self.assertNotIn("requests_not_rescanned", self.persisted("weekly")[self.WEEK])
+
+    def test_a_rescan_that_prices_fewer_responses_keeps_the_count_on_record(self):
+        self.transcript("s1", 40)
+        self.transcript("u1", 10, model=self.UNKNOWN_MODEL)
+        self.earlier("weekly", {self.WEEK: 100})
+        self.week("--write")
+        saved = self.persisted("weekly")[self.WEEK]
+        self.assertEqual((saved["requests"], saved["unpriced_responses"],
+                          saved["requests_not_rescanned"]), (40, 10, 50))
+        (self.trend.ROOT / "-demo" / "u1.jsonl").unlink()
+        self.week("--write")
+        saved = self.persisted("weekly")[self.WEEK]
+        self.assertEqual(saved["requests"] + saved.get("unpriced_responses", 0)
+                         + saved["requests_not_rescanned"], 100)
+
+    def test_pruned_unpriced_responses_are_not_a_shortfall_without_an_earlier_snapshot(self):
+        self.transcript("s1", 40)
+        self.transcript("u1", 5, model=self.UNKNOWN_MODEL)
+        self.week("--write")
+        self.daily()
+        self.assertEqual(self.persisted("weekly")[self.WEEK]["unpriced_responses"], 5)
+        (self.trend.ROOT / "-demo" / "u1.jsonl").unlink()
+        outs = (self.week("--write"), self.daily(), self.daily("--json"), self.vault())
+        self.assertNotIn("unpriced_responses", self.persisted("weekly")[self.WEEK])
+        self.assertIn("0 unpriced responses", outs[0])
+        text = "\n".join(outs) + json.dumps([self.persisted("weekly"), self.persisted("daily")])
+        for word in ("!", "partial", "not rescanned", "on record", "requests_not_rescanned"):
+            self.assertNotIn(word, text)
+        self.assertNotIn(RATE_CARD_VERSION, "\n".join(outs))      # (the records carry it, as always)
+
+    def test_an_unmarked_period_stays_unmarked_when_another_period_has_an_earlier_snapshot(self):
+        self.transcript("a", 40)                                        # week 2026-09-02
+        self.transcript("b", 30, "2026-09-08T12:00:00Z")
+        self.transcript("u", 5, "2026-09-08T13:00:00Z", model=self.UNKNOWN_MODEL)
+        self.earlier("weekly", {self.WEEK: 100})                        # only the first week
+        self.week("--write")
+        (self.trend.ROOT / "-demo" / "u.jsonl").unlink()
+        out = self.week("--write")
+        self.assertTrue(self.row(out, self.WEEK).startswith(self.WEEK + " !"))
+        self.assertNotIn(" !", self.row(out, "2026-09-09"))
+        self.assertNotIn("requests_not_rescanned", self.persisted("weekly")["2026-09-09"])
+
+    def test_unpriced_responses_count_as_read(self):
+        self.transcript("s1", 40)
+        self.transcript("u1", 10, model=self.UNKNOWN_MODEL)
+        self.earlier("weekly", {self.WEEK: 60})
+        self.earlier("daily", {self.day: 60})
+        out = self.week("--write")
+        self.assertIn(self.WEEK + " 83.3% (50 of 60)", self.footer(out))
+        saved = self.persisted("weekly")[self.WEEK]
+        self.assertEqual((saved["requests"], saved["unpriced_responses"],
+                          saved["requests_not_rescanned"]), (40, 10, 10))
+        self.assertEqual(self.block(self.daily(), "partial days shown:"),
+                         ["  %s: read 50 of 60 requests on record (83.3%%)" % self.day])
 
     def test_a_v2_record_under_another_card_hands_its_count_on(self):
         older = {"rate_card": "older-card", "requests": 80, "requests_not_rescanned": 20,
                  "cost": self.OLD_DOLLARS, "cost_upper": self.OLD_DOLLARS,
                  "cost_main": self.OLD_DOLLARS, "cost_sub": self.OLD_DOLLARS,
                  "tier_fable": self.OLD_DOLLARS}   # fields the fresh record lacks must not survive
-        (self.hist / "weekly-v2-test.json").write_text(json.dumps({
-            self.WEEK: older, "2026-08-05": dict(older, requests_not_rescanned=0)}))
+        self.v2_file("weekly", "test", {self.WEEK: older, "2026-08-05": dict(older)})
         self.transcript("s1", 40)
         out = self.week("--write")
         saved = self.persisted("weekly")
         self.assertEqual(saved[self.WEEK]["rate_card"], RATE_CARD_VERSION)
         self.assertEqual(saved[self.WEEK]["requests_not_rescanned"], 60)
         self.assertAlmostEqual(saved[self.WEEK]["cost"], 0.08)
-        self.assertIn(self.WEEK + " 40% (40 of 100)", out)
-        # A week with no fresh scan keeps the other card's record untouched and is listed unread.
+        self.assertIn(self.WEEK + " 40.0% (40 of 100)", out)
+        # A week with no fresh scan keeps the other card's record untouched and is listed
+        # unread, at its ON-RECORD count (80 read plus the 20 it already knew it had not).
         self.assertEqual(saved["2026-08-05"]["rate_card"], "older-card")
-        self.assertIn("- 2026-08-05: not rescanned: 80 requests on record", self.vault())
-        self.assertNotIn("9876", out + self.vault() + json.dumps(saved[self.WEEK]))
+        self.assertIn("- 2026-08-05: not rescanned: 100 requests on record", self.vault())
+        self.assertNoOldDollars(out + self.vault() + json.dumps(saved[self.WEEK]))
 
     def test_machines_sum_their_shortfalls_and_never_a_high_water_mark(self):
         self.transcript("s1", 100)
@@ -1150,14 +1648,34 @@ class TrendPartialPeriodTests(SessionFixture):
         self.earlier("daily", {self.day: 150})
         other = {"rate_card": RATE_CARD_VERSION, "requests": 100, "requests_not_rescanned": 100,
                  "cost": 1.0, "cost_main": 1.0}
-        (self.hist / "weekly-v2-other.json").write_text(json.dumps({self.WEEK: other}))
-        (self.hist / "daily-v2-other.json").write_text(json.dumps({self.day: other}))
+        self.v2_file("weekly", "other", {self.WEEK: other})
+        self.v2_file("daily", "other", {self.day: other})
         # read 200; short 50 + 100 = 150; on record 350 (a max-based mark would say 200 or 150)
-        self.assertIn(self.WEEK + " 57% (200 of 350)", self.week())
+        self.assertIn(self.WEEK + " 57.1% (200 of 350)", self.footer(self.week()))
         self.daily()
         merged = self.trend.merged_history("test")[self.day]
         self.assertEqual((merged["requests"], merged["requests_not_rescanned"]), (200, 150))
-        self.assertIn("1 day(s) rescanned", self.daily())
+        self.assertIn("1 of the 1 day(s) shown", self.footer(self.daily()))
+
+    def test_a_period_short_on_one_machine_and_unread_on_another_keeps_both_counts(self):
+        other = {"rate_card": RATE_CARD_VERSION, "requests": 100, "requests_not_rescanned": 20,
+                 "cost": 1.0, "cost_main": 1.0}
+        self.v2_file("weekly", "other", {self.WEEK: other})
+        self.v2_file("daily", "other", {self.day: other})
+        self.earlier("weekly", {self.WEEK: 150})            # this machine: no transcripts at all
+        self.earlier("daily", {self.day: 150})
+        weekly = self.trend.merged_weekly({}, "test", False)[self.WEEK]
+        self.assertEqual((weekly["requests"], weekly["requests_not_rescanned"]), (100, 170))
+        daily = self.trend.merged_history("test")[self.day]
+        self.assertEqual((daily["requests"], daily["requests_not_rescanned"]), (100, 170))
+        self.assertIn(self.WEEK + " 37.0% (100 of 270)", self.footer(self.week()))
+        # an other-card record that itself carries a shortfall contributes its ON-RECORD count
+        older = {"rate_card": "older-card", "requests": 80, "requests_not_rescanned": 20}
+        self.v2_file("weekly", "test", {"2026-08-05": older})
+        self.v2_file("daily", "test", {"2026-08-05": older})
+        self.assertEqual(self.trend.merged_weekly({}, "test", False)["2026-08-05"],
+                         {"requests_not_rescanned": 100})
+        self.assertEqual(self.trend.merged_history("test")["2026-08-05"]["requests_not_rescanned"], 100)
 
     def test_no_dollar_from_another_rate_card_enters_a_v2_total(self):
         # Nothing was scanned: every dollar on offer belongs to another card.
@@ -1166,8 +1684,8 @@ class TrendPartialPeriodTests(SessionFixture):
         older = {"rate_card": "older-card", "requests": 70, "cost": self.OLD_DOLLARS,
                  "cost_upper": self.OLD_DOLLARS, "cost_main": self.OLD_DOLLARS,
                  "tier_opus": self.OLD_DOLLARS, "tier_cost": {"opus": self.OLD_DOLLARS}}
-        (self.hist / "weekly-v2-other.json").write_text(json.dumps({"2026-08-05": older}))
-        (self.hist / "daily-v2-other.json").write_text(json.dumps({"2026-08-05": older}))
+        self.v2_file("weekly", "other", {"2026-08-05": older})
+        self.v2_file("daily", "other", {"2026-08-05": older})
         weekly = self.trend.merged_weekly({}, "test", False)
         daily = self.trend.merged_history("test")
         self.assertEqual(set(weekly[self.WEEK]), {"requests_not_rescanned"})
@@ -1179,10 +1697,118 @@ class TrendPartialPeriodTests(SessionFixture):
             for field in ("cost", "cost_upper", "cost_main", "cost_sub", "tier_opus"):
                 self.assertEqual(bucket.get(field, 0), 0, field)
             self.assertEqual(sum(bucket.get("tier_cost", {}).values()), 0)
-        self.assertEqual(self.week("--write") + self.daily() + self.vault() + self.daily("--json"),
-                         self.week("--write") + self.daily() + self.vault() + self.daily("--json"))
         for text in (self.week("--write"), self.daily(), self.vault(), self.daily("--json")):
-            self.assertNotIn("9876", text)
+            self.assertNoOldDollars(text)
+
+    # ---- the vault
+
+    def test_the_vault_lists_a_marked_a_short_and_an_unread_week_in_full_and_in_order(self):
+        self.transcript("a", 90)
+        self.transcript("b", 998, "2026-09-08T12:00:00Z")
+        self.earlier("weekly", {"2026-07-08": 4198, "2026-09-02": 100, "2026-09-09": 1000})
+        self.week("--write")
+        lines = self.vault().splitlines()
+        start = next(i for i, line in enumerate(lines)
+                     if line.startswith("Requests on record that the scan did not read"))
+        self.assertIn(self.trend.READ_NOTE[1:-1], lines[start])
+        self.assertIn("under 99.5% of them", lines[start])
+        self.assertEqual(lines[start + 2:start + 5], [
+            "- 2026-07-08: not rescanned: 4,198 requests on record and no transcripts left "
+            "(no row: no dollars on this card)",
+            "- 2026-09-02: read 90 of 100 requests on record (90.0%); partial",
+            "- 2026-09-09: read 998 of 1,000 requests on record (99.8%)"])
+        self.assertEqual(len(lines), start + 5)
+
+    def test_the_rate_card_line_names_where_the_earlier_figures_are(self):
+        self.transcript("s1", 40)
+        # only an earlier-card v2 record exists: the merge replaces it, and the line is
+        # decided BEFORE that, so it still appears
+        self.v2_file("weekly", "test", {self.WEEK: {"rate_card": "older-card", "requests": 40}})
+        self.week("--write")
+        self.assertEqual(self.persisted("weekly")[self.WEEK]["rate_card"], RATE_CARD_VERSION)
+        line = next(l for l in self.vault().splitlines() if l.startswith("Priced under rate card"))
+        self.assertIn(RATE_CARD_VERSION, line)
+        self.assertIn("earlier-card v2 records for weeks this scan repriced are no longer on disk", line)
+        self.assertNotIn("remain in weekly-test.json", line)
+        # with the pre-v2 snapshot on disk it says that instead
+        self.earlier("weekly", {self.WEEK: 40})
+        self.week("--write")
+        line = next(l for l in self.vault().splitlines() if l.startswith("Priced under rate card"))
+        self.assertIn("remain in weekly-test.json and are not comparable", line)
+
+    def test_the_open_week_says_partial_in_its_oneline_only_when_it_is(self):
+        now = datetime.now().astimezone()
+        week = self.trend.meter_week_close(now)
+        self.transcript("s1", 40, now.isoformat())
+        plain = self.week("--oneline")
+        self.assertTrue(plain.startswith("week closing %s: " % week))
+        self.assertNotIn("partial", plain)
+        self.earlier("weekly", {week: 40})
+        self.assertEqual(self.week("--oneline"), plain)
+        self.earlier("weekly", {week: 100})
+        self.assertEqual(self.week("--oneline"), plain.rstrip("\n") +
+                         "; partial: the scan read 40.0% of the 100 requests on record\n")
+        # open AND partial: both markers, no space between them, and the label still leaves
+        # a space before the amount in its 14-character column
+        row = self.row(self.week(), week)
+        self.assertTrue(row.startswith(week + " *!"))
+        self.assertRegex(row, r"^%s \*!\s+\$" % week)
+
+    # ---- timezone, and corrupt files
+
+    def test_a_snapshot_taken_in_another_timezone_names_that_cause(self):
+        old_tz = os.environ.get("TZ")
+        def restore():
+            if old_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old_tz
+            time.tzset()
+        self.addCleanup(restore)
+        self.transcript("a", 48, "2026-09-01T05:00:00Z")
+        self.transcript("b", 48, "2026-09-01T20:00:00Z")
+        self.earlier("daily", {"2026-09-01": 96})        # as a UTC scan would have bucketed it
+        os.environ["TZ"] = "Asia/Tokyo"                 # 05:00Z is 14:00 on the 1st, 20:00Z is 05:00 on the 2nd
+        time.tzset()
+        out = self.daily()
+        self.assertTrue(self.row(out, "2026-09-01").startswith("2026-09-01!"))
+        self.assertIn("pruned", self.footer(out))
+        self.assertIn("another timezone", self.footer(out))
+        self.assertEqual(self.persisted("daily")["2026-09-01"]["requests_not_rescanned"], 48)
+
+    def test_count_and_read_records_tolerate_malformed_values_and_files(self):
+        trend = self.trend
+        for value, want in ((3.6, 4), ("7", 7), (-5, 0), ("abc", 0), (None, 0), (float("nan"), 0),
+                            (float("inf"), 0), ([1], 0), (0, 0)):
+            self.assertEqual(trend._count({"x": value}, "x"), want, value)
+        self.assertEqual(trend._count(None, "x"), 0)
+        self.assertEqual(trend._count([1], "x"), 0)
+        path = self.root / "snap.json"
+        self.assertEqual(trend.read_records(path), {})                          # absent
+        for content in (b"\xff\xfe", b"not json", b"[1, 2]", b'"text"', b""):
+            path.write_bytes(content)
+            self.assertEqual(trend.read_records(path), {}, content)             # corrupt, non-UTF-8, non-dict
+        path.write_text(json.dumps({"a": {"requests": 1}, "b": 3, "c": [1]}))
+        self.assertEqual(trend.read_records(path), {"a": {"requests": 1}})
+
+    def test_a_corrupt_snapshot_file_is_ignored_in_every_mode(self):
+        self.transcript("s1", 40)
+        script = str(HERE / "usage-trend.py")
+        corrupt = ("daily-test.json", "weekly-test.json", "daily-v2-other.json",
+                   "weekly-v2-other.json", "weekly-v2-test.json")
+        modes = (["--no-sync"], ["--no-sync", "--json"], ["--week"], ["--week", "--oneline"])
+        def run_all():
+            done = [subprocess.run([sys.executable, script, *argv], capture_output=True, text=True)
+                    for argv in modes]
+            for result in done:
+                self.assertEqual(result.returncode, 0, result.stderr)
+            return [result.stdout for result in done]
+        for name in corrupt:
+            (self.hist / name).write_bytes(b"\xff\xfe not json \x80")
+        with_corrupt = run_all()
+        for name in corrupt:
+            (self.hist / name).unlink()
+        self.assertEqual(run_all(), with_corrupt)       # the corrupt files were ignored, not half-read
 
 
 if __name__ == "__main__":
