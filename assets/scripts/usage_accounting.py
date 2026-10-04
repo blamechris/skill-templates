@@ -1,4 +1,6 @@
 """Shared, versioned Claude transcript accounting. No transcript text is retained."""
+import glob
+import os
 from decimal import Decimal
 from datetime import datetime
 
@@ -95,6 +97,49 @@ def price_usage(usage, model):
             "speed": speed or "unknown", "service_tier": service_tier or "unknown",
             "inference_geo": geography or "unknown",
             "geography_uncertain": geography_uncertain}
+
+
+def session_subagent_roots(transcript):
+    """Return (roots, main_dir) for the session whose main transcript is `transcript`.
+
+    roots: every existing `subagents` directory that can hold this session's children.
+    The harness can recycle a session's worktree mid-run, and every worktree has its own
+    project dir under ~/.claude/projects: the main transcript moves to the NEW dir while
+    the children written earlier stay in the OLD one, so the dir beside the transcript is
+    not enough. The roots are that sibling (first, which keeps an explicit .jsonl path
+    outside ~/.claude/projects working) and `<full uuid>/subagents` under every project
+    dir, sorted. The scan is keyed by the FULL uuid, escaped so a metacharacter in a
+    filename cannot widen it, and is never a directory sweep: the old dir also holds other
+    sessions' transcripts. Roots dedupe by realpath, the first spelling surviving.
+
+    main_dir: the realpath of the directory holding the main transcript.
+    Used by usage-benchmark-row.py and usage-checkpoint.py; skill-templates#254, #377."""
+    base = os.fspath(transcript)
+    if base.endswith(".jsonl"):
+        base = base[:-len(".jsonl")]
+    sid = os.path.basename(base)
+    projects = os.path.expanduser("~/.claude/projects")
+    roots = [os.path.join(base, "subagents")]
+    roots += sorted(glob.glob(os.path.join(glob.escape(projects), "*", glob.escape(sid), "subagents")))
+    seen, found = set(), []
+    for root in roots:
+        real = os.path.realpath(root)
+        if real not in seen and os.path.isdir(root):
+            seen.add(real)
+            found.append(root)
+    return found, os.path.realpath(os.path.dirname(os.fspath(transcript)))
+
+
+def split_project_dirs(holding_roots, main_dir):
+    """The session's project dirs, sorted, when it is split across more than one; else [].
+
+    `holding_roots` are the roots (from session_subagent_roots) that actually held at
+    least one .jsonl child: an empty `<uuid>/subagents` folder is no holder, because the
+    harness creates them eagerly. A session is SPLIT when any child sits in a project dir
+    other than `main_dir`. The transcript's own dir is then listed even if it holds no
+    children: the commonest recycle shape is every child in the old dir."""
+    holders = {os.path.realpath(os.path.dirname(os.path.dirname(root))) for root in holding_roots}
+    return sorted(holders | {main_dir}) if any(d != main_dir for d in holders) else []
 
 
 def response_key(record, source, line):

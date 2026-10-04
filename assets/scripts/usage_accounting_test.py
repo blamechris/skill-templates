@@ -2,6 +2,7 @@
 import json
 import importlib.util
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -9,9 +10,11 @@ import unittest
 from contextlib import redirect_stdout
 from decimal import Decimal
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import usage_accounting
 from usage_accounting import RATE_CARD_VERSION, Responses, price_usage
 
 
@@ -635,6 +638,295 @@ class UsageAccountingTests(unittest.TestCase):
                                      rf"2026-10-01[^\n]*\s{average}K")
             finally:
                 sys.argv = original_argv
+
+
+# A synthetic session that was split across two project dirs by a worktree recycle
+# (skill-templates#377). Ids are made up; nothing here is read from a real transcript.
+SPLIT = "5ae4397b-0000-4000-8000-00000000cafe"
+FOREIGN = "0d2a7f2c-aaaa-4bbb-8ccc-dddddddddddd"
+
+
+def write_records(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+def priced_child(tag):
+    """One child response priced at exactly 2.501 USD (1M 5m-cache writes + 100 output)."""
+    return rec("2026-09-29T00:00:03Z", "r-" + tag, "m-" + tag, "claude-sonnet-5", 100,
+               cache_5m=1000000, stop="end_turn")
+
+
+def priced_parent(tag):
+    """One parent response priced at exactly 0.002 USD."""
+    return rec("2026-09-29T00:00:01Z", "r-" + tag, "m-" + tag, "claude-opus-5-5", 100,
+               stop="end_turn")
+
+
+class SessionFixture(unittest.TestCase):
+    """A temporary HOME, so no test reads or writes the real ~/.claude."""
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.home = self.root / "home"
+        self.projects = self.home / ".claude" / "projects"
+        self.projects.mkdir(parents=True)
+        patch = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+
+class SessionScopedCheckpointTests(SessionFixture):
+    def recycled_session(self):
+        """Main transcript and one child in the NEW dir, the earlier children in the OLD
+        dir (no main transcript there), and a foreign session living in the old dir."""
+        # The NEW dir sorts AFTER the old one, so discovery order (the transcript's own
+        # dir first) and sorted order differ and the coverage sort is observable.
+        new, old = self.projects / "-demo-zzz-new", self.projects / "-demo-aaa-old"
+        write_records(new / (SPLIT + ".jsonl"), [priced_parent("p1"), priced_parent("p2")])
+        write_records(new / SPLIT / "subagents" / "agent-new.jsonl", [priced_child("n1")])
+        write_records(old / SPLIT / "subagents" / "agent-a.jsonl",
+                      [priced_child("a1"), priced_child("a2")])
+        write_records(old / SPLIT / "subagents" / "workflows" / "wf_x" / "agent-b.jsonl",
+                      [priced_child("b1")])
+        write_records(old / (FOREIGN + ".jsonl"), [priced_parent("fp")])
+        write_records(old / FOREIGN / "subagents" / "agent-x.jsonl", [priced_child("fx")])
+        return new, old
+
+    def run_checkpoint(self, *args):
+        return subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"), *args],
+                              capture_output=True, text=True)
+
+    def capture(self, session):
+        done = self.run_checkpoint("--session", str(session))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return json.loads(done.stdout), done.stderr
+
+    def test_children_in_every_project_dir_are_priced(self):
+        new, old = self.recycled_session()
+        doc, err = self.capture(SPLIT)
+        paths = [c["path"] for c in doc["source_coverage"]]
+        self.assertEqual(len(paths), 4)
+        self.assertEqual(paths[0], str(new / (SPLIT + ".jsonl")))
+        self.assertEqual(paths[1:], sorted([
+            str(new / SPLIT / "subagents" / "agent-new.jsonl"),
+            str(old / SPLIT / "subagents" / "agent-a.jsonl"),
+            str(old / SPLIT / "subagents" / "workflows" / "wf_x" / "agent-b.jsonl")]))
+        self.assertEqual((doc["parent"]["responses"], doc["children"]["responses"]), (2, 4))
+        self.assertEqual(Decimal(doc["children"]["lower_usd"]), Decimal("10.004"))
+        self.assertEqual(Decimal(doc["children"]["upper_usd"]), Decimal("10.004"))
+        dirs = sorted(os.path.realpath(d) for d in (new, old))
+        self.assertEqual(doc["session_project_dirs"], dirs)
+        self.assertEqual(doc["quality"]["split_project_dirs"], 2)
+        self.assertEqual(err.count("WARNING:"), 1)
+        self.assertEqual(err.splitlines()[1:3],
+                         [f"  {d}" + ("  (main transcript)" if d == os.path.realpath(new) else "")
+                          for d in dirs])
+        # The same session addressed by its transcript path reads the same figure.
+        by_path, _ = self.capture(new / (SPLIT + ".jsonl"))
+        self.assertEqual(by_path["children"], doc["children"])
+        self.assertEqual(by_path["source_coverage"], doc["source_coverage"])
+
+    def test_a_foreign_session_in_the_same_dir_keeps_only_its_own_files(self):
+        new, old = self.recycled_session()
+        doc, err = self.capture(FOREIGN)
+        self.assertEqual([c["path"] for c in doc["source_coverage"]],
+                         [str(old / (FOREIGN + ".jsonl")),
+                          str(old / FOREIGN / "subagents" / "agent-x.jsonl")])
+        self.assertEqual((doc["parent"]["responses"], doc["children"]["responses"]), (1, 1))
+        self.assertEqual(Decimal(doc["children"]["lower_usd"]), Decimal("2.501"))
+        self.assertEqual(doc["session_project_dirs"], [os.path.realpath(old)])
+        self.assertEqual(doc["quality"]["split_project_dirs"], 0)
+        self.assertNotIn("WARNING", err)
+
+    def test_split_warning_stays_off_stdout_and_aggregate_reads_new_fields(self):
+        self.recycled_session()
+        out = self.root / "checkpoints"
+        for session in (SPLIT, FOREIGN):
+            done = self.run_checkpoint("--session", session, "--out-dir", str(out),
+                                       "--capture-at", "2026-09-29T00:05:00Z",
+                                       "--status", "final")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(len(done.stdout.splitlines()), 1)
+            self.assertTrue(Path(done.stdout.strip()).is_file())
+            self.assertEqual("WARNING" in done.stderr, session == SPLIT)
+        saved = [json.loads(p.read_text()) for p in sorted(out.glob("*.json"))]
+        self.assertTrue(all("session_project_dirs" in d for d in saved))
+        done = self.run_checkpoint("--aggregate-dir", str(out))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        aggregate = json.loads(done.stdout)
+        self.assertEqual((aggregate["sessions"], aggregate["children_responses"]), (2, 5))
+        self.assertEqual(Decimal(aggregate["children_usd"]), Decimal("12.505"))
+
+    def test_an_empty_extra_uuid_folder_is_not_a_split(self):
+        new = self.projects / "-demo-new"
+        write_records(new / (SPLIT + ".jsonl"), [priced_parent("p1")])
+        write_records(new / SPLIT / "subagents" / "agent-new.jsonl", [priced_child("n1")])
+        (self.projects / "-demo-empty" / SPLIT / "subagents").mkdir(parents=True)
+        write_records(self.projects / "-demo-meta" / SPLIT / "subagents" / "meta.json", [{}])
+        doc, err = self.capture(SPLIT)
+        self.assertEqual(len(doc["source_coverage"]), 2)
+        self.assertEqual(doc["session_project_dirs"], [os.path.realpath(new)])
+        self.assertEqual(doc["quality"]["split_project_dirs"], 0)
+        self.assertNotIn("WARNING", err)
+
+    def test_explicit_path_outside_the_projects_dir_keeps_its_sibling_children(self):
+        outside = self.root / "outside"
+        write_records(outside / (SPLIT + ".jsonl"), [priced_parent("p1")])
+        write_records(outside / SPLIT / "subagents" / "agent.jsonl", [priced_child("o1")])
+        doc, err = self.capture(outside / (SPLIT + ".jsonl"))
+        self.assertEqual(len(doc["source_coverage"]), 2)
+        self.assertEqual(doc["children"]["responses"], 1)
+        self.assertEqual(doc["session_project_dirs"], [os.path.realpath(outside)])
+        self.assertEqual(doc["quality"]["split_project_dirs"], 0)
+        self.assertNotIn("WARNING", err)
+
+    def test_one_dir_reached_through_two_roots_is_counted_once(self):
+        new = self.projects / "-demo-new"
+        write_records(new / (SPLIT + ".jsonl"), [priced_parent("p1")])
+        write_records(new / SPLIT / "subagents" / "agent.jsonl", [priced_child("n1")])
+        alias = self.projects / "-demo-alias"
+        alias.mkdir()
+        os.symlink(new / SPLIT, alias / SPLIT)
+        doc, err = self.capture(SPLIT)
+        self.assertEqual(len(doc["source_coverage"]), 2)
+        self.assertEqual(doc["children"]["responses"], 1)
+        self.assertEqual(doc["session_project_dirs"], [os.path.realpath(new)])
+        self.assertEqual(doc["quality"]["split_project_dirs"], 0)
+        self.assertNotIn("WARNING", err)
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any file")
+    def test_unreadable_child_in_another_dir_refuses(self):
+        new, old = self.recycled_session()
+        locked = old / SPLIT / "subagents" / "agent-a.jsonl"
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o600)
+        done = self.run_checkpoint("--session", SPLIT)
+        self.assertEqual(done.returncode, 1)
+        self.assertTrue(done.stderr.startswith("REFUSE:"), done.stderr)
+        self.assertEqual(done.stdout, "")
+
+
+class SessionDiscoveryTests(SessionFixture):
+    def roots(self, transcript):
+        return usage_accounting.session_subagent_roots(transcript)
+
+    def sub(self, project, session=SPLIT):
+        path = self.projects / project / session / "subagents"
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
+
+    def test_roots_are_the_sibling_first_then_every_project_dir_sorted(self):
+        for project in ("-z", "-m", "-c", "-a", "-k"):
+            self.sub(project)
+        self.sub("-a", FOREIGN)
+        transcript = self.projects / "-c" / (SPLIT + ".jsonl")
+        roots, main_dir = self.roots(str(transcript))
+        self.assertEqual(roots, [self.sub("-c")] + [self.sub(p) for p in ("-a", "-k", "-m", "-z")])
+        self.assertEqual(main_dir, os.path.realpath(self.projects / "-c"))
+        self.assertEqual(self.roots(transcript), (roots, main_dir))
+
+    def test_only_existing_directories_are_roots(self):
+        (self.projects / "-p" / (SPLIT + "x") / "subagents").mkdir(parents=True)  # another id
+        (self.projects / "-q" / SPLIT).mkdir(parents=True)                        # no subagents
+        (self.projects / "-r" / SPLIT).mkdir(parents=True)
+        (self.projects / "-r" / SPLIT / "subagents").write_text("a file, not a directory")
+        roots, main_dir = self.roots(self.projects / "-p" / (SPLIT + ".jsonl"))
+        self.assertEqual(roots, [])
+        self.assertEqual(main_dir, os.path.realpath(self.projects / "-p"))
+
+    def test_path_outside_the_projects_dir_keeps_its_sibling_with_no_projects_dir_at_all(self):
+        outside = self.root / "outside"
+        (outside / SPLIT / "subagents").mkdir(parents=True)
+        with mock.patch.dict(os.environ, {"HOME": str(self.root / "no-such-home")}):
+            roots, main_dir = self.roots(str(outside / (SPLIT + ".jsonl")))
+        self.assertEqual(roots, [str(outside / SPLIT / "subagents")])
+        self.assertEqual(main_dir, os.path.realpath(outside))
+
+    def test_roots_dedupe_by_realpath_and_keep_the_first_spelling(self):
+        real = self.sub("-new")
+        alias = self.projects / "-alias"
+        alias.mkdir()
+        os.symlink(self.projects / "-new" / SPLIT, alias / SPLIT)
+        roots, _ = self.roots(self.projects / "-new" / (SPLIT + ".jsonl"))
+        self.assertEqual(roots, [real])
+        # Addressed through the alias, the alias is the spelling that survives.
+        roots, _ = self.roots(alias / (SPLIT + ".jsonl"))
+        self.assertEqual(roots, [str(alias / SPLIT / "subagents")])
+
+    def test_main_dir_is_the_realpath_of_the_transcripts_directory(self):
+        real = self.projects / "-real"
+        real.mkdir()
+        os.symlink(real, self.projects / "-link")
+        _, main_dir = self.roots(self.projects / "-link" / (SPLIT + ".jsonl"))
+        self.assertEqual(main_dir, os.path.realpath(real))
+        self.assertNotEqual(main_dir, str(self.projects / "-link"))
+
+    def test_the_session_id_is_glob_escaped(self):
+        # A metacharacter in the transcript's own name must match itself and nothing else.
+        for stem, foreign in (("sess-*", "sess-other"), ("ab[cd]", "abc")):
+            with self.subTest(stem=stem):
+                literal = self.sub("-p", stem)
+                self.sub("-p", foreign)
+                roots, _ = self.roots(self.projects / "-p" / (stem + ".jsonl"))
+                self.assertEqual(roots, [literal])
+                other = self.sub("-q", stem)
+                roots, _ = self.roots(self.projects / "-p" / (stem + ".jsonl"))
+                self.assertEqual(roots, [literal, other])
+
+    def test_a_home_with_glob_metacharacters_still_finds_the_projects(self):
+        home = self.root / "h[1]*"
+        for project in ("-a", "-b"):
+            (home / ".claude" / "projects" / project / SPLIT / "subagents").mkdir(parents=True)
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            roots, _ = self.roots(self.root / "elsewhere" / (SPLIT + ".jsonl"))
+        self.assertEqual(roots, [str(home / ".claude" / "projects" / p / SPLIT / "subagents")
+                                 for p in ("-a", "-b")])
+
+
+class SplitRuleTests(SessionFixture):
+    def holder(self, project):
+        path = self.projects / project / SPLIT / "subagents"
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
+
+    def main_dir(self, project):
+        return os.path.realpath(self.projects / project)
+
+    def test_no_holder_or_only_the_main_dir_is_not_a_split(self):
+        main = self.main_dir("-main")
+        self.assertEqual(usage_accounting.split_project_dirs([], main), [])
+        self.assertEqual(usage_accounting.split_project_dirs([self.holder("-main")], main), [])
+
+    def test_a_child_in_another_dir_splits_and_names_the_main_dir_too(self):
+        main = self.main_dir("-main")
+        # Every child in the old dir: the main transcript's own dir holds none, and
+        # still belongs in the listing.
+        self.assertEqual(usage_accounting.split_project_dirs([self.holder("-old")], main),
+                         sorted([main, self.main_dir("-old")]))
+        self.assertEqual(usage_accounting.split_project_dirs(
+            [self.holder("-main"), self.holder("-old")], main),
+            sorted([main, self.main_dir("-old")]))
+
+    def test_the_result_is_sorted_whatever_order_the_holders_arrive_in(self):
+        names = ["-d%02d" % i for i in range(12)]
+        main = self.main_dir("-d05")
+        holders = [self.holder(n) for n in reversed(names)]
+        want = sorted(self.main_dir(n) for n in names)
+        self.assertEqual(usage_accounting.split_project_dirs(holders, main), want)
+        self.assertEqual(usage_accounting.split_project_dirs(holders[::-1], main), want)
+
+    def test_holders_compare_by_realpath_and_repeat_roots_count_once(self):
+        main = self.main_dir("-main")
+        link = self.projects / "-link"
+        os.symlink(self.projects / "-main", link)
+        via_link = str(link / SPLIT / "subagents")
+        self.holder("-main")
+        self.assertEqual(usage_accounting.split_project_dirs([via_link], main), [])
+        old = self.holder("-old")
+        self.assertEqual(usage_accounting.split_project_dirs([old, old, via_link], main),
+                         sorted([main, self.main_dir("-old")]))
 
 
 if __name__ == "__main__":
