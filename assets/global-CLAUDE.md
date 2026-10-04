@@ -266,8 +266,9 @@ mission selects prime mode. A user watching the app does not change the selected
   and partial/final status; at each new capture, aggregate only the latest checkpoint for
   that run/session. The historical effective-unit row in
   `~/Obsidian/no-it-all/briefs/usage-benchmark.md` may be appended once with
-  `usage-benchmark-row.py`; for a delivery package pass its tier (`--tier high-panel`), and
-  keep the emitted `· subagents:`, `· work:` and `· cost:` suffixes. If
+  `usage-benchmark-row.py`; for a session that delivered one package pass its tier
+  with `--tier` (the names are in the reference-figures rule), and keep the emitted
+  `· subagents:`, `· work:` and `· cost:` suffixes. If
   it already has a row, leave that row intact and still capture the continuation.
   ② The next-session seed, below. Full commands are in `/session-lifecycle`.
 
@@ -574,20 +575,29 @@ parsing those notes returns 7,587 PRs for a single week.
 **Each tier has a reference figure for what one package costs, and it stops
 nothing** (decided 2026-10-03; recomputed 2026-10-04). A LOW or MEDIUM package:
 **$15**. A HIGH package under the one-reviewer exception: **$30**. A HIGH package
-at panel depth: **$45**. A figure is the cost of the package's whole session up
-to its close-out, coordinator and subagents together, as the row measures it: the
-lower bound of the range `usage-benchmark-row.py` prices from the transcripts.
-The harness's own total is not the basis, because it is written only when a
-session exits and a close-out row cannot read it; over 19 sessions it ran a
-median 10% above that lower bound (1% to 22%), mostly subagent output that
-transcripts never record (skill-templates#385). The figures are medians of past
-sessions repriced on the installed rate card: $15.43 over 12 ordinary packages,
-$46.54 over seven HIGH packages that ranged from $17 to $76, and $29.98 for the
-one package on record under the one-reviewer exception. Pass the tier when the
-row is made, `usage-benchmark-row.py --tier high-panel` (the tiers are `low`,
-`medium`, `high-single` and `high-panel`), and the row's `· cost:` suffix sets
-the cost against the figure. A package that passes **1.5 times** its figure says
-why in its row. A blocking finding is still fixed whatever the figure says.
+at panel depth: **$45**. When the row is made for a session that delivered one
+package, pass its tier: `usage-benchmark-row.py --tier` with `low`, `medium`,
+`high-single` (the one-reviewer exception) or `high-panel` (panel depth). The
+row's `· cost:` suffix then sets the session's cost against the figure, and a
+package that costs more than **1.5 times** its figure says why in its row. A
+session that delivered several packages, or only part of one, passes no tier and
+its note says so. A blocking finding is still fixed whatever the figure says.
+
+**What a figure measures, and what these three rest on.** The cost is the
+package's whole session, coordinator and subagents together, as the row measures
+it: the lower bound of the range `usage-benchmark-row.py` prices from the
+transcripts. That is Claude spend only; a Codex pass is in no transcript. The
+harness's own total is not the basis, because it is written only when a session
+exits and a close-out row cannot read it. Over 19 sessions it ran a median 10%
+above the lower bound (1% to 22%), and most of that gap was subagent output the
+transcripts did not record (the mechanism is skill-templates#385). The figures
+come from past sessions repriced on the installed rate card. $15 is a median of
+$15.43 over the 12 ordinary single-package sessions that merged a PR. The two
+HIGH figures are provisional, because the evidence does not yet separate the two
+depths: seven HIGH packages have a median of $46.54 and range from $17 to $76,
+but only two of them ran a panel ($28.78 and $75.66), and the other five ran one
+Opus reviewer per round. $30 is the one package run under the exception, at
+$29.98. Revisit both once four more HIGH packages have rows.
 
 <!--default:review-on-a-stable-head-->
 **A review starts only on a stable head** (decided 2026-10-03): a commit nothing

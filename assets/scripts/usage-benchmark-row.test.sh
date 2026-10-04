@@ -26,6 +26,8 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUT="$HERE/usage-benchmark-row.py"
 export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
+# No __pycache__ beside the scripts: every run, mutants included, imports usage_accounting.
+export PYTHONDONTWRITEBYTECODE=1
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/usage-benchmark-row-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
@@ -857,6 +859,29 @@ echo; echo "H. cost suffix and tier reference figures"
 # nothing — and omit inference_geo, so the upper bound is the lower bound x 1.1 and a
 # test that confused the two would see it.
 
+# ---- precondition: the rate card these fixtures are built on. About thirty assertions below
+# turn a token count into exact dollars at claude-opus-5's input rate and read the upper
+# bound as 1.1x the lower (no inference_geo on the fixtures), and they need a made-up model
+# to be unpriced. If the card moves, those assertions fail for a reason that has nothing to
+# do with the cost suffix; this one says so first.
+pre=$("$PY" - <<'PY'
+from decimal import Decimal as D
+import usage_accounting as u
+got = u.price_usage({"input_tokens": 1000000}, "claude-opus-5")
+try:
+    u.price_usage({"input_tokens": 1000}, "claude-mystery-9"); mystery = "priced"
+except ValueError:
+    mystery = "unpriced"
+if got["lower_usd"] != D(5) or got["upper_usd"] != D("5.5") or mystery != "unpriced":
+    print("claude-opus-5 x 1,000,000 input tokens priced %s-%s (want 5-5.5); claude-mystery-9 is %s (want unpriced)"
+          % (got["lower_usd"], got["upper_usd"], mystery))
+PY
+)
+[ -z "$pre" ] \
+  && ok "precondition: the rate card prices claude-opus-5 input at \$5/M with a 1.1x upper bound, and claude-mystery-9 is unpriced" \
+  || bad "precondition: the rate card prices claude-opus-5 input at \$5/M with a 1.1x upper bound, and claude-mystery-9 is unpriced" \
+         "$pre — section H's fixtures assume exactly this and must be rebuilt if the rate card changed"
+
 FIG=$("$PY" "$SUT" --figures 2>/dev/null)
 fig() { printf '%s\n' "$FIG" | awk -v t="$1" '$1 == t { print $2 }'; }
 OVER=$(fig over)
@@ -865,14 +890,17 @@ TIERS="low medium high-single high-panel"
 COSTD="$TMP/cost"; mkdir -p "$COSTD"
 P="$COSTD/c1c1c1c1-0000-4000-8000-000000000000.jsonl"
 
-# gen_priced <path> <parent-input-tokens> <child-input-tokens> <unpriced-responses>
-# The priced parent response, one priced child (when tokens > 0, in the sibling
-# <uuid>/subagents dir), and N parent responses naming a model the rate card has no
-# price for. Message ids are unique within the fixture.
+# gen_priced <path> <parent-input-tokens> <child-input-tokens> <unpriced-parent> [<unpriced-child>]
+# The priced parent response (when tokens > 0), one priced child response (when tokens > 0,
+# in the sibling <uuid>/subagents dir), N parent responses naming a model the rate card has
+# no price for, and M such responses in the child transcript (default 0; the subagents dir
+# is made when there are child tokens or child unpriced responses). Message ids are unique
+# within the fixture.
 gen_priced() {
   "$PY" - "$@" <<'PY'
 import json, os, shutil, sys
 path, ptok, ctok, nun = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+cun = int(sys.argv[5]) if len(sys.argv) > 5 else 0
 base = path[:-len(".jsonl")]
 shutil.rmtree(base, ignore_errors=True)
 def line(tag, i, tokens, model):
@@ -885,10 +913,13 @@ with open(path, "w", encoding="utf-8") as f:
         f.write(line("p", 0, ptok, "claude-opus-5"))
     for i in range(nun):
         f.write(line("u", i, 1000, "claude-mystery-9"))
-if ctok:
+if ctok or cun:
     os.makedirs(base + "/subagents")
     with open(base + "/subagents/agent-1.jsonl", "w", encoding="utf-8") as f:
-        f.write(line("c", 0, ctok, "claude-opus-5"))
+        if ctok:
+            f.write(line("c", 0, ctok, "claude-opus-5"))
+        for i in range(cun):
+            f.write(line("cu", i, 1000, "claude-mystery-9"))
 PY
 }
 
@@ -1026,6 +1057,54 @@ case "$(cost_of "$out")" in
   *) ok "a fully priced session carries neither the marker nor the '≥'" ;;
 esac
 
+# ratio_of <dollars> <figure> — dollars / figure, rounded half up to two places
+ratio_of() { "$PY" -c 'import sys; from decimal import Decimal as D, ROUND_HALF_UP; print((D(sys.argv[1]) / D(sys.argv[2])).quantize(D("0.01"), ROUND_HALF_UP))' "$1" "$2"; }
+
+# An unpriced response in a CHILD transcript counts like one in the parent: the loop that
+# prices responses is shared, but a count that skipped children would still read as a
+# total for every session whose unpriced responses were subagent work.
+fhp=$(fig high-panel); r5=$(ratio_of 5 "$fhp")
+C1="$COSTD/c5c5c5c5-0000-4000-8000-000000000000.jsonl"
+gen_priced "$C1" 1000000 0 0 1
+row "$C1"
+[ "$rc" -eq 0 ] && [ "$(cost_of "$out")" = '$5.00–5.50 (1 unpriced)' ] \
+  && ok "an unpriced response only in a child transcript still reads ' (1 unpriced)'" \
+  || bad "an unpriced response only in a child transcript still reads ' (1 unpriced)'" "rc=$rc $(flat "$out")"
+row "$C1" --tier high-panel
+[ "$rc" -eq 0 ] && [ "$(cost_of "$out")" = "\$5.00–5.50 (1 unpriced) vs \$$fhp high-panel (≥${r5}x)" ] \
+  && ok "an unpriced child response, with a tier: the marker follows the range and the ratio reads '≥'" \
+  || bad "an unpriced child response, with a tier: the marker follows the range and the ratio reads '≥'" "rc=$rc $(flat "$out")"
+gen_priced "$C1" 1000000 2000000 0 1
+row "$C1"
+[ "$rc" -eq 0 ] && [ "$(cost_of "$out")" = '$15.00–16.50 (1 unpriced)' ] \
+  && ok "a priced child and an unpriced child response together: the range is the priced sum, marked (1 unpriced)" \
+  || bad "a priced child and an unpriced child response together: the range is the priced sum, marked (1 unpriced)" "rc=$rc $(flat "$out")"
+
+# Exactly ONE unpriced response, in the parent: a count of one is a count (a test of
+# 'more than one' would pass every fixture above, which all have three or a child's one).
+S1="$COSTD/c6c6c6c6-0000-4000-8000-000000000000.jsonl"
+gen_priced "$S1" 1000000 0 1
+row "$S1"
+[ "$rc" -eq 0 ] && [ "$(cost_of "$out")" = '$5.00–5.50 (1 unpriced)' ] \
+  && ok "exactly one unpriced parent response reads ' (1 unpriced)'" \
+  || bad "exactly one unpriced parent response reads ' (1 unpriced)'" "rc=$rc $(flat "$out")"
+row "$S1" --tier high-panel
+[ "$rc" -eq 0 ] && [ "$(cost_of "$out")" = "\$5.00–5.50 (1 unpriced) vs \$$fhp high-panel (≥${r5}x)" ] \
+  && ok "exactly one unpriced response, with a tier: '(1 unpriced) vs ... (≥<ratio>x)'" \
+  || bad "exactly one unpriced response, with a tier: '(1 unpriced) vs ... (≥<ratio>x)'" "rc=$rc $(flat "$out")"
+# Nothing priced at all: the range is a subtotal of nothing, and must still say so.
+N0="$COSTD/c7c7c7c7-0000-4000-8000-000000000000.jsonl"
+gen_priced "$N0" 0 0 1
+row "$N0"
+[ "$rc" -eq 0 ] && [ "$(cost_of "$out")" = '$0.00–0.00 (1 unpriced)' ] \
+  && ok "nothing priced and one unpriced response: '\$0.00–0.00 (1 unpriced)'" \
+  || bad "nothing priced and one unpriced response: '\$0.00–0.00 (1 unpriced)'" "rc=$rc $(flat "$out")"
+fl=$(fig low)
+row "$N0" --tier low
+[ "$rc" -eq 0 ] && [ "$(cost_of "$out")" = "\$0.00–0.00 (1 unpriced) vs \$$fl low (≥0.00x)" ] \
+  && ok "nothing priced, one unpriced response, with a tier: '\$0.00–0.00 (1 unpriced) vs \$<figure> low (≥0.00x)'" \
+  || bad "nothing priced, one unpriced response, with a tier: '\$0.00–0.00 (1 unpriced) vs \$<figure> low (≥0.00x)'" "rc=$rc $(flat "$out")"
+
 # ---- argument order and spelling
 gen_priced "$P" 1000000 2000000 0
 row "$P" --tier medium;   r1=$out
@@ -1077,6 +1156,7 @@ refuses "an unknown option" "unknown option" --bogus "$P"
 refuses "a short option" "unknown option" -t low "$P"
 refuses "more than one session argument" "more than one" "$P" "$P"
 refuses "--figures beside a session argument" "--figures" --figures "$P"
+refuses "--figures given twice" "given twice" --figures --figures
 refuses "--figures beside a tier" "--figures" --figures --tier low
 # nothing on stdout also means no row for a valid session when the shape is wrong
 o=$(env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" --tier nope "$P" 2>/dev/null)
@@ -1127,6 +1207,55 @@ printf '%s' "$e0" | grep -qF 'three measured suffixes' \
   && ok "the closing line says the measured suffixes are three" \
   || bad "the closing line says the measured suffixes are three" "$(flat "$e0")"
 
+# ---- the WHOLE reference line, not its prefix. The prefix checks above pass a line that
+# prints the upper bound where the lower belongs, a wrong ratio, a dropped '≥', a dropped or
+# miscounted subtotal note, or no 'must say why' sentence for a package that is both over and
+# unpriced. The expected line is built from `--figures` (the figure and the factor), from
+# the row's OWN stdout (the lower bound) and from the test's own ratio arithmetic (`tok`),
+# never from typed dollars.
+REFU="$COSTD/d1d1d1d1-0000-4000-8000-000000000000.jsonl"   # fully priced, under the factor
+REFO="$COSTD/d2d2d2d2-0000-4000-8000-000000000000.jsonl"   # fully priced, over
+REFN="$COSTD/d3d3d3d3-0000-4000-8000-000000000000.jsonl"   # over, ONE unpriced response (a child's)
+fp=$(fig high-panel)
+read -r pt ct shown flag <<< "$(tok "$fp" "$OVER" "$OVER" -0.70 0)"; gen_priced "$REFU" "$pt" "$ct" 0 0; SHOWN_U=$shown
+read -r pt ct shown flag <<< "$(tok "$fp" "$OVER" "$OVER" 0.11 0)";  gen_priced "$REFO" "$pt" "$ct" 0 0; SHOWN_O=$shown
+gen_priced "$REFN" "$pt" "$ct" 0 1; SHOWN_N=$shown
+
+# ref_exact <row-script> <fixture> <ratio shown> <'≥' or ''> <unpriced count> <over|ok>
+# Returns 0 when the stderr 'reference:' line is exactly the expected one, 1 when it is not
+# (REF_GOT / REF_WANT then hold both), 2 when the script produced no row at all.
+ref_exact() {
+  local script=$1 fx=$2 shown=$3 geq=$4 un=$5 isover=$6 o lower
+  o=$(env -u CLAUDE_CODE_SESSION_ID "$PY" "$script" "$fx" --tier high-panel 2>"$TMP/ref.err")
+  [ -n "$o" ] || { REF_GOT="(no row)"; REF_WANT=""; return 2; }
+  REF_GOT=$(grep '^  reference: ' "$TMP/ref.err")
+  lower=$(cost_of "$o" | sed -n 's/^\$\([0-9.]*\)–.*/\1/p')
+  REF_WANT="  reference: high-panel figure \$$fp; all-in lower bound \$$lower; ratio ${geq}${shown}x"
+  [ "$un" -gt 0 ] && REF_WANT="$REF_WANT ($un unpriced, so the lower bound is a subtotal)"
+  [ "$isover" = over ] && REF_WANT="$REF_WANT. This package passed $OVER times its reference figure: the workload note must say why."
+  [ "$REF_GOT" = "$REF_WANT" ]
+}
+# ref_caught <row-script> — the cases (U, O, N) whose line is NOT exact, then "!" and the
+# cases that produced no row at all
+ref_caught() {
+  local mism="" norow="" r
+  ref_exact "$1" "$REFU" "$SHOWN_U" "" 0 ok;  r=$?; [ $r = 1 ] && mism="${mism}U"; [ $r = 2 ] && norow="${norow}U"
+  ref_exact "$1" "$REFO" "$SHOWN_O" "" 0 over; r=$?; [ $r = 1 ] && mism="${mism}O"; [ $r = 2 ] && norow="${norow}O"
+  ref_exact "$1" "$REFN" "$SHOWN_N" "≥" 1 over; r=$?; [ $r = 1 ] && mism="${mism}N"; [ $r = 2 ] && norow="${norow}N"
+  printf '%s!%s' "$mism" "$norow"
+}
+for c in "U:$REFU:$SHOWN_U::0:ok:under the factor and fully priced" \
+         "O:$REFO:$SHOWN_O::0:over:over and fully priced" \
+         "N:$REFN:$SHOWN_N:≥:1:over:over with ONE unpriced response"; do
+  IFS=: read -r _ fx sh gq un ov label <<< "$c"
+  if ref_exact "$SUT" "$fx" "$sh" "$gq" "$un" "$ov"; then
+    ok "the whole stderr reference line is exact: $label"
+  else
+    bad "the whole stderr reference line is exact: $label" "got  '$REF_GOT'" 
+    printf '       want %s\n' "'$REF_WANT'"
+  fi
+done
+
 # ---- the doctrine sync. The `reference-figures` rule in assets/global-CLAUDE.md states the
 # four dollar amounts and the factor in prose; the script's table is where they live. Prose
 # that drifts from the table is a rule nobody can check a row against, so the rule's own
@@ -1170,14 +1299,22 @@ for anchor, pat, keys in (
             print("%s: --figures has no '%s' line" % (anchor, key))
         elif Decimal(found[0]) != want[key]:
             print("%s: the rule says %s, --figures says %s %s" % (anchor, found[0], key, want[key]))
+# The names the rule and the script share: every tier --figures prints is named, in
+# backticks, in this paragraph, and the paragraph shows the flag they go with. A tier renamed
+# on either side is a rule that tells a session to pass a value the script refuses.
+for name in want:
+    if name != "over" and "`%s`" % name not in para:
+        print("tier name: `%s` (a tier --figures prints) does not appear backticked in the rule's first paragraph" % name)
+if "usage-benchmark-row.py --tier" not in para:
+    print("flag: the literal 'usage-benchmark-row.py --tier' does not appear in the rule's first paragraph")
 PY
 }
-# mutate_doc <in> <out> <which> — a copy of the rule with ONE thing broken
+# mutate_doc <in> <out> <which> [<tier name>] — a copy of the rule with ONE thing broken
 mutate_doc() {
-  "$PY" - "$1" "$2" "$3" <<'PY'
+  "$PY" - "$1" "$2" "$3" "${4:-}" <<'PY'
 import re, sys
 from decimal import Decimal
-src, dst, what = sys.argv[1:4]
+src, dst, what, tier = sys.argv[1:5]
 tok = "<!--default:reference-figures-->"
 head, sep, rest = open(src, encoding="utf-8").read().partition(tok)
 if not sep:
@@ -1187,6 +1324,17 @@ def bump(m):
     return m.group(1) + format(Decimal(m.group(2)) + 1, "f") + m.group(3)
 if what == "token":
     out = head + "<!--default:reference-figure-->" + rest
+elif what in ("tier", "flag"):
+    # every occurrence inside the first paragraph (up to the first blank line)
+    cut = rest.find("\n\n")
+    first, after = (rest, "") if cut < 0 else (rest[:cut], rest[cut:])
+    if what == "tier":
+        new = first.replace("`%s`" % tier, "`%s-renamed`" % tier)
+    else:
+        new = first.replace("usage-benchmark-row.py --tier", "usage-benchmark-row.py --level")
+    if new == first:
+        sys.exit(2)
+    out = head + tok + new + after
 else:
     pat = {"low": r"(LOW or MEDIUM package:\s*\*\*\$)" + N + r"()",
            "single": r"(one-reviewer exception:\s*\*\*\$)" + N + r"()",
@@ -1274,13 +1422,84 @@ if MUT=$(mutant no-geq usage-benchmark-row.py 's|^    ratio_note = ("[^"]*" if u
 else
   bad "the fixture DISTINGUISHES the two implementations (no '≥': a subtotal's ratio reads as exact)" "could not build the mutant: the ratio line is not where this expects it"
 fi
+# the count itself: an unpriced response in a CHILD, and a count of exactly one. Each mutant
+# must still print a row; the defect is read off the cost cell it prints.
+# mut_cost <name> <sed-expr> <fixture> [args...] — the mutant's cost cell, or BUILD-FAILED /
+# NO-ROW, so a mutant that did not build (or crashed) can never pass for one that misbehaves.
+mut_cost() {
+  local name=$1 expr=$2 m o; shift 2
+  m=$(mutant "$name" usage-benchmark-row.py "$expr") || { printf 'BUILD-FAILED'; return; }
+  o=$(env -u CLAUDE_CODE_SESSION_ID "$PY" "$m" "$@" 2>/dev/null)
+  [ -n "$o" ] || { printf 'NO-ROW'; return; }
+  cost_of "$o"
+}
+gen_priced "$C1" 1000000 0 0 1
+got=$(mut_cost child-unpriced 's/^        unpriced += 1$/        unpriced += 0 if item["role"] == "child" else 1/' "$C1")
+[ "$got" = '$5.00–5.50' ] \
+  && ok "the fixture DISTINGUISHES the two implementations (children's unpriced responses not counted: the marker vanishes)" \
+  || bad "the fixture DISTINGUISHES the two implementations (children's unpriced responses not counted: the marker vanishes)" "mutant cost='$got'"
+got=$(mut_cost marker-gt1 's/^if unpriced:$/if unpriced > 1:/' "$S1")
+[ "$got" = '$5.00–5.50' ] \
+  && ok "the fixture DISTINGUISHES the two implementations (marker only for MORE than one unpriced: a single one vanishes)" \
+  || bad "the fixture DISTINGUISHES the two implementations (marker only for MORE than one unpriced: a single one vanishes)" "mutant cost='$got'"
+# ...and the '≥' lost only at a count of one, judged on the row it prints (marker kept, '≥' gone)
+GEQ1='s/^\(    ratio_note = ("[^"]*" if unpriced\) else/\1 > 1 else/'
+got=$(mut_cost geq-gt1-one "$GEQ1" "$S1" --tier high-panel)
+[ "$got" = "\$5.00–5.50 (1 unpriced) vs \$$fhp high-panel (${r5}x)" ] \
+  && ok "the fixture DISTINGUISHES the two implementations ('≥' only for MORE than one unpriced: one unpriced response reads as an exact ratio)" \
+  || bad "the fixture DISTINGUISHES the two implementations ('≥' only for MORE than one unpriced: one unpriced response reads as an exact ratio)" "mutant cost='$got'"
+got=$(mut_cost geq-gt1-none "$GEQ1" "$N0" --tier low)
+[ "$got" = "\$0.00–0.00 (1 unpriced) vs \$$fl low (0.00x)" ] \
+  && ok "the fixture DISTINGUISHES the two implementations ('≥' only for MORE than one unpriced: nothing priced reads as an exact 0.00x)" \
+  || bad "the fixture DISTINGUISHES the two implementations ('≥' only for MORE than one unpriced: nothing priced reads as an exact 0.00x)" "mutant cost='$got'"
+
+# the whole stderr reference line: seven ways to get it wrong, each caught by the cases that
+# should see it and by no others (U/O/N = the three fixtures above), and every mutant still
+# prints a row for all three.
+RM_NAME=(up-for-low wrong-ratio geq-dropped note-dropped note-count note-gt1 no-why-unpriced)
+RM_EXPR=(
+  's/all-in lower bound \${cents(lower)}/all-in lower bound ${cents(upper)}/'
+  's/{fmt(ratio)}x")$/{fmt(ratio + CENT)}x")/'
+  "s/{'[^']*' if unpriced else ''}//"
+  's/^        line += f" ({unpriced} unpriced, so the lower bound is a subtotal)"$/        pass/'
+  's/ ({unpriced} unpriced, so/ ({unpriced + 1} unpriced, so/'
+  's/^    if unpriced:$/    if unpriced > 1:/'
+  's/line += (f". This package/line += ("" if unpriced else f". This package/'
+)
+RM_WANT=(UON UON N N N N N)
+RM_WHAT=("the upper bound printed as the lower bound" "a wrong ratio" "the '≥' dropped" "the subtotal note dropped"
+         "the subtotal note's count wrong" "the subtotal note only for MORE than one unpriced"
+         "no 'must say why' sentence once the package is also unpriced")
+for i in 0 1 2 3 4 5 6; do
+  if MUT=$(mutant "ref-${RM_NAME[$i]}" usage-benchmark-row.py "${RM_EXPR[$i]}"); then
+    res=$(ref_caught "$MUT"); mism=${res%%!*}; norow=${res##*!}
+    [ -z "$norow" ] && [ "$mism" = "${RM_WANT[$i]}" ] \
+      && ok "the fixture DISTINGUISHES the two implementations (reference line, ${RM_WHAT[$i]}: caught by case ${RM_WANT[$i]})" \
+      || bad "the fixture DISTINGUISHES the two implementations (reference line, ${RM_WHAT[$i]}: caught by case ${RM_WANT[$i]})" \
+             "cases with a wrong line: '$mism'; cases with no row: '$norow'"
+  else
+    bad "the fixture DISTINGUISHES the two implementations (reference line, ${RM_WHAT[$i]}: caught by case ${RM_WANT[$i]})" \
+        "could not build the mutant: the line is not where this expects it"
+  fi
+done
+# --figures given twice: a copy that lets the repeat through prints the table instead of refusing
+if MUT=$(mutant figures-twice usage-benchmark-row.py 's/^            if figures:$/            if False:/'); then
+  mout=$(env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" --figures --figures 2>/dev/null); mrc=$?
+  [ "$mrc" -eq 0 ] && [ "$mout" = "$FIG" ] \
+    && ok "the fixture DISTINGUISHES the two implementations (--figures --figures let through: it prints the table)" \
+    || bad "the fixture DISTINGUISHES the two implementations (--figures --figures let through: it prints the table)" "rc=$mrc out='$(flat "$mout")'"
+else
+  bad "the fixture DISTINGUISHES the two implementations (--figures --figures let through: it prints the table)" "could not build the mutant: the repeat check is not where this expects it"
+fi
 # the doctrine sync: the rule's paragraph, broken six ways, and the table, broken two
-for what in token low single panel factor anchor; do
-  if mutate_doc "$DOC" "$TMP/doc-$what.md" "$what"; then
+LASTTIER=${TIERS##* }
+for what in token low single panel factor anchor tier flag; do
+  case "$what" in tier) must="tier name: \`$LASTTIER\`" ;; flag) must="flag: " ;; *) must="" ;; esac
+  if mutate_doc "$DOC" "$TMP/doc-$what.md" "$what" "$LASTTIER"; then
     got=$(doctrine_problems "$TMP/doc-$what.md" "$FIG")
-    [ -n "$got" ] \
+    [ -n "$got" ] && printf '%s\n' "$got" | grep -qF -- "$must" \
       && ok "the fixture DISTINGUISHES the two implementations (rule paragraph broken: $what)" \
-      || bad "the fixture DISTINGUISHES the two implementations (rule paragraph broken: $what)" "the sync check passed a broken rule"
+      || bad "the fixture DISTINGUISHES the two implementations (rule paragraph broken: $what)" "the sync check passed a broken rule, or did not name it: '$(flat "$got")'"
   else
     bad "the fixture DISTINGUISHES the two implementations (rule paragraph broken: $what)" \
         "could not build the mutant: the rule's token or anchor is not where this expects it in $DOC"
@@ -1293,6 +1512,14 @@ if MUT=$(mutant fig-table usage-benchmark-row.py 's/\("high-single": Decimal("\)
     || bad "the fixture DISTINGUISHES the two implementations (script table changed: the sync check sees the rule disagree)" "passed"
 else
   bad "the fixture DISTINGUISHES the two implementations (script table changed: the sync check sees the rule disagree)" "could not build the mutant: the table row is not where this expects it"
+fi
+if MUT=$(mutant fig-name usage-benchmark-row.py 's/"high-single": Decimal/"high-one": Decimal/'); then
+  got=$(doctrine_problems "$DOC" "$(env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" --figures 2>/dev/null)")
+  printf '%s\n' "$got" | grep -qF 'tier name: `high-one`' \
+    && ok "the fixture DISTINGUISHES the two implementations (script tier renamed: the sync check wants the new name backticked in the rule)" \
+    || bad "the fixture DISTINGUISHES the two implementations (script tier renamed: the sync check wants the new name backticked in the rule)" "$(flat "$got")"
+else
+  bad "the fixture DISTINGUISHES the two implementations (script tier renamed: the sync check wants the new name backticked in the rule)" "could not build the mutant: the table row is not where this expects it"
 fi
 if MUT=$(mutant fig-factor usage-benchmark-row.py 's/^OVER_FACTOR = Decimal("[0-9.]*")/OVER_FACTOR = Decimal("2")/'); then
   got=$(doctrine_problems "$DOC" "$(env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" --figures 2>/dev/null)")

@@ -29,7 +29,7 @@ nothing is emitted, so nothing wrong can be appended):
   - an explicit argument matching no transcript.
   - an argument shape that cannot be read one way: an unknown tier, `--tier` with
     no value or given twice, an unknown option, more than one session argument,
-    `--figures` beside anything else.
+    `--figures` given twice or beside anything else.
 
 The row's workload-note cell is emitted with THREE measured suffixes already
 filled in — `· subagents: <eff>M/<count>` (from the session's subagents/
@@ -47,8 +47,9 @@ defect a third time.
 `work:` may read `n/a`, which is NOT the same as `0pr/0iss` — see scan_work.
 
 `--tier TIER` (`low`, `medium`, `high-single` or `high-panel`) sets the cost against
-that tier's reference figure: `· cost: $72.62–79.88 vs $45 high-panel (1.61x)`, with
-`, over 1.5x` inside the parentheses when the package passed 1.5 times its figure. The
+that tier's reference figure: `· cost: $55.20–60.72 vs $45 high-panel (1.23x)`. When the
+package passed 1.5 times its figure the parentheses end `, over 1.5x` — `$72.62–79.88 vs
+$45 high-panel (1.61x, over 1.5x)`, since 72.62 is more than 1.5 times 45. The
 comparison is on the all-in LOWER bound, so the figures are lower-bound figures; the
 ratio is that bound over the figure, rounded half up to two places, and "over" is
 decided on the unrounded values and is strict (exactly 1.5 times is not over). A figure
@@ -145,6 +146,8 @@ def parse_args(args):
         a = args[i]
         i += 1
         if a == "--figures":
+            if figures:
+                die("--figures given twice — it takes no other argument.")
             figures = True
         elif a == "--tier" or a.startswith("--tier="):
             if tier is not None:
