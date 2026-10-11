@@ -22,6 +22,7 @@ A section-by-section comparison also found details whose explicit wording had be
 
 | Rule ID | Detail restored or made explicit |
 | --- | --- |
+| `exec-brief` | Explicitly invoke the `visual-brief` skill to create and open the report. |
 | `rule-precedence` | A successful fetch is mandatory; exit 1 means floor drift, exit 0 means a verified comparison, and exit 2 means inability to verify. Unclassified text is default; compare rule tokens rather than headings. Scope belongs to the script alone. |
 | `restart-triggers` | Record mode/package at startup, not only at close-out. A dependent first PR does not complete its package. Treat a lower compaction window as a host experiment and include reconstruction cost when measuring savings. |
 | `fable-paced` | Prefer the incremental script to a fresh scan; readings can be recorded on any day. Commands prompt without shell placeholders. The optional `meter` alias is not shipped. Reject stale samples, label derived fallback, retain measurement policy and all candidate units. |

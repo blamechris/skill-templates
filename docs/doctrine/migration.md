@@ -36,9 +36,10 @@ check or an unauthenticated CLI is not proof. Then repeat the reviewed command w
 `--claude-import-verified`. That option records the operator's acknowledgment; the
 installer does not itself run a provider or certify its output. Include the same
 local additions on both runs. Replacement refuses to remove machine-only blocks unless
-`--discard-local` explicitly authorizes discarding them. Tagged local blocks are retained
-verbatim and must begin with a rule token; a nonblank preamble in tagged input
-refuses before any writes. Untagged additions become the reserved private `machine-local` block.
+`--discard-local` explicitly authorizes discarding them. Local blocks are retained verbatim. Input containing an explicit `machine-local`
+token must begin with a rule token; a nonblank preamble in that input refuses
+before any writes. Input without a `machine-local` token receives a reserved
+private wrapper that retains its preamble.
 The reserved block is reported as INFO by fleet-check, excluded from drift counts and
 publication advice. Never move it into the registry.
 

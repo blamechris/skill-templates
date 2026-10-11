@@ -91,8 +91,8 @@ the restart needed. A saved seed schedules nothing. Keep this to one sentence
 after the four bullets; lead the message with the usable outcome and link details.
 
 <!--default:exec-brief-->
-After long multi-PR/issue, epic or marathon delivery, create and open a
-self-contained HTML `visual-brief` in `$CLAUDE_BRIEF_DIR`.
+After long multi-PR/issue, epic or marathon delivery, use the `visual-brief` skill
+to create and open a self-contained HTML report in `$CLAUDE_BRIEF_DIR`.
 Begin with a two- or three-sentence result, outcome chips and a one-line “needs
 you” callout when Chris has a prerequisite. Below that, give the per-PR table,
 bugs caught and next work. Lead with verified merges, closures and gates passed.

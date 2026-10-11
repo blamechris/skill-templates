@@ -11,6 +11,8 @@ PY=$(command -v python3.12 || command -v python3.11 || command -v python3.13 || 
   exit 1
 }
 TMP=$(mktemp -d /tmp/fleet-bootstrap-test.XXXXXX)
+# Canonical paths must reach restore shape checks on macOS, where /tmp is an alias.
+TMP=$(cd "$TMP" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 pass=0
 fail=0
@@ -411,6 +413,7 @@ assert stat.S_IMODE(p.stat().st_mode) == 0o640
 PY
   preserved_rc=$?
   [ "$rc" -eq 2 ] && [ "$preserved_rc" -eq 0 ] &&
+    printf '%s' "$out" | grep -Eq 'not a (directory|regular-file destination)' &&
     ok "late $obstruction obstruction refuses without earlier byte or mode change" ||
     bad "late $obstruction obstruction refuses without earlier byte or mode change" "rc=$rc preserved=$preserved_rc $out"
 done
