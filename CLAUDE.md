@@ -89,10 +89,9 @@ model — each carries its own `.claude/skill-profile.md` + `.claude/skills.lock
 - A subagent's final message (which is its return value to the orchestrator) likewise ends with its own status block.
 - It's a status, not a recap — don't pad it. The old one-line `·`-separated format is **retired** — it doesn't scan in the desktop/mobile app; don't emit it.
 
-> The canonical machine-level `~/.claude/CLAUDE.md` (which carries this convention plus the
-> attribution, session-boundary, follow-on, and tiering rules) lives in this repo at
-> [`assets/global-CLAUDE.md`](assets/global-CLAUDE.md) — bootstrap new machines from it and
-> land changes to it here via PR, then copy to `~/.claude/CLAUDE.md`.
+> The canonical root is [`assets/AGENTS.md`](assets/AGENTS.md), installed at
+> `~/.fleet/AGENTS.md`. See [bootstrap and adapters](docs/doctrine/migration.md);
+> `assets/global-CLAUDE.md` is the Claude import adapter.
 
 **End of a long / multi-task run → an HTML executive brief, not a wall of text.** When a session shipped real work (several PRs/issues, an epic), close it with a `visual-brief` HTML report into the Obsidian vault (`$CLAUDE_BRIEF_DIR`), opened in the browser — a "two-minute" CEO view: a hero executive statement + outcome chips + a one-line "needs you" callout on top; the nitty-gritty (per-PR table, bugs caught, what's next) at the bottom for the vault record. Lead with verifiable outcomes (PRs merged, issues closed, gates passed); don't pad with misleading whole-file token/time metrics. Still end the chat message with the short `**Status:**` block pointing at the report.
 

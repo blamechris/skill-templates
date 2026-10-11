@@ -7,6 +7,7 @@ Claude settings. Refuses an already-started fixture.
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -25,14 +26,19 @@ def install(root, registry):
     if state["prs"] or (control / "instruction-manifest.json").exists():
         raise ValueError("Use a fresh, uninstalled fixture; never alter a running trial.")
     revision = run(["git", "rev-parse", "HEAD"], registry)
-    dirty = run(["git", "status", "--porcelain", "--", "assets/global-CLAUDE.md",
+    dirty = run(["git", "status", "--porcelain", "--", "assets/AGENTS.md",
                  "generic", "docs/development-cadence.md"], registry)
     if dirty:
         raise ValueError("Commit the source instructions before pinning a trial.")
-    source = (registry / "assets/global-CLAUDE.md").read_text()
-    cadence = "## Delivery cadence (all projects)\n" + source.split(
-        "## Delivery cadence (all projects)\n", 1)[1].split(
-        "- **Ending a session = two artifacts", 1)[0]
+    source = (registry / "assets/AGENTS.md").read_text()
+    def block(rule_id):
+        match = re.search(r"<!--default:" + re.escape(rule_id) + r"-->\n(.*?)(?=^<!--(?:floor|default):|\Z)", source, re.M | re.S)
+        if not match:
+            raise ValueError(f"Missing cadence rule: {rule_id}")
+        return match.group(1).strip()
+    cadence = "\n\n".join(block(name) for name in (
+        "delivery-cadence", "gated-delivery-authority", "default-roles",
+        "in-effect-line", "restart-triggers"))
     report = source.split("<!--default:next-line-->", 1)[1].split(
         "<!--default:exec-brief-->", 1)[0].strip()
     project = """# StockNote local Claude workflow trial
@@ -163,7 +169,7 @@ session boundaries from CLAUDE.md after delivery.
          "--repo", str(workspace), "--targets", "claude"], workspace)
     snapshot = control / "source-instructions"
     snapshot.mkdir()
-    source_paths = ["assets/global-CLAUDE.md", "docs/development-cadence.md"] + [
+    source_paths = ["assets/AGENTS.md", "docs/development-cadence.md"] + [
         "generic/" + name + ".md" for name in (
             "prime-directive", "session-lifecycle", "full-review", "check-pr", "merge",
             "unattended-merge", "merge-gate", "autonomous-dev-flow", "tackle-issues")]

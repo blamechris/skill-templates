@@ -1256,11 +1256,11 @@ for c in "U:$REFU:$SHOWN_U::0:ok:under the factor and fully priced" \
   fi
 done
 
-# ---- the doctrine sync. The `reference-figures` rule in assets/global-CLAUDE.md states the
+# ---- the doctrine sync. The `reference-figures` rule in assets/AGENTS.md states the
 # four dollar amounts and the factor in prose; the script's table is where they live. Prose
 # that drifts from the table is a rule nobody can check a row against, so the rule's own
 # paragraph is held to `--figures` here.
-DOC="$HERE/../global-CLAUDE.md"
+DOC="$HERE/../AGENTS.md"
 # doctrine_problems <file> <figures-text> — one line per disagreement, nothing when they agree
 doctrine_problems() {
   "$PY" - "$1" "$2" <<'PY'

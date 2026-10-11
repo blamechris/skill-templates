@@ -30,8 +30,9 @@ places that used to hold near-copies of it cannot drift apart.
 
 WHAT IT REFUSES TO GUESS
   * The scope key comes from git, never from an argument and never from a $PWD
-    prefix test. Anything that is not "this is not a git repository" is a REFUSE,
-    not a fallback to `fleet`.
+    prefix test. A repository holding the handoff directory is fleet-scoped;
+    other repositories use the main checkout basename. Anything that is not
+    "this is not a git repository" is a REFUSE, not a fallback to `fleet`.
   * The session id comes from --session or $CLAUDE_CODE_SESSION_ID, in that order,
     and from nothing else. There is no scan, no most-recent-mtime pick, no
     "probably this one". A session that cannot name itself writes no seed: an
@@ -153,7 +154,7 @@ def _orphaned_worktree():
 
 
 def resolve_scope(topic=None):
-    """The scope key: the MAIN worktree's directory basename, or `fleet`.
+    """The scope key: `fleet` for the handoff repo, else the main checkout basename.
 
     `--git-common-dir` points at the shared `.git` — the repo's identity — from the
     main checkout, a nested subdirectory, a detached HEAD and every linked worktree
@@ -191,6 +192,17 @@ def resolve_scope(topic=None):
             die("--topic %r is not one filename component of [A-Za-z0-9_-]" % topic)
         return "fleet-" + topic if topic else "fleet"
 
+    # The handoff directory can itself live in a versioned vault. A session in
+    # that repository (including a linked worktree) is fleet work, even if another
+    # repository happens to have the same checkout basename. Compare repository
+    # identity, not path prefixes or names: a symlink may lead into the vault and
+    # the handoff directory may not have been created yet.
+    handoff_common = _handoff_repo_common_dir()
+    if handoff_common == os.path.realpath((r.stdout or "").strip()):
+        if topic is not None and not TOPIC_OK.match(topic):
+            die("--topic %r is not one filename component of [A-Za-z0-9_-]" % topic)
+        return "fleet-" + topic if topic else "fleet"
+
     if topic is not None:
         die("--topic is only meaningful outside a repo. In repo scope the seed is "
             "keyed on the repo, so a topic would fork it into a second seed nobody "
@@ -210,6 +222,27 @@ def resolve_scope(topic=None):
         die("cannot resolve scope: the main worktree's parent has no usable "
             "basename (common dir %r)" % common)
     return scope
+
+
+def _handoff_repo_common_dir():
+    """Repository holding the handoff path, if any, including before it exists."""
+    directory = os.path.realpath(handoff_dir())
+    while not os.path.isdir(directory):
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            return None
+        directory = parent
+    r = _git("-C", directory, "rev-parse", "--path-format=absolute",
+             "--git-common-dir")
+    if r.returncode != 0:
+        if "not a git repository" in (r.stderr or "").lower():
+            return None
+        die("cannot resolve handoff repository: git failed for a reason other "
+            "than 'not a repository' — %s" % ((r.stderr or "").strip() or "no stderr"))
+    common = (r.stdout or "").strip()
+    if not common:
+        die("cannot resolve handoff repository: git reported no common dir")
+    return os.path.realpath(common)
 
 
 def _worktree_roots():

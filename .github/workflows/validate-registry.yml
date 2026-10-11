@@ -171,13 +171,13 @@ jobs:
           #    whole regression, so it is asserted positively rather than by absence.
           gcm = ''
           try:
-              gcm = open('assets/global-CLAUDE.md', encoding='utf-8').read()
+              gcm = open('assets/AGENTS.md', encoding='utf-8').read()
           except OSError:
-              print('::error::assets/global-CLAUDE.md is missing')
+              print('::error::assets/AGENTS.md is missing')
               ok = False
           for needle in ('CLAUDE_HANDOFF_DIR', 'NEXT-<scope>.md'):
               if gcm and needle not in gcm:
-                  print(f'::error file=assets/global-CLAUDE.md::the seed path lost `{needle}` — '
+                  print(f'::error file=assets/AGENTS.md::the seed path lost `{needle}` — '
                         f'the seed is written outside every worktree, at '
                         f'$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md')
                   ok = False
@@ -224,11 +224,11 @@ jobs:
                   doc_floor.add(m.group(2))
           dups = sorted({i for i in seen if seen.count(i) > 1})
           if dups:
-              print(f'::error file=assets/global-CLAUDE.md::duplicate rule-class token id(s) '
+              print(f'::error file=assets/AGENTS.md::duplicate rule-class token id(s) '
                     f'{dups} — fleet-check cannot compare a rule that appears twice')
               ok = False
           if doc_floor != FLOOR:
-              print(f'::error file=assets/global-CLAUDE.md::floor tokens are {sorted(doc_floor)}, '
+              print(f'::error file=assets/AGENTS.md::floor tokens are {sorted(doc_floor)}, '
                     f'expected {sorted(FLOOR)}')
               ok = False
           try:
@@ -344,7 +344,7 @@ jobs:
           #
           #    The step above holds only generic/session-lifecycle.md, which is where
           #    the extraction removed the copy. #210 then put a NEW one somewhere it
-          #    does not look: assets/global-CLAUDE.md grew a hand-written
+          #    does not look: assets/AGENTS.md grew a hand-written
           #    `git rev-parse --path-format=absolute --git-common-dir` block four
           #    commits after the extraction whose entire purpose was to have one
           #    implementation — in the file every agent on every machine reads, which
@@ -400,7 +400,7 @@ jobs:
           #    script. Deleting the snippet without leaving the pointer passes the ban
           #    and leaves every agent's most-read file with no answer at all.
           if gcm and 'session-seed.py scope' not in gcm:
-              print('::error file=assets/global-CLAUDE.md::the seed-path rule no longer names '
+              print('::error file=assets/AGENTS.md::the seed-path rule no longer names '
                     '`session-seed.py scope`. The snippet it replaced was a second '
                     'implementation; removing it without the pointer leaves the file every '
                     'agent reads defining a scope key it cannot resolve')
@@ -488,6 +488,9 @@ jobs:
 
       - name: usage-accounting regression tests
         run: python3 -m unittest assets/scripts/usage_accounting_test.py
+
+      - name: fleet-bootstrap regression tests
+        run: ./assets/scripts/fleet-bootstrap.test.sh
 
       - name: fleet-check regression tests
         # Proves the class split can still fail for its named regressions: a floor

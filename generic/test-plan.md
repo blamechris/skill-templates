@@ -395,7 +395,7 @@ Report to the user:
 **Thin areas:** {areas with < 3 cases, or "none"}
 **Ungrounded surfaces ({N}):** {the list — what a second pass should chase}
 
-**Next:** /smoke-form on the {N} human-visual cases · {N} suite cases ready for /create-issue
+**Next:** 🔴 BLOCKED — Chris completes /smoke-form on the {N} human-visual cases · {N} suite cases ready for /create-issue
 ```
 
 Do NOT commit the corpus unless the user asks. Do NOT push.

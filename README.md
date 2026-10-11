@@ -107,3 +107,9 @@ Do not reintroduce a push trigger, `deploy.sh`, or `deploy.conf`.
 
 The repo owner is the sole author of all work here. No `Co-Authored-By` trailers, no
 "Generated with Claude" or any AI/agent attribution in commits, PRs, issues, or docs.
+
+## Shared agent rules
+
+The authored machine root is [assets/AGENTS.md](assets/AGENTS.md).
+Use the [provider bootstrap and migration guide](docs/doctrine/migration.md) to
+install it for Claude, Codex and Gemini and verify floors and instruction sizes.
