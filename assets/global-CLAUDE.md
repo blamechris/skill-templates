@@ -693,3 +693,14 @@ outcomes:
 One watcher per wait, named in the status block's 🔄 slot. This overrides the app's
 "don't poll CI yourself" default for this user: that default assumes its monitor will wake
 the session, and on green it doesn't.
+
+## Waiting on any long job (all projects)
+
+<!--default:long-job-waits-bounded-->
+**A long background job gets a ceiling, a marker and a check-in, because "the harness will wake me" is true only if the job finishes.** A hung job fires no event, and an agent waiting on it looks exactly like one that is working. A chained Unity build with no timeout did hang after it succeeded, and nobody looked for about 3 days (2026-10-11; `~/Obsidian/no-it-all/conventions/long-waits-and-large-artifacts.md`, "Lesson 1"). The CI section above covers who wakes you for CI; this covers the job itself, CI included.
+
+1. **A hard timeout on the command itself** for every build, test, smoke or other long background job: about 3x its normal duration, floor 10 min (`timeout`, a watchdog loop, or the tool's own limit).
+2. **Success is the job's own success or failure marker** (a log line), not process exit. A missing marker at timeout is a failure to investigate. Kill a process that lingers after its marker.
+3. **Besides the completion wake, arm a periodic check-in wake** (`ScheduleWakeup`, `Monitor` or a bounded poll): first at about 1.5x the expected duration, then every 15-20 min. Each check reads the log tail and the process state.
+4. **A CI run, build or test job past 1.5 h is an incident.** Read the logs, find the stuck step, kill it and file the cause. Do not re-wait.
+5. **The status block's 🔄 slot names the job, its start time, its ceiling and when it was last seen alive.** "Running" with no timestamp is the failure this rule exists to prevent.
