@@ -8,7 +8,7 @@ private instructions stay on the machine. Historical explanations are in
 
 ## Machine bootstrap
 
-Requires Python 3.11+ for the bootstrap's TOML validation. Run from a reviewed
+Bootstrap and fleet-check require Python 3.11+ for complete TOML validation. On macOS, use `python3.12` explicitly if `python3 --version` reports an older system Python. Run from a reviewed
 registry checkout. The command previews all writes by default:
 
 ```bash
@@ -55,6 +55,14 @@ honestly verify inputs, adapters, config or the size bound. It is never agreemen
 The size check conservatively includes the machine file and the selected project
 chain. `AGENTS.override.md`, nested rules and configured fallback names matter.
 Run it from the actual session directory, not just the repository root.
+
+This is a static check of the supported default configuration, not a runtime loading
+certificate. It refuses custom Codex root markers/profiles and any project Codex
+or Gemini settings layer with exit 2 rather than guessing trust-dependent precedence.
+Gemini machine settings (system defaults, user, system overrides) must select only
+GEMINI.md; an alternative or additional filename requires a separate migration.
+Invocation flags, extension instructions and injected host configuration need a fresh
+session smoke test; do not treat this check as proof of those runtime settings.
 
 ## Repository migration recipe
 

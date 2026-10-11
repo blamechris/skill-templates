@@ -12,6 +12,8 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUT="$HERE/fleet-check.py"
+PY=$(command -v python3.12 || command -v python3.11 || command -v python3.13 || command -v python3.14 || command -v python3)
+"$PY" -c 'import tomllib' || exit 1
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fleet-check-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
@@ -25,7 +27,7 @@ bad()  { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf 
 assert() {
   local name=$1 want=$2 needle=$3 machine=$4; shift 4
   local out rc
-  out=$(python3 "$SUT" --machine "$machine" --repo "$TMP/clone" "${CHECK_ARGS[@]}" "$@" 2>&1); rc=$?
+  out=$("$PY" "$SUT" --machine "$machine" --repo "$TMP/clone" "${CHECK_ARGS[@]}" "$@" 2>&1); rc=$?
   if [ "$rc" -ne "$want" ]; then
     bad "$name" "exit $rc, wanted $want — output: $(printf '%s' "$out" | tr '\n' '|')"
     return
@@ -276,7 +278,7 @@ printf 'project_doc_max_bytes = 32768\n' > "$M/small-config.toml"
 assert "Codex default-sized cap -> exit 2" 2 "65536" "$M/identical.md" \
   --codex-config "$M/small-config.toml"
 printf 'project_doc_max_bytes = broken\n' > "$M/bad-config.toml"
-assert "malformed Codex cap -> exit 2" 2 "invalid project_doc_max_bytes" "$M/identical.md" \
+assert "malformed Codex cap -> exit 2" 2 "malformed TOML" "$M/identical.md" \
   --codex-config "$M/bad-config.toml"
 assert "missing Codex config -> exit 2" 2 "Codex config" "$M/identical.md" \
   --codex-config "$M/missing-config.toml"
@@ -288,7 +290,7 @@ TOML
 assert "Codex config with quoted project section parses" 0 "OK:" "$M/identical.md" \
   --codex-config "$M/sections-config.toml"
 
-out=$(CODEX_HOME="$TMP/home/.codex" python3 "$SUT" --machine "$M/identical.md" \
+out=$(CODEX_HOME="$TMP/home/.codex" "$PY" "$SUT" --machine "$M/identical.md" \
   --claude "$TMP/home/.claude/CLAUDE.md" --gemini "$TMP/home/.gemini/GEMINI.md" \
   --repo "$TMP/clone" --project-dir "$TMP/clone" 2>&1); rc=$?
 if [ "$rc" -eq 0 ]; then ok "CODEX_HOME selects Codex defaults"; else
@@ -352,7 +354,7 @@ exec "$FLEET_TEST_REAL_GIT" "$@"
 SH
 chmod +x "$TMP/git-shim/git"
 out=$(PATH="$TMP/git-shim:$PATH" FLEET_TEST_REAL_GIT="$(command -v git)" \
-  python3 "$SUT" --machine "$M/identical.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" 2>&1); rc=$?
+  "$PY" "$SUT" --machine "$M/identical.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" 2>&1); rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'Git root probe failed'; then
   ok "failed Git root probe refuses to guess project chain"
 else
@@ -368,6 +370,42 @@ assert "oversized fleet root -> exit 2" 2 "fleet root" "$M/oversized-root.md"
 # 12. THE fetch precondition. origin moves a FLOOR rule; the clone is never pulled.
 #     If the fetch were softened with `|| true`, this would compare against the stale
 #     clone and print OK. It must instead see origin's new copy and fail.
+# Review regressions: refuse unresolved provider configuration rather than a false pass.
+printf 'project_doc_max_bytes = 65536\nmodel = "unterminated\n' > "$M/malformed-other.toml"
+assert "malformed unrelated TOML key refuses" 2 "malformed TOML" "$M/identical.md" --codex-config "$M/malformed-other.toml"
+printf 'project_doc_max_bytes = 65536\nproject_root_markers = [".custom"]\n' > "$M/markers.toml"
+assert "custom Codex root markers refuse" 2 "effective-config" "$M/identical.md" --codex-config "$M/markers.toml"
+printf 'project_doc_max_bytes = 65536\n[profiles.small]\nproject_doc_max_bytes = 32768\n' > "$M/profiles.toml"
+assert "Codex profile discovery refuses" 2 "effective-config" "$M/identical.md" --codex-config "$M/profiles.toml"
+mkdir -p "$TMP/project-config/.codex"
+git -C "$TMP/project-config" init -q
+printf 'project_doc_max_bytes = 32768\n' > "$TMP/project-config/.codex/config.toml"
+assert "project Codex cap override refuses" 2 "project configuration layer" "$M/identical.md" --project-dir "$TMP/project-config"
+rm "$TMP/project-config/.codex/config.toml"
+mkdir -p "$TMP/project-config/.gemini"
+printf '{"context":{"fileName":"AGENTS.md"}}\n' > "$TMP/project-config/.gemini/settings.json"
+assert "project Gemini context override refuses" 2 "project configuration layer" "$M/identical.md" --project-dir "$TMP/project-config"
+printf '{"context":{"fileName":["AGENTS.md"]}}\n' > "$TMP/home/.gemini/settings.json"
+assert "inactive Gemini adapter refuses" 2 "context.fileName" "$M/identical.md"
+printf '{"context":{"fileName":["GEMINI.md"]}}\n' > "$TMP/home/.gemini/settings.json"
+assert "explicit default Gemini filename passes" 0 "OK:" "$M/identical.md"
+printf '{broken\n' > "$TMP/home/.gemini/settings.json"
+assert "malformed Gemini settings refuse" 2 "malformed JSON" "$M/identical.md"
+rm "$TMP/home/.gemini/settings.json"
+printf '{"context":{"fileName":"AGENTS.md"}}\n' > "$M/system-gemini.json"
+GEMINI_CLI_SYSTEM_SETTINGS_PATH="$M/system-gemini.json" assert "Gemini system override refuses" 2 "context.fileName" "$M/identical.md"
+# Simulate a Python without tomllib without depending on an installed old version.
+parser_out=$("$PY" - "$SUT" "$M/config.toml" <<'PYTEST'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('check', sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.tomllib = None
+m.codex_config(sys.argv[2])
+PYTEST
+)
+parser_rc=$?
+[ "$parser_rc" -eq 2 ] && ok 'missing complete TOML parser refuses' || bad 'missing complete TOML parser refuses' "$parser_rc $parser_out"
+
 write_registry "$M/identical2.md"
 python3 - "$TMP/seed/assets/AGENTS.md" <<'PY'
 import sys
@@ -390,7 +428,7 @@ fi
 
 # 13. Fetch failure must refuse rather than lie. Point origin at nothing.
 git -C "$TMP/clone" remote set-url origin "$TMP/no-such-repo.git"
-out=$(python3 "$SUT" --machine "$M/identical2.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" 2>&1); rc=$?
+out=$("$PY" "$SUT" --machine "$M/identical2.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" 2>&1); rc=$?
 if [ "$rc" -ne 2 ]; then
   bad "unfetchable origin -> exit 2" "exit $rc"
 elif printf '%s' "$out" | grep -q "OK:"; then

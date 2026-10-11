@@ -3,6 +3,8 @@
 
 # Canonical copy (skill-templates). Bootstrap: cp assets/scripts/fleet-check.py ~/.claude/scripts/
 
+Requires Python 3.11+ (complete TOML parsing).
+
 Usage:
   python3 ~/.claude/scripts/fleet-check.py [--machine PATH] [--claude PATH]
       [--codex PATH] [--gemini PATH] [--codex-config PATH]
@@ -40,7 +42,7 @@ Exit codes:
      load. Never 0: an incomplete check must not report agreement.
 """
 import argparse
-import ast
+import json
 import difflib
 import os
 from pathlib import Path
@@ -49,7 +51,7 @@ import subprocess
 import sys
 try:
     import tomllib
-except ModuleNotFoundError:  # macOS still ships Python 3.9
+except ModuleNotFoundError:  # Refuse verification without a complete parser
     tomllib = None
 
 # The floor is exactly these five rules. Widening or narrowing it is a deliberate
@@ -160,47 +162,44 @@ def claude_extra_rules(text, where):
 
 
 def codex_config(path):
+    if tomllib is None:
+        die("Python 3.11+ is required for complete TOML validation; use python3.12 or newer")
     text = read_text(path, "Codex config")
-    if tomllib is not None:
-        try:
-            return tomllib.loads(text)
-        except tomllib.TOMLDecodeError as exc:
-            die(f"Codex config {path!r} is malformed TOML ({exc})")
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        die(f"Codex config {path!r} is malformed TOML ({exc})")
 
-    # Python 3.9 fallback: only these two top-level keys affect this check.
-    # Refuse unsupported forms for either key, rather than guessing a byte cap.
-    result, top_level = {}, True
-    keys = ("project_doc_max_bytes", "project_doc_fallback_filenames")
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+
+def verify_gemini_settings(adapter):
+    """Verify the supported fixed-name adapter against machine settings layers.
+
+    Trust-dependent project settings are refused by codex_load_plan below. Runtime
+    flags, extensions and injected instructions still require a fresh host smoke.
+    """
+    if sys.platform == "darwin":
+        system = Path("/Library/Application Support/GeminiCli")
+    elif os.name == "nt":
+        system = Path(os.environ.get("PROGRAMDATA", "C:/ProgramData")) / "gemini-cli"
+    else:
+        system = Path("/etc/gemini-cli")
+    paths = [Path(os.environ.get("GEMINI_CLI_SYSTEM_DEFAULTS_PATH") or system / "system-defaults.json"),
+             Path(adapter).with_name("settings.json"),
+             Path(os.environ.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH") or system / "settings.json")]
+    filenames = "GEMINI.md"
+    for path in paths:
+        if not os.path.lexists(path):
             continue
-        if stripped.startswith("["):
-            if not re.fullmatch(r"\[\[?.+\]\]?(?:\s*#.*)?", stripped):
-                die(f"Codex config {path!r} has an unsupported section header")
-            top_level = False
-            continue
-        if not top_level:
-            continue
-        match = re.match(r"^([A-Za-z0-9_-]+)\s*=\s*(.*)$", stripped)
-        if not match:
-            die(f"Codex config {path!r} has malformed top-level syntax")
-        key, value = match.groups()
-        if key not in keys:
-            continue
-        if key in result:
-            die(f"Codex config {path!r} repeats {key}")
-        value = value.split("#", 1)[0].strip()
-        if key == "project_doc_max_bytes":
-            if not re.fullmatch(r"[0-9][0-9_]*", value):
-                die(f"Codex config {path!r} has an invalid {key}")
-            result[key] = int(value.replace("_", ""))
-        else:
-            try:
-                result[key] = ast.literal_eval(value)
-            except (SyntaxError, ValueError):
-                die(f"Codex config {path!r} has an invalid {key}")
-    return result
+        try:
+            settings = json.loads(read_text(path, "Gemini settings"))
+        except ValueError as exc:
+            die(f"Gemini settings {str(path)!r} are malformed JSON ({exc})")
+        if not isinstance(settings, dict) or not isinstance(settings.get("context", {}), dict):
+            die(f"Gemini settings {str(path)!r} need an object-valued context")
+        filenames = settings.get("context", {}).get("fileName", filenames)
+    if filenames not in ("GEMINI.md", ["GEMINI.md"]):
+        die("Gemini context.fileName does not select only GEMINI.md; "
+            "the fixed-copy adapter cannot verify that context chain")
 
 
 def normalize(lines):
@@ -312,6 +311,9 @@ def codex_load_plan(args):
     might apply its limit only to the project chain.
     """
     config = codex_config(args.codex_config)
+    if any(key in config for key in ("project_root_markers", "profile", "profiles")):
+        die("Codex custom project_root_markers or profiles need effective-config verification; "
+            "this static check supports default Git discovery without profiles")
     cap = config.get("project_doc_max_bytes", 32768)
     if isinstance(cap, bool) or not isinstance(cap, int) or cap < MIN_CODEX_DOC_MAX_BYTES:
         die(
@@ -361,6 +363,10 @@ def codex_load_plan(args):
 
     selected = [Path(args.codex)]
     for directory in chain:
+        for relative in (".codex/config.toml", ".gemini/settings.json"):
+            if os.path.lexists(directory / relative):
+                die(f"project configuration layer {str(directory / relative)!r} requires "
+                    "effective-config verification; static adapter check refuses to guess")
         for name in ("AGENTS.override.md", "AGENTS.md", *fallback):
             candidate = directory / name
             if os.path.lexists(candidate):
@@ -384,6 +390,7 @@ def verify_adapters(args):
     extra = claude_extra_rules(claude, args.claude)
     codex = read_text(args.codex, "Codex adapter")
     gemini = read_text(args.gemini, "Gemini adapter")
+    verify_gemini_settings(args.gemini)
     selected, total, cap = codex_load_plan(args)
     print(f"ADAPTER  Claude imports the fleet root; Codex load plan {total}/{cap} bytes "
           f"across {len(selected)} file(s).")

@@ -203,5 +203,24 @@ run claude_spaced_floor --claude-extra "$TMP/claude_spaced_floor/extra.md" --cla
   ok 'spaced Claude-only floor token refuses before activation' ||
   bad 'spaced Claude-only floor token refuses before activation' "rc=$rc $out"
 
+new_case backup_link
+mkdir -p "$TMP/backup_link/home/.fleet" "$TMP/backup_link/external"
+printf 'private incumbent\n' > "$TMP/backup_link/home/.fleet/AGENTS.md"
+ln -s "$TMP/backup_link/external" "$TMP/backup_link/home/.fleet/backups"
+run backup_link --replace-existing --apply
+[ "$rc" -eq 2 ] && [ -z "$(ls -A "$TMP/backup_link/external")" ] &&
+  [ "$(cat "$TMP/backup_link/home/.fleet/AGENTS.md")" = 'private incumbent' ] &&
+  [ ! -e "$TMP/backup_link/home/.codex" ] &&
+  ok 'symlinked backup directory refuses before any mutation' ||
+  bad 'symlinked backup directory refuses before any mutation' "rc=$rc $out"
+
+new_case inactive_gemini
+mkdir -p "$TMP/inactive_gemini/home/.gemini"
+printf '{"context":{"fileName":["AGENTS.md"]}}\n' > "$TMP/inactive_gemini/home/.gemini/settings.json"
+run inactive_gemini --apply
+[ "$rc" -eq 2 ] && no_install inactive_gemini &&
+  ok 'inactive Gemini filename refuses before installation' ||
+  bad 'inactive Gemini filename refuses before installation' "rc=$rc $out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

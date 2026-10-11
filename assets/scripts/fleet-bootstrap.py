@@ -96,6 +96,7 @@ def main():
         if extra_duplicates or any(c == 'floor' for c, _ in extra_rules.values()):
             fail('Claude additions must not redefine floor rules or duplicate IDs')
         claude += '\n' + extra.rstrip() + '\n'
+    check.verify_gemini_settings(home / '.gemini/GEMINI.md')
     codex_home = home / '.codex'
     if args.home == Path.home() and os.environ.get('CODEX_HOME'):
         codex_home = Path(os.environ['CODEX_HOME']).expanduser().absolute()
@@ -117,6 +118,10 @@ def main():
         print('HOLD: Claude adapter unchanged until a fresh live import is verified')
     for script in ('fleet-check.py', 'session-seed.py'):
         planned[home / '.claude/scripts' / script] = (registry / 'assets/scripts' / script).read_text(encoding='utf-8')
+    backup_root = home / '.fleet/backups'
+    for component in (backup_root, *backup_root.parents):
+        if component.is_symlink():
+            fail(f'{component} is a symlink; reconcile explicitly before writing backups')
     changes = {}
     for path, content in planned.items():
         for component in (path, *path.parents):
@@ -134,7 +139,7 @@ def main():
         print('Dry run; no files changed.')
         return 0
     # All semantic checks precede writes. Preserve every incumbent before replacing any.
-    backup = home / '.fleet/backups' / datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+    backup = backup_root / datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
     existing = [p for p in changes if p.exists()]
     if existing:
         backup.mkdir(parents=True, mode=0o700)
