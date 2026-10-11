@@ -489,6 +489,9 @@ jobs:
       - name: usage-accounting regression tests
         run: python3 -m unittest assets/scripts/usage_accounting_test.py
 
+      - name: private-advisory regression tests
+        run: ./assets/scripts/private-advisory.test.sh
+
       - name: fleet-bootstrap regression tests
         run: ./assets/scripts/fleet-bootstrap.test.sh
 

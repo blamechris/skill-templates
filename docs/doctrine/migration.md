@@ -35,7 +35,11 @@ Record the exact loaded path and the five floor IDs from that session; a static
 check or an unauthenticated CLI is not proof. Then repeat the reviewed command with
 `--claude-import-verified`. That option records the operator's acknowledgment; the
 installer does not itself run a provider or certify its output. Include the same
-local additions on both runs. Without them, replacement can remove those defaults.
+local additions on both runs. Replacement refuses to remove machine-only blocks unless
+`--discard-local` explicitly authorizes discarding them. Tagged local blocks are retained
+verbatim; untagged additions become the reserved private `machine-local` block.
+The reserved block is reported as INFO by fleet-check, excluded from drift counts and
+publication advice. Never move it into the registry.
 
 Use `--home /temporary/home` to rehearse without touching the live machine.
 Nonempty Codex `AGENTS.override.md` and symlink destinations refuse installation:
@@ -52,9 +56,18 @@ python3 ~/.claude/scripts/fleet-check.py --project-dir /absolute/path/to/project
 A fresh fetch is mandatory. Exit **0** means floors agree; default differences are
 informational. Exit **1** means floor drift. Exit **2** means the checker could not
 honestly verify inputs, adapters, config or the size bound. It is never agreement.
-The size check conservatively includes the machine file and the selected project
-chain. `AGENTS.override.md`, nested rules and configured fallback names matter.
+The size check includes the machine file, the selected project chain, and Codex’s
+23-byte separator between loaded files. A margin below 2,048 bytes exits 2.
+Use `--all-repos` to check every checkout under `~/Projects/` with an `AGENTS.md`,
+along with the selected session directory. `AGENTS.override.md`, nested rules and configured fallback names matter.
 Run it from the actual session directory, not just the repository root.
+
+The bootstrap preserves each incumbent’s file mode, or the source mode for a new
+file. To preview restoring a backup, run
+`python3 assets/scripts/fleet-bootstrap.py --restore /absolute/backup/directory`;
+add `--apply` after reviewing its target paths. The backup’s `paths.txt` identifies
+the original targets. Restore preflights all backup files and destinations, then
+restores their bytes and modes. It does not infer missing files or defaults.
 
 This is a static check of the supported default configuration, not a runtime loading
 certificate. It refuses custom Codex root markers/profiles and any project Codex

@@ -56,7 +56,8 @@ decided on the unrounded values and is strict (exactly 1.5 times is not over). A
 is a number to look at and this script never stops on one: it says so on stderr and
 the workload note is where the package says why. With no `--tier` the row still
 carries its cost and says on stderr that nothing was compared. The figures are
-decided in the `reference-figures` rule of assets/global-CLAUDE.md and live here in
+decided in the `reference-figures` rule of assets/AGENTS.md, installed at
+~/.fleet/AGENTS.md and loaded through family adapters. They live here in
 TIER_FIGURES, one table that `--figures`, the suffix and the stderr line all read;
 usage-benchmark-row.test.sh holds the rule's prose to it.
 
@@ -117,7 +118,8 @@ W_IN, W_CR, W_CW, W_OUT = 1.0, 0.1, 2.0, 5.0
 # What one package of each risk tier costs, in USD, against the row's all-in LOWER
 # bound. The only place these numbers live: `--figures`, the cost suffix and the
 # stderr line read this table, and the tests read `--figures`. The rule that decides
-# them is `reference-figures` in assets/global-CLAUDE.md. A figure stops nothing.
+# them is `reference-figures` in assets/AGENTS.md (machine: ~/.fleet/AGENTS.md,
+# loaded through family adapters). A figure stops nothing.
 TIER_FIGURES = {"low": Decimal("15"), "medium": Decimal("15"),
                 "high-single": Decimal("30"), "high-panel": Decimal("45")}
 OVER_FACTOR = Decimal("1.5")   # a package past this multiple of its figure says why

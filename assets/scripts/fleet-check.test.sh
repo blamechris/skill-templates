@@ -9,6 +9,7 @@
 #
 # No network: "origin" is a local bare repo, so a real `git fetch` really runs.
 set -uo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUT="$HERE/fleet-check.py"
@@ -47,6 +48,10 @@ assert() {
 write_registry() {   # $1 = destination
   cat > "$1" <<'MD'
 # Global instructions
+
+<!--default:rule-precedence-->
+Floors: `no-agent-attribution`, `explicit-path-staging`, `worktree-by-default`,
+`no-secrets-in-committed-files`, `seed-written-outside-any-worktree`.
 
 ## Attribution
 
@@ -366,6 +371,154 @@ import sys
 open(sys.argv[1], 'w').write('x' * 66000)
 PY
 assert "oversized fleet root -> exit 2" 2 "fleet root" "$M/oversized-root.md"
+
+# Serialized Codex budgets include the exact separator between selected files.
+# Boundary fixtures use UTF-8 bytes, including a non-ASCII character.
+set_project_margin() {
+  "$PY" - "$TMP/home/.codex/AGENTS.md" "$TMP/clone/AGENTS.md" "$1" <<'PYTEST'
+from pathlib import Path
+import sys
+root, project, margin = Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3])
+separator = b"\n\n--- project-doc ---\n\n"
+assert len(separator) == 23
+size = 65536 - len(root.read_bytes()) - len(separator) - margin
+project.write_bytes("é".encode("utf-8") + b"x" * (size - 2))
+PYTEST
+}
+set_project_margin 2048
+assert "serialized margin of exactly 2048 bytes passes" 0 "margin=2048 bytes" "$M/identical.md"
+set_project_margin 2047
+assert "serialized margin of 2047 bytes refuses" 2 "margin=2047 bytes" "$M/identical.md"
+set_project_margin 0
+assert "serialized chain exactly at cap refuses" 2 "margin=0 bytes" "$M/identical.md"
+set_project_margin -1
+assert "serialized separator can push chain over cap" 2 "above project_doc_max_bytes" "$M/identical.md"
+rm "$TMP/clone/AGENTS.md"
+printf 'root guidance\n' > "$TMP/clone/AGENTS.md"
+printf 'nested guidance\n' > "$TMP/clone/sub/AGENTS.md"
+out=$("$PY" - "$SUT" "$TMP/home/.codex/AGENTS.md" "$TMP/home/.codex/config.toml" "$TMP/clone/sub" <<'PYTEST'
+import argparse, importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("check", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+args = argparse.Namespace(codex=sys.argv[2], codex_config=sys.argv[3], project_dir=sys.argv[4])
+selected, total, cap = m.codex_load_plan(args)
+assert len(selected) == 3
+assert total == sum(len(Path(p).read_bytes()) for p in selected) + 2 * 23
+print("two separators verified")
+PYTEST
+); rc=$?
+if [ "$rc" -eq 0 ]; then ok "three selected documents count two separators"; else
+  bad "three selected documents count two separators" "$out"
+fi
+rm "$TMP/clone/AGENTS.md" "$TMP/clone/sub/AGENTS.md"
+
+# Only the reserved local token suppresses reconciliation advice and verbose content.
+write_registry "$M/reserved-local.md"
+cat >> "$M/reserved-local.md" <<'MD'
+
+<!--default:machine-local-->
+PRIVATE_TEST_SENTINEL do not print or propose publishing this text.
+MD
+assert "reserved machine-local reports INFO" 0 "INFO.*machine-local" "$M/reserved-local.md" --verbose
+out=$("$PY" "$SUT" --machine "$M/reserved-local.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" --verbose 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -Eq 'PRIVATE_TEST_SENTINEL|DEFAULT drift|machine-ahead|land it in the registry'; then
+  ok "reserved private content excluded from diffs counts and sync advice"
+else
+  bad "reserved private content excluded from diffs counts and sync advice" "exit $rc — $out"
+fi
+write_registry "$M/reserved-local-floor.md"
+cat >> "$M/reserved-local-floor.md" <<'MD'
+
+<!--floor:machine-local-->
+PRIVATE_FLOOR_SENTINEL cannot exempt an added floor from validation.
+MD
+assert "reserved token cannot hide a floor promotion" 1 "FLOOR DRIFT" "$M/reserved-local-floor.md"
+out=$("$PY" "$SUT" --machine "$M/reserved-local-floor.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" --verbose 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && ! printf '%s' "$out" | grep -q PRIVATE_FLOOR_SENTINEL; then
+  ok "misclassified private block still never exposes its contents"
+else
+  bad "misclassified private block still never exposes its contents" "exit $rc — $out"
+fi
+
+# The readable Floors list cannot drift independently of the classified tokens.
+write_registry "$M/prose-sentence.md"
+sed -i.bak 's/Floors:/There are exactly five floors:/' "$M/prose-sentence.md"
+assert "grammatical lowercase floors list agrees" 0 "The floor is intact" "$M/prose-sentence.md"
+for kind in missing extra duplicate typo absent; do
+  write_registry "$M/prose-$kind.md"
+  "$PY" - "$M/prose-$kind.md" "$kind" <<'PYTEST'
+from pathlib import Path
+import sys
+p, kind = Path(sys.argv[1]), sys.argv[2]
+s = p.read_text()
+if kind == "missing":
+    s = s.replace("`no-agent-attribution`, ", "")
+elif kind == "extra":
+    s = s.replace("Floors: ", "Floors: `sixth`, ")
+elif kind == "duplicate":
+    s = s.replace("Floors: ", "Floors: `no-agent-attribution`, ")
+elif kind == "typo":
+    s = s.replace("`no-agent-attribution`", "`attribution`")
+else:
+    s = s.replace("Floors:", "Rules:")
+p.write_text(s)
+PYTEST
+  assert "prose floor list $kind refuses" 1 "FLOOR-LIST" "$M/prose-$kind.md"
+done
+
+# HOME controls discovery; every matching checkout is sized, regardless of its name.
+mkdir -p "$TMP/home/Projects/first" "$TMP/home/Projects/with spaces" \
+  "$TMP/home/Projects/no-doc" "$TMP/home/Projects/non-repo"
+for name in first 'with spaces' no-doc; do
+  git -C "$TMP/home/Projects/$name" init -q
+done
+printf 'small instruction\n' > "$TMP/home/Projects/first/AGENTS.md"
+printf 'small instruction\n' > "$TMP/home/Projects/with spaces/AGENTS.md"
+"$PY" - "$TMP/home/Projects/non-repo/AGENTS.md" <<'PYTEST'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_bytes(b"x" * 66000)
+PYTEST
+HOME="$TMP/home" assert "all repos honors HOME and handles spaced names" 0 "with spaces.*margin=" "$M/identical.md" --all-repos
+out=$(HOME="$TMP/home" "$PY" "$SUT" --machine "$M/identical.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" --all-repos 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '/Projects/first' && \
+   ! printf '%s' "$out" | grep -Eq '/Projects/no-doc|/Projects/non-repo'; then
+  ok "all repos audits every matching checkout only"
+else
+  bad "all repos audits every matching checkout only" "exit $rc — $out"
+fi
+"$PY" - "$TMP/home/Projects/with spaces/AGENTS.md" <<'PYTEST'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_bytes(b"x" * 66000)
+PYTEST
+HOME="$TMP/home" assert "oversized other repo fails all-repos audit" 2 "full loading cannot be verified" "$M/identical.md" --all-repos
+printf 'small instruction\n' > "$TMP/home/Projects/with spaces/AGENTS.override.md"
+HOME="$TMP/home" assert "all repos respects override precedence" 0 "OK:" "$M/identical.md" --all-repos
+mkdir -p "$TMP/empty-home"
+HOME="$TMP/empty-home" assert "missing all-repos Projects directory refuses" 2 "does not exist" "$M/identical.md" --all-repos
+
+# The public registry may never carry the reserved machine-local guidance.
+cat >> "$TMP/seed/assets/AGENTS.md" <<'MD'
+
+<!--default:machine-local-->
+PRIVATE_REGISTRY_SENTINEL do not print this text.
+MD
+git -C "$TMP/seed" add assets/AGENTS.md
+git -C "$TMP/seed" commit --quiet -m "invalid reserved block fixture"
+git -C "$TMP/seed" push --quiet origin HEAD:main
+assert "reserved block in public registry fails" 1 "PRIVATE-BOUNDARY" "$M/identical.md" --verbose
+out=$("$PY" "$SUT" --machine "$M/identical.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" --verbose 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && ! printf '%s' "$out" | grep -q PRIVATE_REGISTRY_SENTINEL; then
+  ok "invalid registry private block never exposes its contents"
+else
+  bad "invalid registry private block never exposes its contents" "exit $rc — $out"
+fi
+write_registry "$TMP/seed/assets/AGENTS.md"
+git -C "$TMP/seed" add assets/AGENTS.md
+git -C "$TMP/seed" commit --quiet -m "restore registry fixture"
+git -C "$TMP/seed" push --quiet origin HEAD:main
 
 # 12. THE fetch precondition. origin moves a FLOOR rule; the clone is never pulled.
 #     If the fetch were softened with `|| true`, this would compare against the stale

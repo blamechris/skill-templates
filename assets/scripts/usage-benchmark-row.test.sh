@@ -1257,9 +1257,9 @@ for c in "U:$REFU:$SHOWN_U::0:ok:under the factor and fully priced" \
 done
 
 # ---- the doctrine sync. The `reference-figures` rule in assets/AGENTS.md states the
-# four dollar amounts and the factor in prose; the script's table is where they live. Prose
+# three dollar amounts and the factor in prose; the script's table is where they live. Prose
 # that drifts from the table is a rule nobody can check a row against, so the rule's own
-# paragraph is held to `--figures` here.
+# complete token-delimited block is held to `--figures` here.
 DOC="$HERE/../AGENTS.md"
 # doctrine_problems <file> <figures-text> — one line per disagreement, nothing when they agree
 doctrine_problems() {
@@ -1279,47 +1279,57 @@ except OSError as e:
 at = [i for i, l in enumerate(lines) if l.strip() == "<!--default:reference-figures-->"]
 if len(at) != 1:
     print("token: <!--default:reference-figures--> appears %d times, want exactly 1" % len(at)); sys.exit(0)
-para = []
+block = []
 for l in lines[at[0] + 1:]:
-    if not l.strip():
+    if re.fullmatch(r"\s*<!--(?:floor|default):[^>]+-->\s*", l):
         break
-    para.append(l.strip())
-para = " ".join(para)
+    block.append(l.strip())
+para = re.sub(r"\s+", " ", " ".join(block))
 N = r"(\d+(?:\.\d+)?)"
+amount_positions = []
 for anchor, pat, keys in (
-        ("LOW or MEDIUM package:", r"LOW or MEDIUM package:\s*\*\*\$" + N + r"\*\*", ("low", "medium")),
-        ("one-reviewer exception:", r"one-reviewer exception:\s*\*\*\$" + N + r"\*\*", ("high-single",)),
-        ("panel depth:", r"panel depth:\s*\*\*\$" + N + r"\*\*", ("high-panel",)),
-        ("N times", r"\*\*" + N + r" times\*\*", ("over",))):
+        ("LOW or MEDIUM package", r"\$" + N + r" for LOW or MEDIUM,", ("low", "medium")),
+        ("one-reviewer exception", r"\$" + N + r" for HIGH under the one-reviewer exception,", ("high-single",)),
+        ("panel depth", r"\$" + N + r" for HIGH at panel depth\.", ("high-panel",)),
+        ("N times", r"Explain costs above " + N + r" times the reference in the row\.", ("over",))):
     found = re.findall(pat, para)
     if len(found) != 1:
-        print("%s: found %d bold amounts after the anchor, want exactly 1" % (anchor, len(found))); continue
+        print("%s: found %d semantic amounts after the anchor, want exactly 1" % (anchor, len(found))); continue
+    if keys != ("over",):
+        amount_positions.append(re.search(pat, para).start())
     for key in keys:
         if key not in want:
             print("%s: --figures has no '%s' line" % (anchor, key))
         elif Decimal(found[0]) != want[key]:
             print("%s: the rule says %s, --figures says %s %s" % (anchor, found[0], key, want[key]))
 # The names the rule and the script share: every tier --figures prints is named, in
-# backticks, in this paragraph, and the paragraph shows the flag they go with. A tier renamed
+# backticks, in this rule block, and the block shows the flag they go with. A tier renamed
 # on either side is a rule that tells a session to pass a value the script refuses.
 for name in want:
     if name != "over" and "`%s`" % name not in para:
-        print("tier name: `%s` (a tier --figures prints) does not appear backticked in the rule's first paragraph" % name)
+        print("tier name: `%s` (a tier --figures prints) does not appear backticked in the rule block" % name)
 if "usage-benchmark-row.py --tier" not in para:
-    print("flag: the literal 'usage-benchmark-row.py --tier' does not appear in the rule's first paragraph")
-# Which tier name sits beside which label. The two names being present is not enough: a
-# paragraph reading "`high-panel` (the one-reviewer exception) or `high-single` (panel depth)"
-# has every name and the flag and tells a session to pass the wrong tier. These two strings
-# are the doctrine's own wording, pinned as literals on purpose (they are not in --figures);
-# whitespace runs, line breaks included, are one space, so re-wrapping the prose cannot fail it.
-flat = re.sub(r"\s+", " ", para)
-for label in ("`high-single` (the one-reviewer exception)", "`high-panel` (panel depth)"):
-    if label not in flat:
-        print("pairing: the literal %s does not appear in the rule's first paragraph" % label)
+    print("flag: the literal 'usage-benchmark-row.py --tier' does not appear in the rule block")
+# The list's "respectively" binds its order to LOW, MEDIUM, the one-reviewer
+# exception, and panel depth. Presence of all names cannot catch swapped mappings.
+# Check each HIGH position separately so a swap produces exactly two diagnostics.
+listing = re.findall(r"Pass `usage-benchmark-row\.py --tier` with (.*?), respectively\.", para)
+names = re.findall(r"`([^`]+)`", listing[0]) if len(listing) == 1 else []
+shape = re.sub(r"`[^`]+`", "TIER", listing[0]) if len(listing) == 1 else ""
+if shape != "TIER, TIER, TIER or TIER":
+    print("pairing: the respective tier list must contain only the four ordered names")
+if len(amount_positions) != 3 or amount_positions != sorted(amount_positions):
+    print("pairing: reference labels must occur in LOW/MEDIUM, exception, panel order")
+if len(names) != 4 or names[:2] != ["low", "medium"]:
+    print("pairing: the ordered tier list must start with `low`, `medium` and contain four names")
+for index, name, label in ((2, "high-single", "one-reviewer exception"),
+                           (3, "high-panel", "panel depth")):
+    if len(names) <= index or names[index] != name:
+        print("pairing: `%s` must occupy the respective %s position" % (name, label))
 PY
 }
 # mutate_doc <in> <out> <which> [<tier name>] — a copy of the rule with ONE thing broken
-# (swap trades `high-single` and `high-panel` in the first paragraph; the others are named below)
+# (swap trades `high-single` and `high-panel` in the rule block; the others are named below)
 mutate_doc() {
   "$PY" - "$1" "$2" "$3" "${4:-}" <<'PY'
 import re, sys
@@ -1329,15 +1339,16 @@ tok = "<!--default:reference-figures-->"
 head, sep, rest = open(src, encoding="utf-8").read().partition(tok)
 if not sep:
     sys.exit(2)
+# Restrict every mutation to this token-delimited rule, including later paragraphs.
+following = re.search(r"(?m)^\s*<!--(?:floor|default):[^>]+-->\s*$", rest)
+block, after = (rest, "") if following is None else (rest[:following.start()], rest[following.start():])
 N = r"(\d+(?:\.\d+)?)"
 def bump(m):
     return m.group(1) + format(Decimal(m.group(2)) + 1, "f") + m.group(3)
 if what == "token":
     out = head + "<!--default:reference-figure-->" + rest
 elif what in ("tier", "flag", "swap"):
-    # every occurrence inside the first paragraph (up to the first blank line)
-    cut = rest.find("\n\n")
-    first, after = (rest, "") if cut < 0 else (rest[:cut], rest[cut:])
+    first = block
     if what == "tier":
         new = first.replace("`%s`" % tier, "`%s-renamed`" % tier)
     elif what == "swap":
@@ -1352,18 +1363,18 @@ elif what in ("tier", "flag", "swap"):
         sys.exit(2)
     out = head + tok + new + after
 else:
-    pat = {"low": r"(LOW or MEDIUM package:\s*\*\*\$)" + N + r"()",
-           "single": r"(one-reviewer exception:\s*\*\*\$)" + N + r"()",
-           "panel": r"(panel depth:\s*\*\*\$)" + N + r"()",
-           "factor": r"(\*\*)" + N + r"( times\*\*)",
-           "anchor": r"(panel depth)(:)()"}[what]
+    pat = {"low": r"(\$)" + N + r"(\s+for\s+LOW\s+or\s+MEDIUM,)",
+           "single": r"(\$)" + N + r"(\s+for\s+HIGH\s+under\s+the\s+one-reviewer\s+exception,)",
+           "panel": r"(\$)" + N + r"(\s+for\s+HIGH\s+at\s+panel\s+depth\.)",
+           "factor": r"(Explain\s+costs\s+above\s+)" + N + r"(\s+times\s+the\s+reference\s+in\s+the\s+row\.)",
+           "anchor": r"(for\s+HIGH\s+at\s+)panel(\s+depth\.)"}[what]
     if what == "anchor":
-        new, n = re.subn(pat, r"\1 -", rest, count=1)
+        new, n = re.subn(pat, r"\1single-reviewer\2", block, count=1)
     else:
-        new, n = re.subn(pat, bump, rest, count=1)
+        new, n = re.subn(pat, bump, block, count=1)
     if n != 1:
         sys.exit(2)
-    out = head + tok + new
+    out = head + tok + new + after
 open(dst, "w", encoding="utf-8").write(out)
 PY
 }
@@ -1507,7 +1518,7 @@ if MUT=$(mutant figures-twice usage-benchmark-row.py 's/^            if figures:
 else
   bad "the fixture DISTINGUISHES the two implementations (--figures --figures let through: it prints the table)" "could not build the mutant: the repeat check is not where this expects it"
 fi
-# the doctrine sync: the rule's paragraph broken one property at a time (token, each amount,
+# the doctrine sync: the rule's block broken one property at a time (token, each amount,
 # the factor, an anchor phrase, a tier name, the flag, and the two tier names swapped), then
 # the script's table changed one property at a time (an amount, a name, the factor). Each
 # must be flagged, and where the break has its own message the check must carry it. The swap
@@ -1527,10 +1538,10 @@ for what in token low single panel factor anchor tier flag swap; do
       && { [ -z "$only" ] || { ! printf '%s\n' "$got" | grep -q -v "^$only: " \
                                && [ "$(printf '%s\n' "$got" | grep -c "^$only: ")" = 2 ] \
                                && [ -z "$(doctrine_problems "$DOC" "$FIG")" ]; }; } \
-      && ok "the fixture DISTINGUISHES the two implementations (rule paragraph broken: $what)" \
-      || bad "the fixture DISTINGUISHES the two implementations (rule paragraph broken: $what)" "the sync check passed a broken rule, or did not name it: '$(flat "$got")'"
+      && ok "the fixture DISTINGUISHES the two implementations (rule block broken: $what)" \
+      || bad "the fixture DISTINGUISHES the two implementations (rule block broken: $what)" "the sync check passed a broken rule, or did not name it: '$(flat "$got")'"
   else
-    bad "the fixture DISTINGUISHES the two implementations (rule paragraph broken: $what)" \
+    bad "the fixture DISTINGUISHES the two implementations (rule block broken: $what)" \
         "could not build the mutant: the rule's token or anchor is not where this expects it in $DOC"
   fi
 done
