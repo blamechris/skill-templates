@@ -69,6 +69,16 @@ fi
 case "$severity" in low|medium|high|critical) ;; *) refuse 'invalid severity' ;; esac
 case "$finding_file" in /*) ;; *) refuse 'finding file must be absolute' ;; esac
 [ -r "$finding_file" ] && [ -f "$finding_file" ] || refuse 'finding file is not readable'
+python3 - "$finding_file" "$HOME/Obsidian/no-it-all/security" <<'PY' || refuse 'finding file must remain beneath the security vault after resolving symlinks'
+from pathlib import Path
+import sys
+try:
+    finding, vault = (Path(p).resolve(strict=True) for p in sys.argv[1:])
+    if not vault.is_dir() or not finding.is_file() or vault not in finding.parents:
+        sys.exit(1)
+except (OSError, RuntimeError):
+    sys.exit(1)
+PY
 
 # The body and POST run in this invocation; failure to build never reaches gh.
 body=$(jq -n --arg summary "$summary" --rawfile description "$finding_file" \

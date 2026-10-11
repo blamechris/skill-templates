@@ -602,5 +602,21 @@ git -C "$TMP/seed" push --quiet origin HEAD:main
 write_registry "$M/identical3.md"
 assert "a sixth floor rule in the registry -> exit 1" 1 "FLOOR-SET" "$M/identical3.md"
 
+"$PY" - "$SUT" "$HERE/../AGENTS.md" <<'PY'
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+check = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(check)
+root = pathlib.Path(sys.argv[2]).read_text()
+assert check.prose_floor_error(check.parse(root, 'actual public root')[0]) is None
+for text in (
+    root.replace('and `seed-written', 'and and `seed-written', 1),
+    root.replace('`explicit-path-staging`,', 'and `explicit-path-staging`,', 1),
+):
+    assert check.prose_floor_error(check.parse(text, 'misplaced conjunction')[0]) is not None
+PY
+[ "$?" -eq 0 ] && ok 'actual public root passes and misplaced conjunctions refuse' ||
+  bad 'actual public root passes and misplaced conjunctions refuse' 'prose validation failed'
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

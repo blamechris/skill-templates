@@ -373,5 +373,47 @@ run inactive_gemini --apply
   ok 'inactive Gemini filename refuses before installation' ||
   bad 'inactive Gemini filename refuses before installation' "rc=$rc $out"
 
+for prefix in instruction heading comment; do
+  new_case "preamble_$prefix"
+  case "$prefix" in
+    instruction) printf 'Keep this private instruction.\n' > "$TMP/preamble_$prefix/local.md" ;;
+    heading) printf '# Private heading\n' > "$TMP/preamble_$prefix/local.md" ;;
+    comment) printf '<!-- Private comment -->\n' > "$TMP/preamble_$prefix/local.md" ;;
+  esac
+  printf '<!--default:machine-local-->\nPrivate fixture body.\n' >> "$TMP/preamble_$prefix/local.md"
+  run "preamble_$prefix" --local-rules "$TMP/preamble_$prefix/local.md" --apply
+  [ "$rc" -eq 2 ] && empty_home "preamble_$prefix" &&
+    ok "tagged private $prefix preamble refuses before any write" ||
+    bad "tagged private $prefix preamble refuses before any write" "rc=$rc $out"
+done
+
+for obstruction in parent directory script_parent; do
+  new_case "obstructed_$obstruction"
+  task_home="$TMP/obstructed_$obstruction/home"
+  task_backup="$TMP/obstructed_$obstruction/backup"
+  mkdir -p "$task_home/.fleet" "$task_backup"
+  printf 'incumbent root\n' > "$task_home/.fleet/AGENTS.md"
+  chmod 640 "$task_home/.fleet/AGENTS.md"
+  printf 'restored root\n' > "$task_backup/0-AGENTS.md"
+  case "$obstruction" in
+    parent) printf 'obstruction\n' > "$task_home/.codex"; task_target="$task_home/.codex/AGENTS.md" ;;
+    directory) mkdir -p "$task_home/.codex/AGENTS.md"; task_target="$task_home/.codex/AGENTS.md" ;;
+    script_parent) mkdir -p "$task_home/.claude"; printf 'obstruction\n' > "$task_home/.claude/scripts"; task_target="$task_home/.claude/scripts/fleet-check.py" ;;
+  esac
+  printf '%s\n%s\n' "$task_home/.fleet/AGENTS.md" "$task_target" > "$task_backup/paths.txt"
+  printf 'later restore\n' > "$task_backup/1-$(basename "$task_target")"
+  run "obstructed_$obstruction" --restore "$task_backup" --apply
+  "$PY" - "$task_home/.fleet/AGENTS.md" <<'PY'
+import pathlib, stat, sys
+p = pathlib.Path(sys.argv[1])
+assert p.read_bytes() == b'incumbent root\n'
+assert stat.S_IMODE(p.stat().st_mode) == 0o640
+PY
+  preserved_rc=$?
+  [ "$rc" -eq 2 ] && [ "$preserved_rc" -eq 0 ] &&
+    ok "late $obstruction obstruction refuses without earlier byte or mode change" ||
+    bad "late $obstruction obstruction refuses without earlier byte or mode change" "rc=$rc preserved=$preserved_rc $out"
+done
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

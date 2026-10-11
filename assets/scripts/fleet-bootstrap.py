@@ -72,6 +72,15 @@ def reject_symlinks(path):
             fail(f'{component} is a symlink; reconcile explicitly before replacing it')
 
 
+def check_destination_shape(path):
+    """Reject predictable layout errors before any member of a plan is written."""
+    if path.exists() and not path.is_file():
+        fail(f'{path} is not a regular-file destination')
+    for parent in path.parents:
+        if parent.exists() and not parent.is_dir():
+            fail(f'{parent} is not a directory; cannot write {path}')
+
+
 def raw_rules(text, check):
     """Retain block contents, including headings, for private-data preservation."""
     blocks, current, rule_class, body = {}, None, None, []
@@ -114,6 +123,7 @@ def restore_backup(args, home, codex_home):
         if not path.is_absolute() or path not in allowed:
             fail(f'restore target {target!r} is not a bootstrap destination for this home')
         reject_symlinks(path)
+        check_destination_shape(path)
         source = backup / f'{index}-{path.name}'
         reject_symlinks(source)
         content = source.read_bytes()
@@ -165,6 +175,12 @@ def main():
         local_rules, local_duplicates, _ = check.parse(local, 'local additions')
         if local_duplicates or any(c == 'floor' for c, _ in local_rules.values()):
             fail('local additions must not redefine floor rules or duplicate IDs')
+        if 'machine-local' in local_rules:
+            for line in local.splitlines():
+                if check.TOKEN.match(line):
+                    break
+                if line.strip():
+                    fail('tagged local rules must start with a rule token; move preamble text inside machine-local')
         additions = ('\n' if 'machine-local' in local_rules else '\n<!--default:machine-local-->\n') + local.rstrip() + '\n'
         root += additions
         supplied = raw_rules(additions, check)

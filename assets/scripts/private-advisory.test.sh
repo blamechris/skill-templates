@@ -33,14 +33,16 @@ ok() { pass=$((pass+1)); printf 'ok %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf 'FAIL %s: %s\n' "$1" "$out"; }
 new_case() {
   export CASE="$TMP/$1"; mkdir "$CASE"; printf '[]' > "$CASE/list.json"
-  printf 'Private fixture description\nwith newline and "quotes"\n' > "$CASE/finding.md"
+  mkdir -p "$CASE/home/Obsidian/no-it-all/security"
+  FINDING_FIXTURE="$CASE/home/Obsidian/no-it-all/security/finding.md"
+  printf 'Private fixture description\nwith newline and "quotes"\n' > "$FINDING_FIXTURE"
   unset FAIL_POST FAIL_LIST
   out=$("$HERE/private-advisory.sh" --repo fixture/repo); rc=$?
   digest=$(printf '%s\n' "$out" | sed -n 's/^reviewed-list: //p')
 }
 create() {
-  out=$("$HERE/private-advisory.sh" --repo fixture/repo --create --reviewed-list "$digest" \
-    --summary 'Neutral behavior' --finding-file "$CASE/finding.md" \
+  out=$(env HOME="$CASE/home" "$HERE/private-advisory.sh" --repo fixture/repo --create --reviewed-list "$digest" \
+    --summary 'Neutral behavior' --finding-file "$FINDING_FIXTURE" \
     --severity high --ecosystem other --package fixture); rc=$?
 }
 count() { cat "$CASE/count" 2>/dev/null || printf 0; }
@@ -48,7 +50,7 @@ new_case list
 [ "$rc" -eq 0 ] && [ "$(count)" -eq 0 ] && [ -n "$digest" ] && ok 'list only never posts' || bad 'list only never posts'
 create
 [ "$rc" -eq 0 ] && [ "$(count)" -eq 1 ] && \
-  jq -e --rawfile text "$CASE/finding.md" '.description == $text and .severity == "high" and .vulnerabilities[0].package.name == "fixture"' "$CASE/body.json" >/dev/null &&
+  jq -e --rawfile text "$FINDING_FIXTURE" '.description == $text and .severity == "high" and .vulnerabilities[0].package.name == "fixture"' "$CASE/body.json" >/dev/null &&
   ok 'one POST carries raw vault text and declared metadata' || bad 'one POST carries raw vault text and declared metadata'
 new_case duplicate
 printf '[{"ghsa_id":"GHSA-existing","state":"draft","summary":"Neutral behavior"}]' > "$CASE/list.json"
@@ -62,7 +64,7 @@ new_case digest
 digest=wrong; create
 [ "$rc" -eq 2 ] && [ "$(count)" -eq 0 ] && ok 'unreviewed list prevents creation' || bad 'unreviewed list prevents creation'
 new_case missing
-rm "$CASE/finding.md"; create
+rm "$FINDING_FIXTURE"; create
 [ "$rc" -eq 2 ] && [ "$(count)" -eq 0 ] && ok 'missing body cannot POST' || bad 'missing body cannot POST'
 new_case jqfailure
 # Wrap jq to fail only body construction; list handling remains valid.
@@ -93,5 +95,17 @@ export FAIL_POST=concurrent; create
 new_case changed
 export FAIL_POST=changed; create
 [ "$rc" -eq 2 ] && [ "$(count)" -eq 1 ] && ok 'changed relist needs coordinator review' || bad 'changed relist needs coordinator review'
+new_case outside
+printf 'outside synthetic text\n' > "$CASE/outside.md"
+FINDING_FIXTURE="$CASE/outside.md"; create
+[ "$rc" -eq 2 ] && [ "$(count)" -eq 0 ] && ok 'outside vault file cannot POST' || bad 'outside vault file cannot POST'
+new_case symlink_escape
+printf 'outside synthetic text\n' > "$CASE/outside.md"
+rm "$FINDING_FIXTURE"; ln -s "$CASE/outside.md" "$FINDING_FIXTURE"; create
+[ "$rc" -eq 2 ] && [ "$(count)" -eq 0 ] && ok 'symlink escape cannot POST' || bad 'symlink escape cannot POST'
+new_case symlink_inside
+mv "$FINDING_FIXTURE" "$CASE/home/Obsidian/no-it-all/security/real.md"
+ln -s "$CASE/home/Obsidian/no-it-all/security/real.md" "$FINDING_FIXTURE"; create
+[ "$rc" -eq 0 ] && [ "$(count)" -eq 1 ] && ok 'symlink staying inside vault can POST' || bad 'symlink staying inside vault can POST'
 printf '%s passed; %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

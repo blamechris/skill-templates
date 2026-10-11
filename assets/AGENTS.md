@@ -468,8 +468,8 @@ marker/path from public relays and files.
 Brief auditors likewise. If unsure, publish nothing, put the question in DECISION
 and the seed, and continue other work.
 
-Use `assets/scripts/private-advisory.sh --repo OWNER/REPO` to list advisories
-first. Read the result; use `--reuse GHSA-ID` for a matching advisory and create
+Locate the fetched registry checkout and invoke its `assets/scripts/private-advisory.sh`
+by absolute path with `--repo OWNER/REPO` to list advisories first. Read the result; use `--reuse GHSA-ID` for a matching advisory and create
 nothing. Only after semantic review finds no match, create one draft with
 a neutral summary, vault description, severity, ecosystem and package, using the
 `--create --reviewed-list` digest and explicit finding/metadata arguments. The script relists before creation, builds with

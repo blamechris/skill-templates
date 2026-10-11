@@ -273,7 +273,9 @@ def prose_floor_error(rules):
     if len(lists) != 1:
         return "rule-precedence must contain exactly one Floors: list"
     ids = re.findall(r"`([^`]+)`", lists[0])
-    residue = re.sub(r"`[^`]+`", "", lists[0])
+    # A grammatical list may join its final ID with a single conjunction.
+    listed = re.sub(r",\s+and\s+(?=`[^`]+`\s*$)", ", ", lists[0], flags=re.IGNORECASE)
+    residue = re.sub(r"`[^`]+`", "", listed)
     if (len(ids) != len(FLOOR_IDS) or len(set(ids)) != len(ids)
             or set(ids) != declared or set(ids) != set(FLOOR_IDS)
             or re.sub(r"[,\s]", "", residue)):
