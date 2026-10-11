@@ -8,7 +8,7 @@ Requires Python 3.11+ (complete TOML parsing).
 Usage:
   python3 ~/.claude/scripts/fleet-check.py [--machine PATH] [--claude PATH]
       [--codex PATH] [--gemini PATH] [--codex-config PATH]
-      [--project-dir PATH] [--repo PATH] [--ref REF] [--verbose]
+      [--project-dir PATH] [--all-repos] [--repo PATH] [--ref REF] [--verbose]
 
 `~/.fleet/AGENTS.md` is AUTHORED, not generated: it is edited in place on the
 machine, and `assets/AGENTS.md` in the registry is the copy a new machine
@@ -39,7 +39,8 @@ Exit codes:
      floor set is no longer the five rules this script knows about.
   2  the comparison could not be made honestly — fetch failed, a path is missing,
      an adapter cannot be read, or Codex's instruction size cap prevents a full
-     load. Never 0: an incomplete check must not report agreement.
+     load with at least 2048 spare bytes. Never 0: an incomplete check must not
+     report agreement.
 """
 import argparse
 import json
@@ -67,6 +68,10 @@ FLOOR_IDS = (
 
 REGISTRY_PATH = "assets/AGENTS.md"
 MIN_CODEX_DOC_MAX_BYTES = 65536
+MIN_CODEX_DOC_MARGIN_BYTES = 2048
+CODEX_DOC_SEPARATOR = b"\n\n--- project-doc ---\n\n"
+# Reserved for private machine guidance. Its contents never enter a drift report.
+MACHINE_LOCAL_ID = "machine-local"
 
 TOKEN = re.compile(r"^\s*<!--\s*(floor|default)\s*:\s*([a-z0-9][a-z0-9._-]*)\s*-->\s*$")
 HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
@@ -260,6 +265,49 @@ def parse(text, where):
     return rules, dups, order
 
 
+def prose_floor_error(rules):
+    """The prose floor list and classified floor tokens must describe the same five rules."""
+    body = "\n".join(rules.get("rule-precedence", (None, []))[1])
+    lists = re.findall(r"\bfloors:\s*(.*?)\.", body, re.DOTALL | re.IGNORECASE)
+    declared = {rid for rid, (cls, _) in rules.items() if cls == "floor"}
+    if len(lists) != 1:
+        return "rule-precedence must contain exactly one Floors: list"
+    ids = re.findall(r"`([^`]+)`", lists[0])
+    # A grammatical list may join its final ID with a single conjunction.
+    listed = re.sub(r",\s+and\s+(?=`[^`]+`\s*$)", ", ", lists[0], flags=re.IGNORECASE)
+    residue = re.sub(r"`[^`]+`", "", listed)
+    if (len(ids) != len(FLOOR_IDS) or len(set(ids)) != len(ids)
+            or set(ids) != declared or set(ids) != set(FLOOR_IDS)
+            or re.sub(r"[,\s]", "", residue)):
+        return "prose Floors: list must match exactly the five classified floor IDs"
+    return None
+
+
+def all_repo_projects():
+    """Find immediate ~/Projects Git checkouts with a root AGENTS.md, honoring HOME."""
+    projects = Path.home() / "Projects"
+    if not projects.exists():
+        die(f"--all-repos project directory {str(projects)!r} does not exist")
+    try:
+        candidates = sorted(projects.iterdir())
+    except OSError as exc:
+        die(f"--all-repos cannot list {str(projects)!r} ({exc})")
+    found = []
+    for candidate in candidates:
+        if not candidate.is_dir() or not os.path.lexists(candidate / "AGENTS.md"):
+            continue
+        probe = subprocess.run(["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
+                               capture_output=True, text=True)
+        if probe.returncode == 0:
+            if not probe.stdout.strip():
+                die(f"Git root probe returned no path in {str(candidate)!r}")
+            if Path(probe.stdout.strip()).resolve() == candidate.resolve():
+                found.append(candidate)
+        elif "not a git repository (or any of the parent directories)" not in probe.stderr:
+            die(f"Git root probe failed in {str(candidate)!r} ({probe.stderr.strip()})")
+    return found
+
+
 def direction(mach, reg):
     """Which node moved. Line-set based: mechanical, and it never guesses intent."""
     mset, rset = set(mach), set(reg)
@@ -302,14 +350,16 @@ def read_registry(repo, ref):
     return shown.stdout
 
 
-def codex_load_plan(args):
+def codex_load_plan(args, project_dir=None):
     """Return Codex's selected instruction files and its configured byte limit.
 
     Codex selects the first nonempty file per project directory: override, AGENTS,
-    then configured fallback names. The sum is deliberately conservative, counting the global copy
-    too. An over-limit result is inconclusive even if a particular Codex release
-    might apply its limit only to the project chain.
+    then configured fallback names. The serialized sum includes Codex separators
+    and conservatively counts the global copy too. At least 2048 bytes of headroom
+    must remain. An over-limit result is inconclusive even if a particular Codex
+    release might apply its limit only to the project chain.
     """
+    project_dir_arg = project_dir if project_dir is not None else args.project_dir
     config = codex_config(args.codex_config)
     if any(key in config for key in ("project_root_markers", "profile", "profiles")):
         die("Codex custom project_root_markers or profiles need effective-config verification; "
@@ -333,11 +383,11 @@ def codex_load_plan(args):
             die(f"nonempty Codex global override {str(global_override)!r} shadows {args.codex!r}")
 
     try:
-        project_dir = Path(args.project_dir).resolve(strict=True)
+        project_dir = Path(project_dir_arg).resolve(strict=True)
     except OSError as exc:
-        die(f"project directory {args.project_dir!r} cannot be resolved ({exc})")
+        die(f"project directory {str(project_dir_arg)!r} cannot be resolved ({exc})")
     if not project_dir.is_dir():
-        die(f"project directory {args.project_dir!r} is not a directory")
+        die(f"project directory {str(project_dir_arg)!r} is not a directory")
     try:
         root_probe = subprocess.run(
             ["git", "-C", str(project_dir), "rev-parse", "--show-toplevel"],
@@ -374,7 +424,7 @@ def codex_load_plan(args):
                 if data:
                     selected.append(candidate)
                     break
-    total = 0
+    total = len(CODEX_DOC_SEPARATOR) * (len(selected) - 1)
     for path in selected:
         total += len(read_bytes(path, "Codex instruction file"))
     if total > cap:
@@ -382,6 +432,11 @@ def codex_load_plan(args):
             f"Codex instruction chain is {total} bytes across {len(selected)} file(s), "
             f"above project_doc_max_bytes={cap}; full loading cannot be verified"
         )
+    margin = cap - total
+    if margin < MIN_CODEX_DOC_MARGIN_BYTES:
+        die(f"Codex instruction chain for {str(project_dir)!r} is {total}/{cap} bytes "
+            f"including separators; margin={margin} bytes is below "
+            f"{MIN_CODEX_DOC_MARGIN_BYTES}; full loading cannot be verified")
     return selected, total, cap
 
 
@@ -391,9 +446,20 @@ def verify_adapters(args):
     codex = read_text(args.codex, "Codex adapter")
     gemini = read_text(args.gemini, "Gemini adapter")
     verify_gemini_settings(args.gemini)
-    selected, total, cap = codex_load_plan(args)
-    print(f"ADAPTER  Claude imports the fleet root; Codex load plan {total}/{cap} bytes "
-          f"across {len(selected)} file(s).")
+    projects = [Path(args.project_dir)]
+    if args.all_repos:
+        projects.extend(all_repo_projects())
+    seen = set()
+    for project in projects:
+        resolved = project.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        selected, total, cap = codex_load_plan(args, project)
+        print(f"ADAPTER  Codex load plan for {str(resolved)!r}: {total}/{cap} bytes "
+              f"across {len(selected)} file(s), margin={cap - total} bytes "
+              f"({len(CODEX_DOC_SEPARATOR)}-byte separators).")
+    print("ADAPTER  Claude imports the fleet root.")
     return extra, codex, gemini, cap
 
 
@@ -408,6 +474,8 @@ def main():
     ap.add_argument("--codex-config", default=os.path.join(codex_home, "config.toml"))
     ap.add_argument("--project-dir", default=os.getcwd(),
                     help="current Codex project directory for instruction-chain sizing")
+    ap.add_argument("--all-repos", action="store_true",
+                    help="also size every ~/Projects/* Git checkout with a root AGENTS.md")
     ap.add_argument("--repo", default=os.path.expanduser("~/Projects/skill-templates"))
     ap.add_argument("--ref", default="origin/main")
     ap.add_argument("--verbose", action="store_true", help="print a unified diff per differing rule")
@@ -423,6 +491,14 @@ def main():
     reg, rdups, _ = parse(registry_text, f"{args.ref}:{REGISTRY_PATH}")
     floor_broken, defaults, report = [], [], []
     default_dirs = []
+    if MACHINE_LOCAL_ID in reg:
+        report.append("PRIVATE-BOUNDARY  reserved machine-local block is present in the public registry; "
+                      "remove it and keep private guidance on the machine")
+        floor_broken.append("(private boundary)")
+    prose_error = prose_floor_error(reg)
+    if prose_error:
+        report.append(f"FLOOR-LIST  {args.ref}:{REGISTRY_PATH}: {prose_error}")
+        floor_broken.append("(prose floor list)")
 
     # The floor set itself is a fleet invariant. If the registry declares a different
     # set of floor rules than this script knows, the floor moved without this script
@@ -454,13 +530,26 @@ def main():
                              (args.codex, codex_text),
                              (args.gemini, gemini_text)):
         mach, mdups, _ = parse(node_text, where)
+        prose_error = prose_floor_error(mach)
+        if prose_error:
+            report.append(f"FLOOR-LIST  {where}: {prose_error}")
+            floor_broken.append(f"{where}:(prose floor list)")
+        if MACHINE_LOCAL_ID in mach:
+            report.append(f"INFO  {where}: machine-local: private machine guidance retained locally; "
+                          "excluded from registry drift")
+            if mach[MACHINE_LOCAL_ID][0] == "floor":
+                report.append(f"FLOOR-CLASS  {where}: reserved machine-local block must be default")
+                floor_broken.append(f"{where}:{MACHINE_LOCAL_ID}")
         for d, duplicate_class in sorted(set(mdups)):
             cls = "floor" if d in FLOOR_IDS or "floor" in (duplicate_class, mach[d][0]) else "default"
-            report.append(f"DUPLICATE  {d} appears more than once in {where} — class {cls}")
+            if d != MACHINE_LOCAL_ID or cls == "floor":
+                report.append(f"DUPLICATE  {d} appears more than once in {where} — class {cls}")
             if cls == "floor":
                 floor_broken.append(f"{where}:{d}")
 
         for rid in sorted(set(mach) | set(reg)):
+            if rid == MACHINE_LOCAL_ID:
+                continue
             mcls, mbody = mach.get(rid, (None, None))
             rcls, rbody = reg.get(rid, (None, None))
             # Effective class: floor if this script says so, or if EITHER node declares it.
@@ -502,8 +591,8 @@ def main():
     if floor_broken:
         print(
             f"\nFLOOR DRIFT: {len(set(floor_broken))} rule(s) — "
-            f"{', '.join(sorted(set(floor_broken)))}. Reconcile before long work: land the "
-            f"machine's delta in the registry (PR), then copy out once."
+            f"{', '.join(sorted(set(floor_broken)))}. Reconcile shared floor rules before "
+            f"long work; reserved machine-local guidance stays private."
         )
         return EXIT_FLOOR
 

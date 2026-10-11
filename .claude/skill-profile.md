@@ -14,7 +14,7 @@
   - **The push-deploy stays dead.** Do not recreate `deploy.sh`, `deploy.conf`, `sync.sh`, `customizations/`, `values/`, or a push trigger.
   - **The session seed lives outside every worktree** at `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`. `docs/handoffs/` is a narrative artifact of a PR and is NOT the continuity mechanism. Seeds are per-scope and archive-on-collide; the single global seed file is retired.
   - **Exactly one scope derivation.** `--git-common-dir` is executable only in `assets/scripts/session-seed.py`; prose outside a code fence may explain it. A second copy fails CI.
-  - **The floor is exactly five rules** (`no-agent-attribution`, `explicit-path-staging`, `worktree-by-default`, `no-secrets-in-committed-files`, `seed-written-outside-any-worktree`), agreeing in `assets/global-CLAUDE.md` and `assets/scripts/fleet-check.py`.
+  - **The floor is exactly five rules** (`no-agent-attribution`, `explicit-path-staging`, `worktree-by-default`, `no-secrets-in-committed-files`, `seed-written-outside-any-worktree`), agreeing in `assets/AGENTS.md` and `assets/scripts/fleet-check.py`.
   - **A new shipped script arrives with an executable sibling suite** (`*.test.sh` / `*.test.mjs`) — an untested script asset is a tracked defect (#209), which is *open*: `scripts/build-index.sh`, `scripts/guard-audit.py` and `assets/smoke-intake.mjs` have none today. Treat that as the known backlog, not as a regression to report.
   - **This repo's own installed skills lint clean.** `.claude/commands/*.md` is covered by CI, and every name in `.claude/skills.lock` must have a file on disk (#156).
   - **No secrets.** The repo is public; keys, tokens, cookies, private URLs, and third-party personal data never land here.
@@ -78,7 +78,7 @@ Note that this particular block is **documentation, not a machine-checked pin**:
 - Labels: `bug` plus `from-review` for anything a review turned up. No `type:` or `severity:` families exist here.
 - Domain hunters: none. This is a Markdown/Bash/Actions registry with no runtime, no network surface, and no UI — do not fabricate hunters from the tech stack.
 - Guardian must check any new scan-based gate for **satisfaction-by-prose**, because it has bitten this repo twice: `validate-registry`'s own comments explain why `|| true` may not be softened and why `docs/handoffs` is banned, so a substring scan for either phrase is satisfied by the documentation rather than by the code. Anchor to a code fence or the start of a line's content, never to a bare substring.
-- Guardian must check any new derivation of the scope key or the seed path against `assets/scripts/session-seed.py`, because a hand-written second copy in `assets/global-CLAUDE.md` is exactly the regression #210 removed — and it landed four commits after the extraction whose purpose was to have one implementation.
+- Guardian must check any new derivation of the scope key or the seed path against `assets/scripts/session-seed.py`, because a hand-written second copy in `assets/AGENTS.md` is exactly the regression #210 removed — and it landed four commits after the extraction whose purpose was to have one implementation.
 
 ## recon Customizations
 
@@ -87,7 +87,7 @@ Note that this particular block is **documentation, not a machine-checked pin**:
 
 ## learn Customizations
 
-- Memory layers here are **two authored nodes, not a source and a copy**: the machine node `~/.claude/CLAUDE.md` and the registry node `assets/global-CLAUDE.md` on `origin/main`. Neither generates the other and nothing is push-deployed. A learning that belongs to the fleet lands in the registry node via PR and is then copied out; a floor-rule difference stops long work until it is reconciled (`assets/scripts/fleet-check.py` reports the direction).
+- Memory layers here are **two authored nodes, not a source and a copy**: the machine node `~/.fleet/AGENTS.md` and the registry node `assets/AGENTS.md` on `origin/main`. Claude imports the machine root through `~/.claude/CLAUDE.md`; Codex and Gemini use checked adapter copies. Neither authored node generates the other, and nothing is push-deployed. A learning that belongs to the fleet lands in the registry node via PR and is then copied out; a floor-rule difference stops long work until it is reconciled (`assets/scripts/fleet-check.py` reports the direction).
 - Repo-scoped learnings go in `CLAUDE.md`; path-scoped ones go in `.claude/rules/<topic>.md` with a `paths:` header.
 - Durable records of *why* a change was made go in `docs/records/`; `docs/handoffs/` is a narrative artifact of a PR and is NOT the continuity mechanism.
 

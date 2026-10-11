@@ -11,6 +11,8 @@ PY=$(command -v python3.12 || command -v python3.11 || command -v python3.13 || 
   exit 1
 }
 TMP=$(mktemp -d /tmp/fleet-bootstrap-test.XXXXXX)
+# Canonical paths must reach restore shape checks on macOS, where /tmp is an alias.
+TMP=$(cd "$TMP" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 pass=0
 fail=0
@@ -122,6 +124,157 @@ run activate --local-rules "$TMP/activate/local.md" \
   bad 'a second identical apply is idempotent' "rc=$rc $out"
 
 # Configuration parsing and override validation must fail before any install.
+# Reconciliation alone cannot erase private blocks from any installed root copy.
+run activate --replace-existing --apply
+[ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'machine-only blocks.*machine-local' &&
+  grep -q 'Machine-only rule:' "$home/.fleet/AGENTS.md" &&
+  [ ! -d "$home/.fleet/backups" ] &&
+  ok 'replace-existing alone refuses to drop an incumbent private block' ||
+  bad 'replace-existing alone refuses to drop an incumbent private block' "rc=$rc $out"
+printf 'Machine-only rule: modified text.\n' > "$TMP/activate/changed.md"
+run activate --replace-existing --local-rules "$TMP/activate/changed.md" --apply
+[ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'not identically re-supplied' &&
+  [ ! -d "$home/.fleet/backups" ] &&
+  ok 'same private ID with modified body refuses before writes' ||
+  bad 'same private ID with modified body refuses before writes' "rc=$rc $out"
+
+# Tagged additions work when the whole block is re-supplied, and each root copy
+# is inspected: a later provider's private block cannot be lost unnoticed.
+new_case local_blocks
+home="$TMP/local_blocks/home"
+cat > "$TMP/local_blocks/local.md" <<'RULES'
+<!--default:machine-local-->
+# Private heading
+Keep private notes local.
+<!--default:my-machine-rule-->
+Keep the machine setting.
+RULES
+run local_blocks --local-rules "$TMP/local_blocks/local.md" --apply
+[ "$rc" -eq 0 ] &&
+  ok 'local-rules accepts complete tagged private blocks' ||
+  bad 'local-rules accepts complete tagged private blocks' "rc=$rc $out"
+printf '\n<!--default:gemini-only-local-->\nKeep a provider note.\n' >> "$home/.gemini/GEMINI.md"
+run local_blocks --replace-existing --local-rules "$TMP/local_blocks/local.md" --apply
+[ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'gemini-only-local' &&
+  [ ! -d "$home/.fleet/backups" ] &&
+  ok 'all root copies are checked for unsupplied machine-only blocks' ||
+  bad 'all root copies are checked for unsupplied machine-only blocks' "rc=$rc $out"
+printf '\n<!--default:gemini-only-local-->\nKeep a provider note.\n' >> "$TMP/local_blocks/local.md"
+run local_blocks --replace-existing --local-rules "$TMP/local_blocks/local.md" --apply
+[ "$rc" -eq 0 ] && cmp -s "$home/.fleet/AGENTS.md" "$home/.gemini/GEMINI.md" &&
+  grep -q 'Keep a provider note.' "$home/.fleet/AGENTS.md" &&
+  ok 'identically re-supplied private blocks survive reconciliation' ||
+  bad 'identically re-supplied private blocks survive reconciliation' "rc=$rc $out"
+run local_blocks --replace-existing --discard-local --apply
+[ "$rc" -eq 0 ] && cmp -s "$home/.fleet/AGENTS.md" "$REGISTRY/assets/AGENTS.md" &&
+  ok 'discard-local explicitly permits removing private blocks' ||
+  bad 'discard-local explicitly permits removing private blocks' "rc=$rc $out"
+
+new_case local_heading
+run local_heading --local-rules "$TMP/local_blocks/local.md" --apply
+sed 's/# Private heading/# Changed private heading/' "$TMP/local_blocks/local.md" > "$TMP/local_heading/changed.md"
+run local_heading --replace-existing --local-rules "$TMP/local_heading/changed.md" --apply
+[ "$rc" -eq 2 ] && [ ! -d "$TMP/local_heading/home/.fleet/backups" ] &&
+  ok 'private headings are compared without drift normalization' ||
+  bad 'private headings are compared without drift normalization' "rc=$rc $out"
+
+new_case duplicate_incumbent
+mkdir -p "$TMP/duplicate_incumbent/home/.fleet"
+printf '<!--default:machine-local-->\nfirst\n<!--default:machine-local-->\nsecond\n' > "$TMP/duplicate_incumbent/home/.fleet/AGENTS.md"
+printf 'second\n' > "$TMP/duplicate_incumbent/local.md"
+run duplicate_incumbent --replace-existing --local-rules "$TMP/duplicate_incumbent/local.md" --apply
+[ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'duplicate block ID' &&
+  [ ! -d "$TMP/duplicate_incumbent/home/.fleet/backups" ] &&
+  ok 'duplicate incumbent block IDs cannot hide private content' ||
+  bad 'duplicate incumbent block IDs cannot hide private content' "rc=$rc $out"
+
+# Atomic replacement preserves incumbents' modes; a newly installed script uses
+# its source mode. Restore is a dry run by default and preserves raw backup bytes
+# (including CRLF) and modes even when the current file's mode has changed.
+new_case modes
+home="$TMP/modes/home"
+mkdir -p "$home/.fleet" "$home/.codex" "$home/.claude/scripts"
+printf 'incumbent root\r\n' > "$home/.fleet/AGENTS.md"
+printf 'incumbent script\r\n' > "$home/.claude/scripts/fleet-check.py"
+printf 'model = "keep"\r\n' > "$home/.codex/config.toml"
+chmod 640 "$home/.fleet/AGENTS.md"
+chmod 751 "$home/.claude/scripts/fleet-check.py"
+chmod 644 "$home/.codex/config.toml"
+run modes --replace-existing --apply
+"$PY" - "$home" "$REGISTRY" <<'PY'
+import pathlib, stat, sys
+home, registry = map(pathlib.Path, sys.argv[1:])
+mode = lambda p: stat.S_IMODE(p.stat().st_mode)
+assert mode(home / '.fleet/AGENTS.md') == 0o640
+assert mode(home / '.claude/scripts/fleet-check.py') == 0o751
+assert mode(home / '.codex/config.toml') == 0o644
+assert mode(home / '.claude/scripts/session-seed.py') == mode(registry / 'assets/scripts/session-seed.py')
+assert mode(home / '.gemini/GEMINI.md') == mode(registry / 'assets/AGENTS.md')
+PY
+mode_rc=$?
+[ "$rc" -eq 0 ] && [ "$mode_rc" -eq 0 ] &&
+  ok 'writes preserve incumbent modes and use source modes for new files' ||
+  bad 'writes preserve incumbent modes and use source modes for new files' "rc=$rc mode_rc=$mode_rc $out"
+backup=$(find "$home/.fleet/backups" -name paths.txt -print)
+backup=$(dirname "$backup")
+cp "$home/.fleet/AGENTS.md" "$TMP/modes/installed.md"
+run modes --restore "$backup"
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^PLAN RESTORE:' &&
+  cmp -s "$home/.fleet/AGENTS.md" "$TMP/modes/installed.md" &&
+  ok 'restore plans without changing installed bytes' ||
+  bad 'restore plans without changing installed bytes' "rc=$rc $out"
+chmod 600 "$home/.fleet/AGENTS.md" "$home/.claude/scripts/fleet-check.py" "$home/.codex/config.toml"
+run modes --restore "$backup" --apply
+"$PY" - "$backup" <<'PY'
+import pathlib, stat, sys
+backup = pathlib.Path(sys.argv[1])
+for index, path in enumerate((backup / 'paths.txt').read_text().splitlines()):
+    target = pathlib.Path(path)
+    source = backup / f'{index}-{target.name}'
+    assert target.read_bytes() == source.read_bytes(), path
+    assert stat.S_IMODE(target.stat().st_mode) == stat.S_IMODE(source.stat().st_mode), path
+PY
+restore_rc=$?
+[ "$rc" -eq 0 ] && [ "$restore_rc" -eq 0 ] &&
+  ok 'restore round trip restores every incumbent byte and mode' ||
+  bad 'restore round trip restores every incumbent byte and mode' "rc=$rc restore_rc=$restore_rc $out"
+
+# Missing late backup members and redirected destinations refuse before any
+# earlier manifest entry is restored.
+printf 'current root\n' > "$home/.fleet/AGENTS.md"
+rm "$backup/2-fleet-check.py"
+run modes --restore "$backup" --apply
+[ "$rc" -eq 2 ] && [ "$(cat "$home/.fleet/AGENTS.md")" = 'current root' ] &&
+  ok 'restore validates every backup member before any mutation' ||
+  bad 'restore validates every backup member before any mutation' "rc=$rc $out"
+new_case restore_escape
+mkdir -p "$TMP/restore_escape/backup"
+printf '%s\n' "$TMP/restore_escape/outside.md" > "$TMP/restore_escape/backup/paths.txt"
+printf 'private bytes\n' > "$TMP/restore_escape/backup/0-outside.md"
+run restore_escape --restore "$TMP/restore_escape/backup" --apply
+[ "$rc" -eq 2 ] && [ ! -e "$TMP/restore_escape/outside.md" ] &&
+  ok 'restore refuses paths outside bootstrap destinations' ||
+  bad 'restore refuses paths outside bootstrap destinations' "rc=$rc $out"
+
+new_case restore_link
+home="$TMP/restore_link/home"
+mkdir -p "$TMP/restore_link/backup" "$home/.fleet" "$home/.codex"
+printf 'current root\n' > "$home/.fleet/AGENTS.md"
+printf 'external bytes\n' > "$TMP/restore_link/external.md"
+ln -s "$TMP/restore_link/external.md" "$home/.codex/AGENTS.md"
+"$PY" - "$home" "$TMP/restore_link/backup" <<'PY'
+import pathlib, sys
+home, backup = (pathlib.Path(p).resolve() for p in sys.argv[1:])
+(backup / 'paths.txt').write_text(f'{home}/.fleet/AGENTS.md\n{home}/.codex/AGENTS.md\n')
+(backup / '0-AGENTS.md').write_bytes(b'restored root\n')
+(backup / '1-AGENTS.md').write_bytes(b'restored provider\n')
+PY
+run restore_link --restore "$TMP/restore_link/backup" --apply
+[ "$rc" -eq 2 ] && [ "$(cat "$home/.fleet/AGENTS.md")" = 'current root' ] &&
+  [ "$(cat "$TMP/restore_link/external.md")" = 'external bytes' ] &&
+  ok 'restore refuses a late symlink destination before touching earlier paths' ||
+  bad 'restore refuses a late symlink destination before touching earlier paths' "rc=$rc $out"
+
 new_case malformed
 mkdir -p "$TMP/malformed/home/.codex"
 printf '[broken\n' > "$TMP/malformed/home/.codex/config.toml"
@@ -221,6 +374,49 @@ run inactive_gemini --apply
 [ "$rc" -eq 2 ] && no_install inactive_gemini &&
   ok 'inactive Gemini filename refuses before installation' ||
   bad 'inactive Gemini filename refuses before installation' "rc=$rc $out"
+
+for prefix in instruction heading comment; do
+  new_case "preamble_$prefix"
+  case "$prefix" in
+    instruction) printf 'Keep this private instruction.\n' > "$TMP/preamble_$prefix/local.md" ;;
+    heading) printf '# Private heading\n' > "$TMP/preamble_$prefix/local.md" ;;
+    comment) printf '<!-- Private comment -->\n' > "$TMP/preamble_$prefix/local.md" ;;
+  esac
+  printf '<!--default:machine-local-->\nPrivate fixture body.\n' >> "$TMP/preamble_$prefix/local.md"
+  run "preamble_$prefix" --local-rules "$TMP/preamble_$prefix/local.md" --apply
+  [ "$rc" -eq 2 ] && empty_home "preamble_$prefix" &&
+    ok "tagged private $prefix preamble refuses before any write" ||
+    bad "tagged private $prefix preamble refuses before any write" "rc=$rc $out"
+done
+
+for obstruction in parent directory script_parent; do
+  new_case "obstructed_$obstruction"
+  task_home="$TMP/obstructed_$obstruction/home"
+  task_backup="$TMP/obstructed_$obstruction/backup"
+  mkdir -p "$task_home/.fleet" "$task_backup"
+  printf 'incumbent root\n' > "$task_home/.fleet/AGENTS.md"
+  chmod 640 "$task_home/.fleet/AGENTS.md"
+  printf 'restored root\n' > "$task_backup/0-AGENTS.md"
+  case "$obstruction" in
+    parent) printf 'obstruction\n' > "$task_home/.codex"; task_target="$task_home/.codex/AGENTS.md" ;;
+    directory) mkdir -p "$task_home/.codex/AGENTS.md"; task_target="$task_home/.codex/AGENTS.md" ;;
+    script_parent) mkdir -p "$task_home/.claude"; printf 'obstruction\n' > "$task_home/.claude/scripts"; task_target="$task_home/.claude/scripts/fleet-check.py" ;;
+  esac
+  printf '%s\n%s\n' "$task_home/.fleet/AGENTS.md" "$task_target" > "$task_backup/paths.txt"
+  printf 'later restore\n' > "$task_backup/1-$(basename "$task_target")"
+  run "obstructed_$obstruction" --restore "$task_backup" --apply
+  "$PY" - "$task_home/.fleet/AGENTS.md" <<'PY'
+import pathlib, stat, sys
+p = pathlib.Path(sys.argv[1])
+assert p.read_bytes() == b'incumbent root\n'
+assert stat.S_IMODE(p.stat().st_mode) == 0o640
+PY
+  preserved_rc=$?
+  [ "$rc" -eq 2 ] && [ "$preserved_rc" -eq 0 ] &&
+    printf '%s' "$out" | grep -Eq 'not a (directory|regular-file destination)' &&
+    ok "late $obstruction obstruction refuses without earlier byte or mode change" ||
+    bad "late $obstruction obstruction refuses without earlier byte or mode change" "rc=$rc preserved=$preserved_rc $out"
+done
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
