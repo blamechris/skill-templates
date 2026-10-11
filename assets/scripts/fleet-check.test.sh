@@ -12,6 +12,8 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUT="$HERE/fleet-check.py"
+PY=$(command -v python3.12 || command -v python3.11 || command -v python3.13 || command -v python3.14 || command -v python3)
+"$PY" -c 'import tomllib' || exit 1
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fleet-check-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
@@ -25,7 +27,7 @@ bad()  { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf 
 assert() {
   local name=$1 want=$2 needle=$3 machine=$4; shift 4
   local out rc
-  out=$(python3 "$SUT" --machine "$machine" --repo "$TMP/clone" "$@" 2>&1); rc=$?
+  out=$("$PY" "$SUT" --machine "$machine" --repo "$TMP/clone" "${CHECK_ARGS[@]}" "$@" 2>&1); rc=$?
   if [ "$rc" -ne "$want" ]; then
     bad "$name" "exit $rc, wanted $want — output: $(printf '%s' "$out" | tr '\n' '|')"
     return
@@ -38,7 +40,7 @@ assert() {
 }
 
 # ---------------------------------------------------------------- the fixture
-# A miniature global-CLAUDE.md: two floor rules, two defaults, headings above each
+# A miniature assets/AGENTS.md: five floor rules, two defaults, headings above each
 # so the heading-insensitivity test has something to rename. The floor ids are real
 # ones from FLOOR_IDS; the other three real floor ids are declared too, because the
 # script checks the DECLARED floor set against its own list.
@@ -79,14 +81,32 @@ mkdir -p "$TMP/origin"
 git -c init.defaultBranch=main init --bare --quiet "$TMP/origin"
 git -c init.defaultBranch=main clone --quiet "$TMP/origin" "$TMP/seed" 2>/dev/null
 mkdir -p "$TMP/seed/assets"
-write_registry "$TMP/seed/assets/global-CLAUDE.md"
-git -C "$TMP/seed" add assets/global-CLAUDE.md
+write_registry "$TMP/seed/assets/AGENTS.md"
+git -C "$TMP/seed" add assets/AGENTS.md
 git -C "$TMP/seed" commit --quiet -m "registry copy"
 git -C "$TMP/seed" push --quiet origin HEAD:main
 git clone --quiet "$TMP/origin" "$TMP/clone"
 
 M=$TMP/machine
 mkdir -p "$M"
+mkdir -p "$TMP/home/.claude" "$TMP/home/.codex" "$TMP/home/.gemini" "$TMP/home/.fleet"
+cat > "$TMP/home/.claude/CLAUDE.md" <<'MD'
+# Claude adapter
+@~/.fleet/AGENTS.md
+MD
+write_registry "$TMP/home/.codex/AGENTS.md"
+write_registry "$TMP/home/.gemini/GEMINI.md"
+cat > "$TMP/home/.codex/config.toml" <<'TOML'
+project_doc_max_bytes = 65536
+TOML
+
+CHECK_ARGS=(
+  --claude "$TMP/home/.claude/CLAUDE.md"
+  --codex "$TMP/home/.codex/AGENTS.md"
+  --gemini "$TMP/home/.gemini/GEMINI.md"
+  --codex-config "$TMP/home/.codex/config.toml"
+  --project-dir "$TMP/clone"
+)
 
 echo "fleet-check.test.sh"
 
@@ -158,15 +178,236 @@ assert "floor: duplicated id -> exit 1" 1 "DUPLICATE" "$M/floor-dup.md"
 write_registry "$M/class-mismatch.md"
 sed -i.bak 's|<!--default:model-tiering-->|<!--floor:model-tiering-->|' "$M/class-mismatch.md"
 assert "floor: class promoted on one node -> exit 1" 1 "model-tiering" "$M/class-mismatch.md"
+write_registry "$M/duplicate-promoted.md"
+cat >> "$M/duplicate-promoted.md" <<'MD'
+
+<!--floor:model-tiering-->
+A conflicting floor-classed duplicate.
+MD
+assert "floor: duplicate promotion cannot hide in default rule" 1 "DUPLICATE" \
+  "$M/duplicate-promoted.md"
 
 # 11. Missing machine copy: cannot verify, never 0.
 assert "missing machine copy -> exit 2" 2 "cannot verify" "$M/does-not-exist.md"
 
+# Adapters are load-bearing. A missing or malformed adapter cannot claim agreement.
+assert "missing Claude adapter -> exit 2" 2 "Claude adapter" "$M/identical.md" \
+  --claude "$TMP/missing-claude.md"
+assert "missing Codex adapter -> exit 2" 2 "Codex adapter" "$M/identical.md" \
+  --codex "$TMP/missing-codex.md"
+assert "missing Gemini adapter -> exit 2" 2 "Gemini adapter" "$M/identical.md" \
+  --gemini "$TMP/missing-gemini.md"
+printf '\377\n' > "$M/invalid-utf8.md"
+assert "unreadable adapter text -> exit 2" 2 "invalid UTF-8" "$M/identical.md" \
+  --gemini "$M/invalid-utf8.md"
+printf '# No import\n' > "$M/bad-claude.md"
+assert "Claude adapter without standalone import -> exit 2" 2 "standalone" "$M/identical.md" \
+  --claude "$M/bad-claude.md"
+printf '# Hidden in prose: @~/.fleet/AGENTS.md\n' > "$M/bad-claude.md"
+assert "Claude prose mention is not an import" 2 "standalone" "$M/identical.md" \
+  --claude "$M/bad-claude.md"
+cat > "$M/fenced-claude.md" <<'MD'
+```md
+@~/.fleet/AGENTS.md
+```
+MD
+assert "Claude import inside fence is inactive" 2 "active standalone" "$M/identical.md" \
+  --claude "$M/fenced-claude.md"
+cat > "$M/comment-claude.md" <<'MD'
+<!--
+@~/.fleet/AGENTS.md
+-->
+MD
+assert "Claude import inside HTML comment is inactive" 2 "active standalone" "$M/identical.md" \
+  --claude "$M/comment-claude.md"
+cat > "$M/extra-import-claude.md" <<'MD'
+@~/.fleet/AGENTS.md
+@~/.claude/other-rules.md
+MD
+assert "unaccounted Claude import -> exit 2" 2 "additional" "$M/identical.md" \
+  --claude "$M/extra-import-claude.md"
+cat > "$M/extra-default-claude.md" <<'MD'
+@~/.fleet/AGENTS.md
+
+<!--default:claude-local-->
+Claude-only local guidance.
+MD
+assert "Claude-only default is informational" 0 "DEFAULT drift only" "$M/identical.md" \
+  --claude "$M/extra-default-claude.md"
+cat > "$M/redefined-floor-claude.md" <<'MD'
+@~/.fleet/AGENTS.md
+
+<!--floor:no-agent-attribution-->
+Claude-only wording contradicts the fleet floor.
+MD
+assert "Claude tagged floor redefinition -> exit 1" 1 "DUPLICATE" "$M/identical.md" \
+  --claude "$M/redefined-floor-claude.md"
+cat > "$M/fenced-floor-claude.md" <<'MD'
+@~/.fleet/AGENTS.md
+
+```md
+<!--floor:no-agent-attribution-->
+This is an example, not an active rule.
+```
+MD
+assert "fenced floor example does not redefine rule" 0 "OK:" "$M/identical.md" \
+  --claude "$M/fenced-floor-claude.md"
+
+write_registry "$M/codex-floor.md"
+sed -i.bak 's/No tokens, no keys, no credentials, ever./No tokens, no keys, ever./' "$M/codex-floor.md"
+assert "Codex copied floor drift -> exit 1" 1 "FLOOR DRIFT" "$M/identical.md" \
+  --codex "$M/codex-floor.md"
+write_registry "$M/gemini-floor.md"
+sed -i.bak 's/No tokens, no keys, no credentials, ever./No tokens, no keys, ever./' "$M/gemini-floor.md"
+assert "Gemini copied floor drift -> exit 1" 1 "FLOOR DRIFT" "$M/identical.md" \
+  --gemini "$M/gemini-floor.md"
+write_registry "$M/codex-local.md"
+cat >> "$M/codex-local.md" <<'MD'
+
+<!--default:private-machine-note-->
+Private machine-specific guidance stays local.
+MD
+assert "tokenized private addition is informational" 0 "machine-ahead" "$M/identical.md" \
+  --codex "$M/codex-local.md"
+
+printf 'shadow\n' > "$TMP/home/.codex/AGENTS.override.md"
+assert "nonempty Codex global override -> exit 2" 2 "shadows" "$M/identical.md"
+rm "$TMP/home/.codex/AGENTS.override.md"
+
+printf 'project_doc_max_bytes = 32768\n' > "$M/small-config.toml"
+assert "Codex default-sized cap -> exit 2" 2 "65536" "$M/identical.md" \
+  --codex-config "$M/small-config.toml"
+printf 'project_doc_max_bytes = broken\n' > "$M/bad-config.toml"
+assert "malformed Codex cap -> exit 2" 2 "malformed TOML" "$M/identical.md" \
+  --codex-config "$M/bad-config.toml"
+assert "missing Codex config -> exit 2" 2 "Codex config" "$M/identical.md" \
+  --codex-config "$M/missing-config.toml"
+cat > "$M/sections-config.toml" <<'TOML'
+project_doc_max_bytes = 65536
+[projects."/Users/example/Project"]
+trust_level = "trusted"
+TOML
+assert "Codex config with quoted project section parses" 0 "OK:" "$M/identical.md" \
+  --codex-config "$M/sections-config.toml"
+
+out=$(CODEX_HOME="$TMP/home/.codex" "$PY" "$SUT" --machine "$M/identical.md" \
+  --claude "$TMP/home/.claude/CLAUDE.md" --gemini "$TMP/home/.gemini/GEMINI.md" \
+  --repo "$TMP/clone" --project-dir "$TMP/clone" 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then ok "CODEX_HOME selects Codex defaults"; else
+  bad "CODEX_HOME selects Codex defaults" "exit $rc — $out"
+fi
+
+mkdir -p "$TMP/clone/sub"
+python3 - "$TMP/clone/sub/AGENTS.md" <<'PY'
+import sys
+open(sys.argv[1], 'w').write('x' * 65000)
+PY
+assert "effective project chain over cap -> exit 2" 2 "full loading cannot be verified" \
+  "$M/identical.md" --project-dir "$TMP/clone/sub"
+rm "$TMP/clone/sub/AGENTS.md"
+python3 - "$TMP/clone/AGENTS.md" <<'PY'
+import sys
+open(sys.argv[1], 'w').write('x' * 65000)
+PY
+assert "ancestor project instruction contributes to cap" 2 "full loading cannot be verified" \
+  "$M/identical.md" --project-dir "$TMP/clone/sub"
+rm "$TMP/clone/AGENTS.md"
+
+cat > "$M/fallback-config.toml" <<'TOML'
+project_doc_max_bytes = 65536
+project_doc_fallback_filenames = ["LOCAL.md"]
+TOML
+python3 - "$TMP/clone/sub/LOCAL.md" <<'PY'
+import sys
+open(sys.argv[1], 'w').write('x' * 65000)
+PY
+assert "selected fallback file contributes to cap" 2 "full loading cannot be verified" \
+  "$M/identical.md" --codex-config "$M/fallback-config.toml" --project-dir "$TMP/clone/sub"
+touch "$TMP/clone/sub/AGENTS.override.md"
+assert "empty override must not hide oversized fallback" 2 "full loading cannot be verified" \
+  "$M/identical.md" --codex-config "$M/fallback-config.toml" --project-dir "$TMP/clone/sub"
+touch "$TMP/clone/sub/AGENTS.md"
+assert "empty AGENTS must not hide oversized fallback" 2 "full loading cannot be verified" \
+  "$M/identical.md" --codex-config "$M/fallback-config.toml" --project-dir "$TMP/clone/sub"
+rm "$TMP/clone/sub/AGENTS.override.md" "$TMP/clone/sub/AGENTS.md"
+printf 'small project file\n' > "$TMP/clone/sub/AGENTS.md"
+assert "AGENTS.md takes precedence over fallback" 0 "OK:" "$M/identical.md" \
+  --codex-config "$M/fallback-config.toml" --project-dir "$TMP/clone/sub"
+python3 - "$TMP/clone/sub/AGENTS.override.md" <<'PY'
+import sys
+open(sys.argv[1], 'w').write('x' * 65000)
+PY
+assert "selected project override contributes to cap" 2 "full loading cannot be verified" \
+  "$M/identical.md" --codex-config "$M/fallback-config.toml" --project-dir "$TMP/clone/sub"
+rm "$TMP/clone/sub/AGENTS.override.md" "$TMP/clone/sub/AGENTS.md" "$TMP/clone/sub/LOCAL.md"
+
+assert "non-repository project directory uses only itself" 0 "OK:" "$M/identical.md" \
+  --project-dir "$M"
+mkdir -p "$TMP/git-shim"
+cat > "$TMP/git-shim/git" <<'SH'
+#!/usr/bin/env bash
+if [ "${3:-}" = rev-parse ] && [ "${4:-}" = --show-toplevel ]; then
+  echo 'fatal: Git probe unavailable' >&2
+  exit 128
+fi
+exec "$FLEET_TEST_REAL_GIT" "$@"
+SH
+chmod +x "$TMP/git-shim/git"
+out=$(PATH="$TMP/git-shim:$PATH" FLEET_TEST_REAL_GIT="$(command -v git)" \
+  "$PY" "$SUT" --machine "$M/identical.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'Git root probe failed'; then
+  ok "failed Git root probe refuses to guess project chain"
+else
+  bad "failed Git root probe refuses to guess project chain" "exit $rc — $out"
+fi
+
+python3 - "$M/oversized-root.md" <<'PY'
+import sys
+open(sys.argv[1], 'w').write('x' * 66000)
+PY
+assert "oversized fleet root -> exit 2" 2 "fleet root" "$M/oversized-root.md"
+
 # 12. THE fetch precondition. origin moves a FLOOR rule; the clone is never pulled.
 #     If the fetch were softened with `|| true`, this would compare against the stale
 #     clone and print OK. It must instead see origin's new copy and fail.
+# Review regressions: refuse unresolved provider configuration rather than a false pass.
+printf 'project_doc_max_bytes = 65536\nmodel = "unterminated\n' > "$M/malformed-other.toml"
+assert "malformed unrelated TOML key refuses" 2 "malformed TOML" "$M/identical.md" --codex-config "$M/malformed-other.toml"
+printf 'project_doc_max_bytes = 65536\nproject_root_markers = [".custom"]\n' > "$M/markers.toml"
+assert "custom Codex root markers refuse" 2 "effective-config" "$M/identical.md" --codex-config "$M/markers.toml"
+printf 'project_doc_max_bytes = 65536\n[profiles.small]\nproject_doc_max_bytes = 32768\n' > "$M/profiles.toml"
+assert "Codex profile discovery refuses" 2 "effective-config" "$M/identical.md" --codex-config "$M/profiles.toml"
+mkdir -p "$TMP/project-config/.codex"
+git -C "$TMP/project-config" init -q
+printf 'project_doc_max_bytes = 32768\n' > "$TMP/project-config/.codex/config.toml"
+assert "project Codex cap override refuses" 2 "project configuration layer" "$M/identical.md" --project-dir "$TMP/project-config"
+rm "$TMP/project-config/.codex/config.toml"
+mkdir -p "$TMP/project-config/.gemini"
+printf '{"context":{"fileName":"AGENTS.md"}}\n' > "$TMP/project-config/.gemini/settings.json"
+assert "project Gemini context override refuses" 2 "project configuration layer" "$M/identical.md" --project-dir "$TMP/project-config"
+printf '{"context":{"fileName":["AGENTS.md"]}}\n' > "$TMP/home/.gemini/settings.json"
+assert "inactive Gemini adapter refuses" 2 "context.fileName" "$M/identical.md"
+printf '{"context":{"fileName":["GEMINI.md"]}}\n' > "$TMP/home/.gemini/settings.json"
+assert "explicit default Gemini filename passes" 0 "OK:" "$M/identical.md"
+printf '{broken\n' > "$TMP/home/.gemini/settings.json"
+assert "malformed Gemini settings refuse" 2 "malformed JSON" "$M/identical.md"
+rm "$TMP/home/.gemini/settings.json"
+printf '{"context":{"fileName":"AGENTS.md"}}\n' > "$M/system-gemini.json"
+GEMINI_CLI_SYSTEM_SETTINGS_PATH="$M/system-gemini.json" assert "Gemini system override refuses" 2 "context.fileName" "$M/identical.md"
+# Simulate a Python without tomllib without depending on an installed old version.
+parser_out=$("$PY" - "$SUT" "$M/config.toml" <<'PYTEST'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('check', sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.tomllib = None
+m.codex_config(sys.argv[2])
+PYTEST
+)
+parser_rc=$?
+[ "$parser_rc" -eq 2 ] && ok 'missing complete TOML parser refuses' || bad 'missing complete TOML parser refuses' "$parser_rc $parser_out"
+
 write_registry "$M/identical2.md"
-python3 - "$TMP/seed/assets/global-CLAUDE.md" <<'PY'
+python3 - "$TMP/seed/assets/AGENTS.md" <<'PY'
 import sys
 p = sys.argv[1]
 t = open(p).read()
@@ -187,7 +428,7 @@ fi
 
 # 13. Fetch failure must refuse rather than lie. Point origin at nothing.
 git -C "$TMP/clone" remote set-url origin "$TMP/no-such-repo.git"
-out=$(python3 "$SUT" --machine "$M/identical2.md" --repo "$TMP/clone" 2>&1); rc=$?
+out=$("$PY" "$SUT" --machine "$M/identical2.md" --repo "$TMP/clone" "${CHECK_ARGS[@]}" 2>&1); rc=$?
 if [ "$rc" -ne 2 ]; then
   bad "unfetchable origin -> exit 2" "exit $rc"
 elif printf '%s' "$out" | grep -q "OK:"; then
@@ -198,7 +439,7 @@ fi
 git -C "$TMP/clone" remote set-url origin "$TMP/origin"
 
 # 14. The floor set is itself an invariant: a sixth floor token in the registry fails.
-cat >> "$TMP/seed/assets/global-CLAUDE.md" <<'MD'
+cat >> "$TMP/seed/assets/AGENTS.md" <<'MD'
 
 <!--floor:invented-sixth-rule-->
 A rule someone promoted to the floor without updating fleet-check.py.

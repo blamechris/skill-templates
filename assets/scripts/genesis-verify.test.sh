@@ -41,7 +41,7 @@ commit_all() { git -C "$1" add -A && git -C "$1" commit -qm "${2:-fixture}"; }
 REG="$TMP/registry"
 mkdir -p "$REG/assets"
 cp -R "$ROOT/assets/genesis" "$REG/assets/"
-cp "$ROOT/assets/global-CLAUDE.md" "$REG/assets/"
+cp "$ROOT/assets/AGENTS.md" "$REG/assets/"
 git -C "$REG" init -q && commit_all "$REG" registry
 
 V() { python3 "$SUT" --registry "$REG" --registry-ref HEAD --no-fetch "$@"; }

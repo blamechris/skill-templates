@@ -95,7 +95,8 @@ EXIT_OK, EXIT_FINDINGS, EXIT_CANNOT_VERIFY = 0, 1, 2
 MANIFEST = "assets/genesis/standard-v1.json"
 GENESIS_DIR = "assets/genesis/"
 TEMPLATES_DIR = "assets/genesis/templates/"
-GLOBAL_CLAUDE = "assets/global-CLAUDE.md"
+GLOBAL_RULES = "assets/AGENTS.md"
+LEGACY_GLOBAL_RULES = "assets/global-CLAUDE.md"
 
 FLOOR_TOKEN = re.compile(r"^\s*<!--\s*floor\s*:\s*([a-z0-9][a-z0-9._-]*)\s*-->\s*$", re.M)
 PLACEHOLDER = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
@@ -213,9 +214,9 @@ class Registry(GitTree):
             die(f"{GENESIS_DIR}{rel} at {self.ref} is not valid JSON ({e})")
 
     def floor_ids(self):
-        ids = FLOOR_TOKEN.findall(self.need(GLOBAL_CLAUDE))
+        ids = FLOOR_TOKEN.findall(self.need(GLOBAL_RULES if GLOBAL_RULES in self.files else LEGACY_GLOBAL_RULES))
         if not ids:
-            die(f"{GLOBAL_CLAUDE} at {self.ref} declares no floor rules")
+            die(f"{GLOBAL_RULES} at {self.ref} declares no floor rules")
         return ids
 
 
@@ -237,9 +238,9 @@ class PinRegistry(Registry):
             raise CannotVerify(f"{GENESIS_DIR}{rel} at the registry pin {self.commit[:7]} is not valid JSON ({e})")
 
     def floor_ids(self):
-        ids = FLOOR_TOKEN.findall(self.need(GLOBAL_CLAUDE))
+        ids = FLOOR_TOKEN.findall(self.need(GLOBAL_RULES if GLOBAL_RULES in self.files else LEGACY_GLOBAL_RULES))
         if not ids:
-            raise CannotVerify(f"{GLOBAL_CLAUDE} at the registry pin {self.commit[:7]} declares no floor rules")
+            raise CannotVerify(f"{GLOBAL_RULES} at the registry pin {self.commit[:7]} declares no floor rules")
         return ids
 
 

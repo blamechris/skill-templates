@@ -395,8 +395,10 @@ Report to the user:
 **Thin areas:** {areas with < 3 cases, or "none"}
 **Ungrounded surfaces ({N}):** {the list — what a second pass should chase}
 
-**Next:** /smoke-form on the {N} human-visual cases · {N} suite cases ready for /create-issue
+**Next:** {state token} — {actual next action and owner}
 ```
+
+Choose `🔴 BLOCKED` only when a required human-visual case or other external prerequisite remains; name that action and owner. With zero human-visual cases, use `🟢 RUNNING` only for authorized work actually continuing, or `⚪ IDLE` when this planning package is delivered. A zero count never assigns a human task. Use `🟠 FAILED` for an actual failed job or reached limit.
 
 Do NOT commit the corpus unless the user asks. Do NOT push.
 

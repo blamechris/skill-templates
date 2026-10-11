@@ -98,8 +98,9 @@ canon()    { ls "$TMP/$1/handoffs" 2>/dev/null | grep -E '^NEXT-.*\.md$' | grep 
 preserved(){ grep -Rql "${2:-$LOST}" "$TMP/$1/handoffs" 2>/dev/null; }
 
 # ============================================================ GROUP A — scope
-# The scope key is the MAIN worktree's directory basename. Every one of these is a
-# place a simpler rule ($PWD prefix, origin slug, `basename $PWD`) gets it wrong.
+# Ordinary repo scopes use the MAIN worktree's directory basename. The handoff
+# repository is the fleet exception. These cases catch simpler rules such as a
+# $PWD prefix, origin slug, or `basename $PWD`.
 echo; echo "A. scope resolution"
 
 new_case a1
@@ -212,6 +213,83 @@ run a7 outside scope
 [ "$rc" -eq 0 ] && [ "$out" = fleet ] \
   && ok "the orphan guard does not break the ordinary fleet case" \
   || bad "the orphan guard does not break the ordinary fleet case" "rc=$rc $(flat "$out")"
+
+# The versioned handoff vault is a git repository, but its sessions own the
+# fleet seed. A separate app checkout with the same basename remains app-scoped.
+mkdir -p "$TMP/a8/vault" "$TMP/a8/app"
+new_repo "$TMP/a8/vault/no-it-all"
+new_repo "$TMP/a8/app/no-it-all"
+VAULT="$TMP/a8/vault/no-it-all"
+VAULT_HANDOFFS="$VAULT/handoffs"
+mkdir -p "$VAULT_HANDOFFS" "$VAULT/deep/nested"
+out=$(cd "$VAULT" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
+      "$PY" "$SUT" scope 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = fleet ] \
+  && ok "the repository holding the handoff dir resolves to fleet" \
+  || bad "the repository holding the handoff dir resolves to fleet" "rc=$rc $(flat "$out")"
+out=$(cd "$VAULT/deep/nested" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
+      "$PY" "$SUT" scope 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = fleet ] \
+  && ok "nested path in the handoff repository resolves to fleet" \
+  || bad "nested path in the handoff repository resolves to fleet" "rc=$rc $(flat "$out")"
+out=$(cd "$TMP/a8/app/no-it-all" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
+      "$PY" "$SUT" scope 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = no-it-all ] \
+  && ok "an app named no-it-all keeps its own scope" \
+  || bad "an app named no-it-all keeps its own scope" "rc=$rc $(flat "$out")"
+
+git -C "$VAULT" worktree add -q "$TMP/a8/vault-linked" -b vault-linked
+mkdir -p "$TMP/a8/vault-linked/deep"
+out=$(cd "$TMP/a8/vault-linked/deep" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
+      "$PY" "$SUT" scope 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = fleet ] \
+  && ok "a linked worktree of the handoff repository resolves to fleet" \
+  || bad "a linked worktree of the handoff repository resolves to fleet" "rc=$rc $(flat "$out")"
+
+# Probe the nearest existing parent when a custom handoff dir does not yet exist.
+out=$(cd "$VAULT" && CLAUDE_HANDOFF_DIR="$VAULT/custom/missing/handoffs" \
+      "$PY" "$SUT" scope 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = fleet ] \
+  && ok "a missing custom handoff dir in the same repository resolves to fleet" \
+  || bad "a missing custom handoff dir in the same repository resolves to fleet" "rc=$rc $(flat "$out")"
+ln -s "$VAULT" "$TMP/a8/vault-alias"
+out=$(cd "$VAULT" && CLAUDE_HANDOFF_DIR="$TMP/a8/vault-alias/handoffs" \
+      "$PY" "$SUT" scope 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = fleet ] \
+  && ok "a symlinked handoff path keeps repository identity" \
+  || bad "a symlinked handoff path keeps repository identity" "rc=$rc $(flat "$out")"
+out=$(cd "$VAULT" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
+      "$PY" "$SUT" scope --topic planning 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = fleet-planning ] \
+  && ok "a topic in the handoff repository uses fleet-topic" \
+  || bad "a topic in the handoff repository uses fleet-topic" "rc=$rc $(flat "$out")"
+
+# Resolving a fleet scope does not waive the floor: writing from inside the
+# vault would put a session seed in that session's own worktree.
+out=$(cd "$VAULT" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
+      "$PY" "$SUT" write --session "$MINE" --now "$STAMP" \
+      --picks-up-at 'vault floor' 2>&1); rc=$?
+[ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'REFUSE.*inside the worktree' \
+  && [ ! -f "$VAULT_HANDOFFS/NEXT-fleet.md" ] \
+  && ok "writing from the vault still REFUSES an in-worktree seed" \
+  || bad "writing from the vault still REFUSES an in-worktree seed" "rc=$rc $(flat "$out")"
+out=$(cd "$TMP/a8/vault-linked" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
+      "$PY" "$SUT" write --session "$MINE" --now "$STAMP" \
+      --picks-up-at 'vault floor' 2>&1); rc=$?
+[ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'REFUSE.*inside the worktree' \
+  && [ ! -f "$VAULT_HANDOFFS/NEXT-fleet.md" ] \
+  && ok "writing from a linked vault worktree still REFUSES" \
+  || bad "writing from a linked vault worktree still REFUSES" "rc=$rc $(flat "$out")"
+
+# The default path also identifies the vault, with no environment override.
+FAKE_VAULT_HOME="$TMP/a9/home"
+mkdir -p "$FAKE_VAULT_HOME/Obsidian"
+new_repo "$FAKE_VAULT_HOME/Obsidian/no-it-all"
+out=$(cd "$FAKE_VAULT_HOME/Obsidian/no-it-all" && env -u CLAUDE_HANDOFF_DIR \
+      HOME="$FAKE_VAULT_HOME" "$PY" "$SUT" scope 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = fleet ] \
+  && ok "the default handoff path identifies its repository as fleet" \
+  || bad "the default handoff path identifies its repository as fleet" "rc=$rc $(flat "$out")"
 
 # ==================================================== GROUP B — the handoff dir
 echo; echo "B. the handoff dir"
@@ -592,6 +670,8 @@ mkdir -p "$TMP/f3b/stub" "$TMP/f3b/other"
 GIT_REAL=$(command -v git)
 cat > "$TMP/f3b/stub/git" <<STUB
 #!/bin/sh
+# The handoff repository probe uses git -C. Only alter the session repository.
+[ "\$1" = -C ] && exec "$GIT_REAL" "\$@"
 case "\$*" in
   *--git-common-dir*) [ -f "$TMP/f3b/handoffs/NEXT-demo.md" ] && { echo "$TMP/f3b/other/.git"; exit 0; } ;;
 esac

@@ -25,9 +25,9 @@ Run these in order; each step re-derives state rather than trusting memory:
    gh pr list --state open --search "-author:@me"
    ```
 4. **Skill drift** — run `/skill outdated` and report any drifted skills (fix now only if the session will use them).
-5. **Global-conventions sync** — `~/.claude/CLAUDE.md` and `assets/global-CLAUDE.md` in the registry
+5. **Global-conventions sync** — `~/.fleet/AGENTS.md` and `assets/AGENTS.md` in the registry
    are **both authored**, so they drift in both directions at once and a bare `diff -q` cannot say
-   which side is right. Run the class-split check instead:
+   which side is right. Run the class-split root, provider-adapter and size check instead:
 
    ```bash
    python3 ~/.claude/scripts/fleet-check.py    # 0 = floor intact · 1 = FLOOR drift · 2 = could not verify
@@ -35,7 +35,7 @@ Run these in order; each step re-derives state rather than trusting memory:
 
    Exit 1 is a stop: reconcile the named floor rule before long work (land the machine's delta in
    the registry, then copy out). Exit 0 with default drift is information — it names the direction,
-   act on it when convenient. Exit 2 means it could not see the registry copy (the `git fetch` is a
+   act on it when convenient. Exit 2 means it could not verify a root, adapter, instruction size or configuration (the `git fetch` is a
    hard precondition, never softened) — that is *not* agreement; say so rather than proceeding as if
    it passed.
 
@@ -154,7 +154,7 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
 6. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
 
    This step is **ungated on purpose**: `git worktree remove --force` deletes untracked files without prompting, and the seed is not in any worktree to be deleted. Anything else durable that got written into a worktree is committed and pushed before removal, or it is lost — so do not write durable things there.
-7. **Closing message** — lead with the outcome, usable state and remaining gap from the seed. Include the verified absolute seed path (`seed:` from step 1) and any open PR number. End with the global `**Status:**` block and `**Next:**` line naming actual execution: accepted next task/session, continuing work, genuine QA/access/decision, a reached limit, or complete. The stable seed path is the one line to paste if a manual restart is truly required; its existence alone is never evidence that work will continue.
+7. **Closing message** — lead with the outcome, usable state and remaining gap from the seed. Include the verified absolute seed path (`seed:` from step 1) and any open PR number. End with the global `**Status:**` block and `**Next:**` line with exactly one state token — 🔴 BLOCKED, 🟢 RUNNING, ⚪ IDLE, or 🟠 FAILED — naming actual execution: accepted next task/session, continuing work, genuine QA/access/decision, a reached limit, or complete. The stable seed path is the one line to paste if a manual restart is truly required; its existence alone is never evidence that work will continue.
 
 ### Follow-on protocol (when a task completes and work remains)
 
