@@ -321,7 +321,10 @@ def parse_frontmatter(text):
             break
         m = FM_LINE.match(ln)
         if m and m.group(1) not in out:
-            out[m.group(1)] = _unquote(m.group(2))
+            # Structured fields use JSON flow syntax; '#' inside a JSON string
+            # is data, not the trailing comment of an unquoted YAML scalar.
+            out[m.group(1)] = (m.group(2).strip() if m.group(1) in ("decisions", "last_pulse")
+                               else _unquote(m.group(2)))
     return out
 
 
@@ -500,8 +503,14 @@ def validate_content(text):
     that an action is semantically imperative. Resume still re-derives evidence.
     """
     fm = parse_frontmatter(text)
-    if not fm or not re.match(r"\A---\s*\n[\s\S]*?\n---[ \t]*(?:\n|\Z)", text):
+    if not fm or not re.match(r"\A---\s*\n[\s\S]*?\n---[ \t]*\r?(?:\n|\Z)", text):
         die("seed content needs closed frontmatter")
+    if "decisions" in fm:
+        validate_decisions(decode_json(fm["decisions"], "decisions"))
+    if "last_pulse" in fm:
+        pulse = validate_pulse_snapshot(decode_json(fm["last_pulse"], "last_pulse"))
+        if pulse["state"]["scope"] != fm.get("scope"):
+            die("pulse snapshot scope does not match seed frontmatter")
     for placeholder in SKELETON_PLACEHOLDERS:
         if placeholder.lower() in text.lower():
             die("seed content still contains a skeleton placeholder: %s" % placeholder)
@@ -552,6 +561,79 @@ def validate_content(text):
 
 
 # ----------------------------------------------------------------------- write
+
+def decode_json(text, field):
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        die("%s must be JSON flow syntax on one frontmatter line" % field)
+
+
+def utc_timestamp(value, field):
+    if not isinstance(value, str):
+        die("%s must be a UTC timestamp" % field)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        die("%s must be a UTC timestamp" % field)
+    if "T" not in value or parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
+        die("%s must be a full UTC timestamp" % field)
+    return parsed
+
+
+def validate_decisions(value):
+    """JSON flow syntax is also YAML; no second, partial YAML parser is needed."""
+    if not isinstance(value, list):
+        die("decisions must be a JSON list of text/opened_at/default objects")
+    for decision in value:
+        if not isinstance(decision, dict) or set(decision) != {"text", "opened_at", "default"}:
+            die("each decision needs exactly text, opened_at and default")
+        for key in ("text", "default"):
+            if not isinstance(decision[key], str) or not decision[key].strip() or CONTROL.search(decision[key]):
+                die("decision %s must be filled single-line text" % key)
+        utc_timestamp(decision["opened_at"], "decision opened_at")
+    return value
+
+
+def validate_pulse_snapshot(value):
+    if not isinstance(value, dict) or set(value) != {"at", "line", "state"}:
+        die("last_pulse needs exactly at, line and state")
+    utc_timestamp(value["at"], "pulse at")
+    if not isinstance(value["line"], str) or not value["line"].strip() or CONTROL.search(value["line"]):
+        die("pulse line must be filled single-line text")
+    if (not isinstance(value["state"], dict) or not isinstance(value["state"].get("scope"), str)
+            or not value["state"]["scope"].strip() or CONTROL.search(value["state"]["scope"])):
+        die("pulse state must be an object with a scope string")
+    try:
+        json.dumps(value, allow_nan=False)
+    except (ValueError, TypeError):
+        die("pulse state must contain finite JSON values")
+    return value
+
+
+def json_file(path, field):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError, UnicodeError) as e:
+        die("cannot read %s from %s (%s)" % (field, path, e))
+
+
+def with_metadata(text, **fields):
+    """Change only named frontmatter fields, leaving date and body bytes alone."""
+    lines = text.splitlines(keepends=True)
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if not lines or lines[0].strip() != "---" or end is None:
+        die("cannot add metadata without closed frontmatter")
+    additions = []
+    for key, value in fields.items():
+        encoded = (value if key == "session" and BARE_SCALAR.match(value)
+                   else _quote(value) if key == "session"
+                   else json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")))
+        additions.append("%s: %s\n" % (key, encoded))
+    kept = [line for line in lines[1:end]
+            if not ((m := FM_LINE.match(line.rstrip("\r\n"))) and m.group(1) in fields)]
+    return lines[0] + "".join(kept + additions + lines[end:])
 
 
 def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body, next_task, alternatives):
@@ -604,7 +686,21 @@ def cmd_write(a):
     sid = resolve_session_id(a.session)
     now = parse_now(a.now)
 
-    if not a.picks_up_at.strip():
+    if a.refresh_pulse:
+        if (a.picks_up_at is not None or a.body is not None or a.next_task or a.alt
+                or a.decisions_file or a.pulse_file or a.title
+                or a.boundary_reason != "unstated" or a.sensitivity != "vault"):
+            die("--refresh-pulse cannot be combined with full seed content inputs")
+        seed = seed_path(scope)
+        previous = read_seed_text(seed)
+        validate_content(previous)
+        pulse = validate_pulse_snapshot(json_file(a.refresh_pulse, "pulse snapshot"))
+        if pulse["state"]["scope"] != scope:
+            die("pulse snapshot scope does not match this seed")
+        text = with_metadata(previous, session=sid, last_pulse=pulse)
+        return finish_write(a, scope, sid, now, text)
+
+    if not a.picks_up_at or not a.picks_up_at.strip():
         die("--picks-up-at is empty. It is the only line `/next` quotes, so a seed "
             "without it tells the next session nothing about where to start.")
     for name, val in (("--picks-up-at", a.picks_up_at), ("--title", a.title),
@@ -625,6 +721,17 @@ def cmd_write(a):
     text = render(scope, sid, now.strftime("%Y-%m-%dT%H:%MZ"), a.picks_up_at,
                   a.title or a.picks_up_at, a.boundary_reason, a.sensitivity,
                   a.body, a.next_task, a.alt)
+    decisions = validate_decisions(json_file(a.decisions_file, "decisions") if a.decisions_file else [])
+    text = with_metadata(text, decisions=decisions)
+    if a.pulse_file:
+        pulse = validate_pulse_snapshot(json_file(a.pulse_file, "pulse snapshot"))
+        if pulse["state"]["scope"] != scope:
+            die("pulse snapshot scope does not match this seed")
+        text = with_metadata(text, last_pulse=pulse)
+    return finish_write(a, scope, sid, now, text)
+
+
+def finish_write(a, scope, sid, now, text):
     # Validate BEFORE creating directories or moving an incumbent. A hollow new
     # seed must not displace the useful context the next session would have read.
     validate_content(text)
@@ -735,7 +842,7 @@ def cmd_verify(a):
 
 def read_seed_text(path):
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", newline="") as f:
             return f.read()
     except (OSError, UnicodeError) as e:
         die("cannot read seed content %s (%s)" % (path, e))
@@ -836,7 +943,7 @@ def main(argv=None):
         return sp
 
     w = scoped(sub.add_parser("write", help="archive on collide, write the seed, prove it"))
-    w.add_argument("--picks-up-at", required=True,
+    w.add_argument("--picks-up-at",
                    help="the one thing the next session starts on; `/next` quotes it verbatim")
     w.add_argument("--session", help="this session's id (default: $CLAUDE_CODE_SESSION_ID)")
     w.add_argument("--title", default="", help="H1 text (default: --picks-up-at)")
@@ -848,6 +955,9 @@ def main(argv=None):
                    help="one alternative task, repeatable zero to two times")
     w.add_argument("--sensitivity", default="vault", choices=("public", "vault"))
     w.add_argument("--body-file", help="filled STATE/TL;DR and other context; `-` reads stdin; no skeleton default")
+    w.add_argument("--decisions-file", help="JSON list of text/opened_at/default objects (default: empty list)")
+    w.add_argument("--pulse-file", help="JSON pulse snapshot to carry in a full seed write")
+    w.add_argument("--refresh-pulse", help="refresh only snapshot/session, preserving the canonical seed date and body")
     w.add_argument("--now", help="pin the clock (ISO-8601 UTC) for `date:` and the archive stamp")
     w.add_argument("--no-verify", action="store_true",
                    help="skip the built-in proof (it is the point; for tests only)")

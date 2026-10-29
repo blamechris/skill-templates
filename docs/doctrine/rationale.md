@@ -55,6 +55,37 @@ permission. The choice remains in DECISION and its dependent task remains BLOCKE
 answered. Independent authorized work may continue; silence never grants reserved
 execution authority.
 
+The offline pulse makes those boundaries visible without turning a status request into a
+new investigation. Eight lines report scope; seed age and dispatch; local git state;
+commits/open items/turns; cached tests and CI; decisions; usage/context/compactions; and
+delta/WARN. It imports the seed's scope implementation and puts every subprocess under
+one 0.8-second deadline. No fetch, service query, test suite or model is part of the reader.
+Missing measurements remain `n/a`; Codex and chroxy do not inherit another host's Claude
+meter. Explicit cached signals must identify their actual source, observation timestamp
+and numeric types. Test and CI values remain labelled cached.
+
+The previous pulse is evidence, not a second status board. A scratch snapshot contains
+`at`, a readable `line`, and material `state`; only `session-seed.py write` persists it as
+`last_pulse`. The refresh mode preserves the seed's original date and body, carries its
+decisions, archives on a different session's collision, validates before moving anything,
+and runs fresh canonical proof. A missing identity or invalid legacy seed leaves the pulse
+observational. Snapshot failure does not become a work-stopping gate or a false claim that
+the baseline was saved. The bootstrap installs the reader beside the writer so this is
+usable after copy-out rather than only inside the registry checkout.
+
+No baseline means `no baseline`; unchanged material fields mean `no material change since
+TIME`. Raw ages and recurrence counters do not themselves invent a material change; stable
+threshold booleans make each crossing visible in delta without repeating a change on every
+subsequent pulse.
+Warnings surface a decision text present across at least two recorded pulses, more than
+three open items, a seed older than 24 hours, at least two compactions, dirt at a boundary,
+or stated estimate drift above 25 percent. A threshold warns rather than stops execution.
+Legacy pending DECISION prose is explicitly unknown-count state, with age when recoverable;
+it must not silently become zero open decisions merely because the structured list is
+absent or empty. Structured choices use `text`, full UTC `opened_at` and `default`, carried
+as JSON flow syntax in YAML frontmatter to keep parsing stdlib-only. A pulse delta crossing
+a WARN threshold or package close triggers the executive brief.
+
 Long sessions use a concise HTML executive brief for verified outcomes and a lower section for detailed records. HTML deliverables for Chris default to a dark palette because the Claude app's local browser pane rendered pages light even when the OS used dark mode (#306). Product UI, third-party reports and claude.ai Artifacts have separate styling contracts. Delegated generators need the dark instruction in their own brief because they may never read the root.
 
 ## Skills and delivery

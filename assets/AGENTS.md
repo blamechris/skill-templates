@@ -81,8 +81,8 @@ the host question UI with context, trade-offs and a recommendation. Keep the blo
 After the four bullets, add one final sentence: `**Next:** <state> — <one task and executor>`. Both `Next` and the seed's `picks_up_at` name exactly one imperative task with `(agent name)` or `OWNER: name`; alternatives belong only in the seed body, never as candidates in `Next`. Use `🟢 RUNNING` for authorized work actually continuing or an accepted continuation, `⚪ IDLE` only when nothing waits on anyone, `🔴 BLOCKED` whenever an owner action, external prerequisite or non-`none` DECISION remains, and `🟠 FAILED` for a stopped job, budget, retry or host limit. Before writing a seed with a choice, use `/decide`: pick and record an authorized reversible choice; proactively present an owner-reserved choice through the host question UI with trade-offs, a recommendation and a default before writing. Keep it in DECISION with `recommend:` and `default:` until answered; its default records the recommended plan only and never authorizes reserved execution without an answer. Continue independent authorized work while that task stays blocked. Normal delivery gives Chris a verified absolute seed path for a fresh session; prime names the next authorized task or accepted continuation, with “no user action needed” when true. Routine gated merge is the agent's action. Name missing QA, access, authority or a decision and what it unblocks; for a reached limit, name the limit and restart needed. A saved seed schedules nothing. Lead the message with the usable outcome and link details.
 
 <!--default:exec-brief-->
-After long multi-PR/issue, epic or marathon delivery, use the `visual-brief` skill
-to create and open a self-contained HTML report in `$CLAUDE_BRIEF_DIR`.
+When a pulse delta crosses a WARN threshold or at package close, use the
+`visual-brief` skill to create and open a self-contained HTML report in `$CLAUDE_BRIEF_DIR`.
 Begin with a two- or three-sentence result, outcome chips and a one-line “needs
 you” callout when Chris has a prerequisite. Below that, give the per-PR table,
 bugs caught and next work. Lead with verified merges, closures and gates passed.

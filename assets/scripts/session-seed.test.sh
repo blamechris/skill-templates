@@ -989,5 +989,91 @@ out=$(cd "$TMP/i4/demo" && CLAUDE_HANDOFF_DIR="$TMP/i4/handoffs" \
   && ok 'negative control: hollow-seed refusal assertion fails with disabled-validator mutant' \
   || bad 'negative control: hollow-seed refusal assertion fails with disabled-validator mutant' "real=$real_rc mutant=$rc $(flat "$out")"
 
+# ====================================================== GROUP I — pulse metadata
+echo; echo "I. structured decisions and pulse metadata"
+new_case j1
+cat > "$TMP/decisions.json" <<'JSON'
+[{"text":"Approve issue #123","opened_at":"2026-08-11T00:00:00Z","default":"Keep the recommendation pending an answer"}]
+JSON
+cat > "$TMP/pulse.json" <<'JSON'
+{"at":"2026-08-11T00:00:00Z","line":"delta: no baseline | WARN: none","state":{"scope":"demo","tests":"PASS #123"}}
+JSON
+run j1 demo write --session "$MINE" --now "$STAMP" --picks-up-at "$GOOD_PICKS" \
+  --decisions-file "$TMP/decisions.json" --pulse-file "$TMP/pulse.json"
+[ "$rc" -eq 0 ] && ok 'full seed write accepts structured decisions and pulse' \
+  || bad 'full seed write accepts structured decisions and pulse' "rc=$rc $(flat "$out")"
+hdr=$("$PY" "$SUT" header "$TMP/j1/handoffs/NEXT-demo.md")
+printf '%s' "$hdr" | "$PY" -c 'import json,sys; h=json.load(sys.stdin); assert json.loads(h["decisions"])[0]["text"] == "Approve issue #123"; assert json.loads(h["last_pulse"])["state"]["tests"] == "PASS #123"'
+[ "$?" -eq 0 ] && ok 'JSON-flow metadata round-trips embedded # without YAML-comment truncation' \
+  || bad 'JSON-flow metadata round-trips embedded # without YAML-comment truncation'
+cp "$TMP/j1/handoffs/NEXT-demo.md" "$TMP/before-refresh.md"
+run_raw j1 demo write --session next-session --now "$STAMP" --refresh-pulse "$TMP/pulse.json"
+"$PY" - "$TMP/before-refresh.md" "$TMP/j1/handoffs/NEXT-demo.md" <<'PY'
+from pathlib import Path
+import sys
+before, after = (Path(p).read_text() for p in sys.argv[1:])
+assert before.split('\n---\n', 1)[1] == after.split('\n---\n', 1)[1]
+assert 'date: 2026-08-11T00:00Z\n' in after
+assert 'session: next-session\n' in after
+assert 'Approve issue #123' in after
+PY
+metadata_rc=$?
+[ "$rc" -eq 0 ] && [ "$metadata_rc" -eq 0 ] && [ "$(archives j1)" -eq 1 ] \
+  && ok 'refresh preserves body/date/decisions, archives foreign session and proves actual session' \
+  || bad 'refresh preserves body/date/decisions, archives foreign session and proves actual session' "rc=$rc $(flat "$out")"
+run_raw j1 demo write --session next-session --now "$STAMP" --refresh-pulse "$TMP/pulse.json"
+[ "$rc" -eq 0 ] && [ "$(archives j1)" -eq 1 ] \
+  && ok 'same-session refresh does not create a spurious archive' \
+  || bad 'same-session refresh does not create a spurious archive' "rc=$rc $(flat "$out")"
+
+# Every malformed metadata input refuses before moving the existing i2 seed.
+for invalid in '{}' '[{}]' \
+ '[{"text":"Approve","opened_at":"yesterday","default":"Hold"}]' \
+ '[{"text":"Approve","opened_at":"2026-08-11T00:00:00Z","default":""}]' \
+ '[{"text":false,"opened_at":"2026-08-11T00:00:00Z","default":"Hold"}]'; do
+  printf '%s\n' "$invalid" > "$TMP/invalid-decisions.json"
+  refused_unchanged 'invalid decisions metadata' --decisions-file "$TMP/invalid-decisions.json"
+done
+for invalid in '{}' \
+ '{"at":"yesterday","line":"readout","state":{"scope":"demo"}}' \
+ '{"at":"2026-08-11T00:00:00Z","line":false,"state":{"scope":"demo"}}' \
+ '{"at":"2026-08-11T00:00:00Z","line":"readout","state":{"scope":"other-repo"}}'; do
+  printf '%s\n' "$invalid" > "$TMP/invalid-pulse.json"
+  refused_unchanged 'invalid or wrong-scope pulse metadata' --pulse-file "$TMP/invalid-pulse.json"
+done
+run_raw j1 demo write --session next-session --refresh-pulse "$TMP/pulse.json" --next "$GOOD_NEXT"
+[ "$rc" -eq 1 ] && ok 'refresh refuses full-write input switches' \
+  || bad 'refresh refuses full-write input switches' "rc=$rc $(flat "$out")"
+run_raw j1 demo write --refresh-pulse "$TMP/pulse.json"
+[ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'REFUSE.*no id' \
+  && ok 'refresh never guesses the actual session identity' \
+  || bad 'refresh never guesses the actual session identity' "rc=$rc $(flat "$out")"
+
+# Existing metadata is revalidated by canonical proof, not trusted because a
+# previous writer accepted the rest of the seed.
+cp "$TMP/j1/handoffs/NEXT-demo.md" "$TMP/filled-metadata-seed.md"
+"$PY" - "$TMP/j1/handoffs/NEXT-demo.md" <<'PY'
+from pathlib import Path
+import re, sys
+p=Path(sys.argv[1]); p.write_text(re.sub(r'^decisions:.*$', 'decisions: [{}]', p.read_text(), flags=re.M))
+PY
+run_raw j1 demo verify --session next-session
+[ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'REFUSE.*each decision' \
+  && ok 'canonical verify rejects malformed existing decision metadata' \
+  || bad 'canonical verify rejects malformed existing decision metadata' "rc=$rc $(flat "$out")"
+cp "$TMP/filled-metadata-seed.md" "$TMP/j1/handoffs/NEXT-demo.md"
+"$PY" - "$TMP/j1/handoffs/NEXT-demo.md" <<'PY'
+from pathlib import Path
+import json, re, sys
+p=Path(sys.argv[1]); text=p.read_text()
+m=re.search(r'^last_pulse: (.*)$', text, flags=re.M)
+snapshot=json.loads(m.group(1)); snapshot['state']['scope']='other-repo'
+p.write_text(text[:m.start(1)]+json.dumps(snapshot)+text[m.end(1):])
+PY
+run_raw j1 demo verify --session next-session
+[ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'REFUSE.*scope does not match' \
+  && ok 'canonical verify rejects a snapshot belonging to another scope' \
+  || bad 'canonical verify rejects a snapshot belonging to another scope' "rc=$rc $(flat "$out")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
