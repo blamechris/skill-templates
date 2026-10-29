@@ -235,6 +235,26 @@ write a7 demo-wt
   && ok "an orphaned linked worktree writes NO fleet seed" \
   || bad "an orphaned linked worktree writes NO fleet seed" \
          "rc=$rc $(ls "$TMP/a7/handoffs" 2>/dev/null | tr '\n' ' ')"
+# New Git versions report an invalid gitfile instead of "not a git repository".
+# The real orphan fixture must reach the same specific guard under either wording.
+mkdir -p "$TMP/a7/gitfile-stub"
+cat > "$TMP/a7/gitfile-stub/git" <<'STUB'
+#!/bin/sh
+echo 'fatal: gitfile does not point to a valid repository' >&2
+exit 128
+STUB
+chmod +x "$TMP/a7/gitfile-stub/git"
+out=$(cd "$TMP/a7/demo-wt" && PATH="$TMP/a7/gitfile-stub:$PATH" \
+      CLAUDE_HANDOFF_DIR="$TMP/a7/handoffs" "$PY" "$SUT" scope 2>&1); rc=$?
+[ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'REFUSE.*main checkout is gone' \
+  && ok 'an orphaned worktree gets the specific refusal with the newer gitfile diagnostic' \
+  || bad 'an orphaned worktree gets the specific refusal with the newer gitfile diagnostic' "rc=$rc $(flat "$out")"
+mkdir -p "$TMP/a7/not-an-orphan"
+out=$(cd "$TMP/a7/not-an-orphan" && PATH="$TMP/a7/gitfile-stub:$PATH" \
+      CLAUDE_HANDOFF_DIR="$TMP/a7/handoffs" "$PY" "$SUT" scope 2>&1); rc=$?
+[ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'REFUSE.*other than' \
+  && ok 'an unfamiliar git failure without an orphan remains a generic refusal' \
+  || bad 'an unfamiliar git failure without an orphan remains a generic refusal' "rc=$rc $(flat "$out")"
 # The negative half: `fleet` must stay reachable from a directory that is genuinely
 # outside every repo. A guard that refuses everywhere would satisfy the two above.
 mkdir -p "$TMP/a7/outside"
@@ -1074,6 +1094,104 @@ run_raw j1 demo verify --session next-session
 [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'REFUSE.*scope does not match' \
   && ok 'canonical verify rejects a snapshot belonging to another scope' \
   || bad 'canonical verify rejects a snapshot belonging to another scope' "rc=$rc $(flat "$out")"
+
+# =================================================== GROUP J — visible content
+echo; echo "J. invisible comments cannot fill required content"
+cat > "$TMP/comment-only-body.md" <<'BODY'
+## STATE
+<!-- Fill current state here -->
+## TL;DR
+<!-- Fill shipped changes here -->
+BODY
+refused_unchanged 'comment-only boundary reason' --boundary-reason '<!-- pending -->'
+refused_unchanged 'comment-hidden dispatch executor' --picks-up-at 'Add checks <!-- (agent Sol) -->'
+refused_unchanged 'comment-only STATE and TLDR' --body-file "$TMP/comment-only-body.md"
+refused_unchanged 'comment-only task and acceptance' --next '<!-- Add checks. Acceptance: suites pass. -->'
+refused_unchanged 'comment-only acceptance' --next 'Add checks. Acceptance: <!-- fill result here -->'
+refused_unchanged 'comment-only action' --next '<!-- Add checks. --> Acceptance: suites pass.'
+refused_unchanged 'comment-hidden Acceptance marker' --next 'Add checks. <!-- Acceptance: suites pass. -->'
+cp "$TMP/filled-body.md" "$TMP/comment-skeleton-body.md"
+printf '\n<!-- <n> -->\n' >> "$TMP/comment-skeleton-body.md"
+refused_unchanged 'explicit skeleton hole remains invalid inside a comment' --body-file "$TMP/comment-skeleton-body.md"
+
+new_case k1
+cat > "$TMP/visible-comment-body.md" <<'BODY'
+<!--
+```markdown
+## STATE
+Fake heading inside an invisible comment.
+-->
+## STATE
+
+The main branch is clean. <!-- Ordinary note alongside visible state. -->
+
+```html
+<!-- This is literal code, not an unclosed prose comment.
+```
+
+## TL;DR — what shipped
+
+Visible checks passed. <!-- Ordinary note alongside visible delivery. -->
+BODY
+run k1 demo write --session "$MINE" --picks-up-at "$GOOD_PICKS <!-- note -->" \
+  --boundary-reason 'package complete <!-- ordinary note -->' \
+  --body-file "$TMP/visible-comment-body.md" \
+  --next 'Add checks. <!-- Ordinary task note. --> Acceptance: the suites pass.'
+[ "$rc" -eq 0 ] && ok 'visible content with ordinary comments and literal code delimiters writes and proves' \
+  || bad 'visible content with ordinary comments and literal code delimiters writes and proves' "rc=$rc $(flat "$out")"
+run_raw k1 demo verify --file "$TMP/k1/handoffs/NEXT-demo.md"
+[ "$rc" -eq 0 ] && ok 'content-only verify accepts filled prose with ordinary comments' \
+  || bad 'content-only verify accepts filled prose with ordinary comments' "rc=$rc $(flat "$out")"
+
+# Mutate filled seeds so both verify modes must independently reject hidden holes.
+new_case k2
+"$PY" - "$TMP/valid-seed.md" "$TMP/k2/handoffs" <<'PY'
+from pathlib import Path
+import re, sys
+text=Path(sys.argv[1]).read_text()
+def section(name, body):
+    return re.sub(r'(^## '+name+r'[^\n]*\n)[\s\S]*?(?=^## |\Z)',
+                  lambda m:m.group(1)+'\n'+body+'\n\n', text, count=1, flags=re.M)
+cases={
+ 'boundary-comment': text.replace('**Boundary reason:** package complete', '**Boundary reason:** <!-- pending -->'),
+ 'executor-comment': re.sub(r'^picks_up_at:.*$', 'picks_up_at: "Add checks <!-- (agent Sol) -->"', text, flags=re.M),
+ 'state-comment': section('STATE', '<!-- Fill current state here -->'),
+ 'tldr-comment': section('TL;DR', '<!-- Fill shipped changes here -->'),
+ 'task-comment': section("Today's task", '<!-- Add checks. Acceptance: suites pass. -->'),
+ 'acceptance-comment': section("Today's task", 'Add checks. Acceptance: <!-- fill result here -->'),
+ 'action-comment': section("Today's task", '<!-- Add checks. --> Acceptance: suites pass.'),
+ 'hidden-acceptance-marker': section("Today's task", 'Add checks. <!-- Acceptance: suites pass. -->'),
+}
+for name,value in cases.items():
+    Path(sys.argv[2],name+'.md').write_text(value)
+PY
+for invalid in "$TMP/k2/handoffs/"*.md; do
+  cp "$invalid" "$TMP/k2/handoffs/NEXT-demo.md"
+  run_raw k2 demo verify --session "$MINE"
+  [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q '^REFUSE:' \
+    && ok "canonical verify refuses $(basename "$invalid")" \
+    || bad "canonical verify refuses $(basename "$invalid")" "rc=$rc $(flat "$out")"
+  run_raw k2 demo verify --file "$invalid"
+  [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q '^REFUSE:' \
+    && ok "content-only verify refuses $(basename "$invalid")" \
+    || bad "content-only verify refuses $(basename "$invalid")" "rc=$rc $(flat "$out")"
+done
+"$PY" - "$SUT" "$TMP/comment-mutant.py" <<'PY'
+from pathlib import Path
+import sys
+source=Path(sys.argv[1]).read_text()
+needle='parts = sections(visible)'
+assert needle in source
+Path(sys.argv[2]).write_text(source.replace(needle,'parts = sections(prose)'))
+PY
+cp "$TMP/k2/handoffs/state-comment.md" "$TMP/k2/handoffs/NEXT-demo.md"
+run_raw k2 demo verify --session "$MINE"
+real_rc=$rc
+out=$(cd "$TMP/k2/demo" && CLAUDE_HANDOFF_DIR="$TMP/k2/handoffs" \
+  "$PY" "$TMP/comment-mutant.py" verify --session "$MINE" 2>&1); rc=$?
+[ "$real_rc" -eq 1 ] && [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^seed:' \
+  && ok 'negative control: hidden-content assertion fails when comments count as filled prose' \
+  || bad 'negative control: hidden-content assertion fails when comments count as filled prose' "real=$real_rc mutant=$rc $(flat "$out")"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

@@ -71,6 +71,36 @@ def clean(value, limit=180):
     return re.sub(r"\s+", " ", text).strip()[:limit]
 
 
+def usage_signature(oneline):
+    """Compare supported printed measurements, never ages or projections.
+
+    This is presentation parsing, not another accounting implementation. Keep
+    direct sd/fh/fable readings, total/subtotal and fable spend, and derived
+    capacity exactly at the source formatter's precision. Unrecognized/missing
+    measurements stay unknown; sample identity/age, reset countdown, burn,
+    headroom, rates and projected landings are not stable source measurements.
+    """
+    text, values = clean(oneline, 10000), {}
+    number = r"[0-9][0-9,]*(?:\.[0-9]+)?"
+    money = r"\$" + number
+    amount = money + r"(?:-" + money + r")?"
+    patterns = {
+        "sd": r"^sd (" + number + r")%",
+        "fh": r"(?:^| · )fh (" + number + r")%",
+        "fable_reading": r"(?:^| · )fable(?: reading)? (" + number + r")%",
+        "spend": r"(?:^| · )spent (" + amount + r")(?= since | · |$)",
+        "spend_subtotal": r"(?:^| · )priced spend subtotal (" + amount + r") \(not total\)",
+        "fable_spend": r"(?:^| · )(" + amount + r") fable(?= · |$)",
+        "derived_pct": r"(?:^| · )all-models ~(" + number + r")% of cap ",
+        "derived_cap": r"(?:^| · )all-models ~" + number + r"% of cap (" + money + r")",
+    }
+    for name, pattern in patterns.items():
+        match = re.search(pattern, text)
+        if match:
+            values[name] = match.group(1)
+    return values or None
+
+
 def read_text(path):
     # A pipe/device supplied as a cache path must not block the eight-line reader.
     info = os.stat(path)
@@ -292,19 +322,20 @@ def pulse(argv=None):
         if drift > 0.25:
             estimate_drift = True
             warnings.append("stated estimate drift >25%")
-    usage = None
+    usage, usage_measurements = None, None
     # An explicitly selected Claude host and the actual harness session id are
     # both required. Codex/chroxy never consult Claude's unrelated meter.
     if args.source == "claude" and os.environ.get("CLAUDE_CODE_SESSION_ID"):
         pace = budget.run([sys.executable, str(Path(__file__).with_name("usage-pace.py")), "--oneline"])
         if pace.returncode == 0:
-            usage = clean(pace.stdout, 130) or None
+            usage = clean(pace.stdout, 1200) or None
+            usage_measurements = usage_signature(pace.stdout)
     if budget.degraded:
         warnings.append("source unavailable/deadline")
     state = {"scope": scope, "seed_date": fm.get("date"), "picks": fm.get("picks_up_at"),
              "head": head, "branch": branch, "tree": tree, "ahead": ahead, "behind": behind,
              "commits": int(commits) if commits is not None else None, "open_items": open_items,
-             "turns": turns, "tests": tests, "ci": ci, **decisions, "usage": usage,
+             "turns": turns, "tests": tests, "ci": ci, **decisions, "usage": usage_measurements,
              "context_pct": cache.get("context_pct"), "compactions": compactions,
              "estimate": estimate, "actual": actual, "unit": cache.get("unit"),
              "signals_source": cache.get("source"), "signals_observed_at": cache.get("observed_at"),
@@ -342,7 +373,7 @@ def pulse(argv=None):
             "work: commits since seed %s | open items %s | turns %s" % tuple(map(clean, (commits, open_items, turns))),
             "cached: tests %s | CI %s" % (clean(tests), clean(ci)),
             "decisions: " + decisions_line,
-            "usage: %s | context %s | compactions %s" % (clean(usage), clean(cache.get("context_pct")), clean(compactions)),
+            "usage: %s | context %s | compactions %s" % (clean(usage, 1200), clean(cache.get("context_pct")), clean(compactions)),
             last_line]
 
 

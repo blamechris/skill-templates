@@ -173,13 +173,8 @@ def resolve_scope(topic=None):
     """
     r = _git("rev-parse", "--path-format=absolute", "--git-common-dir")
     if r.returncode != 0:
-        # ONLY "not a repository" means fleet. Dubious ownership, a corrupt index,
-        # a git too old for --path-format — each of those is a question this cannot
-        # answer, and answering `fleet` would file the seed under the wrong scope
-        # while looking like a success.
-        if "not a git repository" not in (r.stderr or "").lower():
-            die("cannot resolve scope: git failed for a reason other than 'not a "
-                "repository' — %s" % ((r.stderr or "").strip() or "no stderr"))
+        # Inspect the structural orphan before classifying Git's diagnostic:
+        # versions also say "gitfile does not point to a valid repository".
         orphan = _orphaned_worktree()
         if orphan is not None:
             die("cannot resolve scope: %s is a linked worktree whose main checkout "
@@ -190,6 +185,11 @@ def resolve_scope(topic=None):
                 "because it re-derives the same wrong scope. Restore the main "
                 "checkout, or run the write from a worktree of the repo it belongs "
                 "to." % orphan)
+        # ONLY "not a repository" means fleet. Dubious ownership, a corrupt index,
+        # a git too old for --path-format remain unknown, never a fleet fallback.
+        if "not a git repository" not in (r.stderr or "").lower():
+            die("cannot resolve scope: git failed for a reason other than 'not a "
+                "repository' — %s" % ((r.stderr or "").strip() or "no stderr"))
         if topic is not None and not TOPIC_OK.match(topic):
             die("--topic %r is not one filename component of [A-Za-z0-9_-]" % topic)
         return "fleet-" + topic if topic else "fleet"
@@ -473,10 +473,26 @@ CLOSING = ("Repeat the session-lifecycle protocol at this session's end: write t
            "with `session-seed.py write`, and hand back the one line to paste.\n")
 
 
-def outside_fences(text):
-    """Keep prose only; honor backtick/tilde fence kind and closing length."""
-    out, fence, width = [], None, 0
+def outside_fences(text, strip_comments=False):
+    """Keep prose only; optionally hide HTML comments outside code fences."""
+    out, fence, width, comment = [], None, 0, False
     for line in text.splitlines():
+        if fence is None and strip_comments:
+            visible, offset = [], 0
+            while offset < len(line):
+                if comment:
+                    end = line.find("-->", offset)
+                    if end == -1:
+                        break
+                    comment, offset = False, end + 3
+                else:
+                    start = line.find("<!--", offset)
+                    if start == -1:
+                        visible.append(line[offset:])
+                        break
+                    visible.append(line[offset:start])
+                    comment, offset = True, start + 4
+            line = "".join(visible)
         m = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
         if fence is None:
             if m:
@@ -494,6 +510,16 @@ def sections(prose):
     return [(heading.group(1), prose[heading.end():
              headings[i + 1].start() if i + 1 < len(headings) else len(prose)].strip())
             for i, heading in enumerate(headings)]
+
+
+def visible_prose(text):
+    """Remove invisible Markdown comments as well as fenced examples.
+
+    Comment/fence state is parsed together: fences inside comments are invisible,
+    while literal comment delimiters inside fenced code do not hide later prose.
+    An unclosed prose comment hides the rest, as Markdown rendering does.
+    """
+    return outside_fences(text, strip_comments=True)
 
 
 def validate_content(text):
@@ -526,14 +552,19 @@ def validate_content(text):
         die("picks_up_at exceeds 140 characters; name one next task")
     if MULTIPLE_TASKS.search(picks):
         die("picks_up_at contains a multiple-task marker; name one next task")
-    if not EXECUTOR.search(picks):
+    if not EXECUTOR.search(visible_prose(picks)):
         die("picks_up_at needs an executor: (agent name) or OWNER: name")
-    boundaries = re.findall(r"^- \*\*Boundary reason:\*\*[ \t]*(.*)$", prose, re.M)
+    boundary_pattern = r"^- \*\*Boundary reason:\*\*[ \t]*(.*)$"
+    if any(CONTROL.search(value) for value in re.findall(boundary_pattern, prose, re.M)):
+        die("Boundary reason contains a control character")
+    visible = visible_prose(text)
+    boundaries = re.findall(boundary_pattern, visible, re.M)
     if len(boundaries) != 1 or not boundaries[0].strip() or boundaries[0].strip().lower() == "unstated":
         die("seed content needs one explicit Boundary reason; missing or unstated is invalid")
-    if CONTROL.search(boundaries[0]):
-        die("Boundary reason contains a control character")
-    parts = sections(prose)
+    # Placeholder detection above deliberately examines the original prose (and
+    # explicit skeleton holes even in fences/comments). Hidden instructions never
+    # establish that required state, task or acceptance fields are filled.
+    parts = sections(visible)
     tasks = [body for title, body in parts if title.lower() == "today's task"]
     if len(tasks) != 1:
         die("seed content needs one Today's task section (write it with --next)")

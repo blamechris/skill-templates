@@ -64,6 +64,15 @@ since seed/open items/turns; cached tests and CI; decisions count/age/default; u
 compactions; and delta/WARN. Claude usage may come only from `usage-pace.py --oneline`.
 All subprocesses share a 0.8-second deadline; unavailable sources degrade to `n/a`.
 
+The readable Claude usage line remains the helper's bounded raw `--oneline` output.
+Material comparison uses only supported printed measurements at that formatter's
+precision: direct `sd`, `fh` and fable percentages; total or explicitly labelled subtotal
+spend; fable spend; and derived capacity percentage/cap. Sample timestamps and ages,
+reset countdowns, rates, burn, headroom and projected landings are excluded. Missing or
+unrecognized measurements remain unknown. This small presentation signature reuses the
+single bounded `--oneline` call; it neither recalculates accounting nor makes another
+source call for a separate JSON report.
+
 A missing previous snapshot says `no baseline`; unchanged material state says
 `no material change since TIME`. Changed material fields are named. Decision recurrence
 counts advance only when snapshots are persisted. Raw ages and recurrence counters do not

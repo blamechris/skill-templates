@@ -4,6 +4,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 python3 - "$HERE" <<'PY_PULSE_SUITE'
 import json
+import importlib.util
 import os
 from pathlib import Path
 import shutil
@@ -317,6 +318,71 @@ class PulseTests(unittest.TestCase):
                          env={**self.env, 'CLAUDE_CODE_SESSION_ID': 'test-id'})
         self.assertTrue(marker.exists())
         self.assertIn('usage: sd 12% live', out)
+
+    def test_actual_usage_formatter_ages_are_not_material_measurements(self):
+        # Generate source output with the real formatter, without invoking its
+        # accounting scan or reading any live meter data.
+        sys.dont_write_bytecode = True
+        spec = importlib.util.spec_from_file_location('pace_formatter', HERE / 'usage-pace.py')
+        formatter = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(formatter)
+        values = dict(source='live', sd=12, fh=3, pct_now=None,
+                      sample_at=DATE, sample_age_min=1, spend=100, spend_hi=100,
+                      anchor_label='period', fable=20, fable_hi=20, rate=None,
+                      pts_left=88, hours_to_reset=10, burn_1h=5, burn_3h=4,
+                      stale=True, fable_reading={'pct': 5, 'age_h': 1})
+        tools = self.root / 'usage-tools'
+        tools.mkdir()
+        shutil.copy(PULSE, tools / PULSE.name)
+        shutil.copy(SEED, tools / SEED.name)
+        oneline = self.root / 'usage-line.txt'
+        marker = self.root / 'usage-calls.txt'
+        (tools / 'usage-pace.py').write_text('from pathlib import Path\nimport sys\n'
+            'assert sys.argv[1:] == ["--oneline"]\n'
+            'with Path(%r).open("a") as f: f.write("called\\n")\n'
+            'print(Path(%r).read_text())\n' % (str(marker), str(oneline)))
+        env = {**self.env, 'CLAUDE_CODE_SESSION_ID': 'test-id'}
+        snapshot = self.root / 'usage-snapshot.json'
+        oneline.write_text(formatter.fmt(values))
+        out = self.pulse('--source', 'claude', '--snapshot-file', str(snapshot),
+                         script=tools / PULSE.name, env=env)
+        self.assertIn('1m old', out)
+        self.refresh(snapshot)
+        values.update(sample_age_min=2, hours_to_reset=9.9)
+        values['fable_reading']['age_h'] = 2
+        oneline.write_text(formatter.fmt(values))
+        out = self.pulse('--source', 'claude', script=tools / PULSE.name, env=env)
+        self.assertIn('2m old', out)
+        self.assertIn('reset in 9.9h', out)
+        self.assertIn('no material change since', out)
+        values.update(sd=13, pts_left=87)
+        oneline.write_text(formatter.fmt(values))
+        self.assertIn('changed usage', self.pulse('--source', 'claude', script=tools / PULSE.name, env=env))
+        values.update(sd=12, pts_left=88, spend=101, spend_hi=101)
+        oneline.write_text(formatter.fmt(values))
+        self.assertIn('changed usage', self.pulse('--source', 'claude', script=tools / PULSE.name, env=env))
+        # Four observations made exactly four source calls, not separate human and
+        # structured accounting queries.
+        self.assertEqual(marker.read_text().splitlines(), ['called'] * 4)
+
+        # A mutant restoring raw-string comparison reproduces the reported age
+        # defect against the same actual formatter outputs and persisted baseline.
+        mutant = tools / 'raw-usage-mutant.py'
+        source = PULSE.read_text()
+        needle = '"usage": usage_measurements'
+        self.assertIn(needle, source)
+        mutant.write_text(source.replace(needle, '"usage": usage'))
+        self.write()
+        values.update(sample_age_min=1, hours_to_reset=10, spend=100, spend_hi=100)
+        values['fable_reading']['age_h'] = 1
+        oneline.write_text(formatter.fmt(values))
+        self.pulse('--source', 'claude', '--snapshot-file', str(snapshot), script=mutant, env=env)
+        self.refresh(snapshot)
+        values.update(sample_age_min=2, hours_to_reset=9.9)
+        values['fable_reading']['age_h'] = 2
+        oneline.write_text(formatter.fmt(values))
+        self.assertIn('changed usage', self.pulse('--source', 'claude', script=mutant, env=env))
+        print('  mutant: raw usage comparison invents a delta for actual formatter aging', flush=True)
 
     def test_no_baseline_mutant_is_detected(self):
         tools = self.root / 'mutant-tools'
