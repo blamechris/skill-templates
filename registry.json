@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "6c51782",
+  "generatedFromCommit": "cda2081",
   "skillCount": 43,
   "skills": [
     {
@@ -141,8 +141,8 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "699a5ca",
-      "lines": 528,
+      "hash": "cda2081",
+      "lines": 530,
       "description": "Carry delegated development through scope/design, reuse investigation, a proportional plan, model delegation, TDD, /full-review, gated synchronous merge and verified ledger updates. Both normal development and prime-directive include merge authority under Critical Rule 5. Normal development ends with a seed/status after the selected feature or work package is delivered; prime-directive continues to the next authorized item within its mission and original limits. Owner presence does not select or change that mode.",
       "guards": [
         {
@@ -1474,7 +1474,7 @@
     },
     {
       "name": "prime-directive",
-      "hash": "605572e",
+      "hash": "cda2081",
       "lines": 133,
       "description": "A reload-resilient directive for unattended work toward a delegated outcome, or an explicitly requested backlog-clearing marathon. Re-invoke it after every context compaction to restore the mission, acceptance criteria, authority, per-issue loop, and never-strip guardrails before resuming. `/tackle-issues` and `/autonomous-dev-flow` provide the wave machinery.",
       "guards": [
@@ -1850,8 +1850,8 @@
     },
     {
       "name": "pulse",
-      "hash": "6c51782",
-      "lines": 86,
+      "hash": "cda2081",
+      "lines": 95,
       "description": "Read eight offline session signals and record the observation through the canonical seed writer. Use when the user requests `/pulse`, a quick session health check, or a boundary readout. The underlying stdlib script calls no model, network service or test suite."
     },
     {
@@ -2420,8 +2420,8 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "37866a5",
-      "lines": 460,
+      "hash": "cda2081",
+      "lines": 458,
       "description": "Advance a delegated outcome through bounded issue waves, or clear an explicitly selected backlog. Convergence follows observable acceptance and genuine dependencies, not the number of easy issues closed.",
       "guards": [
         {
