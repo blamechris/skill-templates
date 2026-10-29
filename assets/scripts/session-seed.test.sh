@@ -1207,6 +1207,10 @@ cases={
  'at-line-start': '```<!--``` is the literal token.',
  'multiline-double': 'The literal token ``<!--\ncontinues here`` is supported.',
  'multiline-single': 'The token `first\nthen <!--` is supported.',
+ 'ordered-two-dot': 'The token `first\n2. <!--` is supported.',
+ 'ordered-two-paren': 'The token `first\n2) <!--` is supported.',
+ 'ordered-zero': 'The token `first\n0. <!--` is supported.',
+ 'ordered-ten-digit-one': 'The token `first\n0000000001. <!--` is supported.',
 }
 for name,state in cases.items():
     Path(sys.argv[1],name+'.md').write_text('## STATE\n\n'+state+'\n\n## TL;DR\n\nVisible checks passed.\n')
@@ -1241,6 +1245,10 @@ cases={
  'blank-line-boundary': '` <!-- Fill current state here -->\n\n`',
  'comment-before-span': '<!-- ` Fill current state here --> `',
  'real-comment-after-span': '`<!--` <!-- Fill current state here -->',
+ 'ordered-one-dot': 'The token `first\n1. <!--` is supported.',
+ 'ordered-one-paren': 'The token `first\n1) <!--` is supported.',
+ 'ordered-leading-zero-one': 'The token `first\n01. <!--` is supported.',
+ 'ordered-nine-digit-one': 'The token `first\n000000001) <!--` is supported.',
 }
 for name,state in cases.items():
     body='## STATE\n\n'+state+'\n\n## TL;DR\n\nVisible checks passed.\n'

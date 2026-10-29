@@ -475,7 +475,7 @@ FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 BACKTICK_RUN = re.compile(r"`+")
 # Inline spans may wrap within a paragraph, but cannot run through a new block.
 INLINE_BLOCK = re.compile(r"^ {0,3}(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|<!--|"
-                          r">|(?:[-+*]|[0-9]+[.)])[ \t]+|(?:[-*_][ \t]*){3,}$)")
+                          r">|(?:[-+*]|0{0,8}1[.)])[ \t]+|(?:[-*_][ \t]*){3,}$)")
 
 
 def inline_span_ends(lines):
