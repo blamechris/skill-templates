@@ -471,14 +471,60 @@ SKELETON_PLACEHOLDERS = (
 )
 CLOSING = ("Repeat the session-lifecycle protocol at this session's end: write the next seed\n"
            "with `session-seed.py write`, and hand back the one line to paste.\n")
+FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+BACKTICK_RUN = re.compile(r"`+")
+# Inline spans may wrap within a paragraph, but cannot run through a new block.
+INLINE_BLOCK = re.compile(r"^ {0,3}(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|<!--|"
+                          r">|(?:[-+*]|[0-9]+[.)])[ \t]+|(?:[-*_][ \t]*){3,}$)")
+
+
+def inline_span_ends(lines):
+    """Index the next exact-width run once per inline block.
+
+    An absent closer leaves the opener literal: it must not hide later comments.
+    Reverse indexing avoids rescanning the paragraph for each unmatched width.
+    Runs inside a span are ordinary unless the whole run matches its delimiter.
+    """
+    ends, following = {}, {}
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index]
+        for run in reversed(list(BACKTICK_RUN.finditer(line))):
+            width, position = len(run.group()), (index, run.end())
+            if width in following:
+                ends[position] = following[width]
+            following[width] = position
+        if not line.strip() or INLINE_BLOCK.match(line):
+            following.clear()
+    return ends
 
 
 def outside_fences(text, strip_comments=False):
     """Keep prose only; optionally hide HTML comments outside code fences."""
     out, fence, width, comment = [], None, 0, False
-    for line in text.splitlines():
+    lines, inline_end = text.splitlines(), None
+    inline_ends = inline_span_ends(lines) if strip_comments else {}
+    for index, line in enumerate(lines):
+        raw_fence = FENCE_LINE.match(line)
+        if fence is not None:
+            if (raw_fence and raw_fence.group(1)[0] == fence
+                    and len(raw_fence.group(1)) >= width and not raw_fence.group(2).strip()):
+                fence = None
+            continue
+        # A block fence takes precedence over inline spans. Backtick fence info
+        # cannot itself contain backticks; that shape can be an inline span.
+        if (not comment and inline_end is None and raw_fence
+                and (raw_fence.group(1)[0] == "~" or "`" not in raw_fence.group(2))):
+            fence, width = raw_fence.group(1)[0], len(raw_fence.group(1))
+            continue
         if fence is None and strip_comments:
             visible, offset = [], 0
+            if inline_end is not None:
+                end_index, end_offset = inline_end
+                offset = len(line) if index < end_index else end_offset
+                visible.append(line[:offset])
+                if index == end_index:
+                    inline_end = None
+            next_comment = line.find("<!--", offset)
             while offset < len(line):
                 if comment:
                     end = line.find("-->", offset)
@@ -486,21 +532,38 @@ def outside_fences(text, strip_comments=False):
                         break
                     comment, offset = False, end + 3
                 else:
-                    start = line.find("<!--", offset)
+                    if next_comment != -1 and next_comment < offset:
+                        next_comment = line.find("<!--", offset)
+                    start = next_comment
+                    tick = BACKTICK_RUN.search(line, offset, start if start != -1 else len(line))
+                    if tick:
+                        tick_start, tick_end = tick.span()
+                        escaped_at = tick_start
+                        while escaped_at and line[escaped_at - 1] == "\\":
+                            escaped_at -= 1
+                        end = (inline_ends.get((index, tick_end))
+                               if (tick_start - escaped_at) % 2 == 0 else None)
+                        if end is None:
+                            visible.append(line[offset:tick_end])
+                            offset = tick_end
+                        elif end[0] == index:
+                            visible.append(line[offset:end[1]])
+                            offset = end[1]
+                        else:
+                            visible.append(line[offset:])
+                            inline_end, offset = end, len(line)
+                        continue
                     if start == -1:
                         visible.append(line[offset:])
                         break
                     visible.append(line[offset:start])
                     comment, offset = True, start + 4
             line = "".join(visible)
-        m = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
-        if fence is None:
-            if m:
-                fence, width = m.group(1)[0], len(m.group(1))
-            else:
-                out.append(line)
-        elif m and m.group(1)[0] == fence and len(m.group(1)) >= width and not m.group(2).strip():
-            fence = None
+        m = FENCE_LINE.match(line)
+        if m and (m.group(1)[0] == "~" or "`" not in m.group(2)):
+            fence, width, inline_end = m.group(1)[0], len(m.group(1)), None
+        else:
+            out.append(line)
     return "\n".join(out)
 
 
@@ -516,7 +579,8 @@ def visible_prose(text):
     """Remove invisible Markdown comments as well as fenced examples.
 
     Comment/fence state is parsed together: fences inside comments are invisible,
-    while literal comment delimiters inside fenced code do not hide later prose.
+    while literal comment delimiters inside fences or matched inline backtick
+    spans do not hide later prose. Inline spans may wrap within a paragraph.
     An unclosed prose comment hides the rest, as Markdown rendering does.
     """
     return outside_fences(text, strip_comments=True)

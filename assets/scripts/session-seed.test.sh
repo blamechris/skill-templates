@@ -1193,5 +1193,94 @@ out=$(cd "$TMP/k2/demo" && CLAUDE_HANDOFF_DIR="$TMP/k2/handoffs" \
   && ok 'negative control: hidden-content assertion fails when comments count as filled prose' \
   || bad 'negative control: hidden-content assertion fails when comments count as filled prose' "real=$real_rc mutant=$rc $(flat "$out")"
 
+# ================================================= GROUP K — literal inline code
+echo; echo "K. matched inline backticks preserve literal comment delimiters"
+new_case l1
+mkdir -p "$TMP/inline-positive-bodies"
+"$PY" - "$TMP/inline-positive-bodies" <<'PY'
+from pathlib import Path
+import sys
+cases={
+ 'single': 'The literal token `<!--` is supported.',
+ 'double': 'The literal token ``<!-- ` nested`` is supported.',
+ 'triple': 'The literal token ```<!-- `` nested``` is supported.',
+ 'at-line-start': '```<!--``` is the literal token.',
+ 'multiline-double': 'The literal token ``<!--\ncontinues here`` is supported.',
+ 'multiline-single': 'The token `first\nthen <!--` is supported.',
+}
+for name,state in cases.items():
+    Path(sys.argv[1],name+'.md').write_text('## STATE\n\n'+state+'\n\n## TL;DR\n\nVisible checks passed.\n')
+PY
+for body in "$TMP/inline-positive-bodies/"*.md; do
+  name=$(basename "$body")
+  run l1 demo write --session "$MINE" --picks-up-at "$GOOD_PICKS" --body-file "$body" \
+    --next 'Add checks for `<!--` tokens. Acceptance: the suites pass.'
+  [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^seed:' \
+    && ok "writer accepts literal inline delimiters in $name" \
+    || bad "writer accepts literal inline delimiters in $name" "rc=$rc $(flat "$out")"
+  run_raw l1 demo verify --session "$MINE"
+  [ "$rc" -eq 0 ] && ok "canonical verify accepts literal inline delimiters in $name" \
+    || bad "canonical verify accepts literal inline delimiters in $name" "rc=$rc $(flat "$out")"
+  run_raw l1 demo verify --file "$TMP/l1/handoffs/NEXT-demo.md"
+  [ "$rc" -eq 0 ] && ok "content-only verify accepts literal inline delimiters in $name" \
+    || bad "content-only verify accepts literal inline delimiters in $name" "rc=$rc $(flat "$out")"
+done
+cp "$TMP/l1/handoffs/NEXT-demo.md" "$TMP/inline-positive-seed.md"
+
+# Backticks that do not match within the paragraph are literal punctuation, not
+# permission to expose a real comment as filled content. Refusal must precede archive.
+mkdir -p "$TMP/inline-negative-bodies"
+"$PY" - "$TMP/inline-negative-bodies" "$TMP/valid-seed.md" <<'PY'
+from pathlib import Path
+import re, sys
+base=Path(sys.argv[2]).read_text()
+cases={
+ 'unmatched': '` <!-- Fill current state here -->',
+ 'mismatched': '`` <!-- Fill current state here --> `',
+ 'different-runs': '``` <!-- Fill current state here --> ``',
+ 'blank-line-boundary': '` <!-- Fill current state here -->\n\n`',
+ 'comment-before-span': '<!-- ` Fill current state here --> `',
+ 'real-comment-after-span': '`<!--` <!-- Fill current state here -->',
+}
+for name,state in cases.items():
+    body='## STATE\n\n'+state+'\n\n## TL;DR\n\nVisible checks passed.\n'
+    Path(sys.argv[1],name+'.body.md').write_text(body)
+    text=re.sub(r'(^## STATE[^\n]*\n)[\s\S]*?(?=^## )',
+                lambda m:m.group(1)+'\n'+state+'\n\n',base,count=1,flags=re.M)
+    Path(sys.argv[1],name+'.seed.md').write_text(text)
+PY
+new_case l2
+for body in "$TMP/inline-negative-bodies/"*.body.md; do
+  name=$(basename "$body" .body.md)
+  refused_unchanged "real comment with $name backtick control" --body-file "$body"
+  fixture="$TMP/inline-negative-bodies/$name.seed.md"
+  cp "$fixture" "$TMP/l2/handoffs/NEXT-demo.md"
+  run_raw l2 demo verify --session "$MINE"
+  [ "$rc" -eq 1 ] && ok "canonical verify refuses real comment in $name" \
+    || bad "canonical verify refuses real comment in $name" "rc=$rc $(flat "$out")"
+  run_raw l2 demo verify --file "$fixture"
+  [ "$rc" -eq 1 ] && ok "content-only verify refuses real comment in $name" \
+    || bad "content-only verify refuses real comment in $name" "rc=$rc $(flat "$out")"
+done
+
+# Disable only inline recognition to show that the valid-input assertion detects
+# the reported regression, while leaving comment and fenced-code behavior intact.
+"$PY" - "$SUT" "$TMP/inline-mutant.py" <<'PY'
+from pathlib import Path
+import sys
+source=Path(sys.argv[1]).read_text()
+needle='tick = BACKTICK_RUN.search(line, offset, start if start != -1 else len(line))'
+assert needle in source
+Path(sys.argv[2]).write_text(source.replace(needle,'tick = None'))
+PY
+cp "$TMP/inline-positive-seed.md" "$TMP/l1/handoffs/NEXT-demo.md"
+run_raw l1 demo verify --session "$MINE"
+real_rc=$rc
+out=$(cd "$TMP/l1/demo" && CLAUDE_HANDOFF_DIR="$TMP/l1/handoffs" \
+  "$PY" "$TMP/inline-mutant.py" verify --session "$MINE" 2>&1); rc=$?
+[ "$real_rc" -eq 0 ] && [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q '^REFUSE:' \
+  && ok 'negative control: valid inline-literal assertion fails without inline recognition' \
+  || bad 'negative control: valid inline-literal assertion fails without inline recognition' "real=$real_rc mutant=$rc $(flat "$out")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
