@@ -22,6 +22,7 @@ cat CLAUDE.md
 
 # Get PR info
 PR_NUM=${1:-$(gh pr view --json number -q .number)}
+REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 gh pr view ${PR_NUM}
 gh pr diff ${PR_NUM}
 ```
@@ -31,31 +32,20 @@ gh pr diff ${PR_NUM}
 The agent reviews against these standards:
 
 #### Code Quality
-- [ ] **Bash 3.2 portable** (`scripts/*.sh`) — macOS ships bash 3.2. No `declare -A`, no `${var^^}`/`${var,,}`, no `mapfile`/`readarray`, no `&>>`. Use parallel indexed arrays. See `.claude/rules/bash-compat.md`.
-- [ ] `set -euo pipefail` at the top of every script; expansions quoted (`"$var"`, `"$@"`); `bash -n` parses clean.
-- [ ] Embedded `python3` heredocs use a **quoted** delimiter (`<<'PY'`) so the shell does not interpolate the script body.
-- [ ] **Node ESM (`assets/*.mjs`) has zero external dependencies** — assets are copied verbatim into consumer repos and must run on a bare `node` with no install step.
-- [ ] Generated files (`registry.json`) are never hand-edited — regenerate via `./scripts/build-index.sh`.
-- [ ] Markdown templates: fenced code blocks are closed, and heredocs inside them use quoted delimiters so `$VAR` reaches the agent literally.
+- [ ] Bash remains macOS 3.2 compatible; Python and Node use standard libraries. Skill installs preserve fixed template text and guards.
 - [ ] Follows project style guide (per CLAUDE.md)
 - [ ] Proper error handling
 - [ ] No obvious security issues (injection, path traversal, credential exposure)
 - [ ] Clean naming and structure
 
 #### Architecture Alignment
-- [ ] **`generic/*.md` stays repo-agnostic** — `{{CUSTOMIZE: ...}}` markers belong in the template and must NOT be pre-filled with any one repo's details. The installing agent fills them.
-- [ ] **Index freshness** — any change under `generic/` or to `skill-guards.json` requires `./scripts/build-index.sh` to be re-run and `registry.json` committed in the same PR, or `validate-registry.yml` fails.
-- [ ] **`assets/` is distributed verbatim** to consumer repos — treat every change there as a breaking change for all installed repos, and check backward compatibility with existing `.claude/skills.lock` entries.
-- [ ] **Guards track the template** — if a load-bearing section of a `generic/` skill is renamed or removed, its `skill-guards.json` entry is updated in the same PR (a guard that can never match silently degrades `skill outdated`).
-- [ ] **Push-deploy stays retired** (#68/#75) — no reintroduction of `deploy.sh`, `sync.sh`, `deploy.conf`, `customizations/`, `values/`, or a push trigger.
+- [ ] Scope derives only in session-seed.py; preserve the five floors and pull-based registry.
 - [ ] Changes follow established patterns
 - [ ] No breaking changes to existing interfaces/APIs
 - [ ] New patterns documented if introduced
 
 #### Testing
-- [ ] All four local gates exit 0 — `node assets/compile-skill-targets.test.mjs`, `./scripts/check-index-fresh.test.sh`, `./scripts/skill-lint.test.sh`, and `./scripts/build-index.sh` (with the regenerated `registry.json` committed).
-- [ ] A changed or added `generic/` skill has been lint-checked as an install: `./scripts/skill-lint.sh <name> <path/to/install.md> registry.json` — exit 0. Exit 2 ("not verifiable") is never a pass.
-- [ ] Behaviour changes to `scripts/*.sh` or `assets/*.mjs` come with a case in the matching `*.test.sh` / `*.test.mjs`.
+- [ ] Run affected sibling suites with negative/mutant evidence, lint installs, and regenerate registry.json.
 - [ ] Tests pass
 - [ ] New functionality has test coverage where appropriate
 - [ ] No test regressions
@@ -168,11 +158,7 @@ Two rules, non-negotiable:
    review that never checked the body (or the PR carries none) reports `null`, never a
    default-true.
 
-In this repo, `/agent-review` is typically invoked directly by the top-level session rather than
-spawned as a background subagent — there is no `agentType: general-purpose` sidecar to record
-beside for an inline run, so the block in step 3's report satisfies the guard on its own. When a
-review does run as a spawned subagent (a marathon session batching several PR reviews), the
-parent session records it right after the agent returns, per step 7.
+The coordinator records independent review results after the subagent returns.
 
 ### 4. Post Review on PR
 
@@ -194,16 +180,15 @@ EOF
 Never leave deferred items as just review comments. If it's worth mentioning, it's worth tracking.
 
 ```bash
-# Labels that exist in this repo: bug, documentation, duplicate, enhancement,
-# good first issue, help wanted, invalid, question, wontfix, from-review.
-# There is no `chore` label — `gh issue create` fails on an unknown label, so use
-# `enhancement` for improvements and `bug` for defects. Always add `from-review`.
+# Use existing `enhancement` and `from-review` labels.
 ISSUE_URL=$(gh issue create \
   --title "Short descriptive title" \
   --label "enhancement" \
   --label "from-review" \
-  --body "$(cat <<'EOF'
+  --body "$(cat <<EOF
 ## Context
+
+Filed from: #${PR_NUM}
 
 Identified during review of PR #${PR_NUM}.
 
@@ -275,11 +260,9 @@ guard on this skill.
 
 ## Agent Persona
 
-You are a **Registry Reviewer** — expert in Claude Code skill design, bash 3.2 portability, dependency-free Node ESM, and the generated-index contract that keeps `registry.json`, `skill-guards.json`, and `generic/*.md` in agreement.
+Review templates as executable instructions, checking install-time behavior and gates that fail for the intended reason.
 
-This repo ships no application code. What it ships is *instructions other agents will execute in other people's repos*, plus the bash/JSON tooling that indexes and validates them. A wrong word in a template is a production bug in sixteen repos.
-
-Your mindset: *"When an agent installs this template into a repo I've never seen and fills the `{{CUSTOMIZE}}` markers from that repo's `CLAUDE.md`, does it still produce a correct, lint-clean, stamped skill — and does the index still tell the truth about what it installed?"*
+You are an expert code reviewer with deep knowledge of the project's tech stack. You review with the mindset of reliability, maintainability, and correctness.
 
 ## Review Philosophy
 
