@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "cda2081",
+  "generatedFromCommit": "84fe5f4",
   "skillCount": 43,
   "skills": [
     {
@@ -141,7 +141,7 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "cda2081",
+      "hash": "84fe5f4",
       "lines": 530,
       "description": "Carry delegated development through scope/design, reuse investigation, a proportional plan, model delegation, TDD, /full-review, gated synchronous merge and verified ledger updates. Both normal development and prime-directive include merge authority under Critical Rule 5. Normal development ends with a seed/status after the selected feature or work package is delivered; prime-directive continues to the next authorized item within its mission and original limits. Owner presence does not select or change that mode.",
       "guards": [
@@ -643,7 +643,7 @@
     },
     {
       "name": "decide",
-      "hash": "47695ab",
+      "hash": "84fe5f4",
       "lines": 133,
       "description": "A decision protocol for an agent that thinks it is blocked. Most apparent blocks are not blocks: they are questions the repo already answers, or cheap reversible calls the agent is entitled to make and record. The few that are real deserve a structured question carrying options and a recommendation — not a paragraph of prose that hands the problem back and waits. This skill routes any pending decision down a fixed ladder, and dictates the shape of the ask when escalation is genuinely warranted.",
       "guards": [
@@ -1474,7 +1474,7 @@
     },
     {
       "name": "prime-directive",
-      "hash": "cda2081",
+      "hash": "84fe5f4",
       "lines": 133,
       "description": "A reload-resilient directive for unattended work toward a delegated outcome, or an explicitly requested backlog-clearing marathon. Re-invoke it after every context compaction to restore the mission, acceptance criteria, authority, per-issue loop, and never-strip guardrails before resuming. `/tackle-issues` and `/autonomous-dev-flow` provide the wave machinery.",
       "guards": [
@@ -1850,7 +1850,7 @@
     },
     {
       "name": "pulse",
-      "hash": "cda2081",
+      "hash": "84fe5f4",
       "lines": 95,
       "description": "Read eight offline session signals and record the observation through the canonical seed writer. Use when the user requests `/pulse`, a quick session health check, or a boundary readout. The underlying stdlib script calls no model, network service or test suite."
     },
@@ -2026,7 +2026,7 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "6c51782",
+      "hash": "84fe5f4",
       "lines": 339,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`, `/decide`, `/pulse`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
@@ -2420,7 +2420,7 @@
     },
     {
       "name": "tackle-issues",
-      "hash": "cda2081",
+      "hash": "84fe5f4",
       "lines": 458,
       "description": "Advance a delegated outcome through bounded issue waves, or clear an explicitly selected backlog. Convergence follows observable acceptance and genuine dependencies, not the number of easy issues closed.",
       "guards": [
