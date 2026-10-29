@@ -28,7 +28,7 @@ python3 assets/scripts/fleet-bootstrap.py --replace-existing --apply
 ```
 
 This stages the root and Codex/Gemini copies, sets Codex's top-level
-`project_doc_max_bytes` to at least 65536, and installs fleet-check/session-seed.
+`project_doc_max_bytes` to at least 65536, and installs fleet-check/session-seed/session-pulse.
 It deliberately leaves the current Claude file intact. Before replacing that file,
 prove a fresh live Claude session loaded an import of `@~/.fleet/AGENTS.md`.
 Record the exact loaded path and the five floor IDs from that session; a static

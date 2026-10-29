@@ -17,8 +17,7 @@ Carry delegated development through scope/design, reuse investigation, a proport
 ### Phase 0: Queue Setup
 
 ```bash
-# {{CUSTOMIZE: Branch prefix for autonomous session branches — e.g., "auto/" or multiple prefixes for repos that use feat/, fix/, etc.}}
-BRANCH_PREFIX="auto/"
+BRANCH_PREFIX="{{CUSTOMIZE: Literal branch prefix for autonomous session branches, e.g. auto/ or feat/. Supply only the prefix value, without quotes or an assignment.}}"
 ```
 
 Parse `$ARGUMENTS` to determine the issue source:
@@ -459,14 +458,17 @@ Preserve the recorded mode, run identity, state and scoped limits from the calle
 - **No accepted re-launch** — continue using supported host continuation/compaction where available. If the host cannot continue, report that capability limit and exact restart action; do not claim background work or invent an unsupported command. A genuine dependency, explicit pause or reached retry/budget limit still stops its affected work.
 - **The boundary seed is written outside every worktree, and it archives rather than overwrites.** Both halves come from `/session-lifecycle` End step 1 and neither is optional:
 
-  ```bash
-  python3 ~/.claude/scripts/session-seed.py write \
-    --picks-up-at "<the next queue item>" --boundary-reason "wave boundary"
-  ```
+  Execute the complete `/session-lifecycle` End flow for this checkpoint. It selects one
+  next task with an executor and observable acceptance, fills the STATE/TL;DR context,
+  records the boundary reason, carries unresolved decisions and the pulse snapshot, and
+  writes/verifies the seed through its canonical writer. Do not substitute a partial raw
+  writer call or another skeleton. Preserve the recorded mode: prime checkpoints continue
+  the already authorized mission under the continuation rules above; the lifecycle flow
+  grants no new authority and does not make a checkpoint a forced stop.
 
   **① The path.** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, where `<scope>` is the main worktree's directory basename. Never inside the segment's worktree: `git worktree remove --force` — the fleet's standard teardown — deletes untracked files silently, which is how three earlier versions of this rule lost a seed. Outside every workspace there is nothing to commit, nothing to push, and nothing to gate teardown on.
 
-  **② The header, and archive-on-collide.** The command writes the frontmatter End step 1 prescribes — `type`, `date` (full UTC timestamp), `scope`, `session`, `picks_up_at`, `sensitivity`. If the canonical file already exists carrying a **different** `session:`, it renames that one to `NEXT-<scope>.<UTC>-<sid>.md` before writing; a seed this segment did not write is never overwritten, a segment re-writing its own seed overwrites in place, and a failed archive is a REFUSE that writes nothing.
+  **② The header, and archive-on-collide.** The lifecycle's writer writes the frontmatter End step 1 prescribes — `type`, `date` (full UTC timestamp), `scope`, `session`, `picks_up_at`, `sensitivity`. If the canonical file already exists carrying a **different** `session:`, it renames that one to `NEXT-<scope>.<UTC>-<sid>.md` before writing; a seed this segment did not write is never overwritten, a segment re-writing its own seed overwrites in place, and a failed archive is a REFUSE that writes nothing.
 
   **Do not reimplement any of this inline.** The scope key, the session id, the archive and the proof live in one script with its own test suite; a segment that writes its own version is exactly the drift this consolidation removed.
 

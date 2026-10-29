@@ -2,7 +2,7 @@
 
 A decision protocol for an agent that thinks it is blocked. Most apparent blocks are not blocks: they are questions the repo already answers, or cheap reversible calls the agent is entitled to make and record. The few that are real deserve a structured question carrying options and a recommendation — not a paragraph of prose that hands the problem back and waits. This skill routes any pending decision down a fixed ladder, and dictates the shape of the ask when escalation is genuinely warranted.
 
-Invoke it the moment you catch yourself about to write *"I need your input"*, *"how would you like me to proceed"*, or *"let me know and I'll continue"* — and any time you are about to stop work pending an answer. Cues like *"just decide"*, *"stop stalling"*, *"ask me properly"*, *"what are my options"* route here too. There are exactly two acceptable outcomes: a decision you made and recorded, or one `AskUserQuestion` call carrying 2-4 options with your recommendation first. A paragraph ending in a question mark is not one of them.
+Invoke it the moment you catch yourself about to write *"I need your input"*, *"how would you like me to proceed"*, or *"let me know and I'll continue"* — and any time you are about to stop work pending an answer or are about to write a seed with more than one next task. Cues like *"just decide"*, *"stop stalling"*, *"ask me properly"*, *"what are my options"* route here too. There are exactly two acceptable outcomes: a decision you made and recorded, or one `AskUserQuestion` call carrying 2-4 options with your recommendation first. A paragraph ending in a question mark is not one of them.
 
 ## Arguments
 
@@ -42,7 +42,7 @@ If reading gives you a defensible answer, that is your answer. Cite where you fo
 
 ### 2. Decide and record
 
-If the call is cheap and reversible, it is yours to make. The test: **could you undo it in a minute, with a follow-up commit, before anything outside this branch depends on it?** If yes, decide.
+If the call is within existing authority, cheap and reversible, it is yours to make. The test: **could you undo it in a minute, with a follow-up commit, before anything outside this branch depends on it?** If yes, decide. A choice the owner explicitly reserves still goes to rung 3, even if it is easy to undo.
 
 - **Pick** the option you would defend.
 - **State the assumption** in plain words — "assumed X because Y".
@@ -68,7 +68,7 @@ Escalate only if at least one of these is true:
 
 None of those? Go back down to rung 2 and decide. Asking is not free: it costs the user a context switch and it costs the run its momentum. Weigh that against the cost of being wrong — and remember that a wrong rung-2 call is usually a one-commit fix.
 
-{{CUSTOMIZE: unattended-run override — under an autonomous authority grant (e.g. `/prime-directive`), rung 3 collapses into rung 2: decide, record, proceed, never block on the user. Name the exceptions the owner still reserves — typically the irreversible, outward-facing and money-spending bullets above.}}
+{{CUSTOMIZE: unattended-run override — name the choices covered by the autonomous authority grant (e.g. `/prime-directive`) that therefore resolve at rung 2, and the choices the owner still reserves. Owner-reserved choices require an answer and remain blocked without one; a recommendation or default never expands the grant.}}
 
 ### 4. When you escalate, escalate well
 
@@ -79,7 +79,7 @@ Use the **`AskUserQuestion` tool. Never prose.** A question buried in a paragrap
 - **Real pros and cons on every option — including the recommended one.** Name what your recommendation costs. An option with no downside listed reads as unconsidered, and a judgment whose price is hidden cannot be audited.
 - **Plain language.** Write for someone who has not read the diff: expand the internal names, drop the acronyms you coined this session, describe consequences in terms of the product rather than the code.
 - **One round, not five.** Batch every open question. Drip-feeding one per turn turns a five-minute conversation into a day of latency.
-- **Say what happens if they do not answer** — normally that you proceed on the recommendation once the unblocked work runs out. A question with no default is a stall with extra steps.
+- **Say what happens if they do not answer** — record the recommended plan as the default and continue independent authorized work. For an owner-reserved choice, the dependent task stays blocked until answered; the default never grants permission to execute it. Keep the choice in DECISION with `recommend:` and `default:` in every status block. If the choice is already authorized and reversible, resolve it at rung 2 instead of asking.
 - **Never ask a bare "what would you like to do?"** If you cannot draft two concrete options, you do not understand the problem well enough to escalate it. Go back to rung 1.
 
 {{CUSTOMIZE: fallback channel if `AskUserQuestion` is unavailable in the target agent — e.g. a single message with a numbered option list, the recommendation labelled and placed first, pros and cons per option, and the no-answer default. The shape is the requirement; the tool is the default carrier.}}

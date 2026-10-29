@@ -49,14 +49,17 @@ A marathon preserves one authorized run across checkpoints, compactions and any 
   Carry outcome, acceptance criteria, authority and consumed retry/budget limits across the boundary. Measure handoff and reconstruction cost as well as context cost before claiming savings.
 - **The wave seed is written outside every worktree, and it archives rather than overwrites.** Both halves come from `/session-lifecycle` End step 1 and neither is optional:
 
-  ```bash
-  python3 ~/.claude/scripts/session-seed.py write \
-    --picks-up-at "wave <n+1> — <the next queue item>" --boundary-reason "wave boundary"
-  ```
+  Execute the complete `/session-lifecycle` End flow for this checkpoint. It selects one
+  next task with an executor and observable acceptance, fills the STATE/TL;DR context,
+  records the boundary reason, carries unresolved decisions and the pulse snapshot, and
+  writes/verifies the seed through its canonical writer. Do not substitute a partial raw
+  writer call or another skeleton. Preserve the recorded mode: a prime checkpoint continues
+  the already authorized mission using the continuation rules above; it does not grant new
+  authority or turn a wave boundary into a stop.
 
   **① The path.** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, where `<scope>` is the main worktree's directory basename — the same key from every wave's worktree, so a marathon's waves all read and write one seed. Never inside a wave's worktree: `git worktree remove --force` deletes untracked files silently, and a wave that loses its seed has not shed context, it has dropped the marathon's continuity. Outside every workspace there is nothing to commit, nothing to push, and nothing to gate teardown on.
 
-  **② The header, and archive-on-collide.** The command writes the frontmatter End step 1 prescribes — `type`, `date` (full UTC timestamp), `scope`, `session`, `picks_up_at`, `sensitivity`. If the canonical file already exists carrying a **different** `session:` — another session ended on this repo while the marathon was running — it renames that one to `NEXT-<scope>.<UTC>-<sid>.md` before writing, and a failure to archive is a REFUSE that writes nothing. Successive waves of one marathon share a session id only within a session; across a restart the new session archives the previous wave's seed, which is the intended record.
+  **② The header, and archive-on-collide.** The lifecycle's writer writes the frontmatter End step 1 prescribes — `type`, `date` (full UTC timestamp), `scope`, `session`, `picks_up_at`, `sensitivity`. If the canonical file already exists carrying a **different** `session:` — another session ended on this repo while the marathon was running — it renames that one to `NEXT-<scope>.<UTC>-<sid>.md` before writing, and a failure to archive is a REFUSE that writes nothing. Successive waves of one marathon share a session id only within a session; across a restart the new session archives the previous wave's seed, which is the intended record.
 
   **Do not hand-write the seed or reimplement any of this at the boundary.** The scope key, the id, the archive and the proof are one implementation with its own test suite; a wave that writes its own version is the drift that cost five review rounds.
 - **No forced restart or numeric context ceiling.** A run may span waves and supported compactions in the same session; neither 150K nor a compaction count determines completion. Route heavy output through subagents. If an item balloons, finish or park it within the attempt limit and continue independent work. Only test a lower compaction threshold through an explicitly configured, supported host setting; do not silently change it.
@@ -72,16 +75,11 @@ REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 REPO_NAME=$(basename "$REPO")
 SESSION_START=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-# {{CUSTOMIZE: Branch prefix for NEW session branches this skill creates — a single
-# prefix, e.g. "auto/". This skill always builds branches as
-# "${BRANCH_PREFIX}${ISSUE_NUM}-${SLUG}", so it only ever creates one prefix.}}
-BRANCH_PREFIX="auto/"
+# This skill creates ${BRANCH_PREFIX}${ISSUE_NUM}-${SLUG} with one prefix.
+BRANCH_PREFIX="{{CUSTOMIZE: Literal branch prefix for NEW session branches, e.g. auto/ or feat/. Supply only the prefix value, without quotes or an assignment.}}"
 
-# {{CUSTOMIZE: Regex of EVERY prefix a session branch might carry, for the
-# merge/resume SCANS below. If the repo's convention emits multiple prefixes
-# (feat/, fix/, refactor/, docs/, chore/), list them all as an alternation so the
-# scans don't miss merged branches. Defaults to just BRANCH_PREFIX.}}
-BRANCH_PREFIX_RE="^auto/"
+# Merge/resume scans must recognize every prefix a session branch may carry.
+BRANCH_PREFIX_RE="{{CUSTOMIZE: Literal anchored regex for EVERY session branch prefix, e.g. ^auto/ or ^(feat|fix|refactor|test)/. Supply only the regex value, without quotes or an assignment.}}"
 ```
 
 Parse `$ARGUMENTS` — same as `/autonomous-dev-flow` but with higher defaults:

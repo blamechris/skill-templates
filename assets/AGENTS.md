@@ -78,21 +78,11 @@ Chris replies “decision” or names a pending choice, immediately present it t
 the host question UI with context, trade-offs and a recommendation. Keep the block a status without recap padding; the old one-line format is retired.
 
 <!--default:next-line-->
-After the four bullets, add one final sentence:
-`**Next:** <state> — <action and owner>`. Use `🔴 BLOCKED` for an external
-prerequisite, `🟢 RUNNING` for authorized work, `⚪ IDLE` for a complete package,
-and `🟠 FAILED` for a stopped job, budget, retry or host limit.
-
-Normal delivery gives Chris a verified absolute seed path for a fresh session.
-Prime names the next authorized item or accepted continuation, with “no user
-action needed” when true. Routine gated merge is the agent's action. Name a dependency's missing QA,
-access, authority or decision and what it unblocks. If a limit stopped work, name the limit and
-the restart needed. A saved seed schedules nothing. Keep this to one sentence
-after the four bullets; lead the message with the usable outcome and link details.
+After the four bullets, write `**Next:** <state> — <one task and executor>`. `Next` and seed `picks_up_at` name one imperative task with `(agent name)` or `OWNER: name`; alternatives stay in the seed body. States: `🟢 RUNNING` for continuing authorized work or accepted continuation; `⚪ IDLE` only when nothing waits on anyone; `🔴 BLOCKED` for owner action, external prerequisite or non-`none` DECISION; `🟠 FAILED` for a stopped job, budget, retry or host limit. Before a seed with choices, use `/decide`: record an authorized reversible choice, or raise owner-reserved choices proactively through the host question UI with trade-offs, recommendation and default. Retain `recommend:` and `default:` in DECISION until answered; defaults never authorize reserved execution. Advance independent authorized work. Normal delivery gives a verified absolute seed path for a fresh session; prime names authorized work or accepted continuation with “no user action needed” when true. Routine gated merge is the agent’s task. Name missing QA, access, authority or decisions and what they unblock; name reached limits and required restarts. A seed schedules nothing. Lead with the usable outcome and links.
 
 <!--default:exec-brief-->
-After long multi-PR/issue, epic or marathon delivery, use the `visual-brief` skill
-to create and open a self-contained HTML report in `$CLAUDE_BRIEF_DIR`.
+When a pulse delta crosses a WARN threshold or at package close, use the
+`visual-brief` skill to create and open a self-contained HTML report in `$CLAUDE_BRIEF_DIR`.
 Begin with a two- or three-sentence result, outcome chips and a one-line “needs
 you” callout when Chris has a prerequisite. Below that, give the per-PR table,
 bugs caught and next work. Lead with verified merges, closures and gates passed.

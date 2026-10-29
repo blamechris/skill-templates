@@ -4,8 +4,9 @@
 # Canonical copy (skill-templates). Bootstrap: cp assets/scripts/session-seed.py ~/.claude/scripts/
 
 Usage:
-  python3 ~/.claude/scripts/session-seed.py write  --picks-up-at TEXT [--body-file F]
+  python3 ~/.claude/scripts/session-seed.py write  --picks-up-at TEXT --boundary-reason TEXT --next TEXT --body-file F [--alt TEXT]
   python3 ~/.claude/scripts/session-seed.py verify [--topic T] [--session ID]
+  python3 ~/.claude/scripts/session-seed.py verify --file PATH
   python3 ~/.claude/scripts/session-seed.py path   [--topic T]
   python3 ~/.claude/scripts/session-seed.py scope  [--topic T]
   python3 ~/.claude/scripts/session-seed.py list   [--archives]
@@ -39,8 +40,9 @@ WHAT IT REFUSES TO GUESS
     anonymous seed is one the next session cannot archive and this one cannot prove.
 
 Exit codes:
-  0  the operation succeeded (for `write` and `verify`: the canonical seed for this
-     scope exists, carries this session's id, and sits outside every worktree).
+  0  the operation succeeded (for `write` and canonical `verify`: the seed for this
+     scope exists, carries this session's id, has filled content, and sits outside
+     every worktree). `verify --file` checks content only, never canonical proof.
   1  REFUSE — stated on stderr. NO REFUSE EVER DESTROYS AN INCUMBENT SEED: the
      archive is what earns the right to write, so a failed archive aborts before
      the write. That is not the same as "nothing happened", and `write` must not be
@@ -171,13 +173,8 @@ def resolve_scope(topic=None):
     """
     r = _git("rev-parse", "--path-format=absolute", "--git-common-dir")
     if r.returncode != 0:
-        # ONLY "not a repository" means fleet. Dubious ownership, a corrupt index,
-        # a git too old for --path-format — each of those is a question this cannot
-        # answer, and answering `fleet` would file the seed under the wrong scope
-        # while looking like a success.
-        if "not a git repository" not in (r.stderr or "").lower():
-            die("cannot resolve scope: git failed for a reason other than 'not a "
-                "repository' — %s" % ((r.stderr or "").strip() or "no stderr"))
+        # Inspect the structural orphan before classifying Git's diagnostic:
+        # versions also say "gitfile does not point to a valid repository".
         orphan = _orphaned_worktree()
         if orphan is not None:
             die("cannot resolve scope: %s is a linked worktree whose main checkout "
@@ -188,6 +185,11 @@ def resolve_scope(topic=None):
                 "because it re-derives the same wrong scope. Restore the main "
                 "checkout, or run the write from a worktree of the repo it belongs "
                 "to." % orphan)
+        # ONLY "not a repository" means fleet. Dubious ownership, a corrupt index,
+        # a git too old for --path-format remain unknown, never a fleet fallback.
+        if "not a git repository" not in (r.stderr or "").lower():
+            die("cannot resolve scope: git failed for a reason other than 'not a "
+                "repository' — %s" % ((r.stderr or "").strip() or "no stderr"))
         if topic is not None and not TOPIC_OK.match(topic):
             die("--topic %r is not one filename component of [A-Za-z0-9_-]" % topic)
         return "fleet-" + topic if topic else "fleet"
@@ -308,6 +310,24 @@ def _quote(v):
     return '"%s"' % v.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def parse_frontmatter(text):
+    """The frontmatter grammar shared by file readers and content validation."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    out = {}
+    for ln in lines[1:]:
+        if ln.strip() == "---":
+            break
+        m = FM_LINE.match(ln)
+        if m and m.group(1) not in out:
+            # Structured fields use JSON flow syntax; '#' inside a JSON string
+            # is data, not the trailing comment of an unquoted YAML scalar.
+            out[m.group(1)] = (m.group(2).strip() if m.group(1) in ("decisions", "last_pulse")
+                               else _unquote(m.group(2)))
+    return out
+
+
 def read_frontmatter(path):
     """Parse the seed's YAML frontmatter. Missing file or no frontmatter -> {}.
 
@@ -317,19 +337,10 @@ def read_frontmatter(path):
     """
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
+            text = f.read()
     except OSError:
         return {}
-    if not lines or lines[0].strip() != "---":
-        return {}
-    out = {}
-    for ln in lines[1:]:
-        if ln.strip() == "---":
-            break
-        m = FM_LINE.match(ln)
-        if m and m.group(1) not in out:
-            out[m.group(1)] = _unquote(m.group(2))
-    return out
+    return parse_frontmatter(text)
 
 
 def incumbent_session(path):
@@ -444,43 +455,283 @@ def archive(seed, scope, directory, stamp):
         "seed is not written" % seed)
 
 
+# ---------------------------------------------------------- content contract
+
+MULTIPLE_TASKS = re.compile(r" or |;|·|candidate|Next runs", re.I)
+TASK_CHOICES = re.compile(r" or |;|·|Next runs", re.I)
+EXECUTOR = re.compile(r"\(agent\s+[^()\s][^()\n]*\)|\bOWNER:\s*\S", re.I)
+ANGLE_PLACEHOLDER = re.compile(r"<[a-z][^>\n]{2,}>")
+# The retired default body's exact holes remain invalid even in fenced examples.
+# A generic code sample such as `List<T>` can otherwise remain in a filled seed.
+SKELETON_PLACEHOLDERS = (
+    "<clean | the files another session left>", "<last run and verdict>",
+    "<suite and result>", "<numbers>", "<n>", "<the commit this claims>",
+    "<one line per landed change>", "<the next two>", "<item>",
+    "<why it is blocked or deferred>", "{branch}", "{picks_up_at}",
+)
+CLOSING = ("Repeat the session-lifecycle protocol at this session's end: write the next seed\n"
+           "with `session-seed.py write`, and hand back the one line to paste.\n")
+FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+BACKTICK_RUN = re.compile(r"`+")
+# Inline spans may wrap within a paragraph, but cannot run through a new block.
+INLINE_BLOCK = re.compile(r"^ {0,3}(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|<!--|"
+                          r">|(?:[-+*]|0{0,8}1[.)])[ \t]+|(?:[-*_][ \t]*){3,}$)")
+
+
+def inline_span_ends(lines):
+    """Index the next exact-width run once per inline block.
+
+    An absent closer leaves the opener literal: it must not hide later comments.
+    Reverse indexing avoids rescanning the paragraph for each unmatched width.
+    Runs inside a span are ordinary unless the whole run matches its delimiter.
+    """
+    ends, following = {}, {}
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index]
+        for run in reversed(list(BACKTICK_RUN.finditer(line))):
+            width, position = len(run.group()), (index, run.end())
+            if width in following:
+                ends[position] = following[width]
+            following[width] = position
+        if not line.strip() or INLINE_BLOCK.match(line):
+            following.clear()
+    return ends
+
+
+def outside_fences(text, strip_comments=False):
+    """Keep prose only; optionally hide HTML comments outside code fences."""
+    out, fence, width, comment = [], None, 0, False
+    lines, inline_end = text.splitlines(), None
+    inline_ends = inline_span_ends(lines) if strip_comments else {}
+    for index, line in enumerate(lines):
+        raw_fence = FENCE_LINE.match(line)
+        if fence is not None:
+            if (raw_fence and raw_fence.group(1)[0] == fence
+                    and len(raw_fence.group(1)) >= width and not raw_fence.group(2).strip()):
+                fence = None
+            continue
+        # A block fence takes precedence over inline spans. Backtick fence info
+        # cannot itself contain backticks; that shape can be an inline span.
+        if (not comment and inline_end is None and raw_fence
+                and (raw_fence.group(1)[0] == "~" or "`" not in raw_fence.group(2))):
+            fence, width = raw_fence.group(1)[0], len(raw_fence.group(1))
+            continue
+        if fence is None and strip_comments:
+            visible, offset = [], 0
+            if inline_end is not None:
+                end_index, end_offset = inline_end
+                offset = len(line) if index < end_index else end_offset
+                visible.append(line[:offset])
+                if index == end_index:
+                    inline_end = None
+            next_comment = line.find("<!--", offset)
+            while offset < len(line):
+                if comment:
+                    end = line.find("-->", offset)
+                    if end == -1:
+                        break
+                    comment, offset = False, end + 3
+                else:
+                    if next_comment != -1 and next_comment < offset:
+                        next_comment = line.find("<!--", offset)
+                    start = next_comment
+                    tick = BACKTICK_RUN.search(line, offset, start if start != -1 else len(line))
+                    if tick:
+                        tick_start, tick_end = tick.span()
+                        escaped_at = tick_start
+                        while escaped_at and line[escaped_at - 1] == "\\":
+                            escaped_at -= 1
+                        end = (inline_ends.get((index, tick_end))
+                               if (tick_start - escaped_at) % 2 == 0 else None)
+                        if end is None:
+                            visible.append(line[offset:tick_end])
+                            offset = tick_end
+                        elif end[0] == index:
+                            visible.append(line[offset:end[1]])
+                            offset = end[1]
+                        else:
+                            visible.append(line[offset:])
+                            inline_end, offset = end, len(line)
+                        continue
+                    if start == -1:
+                        visible.append(line[offset:])
+                        break
+                    visible.append(line[offset:start])
+                    comment, offset = True, start + 4
+            line = "".join(visible)
+        m = FENCE_LINE.match(line)
+        if m and (m.group(1)[0] == "~" or "`" not in m.group(2)):
+            fence, width, inline_end = m.group(1)[0], len(m.group(1)), None
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def sections(prose):
+    """Return level-two sections without constraining other useful headings."""
+    headings = list(re.finditer(r"^##[ \t]+(.+?)[ \t]*$", prose, re.M))
+    return [(heading.group(1), prose[heading.end():
+             headings[i + 1].start() if i + 1 < len(headings) else len(prose)].strip())
+            for i, heading in enumerate(headings)]
+
+
+def visible_prose(text):
+    """Remove invisible Markdown comments as well as fenced examples.
+
+    Comment/fence state is parsed together: fences inside comments are invisible,
+    while literal comment delimiters inside fences or matched inline backtick
+    spans do not hide later prose. Inline spans may wrap within a paragraph.
+    An unclosed prose comment hides the rest, as Markdown rendering does.
+    """
+    return outside_fences(text, strip_comments=True)
+
+
+def validate_content(text):
+    """The SAME filled-content test for proposed writes and existing seeds.
+
+    This is a structural check, not a claim that prose proves its own truth or
+    that an action is semantically imperative. Resume still re-derives evidence.
+    """
+    fm = parse_frontmatter(text)
+    if not fm or not re.match(r"\A---\s*\n[\s\S]*?\n---[ \t]*\r?(?:\n|\Z)", text):
+        die("seed content needs closed frontmatter")
+    if "decisions" in fm:
+        validate_decisions(decode_json(fm["decisions"], "decisions"))
+    if "last_pulse" in fm:
+        pulse = validate_pulse_snapshot(decode_json(fm["last_pulse"], "last_pulse"))
+        if pulse["state"]["scope"] != fm.get("scope"):
+            die("pulse snapshot scope does not match seed frontmatter")
+    for placeholder in SKELETON_PLACEHOLDERS:
+        if placeholder.lower() in text.lower():
+            die("seed content still contains a skeleton placeholder: %s" % placeholder)
+    prose = outside_fences(text)
+    if ANGLE_PLACEHOLDER.search(prose):
+        die("seed content contains an angle placeholder outside fenced code")
+    picks = fm.get("picks_up_at", "").strip()
+    if not picks:
+        die("--picks-up-at is empty (or seed picks_up_at is missing)")
+    if CONTROL.search(picks):
+        die("picks_up_at contains a newline or control character")
+    if len(picks) > 140:
+        die("picks_up_at exceeds 140 characters; name one next task")
+    if MULTIPLE_TASKS.search(picks):
+        die("picks_up_at contains a multiple-task marker; name one next task")
+    if not EXECUTOR.search(visible_prose(picks)):
+        die("picks_up_at needs an executor: (agent name) or OWNER: name")
+    boundary_pattern = r"^- \*\*Boundary reason:\*\*[ \t]*(.*)$"
+    if any(CONTROL.search(value) for value in re.findall(boundary_pattern, prose, re.M)):
+        die("Boundary reason contains a control character")
+    visible = visible_prose(text)
+    boundaries = re.findall(boundary_pattern, visible, re.M)
+    if len(boundaries) != 1 or not boundaries[0].strip() or boundaries[0].strip().lower() == "unstated":
+        die("seed content needs one explicit Boundary reason; missing or unstated is invalid")
+    # Placeholder detection above deliberately examines the original prose (and
+    # explicit skeleton holes even in fences/comments). Hidden instructions never
+    # establish that required state, task or acceptance fields are filled.
+    parts = sections(visible)
+    tasks = [body for title, body in parts if title.lower() == "today's task"]
+    if len(tasks) != 1:
+        die("seed content needs one Today's task section (write it with --next)")
+    task = tasks[0]
+    # The writer owns the closing protocol; do not mistake it for task text when
+    # there are no alternatives after Today's task.
+    task = task.split("Repeat the session-lifecycle protocol", 1)[0].strip()
+    acceptance = re.split(r"\bAcceptance:[ \t]*", task, maxsplit=1, flags=re.I)
+    if len(acceptance) != 2 or not acceptance[0].strip() or not acceptance[1].strip():
+        die("Today's task needs one task plus explicit Acceptance: text")
+    if TASK_CHOICES.search(acceptance[0]) or CONTROL.search(task):
+        die("Today's task must be one paragraph with one task plus Acceptance: text")
+    alternatives = [body for title, body in parts if title.lower() == "alternatives"]
+    if len(alternatives) > 1:
+        die("seed content has duplicate Alternatives sections")
+    if alternatives:
+        alternative_body = alternatives[0].split("Repeat the session-lifecycle protocol", 1)[0].strip()
+        lines = alternative_body.splitlines()
+        if not 1 <= len(lines) <= 2 or any(not re.match(r"^- \S", line) or CONTROL.search(line) for line in lines):
+            die("Alternatives must contain one or two filled bullet lines")
+    for name, pattern in (("STATE", r"state\b"), ("TL;DR", r"tl;dr\b")):
+        bodies = [body for title, body in parts if re.match(pattern, title, re.I)]
+        if len(bodies) != 1 or not re.search(r"[A-Za-z0-9]", re.sub(r"^#+.*$", "", bodies[0], flags=re.M)):
+            die("seed content needs a filled %s section in --body-file" % name)
+
+
 # ----------------------------------------------------------------------- write
 
-SKELETON = """## STATE
-
-- **Branch / HEAD:** {branch}
-- **Working tree:** <clean | the files another session left>
-- **CI:** <last run and verdict>
-- **Tests:** <suite and result>
-- **Open PRs / issues:** <numbers>
-
-Verify before building on any of this — re-derive, don't trust:
-
-```bash
-gh pr view <n> --json state -q .state      # expect: MERGED
-git log --oneline -3                       # expect: <the commit this claims>
-```
-
-## TL;DR — what shipped
-
-- <one line per landed change>
-
-## Today's task
-
-{picks_up_at}
-
-Alternatives, if that is blocked: <the next two>
-
-## Left undone, deliberately
-
-- <item> — <why it is blocked or deferred>
-
-Repeat the session-lifecycle protocol at this session's end: write the next seed
-with `session-seed.py write`, and hand back the one line to paste.
-"""
+def decode_json(text, field):
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        die("%s must be JSON flow syntax on one frontmatter line" % field)
 
 
-def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body):
+def utc_timestamp(value, field):
+    if not isinstance(value, str):
+        die("%s must be a UTC timestamp" % field)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        die("%s must be a UTC timestamp" % field)
+    if "T" not in value or parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
+        die("%s must be a full UTC timestamp" % field)
+    return parsed
+
+
+def validate_decisions(value):
+    """JSON flow syntax is also YAML; no second, partial YAML parser is needed."""
+    if not isinstance(value, list):
+        die("decisions must be a JSON list of text/opened_at/default objects")
+    for decision in value:
+        if not isinstance(decision, dict) or set(decision) != {"text", "opened_at", "default"}:
+            die("each decision needs exactly text, opened_at and default")
+        for key in ("text", "default"):
+            if not isinstance(decision[key], str) or not decision[key].strip() or CONTROL.search(decision[key]):
+                die("decision %s must be filled single-line text" % key)
+        utc_timestamp(decision["opened_at"], "decision opened_at")
+    return value
+
+
+def validate_pulse_snapshot(value):
+    if not isinstance(value, dict) or set(value) != {"at", "line", "state"}:
+        die("last_pulse needs exactly at, line and state")
+    utc_timestamp(value["at"], "pulse at")
+    if not isinstance(value["line"], str) or not value["line"].strip() or CONTROL.search(value["line"]):
+        die("pulse line must be filled single-line text")
+    if (not isinstance(value["state"], dict) or not isinstance(value["state"].get("scope"), str)
+            or not value["state"]["scope"].strip() or CONTROL.search(value["state"]["scope"])):
+        die("pulse state must be an object with a scope string")
+    try:
+        json.dumps(value, allow_nan=False)
+    except (ValueError, TypeError):
+        die("pulse state must contain finite JSON values")
+    return value
+
+
+def json_file(path, field):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError, UnicodeError) as e:
+        die("cannot read %s from %s (%s)" % (field, path, e))
+
+
+def with_metadata(text, **fields):
+    """Change only named frontmatter fields, leaving date and body bytes alone."""
+    lines = text.splitlines(keepends=True)
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if not lines or lines[0].strip() != "---" or end is None:
+        die("cannot add metadata without closed frontmatter")
+    additions = []
+    for key, value in fields.items():
+        encoded = (value if key == "session" and BARE_SCALAR.match(value)
+                   else _quote(value) if key == "session"
+                   else json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")))
+        additions.append("%s: %s\n" % (key, encoded))
+    kept = [line for line in lines[1:end]
+            if not ((m := FM_LINE.match(line.rstrip("\r\n"))) and m.group(1) in fields)]
+    return lines[0] + "".join(kept + additions + lines[end:])
+
+
+def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body, next_task, alternatives):
     head = [
         "---",
         "type: handoff",
@@ -497,7 +748,10 @@ def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body):
         "",
         "",
     ]
-    return "\n".join(head) + body.rstrip("\n") + "\n"
+    tail = "\n\n## Today's task\n\n%s\n" % next_task
+    if alternatives:
+        tail += "\n## Alternatives\n\n" + "\n".join("- " + alt for alt in alternatives) + "\n"
+    return "\n".join(head) + body.rstrip("\n") + tail + "\n" + CLOSING
 
 
 def atomic_write(path, text):
@@ -527,14 +781,55 @@ def cmd_write(a):
     sid = resolve_session_id(a.session)
     now = parse_now(a.now)
 
-    if not a.picks_up_at.strip():
+    if a.refresh_pulse:
+        if (a.picks_up_at is not None or a.body is not None or a.next_task or a.alt
+                or a.decisions_file or a.pulse_file or a.title
+                or a.boundary_reason != "unstated" or a.sensitivity != "vault"):
+            die("--refresh-pulse cannot be combined with full seed content inputs")
+        seed = seed_path(scope)
+        previous = read_seed_text(seed)
+        validate_content(previous)
+        pulse = validate_pulse_snapshot(json_file(a.refresh_pulse, "pulse snapshot"))
+        if pulse["state"]["scope"] != scope:
+            die("pulse snapshot scope does not match this seed")
+        text = with_metadata(previous, session=sid, last_pulse=pulse)
+        return finish_write(a, scope, sid, now, text)
+
+    if not a.picks_up_at or not a.picks_up_at.strip():
         die("--picks-up-at is empty. It is the only line `/next` quotes, so a seed "
             "without it tells the next session nothing about where to start.")
     for name, val in (("--picks-up-at", a.picks_up_at), ("--title", a.title),
-                      ("--boundary-reason", a.boundary_reason)):
+                      ("--boundary-reason", a.boundary_reason), ("--next", a.next_task or ""),
+                      *(("--alt", alt) for alt in a.alt)):
         if "\n" in val or CONTROL.search(val):
             die("%s contains a newline or control character; it is a single "
                 "frontmatter line" % name)
+
+    if a.body is None:
+        die("--body-file is required with filled STATE and TL;DR sections; no skeleton is written")
+    if not a.next_task:
+        die("--next is required: one imperative task plus Acceptance: text")
+    if len(a.alt) > 2:
+        die("--alt accepts at most two alternatives")
+    if any(not alt.strip() for alt in a.alt):
+        die("--alt must not be empty")
+    text = render(scope, sid, now.strftime("%Y-%m-%dT%H:%MZ"), a.picks_up_at,
+                  a.title or a.picks_up_at, a.boundary_reason, a.sensitivity,
+                  a.body, a.next_task, a.alt)
+    decisions = validate_decisions(json_file(a.decisions_file, "decisions") if a.decisions_file else [])
+    text = with_metadata(text, decisions=decisions)
+    if a.pulse_file:
+        pulse = validate_pulse_snapshot(json_file(a.pulse_file, "pulse snapshot"))
+        if pulse["state"]["scope"] != scope:
+            die("pulse snapshot scope does not match this seed")
+        text = with_metadata(text, last_pulse=pulse)
+    return finish_write(a, scope, sid, now, text)
+
+
+def finish_write(a, scope, sid, now, text):
+    # Validate BEFORE creating directories or moving an incumbent. A hollow new
+    # seed must not displace the useful context the next session would have read.
+    validate_content(text)
 
     directory = handoff_dir()
     try:
@@ -556,11 +851,7 @@ def cmd_write(a):
         if prev != sid:
             archived = archive(seed, scope, directory, now.strftime("%Y%m%dT%H%M%SZ"))
 
-    body = a.body if a.body is not None else SKELETON.format(
-        branch=current_branch(), picks_up_at=a.picks_up_at)
-    atomic_write(seed, render(
-        scope, sid, now.strftime("%Y-%m-%dT%H:%MZ"), a.picks_up_at,
-        a.title or a.picks_up_at, a.boundary_reason, a.sensitivity, body))
+    atomic_write(seed, text)
 
     if archived:
         print("archived: %s" % archived)
@@ -585,12 +876,6 @@ def cmd_write(a):
         # for "the write proved the path".
         print("wrote (UNPROVED): %s" % seed)
     return 0
-
-
-def current_branch():
-    r = _git("branch", "--show-current")
-    b = (r.stdout or "").strip() if r.returncode == 0 else ""
-    return b or "(detached or not in a repo)"
 
 
 def parse_now(s):
@@ -620,6 +905,13 @@ def cmd_verify(a):
       canonical path holds someone else's seed. Only reading `session:` back catches
       this; it is the same field the archive decides on, used a second time as proof.
     """
+    if a.file:
+        if a.topic is not None or a.session is not None:
+            die("--file is content validation only; do not combine it with --session or --topic")
+        path = os.path.abspath(a.file)
+        validate_content(read_seed_text(path))
+        print("content valid (NOT canonical proof): %s" % path)
+        return 0
     scope = resolve_scope(a.topic)
     sid = resolve_session_id(a.session)
     seed = seed_path(scope)
@@ -638,8 +930,17 @@ def cmd_verify(a):
     if mine != sid:
         die("%s carries session %r, not this session's %r%s"
             % (seed, mine, sid, _elsewhere(sid, scope)))
+    validate_content(read_seed_text(seed))
     print("seed: %s" % seed)
     return 0
+
+
+def read_seed_text(path):
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            return f.read()
+    except (OSError, UnicodeError) as e:
+        die("cannot read seed content %s (%s)" % (path, e))
 
 
 def _elsewhere(sid, scope):
@@ -737,14 +1038,21 @@ def main(argv=None):
         return sp
 
     w = scoped(sub.add_parser("write", help="archive on collide, write the seed, prove it"))
-    w.add_argument("--picks-up-at", required=True,
+    w.add_argument("--picks-up-at",
                    help="the one thing the next session starts on; `/next` quotes it verbatim")
     w.add_argument("--session", help="this session's id (default: $CLAUDE_CODE_SESSION_ID)")
     w.add_argument("--title", default="", help="H1 text (default: --picks-up-at)")
     w.add_argument("--boundary-reason", default="unstated",
                    help="which global session-boundary rule fired")
+    w.add_argument("--next", dest="next_task",
+                   help="one imperative task followed by Acceptance: and an observable result")
+    w.add_argument("--alt", action="append", default=[],
+                   help="one alternative task, repeatable zero to two times")
     w.add_argument("--sensitivity", default="vault", choices=("public", "vault"))
-    w.add_argument("--body-file", help="seed body after the header; `-` reads stdin")
+    w.add_argument("--body-file", help="filled STATE/TL;DR and other context; `-` reads stdin; no skeleton default")
+    w.add_argument("--decisions-file", help="JSON list of text/opened_at/default objects (default: empty list)")
+    w.add_argument("--pulse-file", help="JSON pulse snapshot to carry in a full seed write")
+    w.add_argument("--refresh-pulse", help="refresh only snapshot/session, preserving the canonical seed date and body")
     w.add_argument("--now", help="pin the clock (ISO-8601 UTC) for `date:` and the archive stamp")
     w.add_argument("--no-verify", action="store_true",
                    help="skip the built-in proof (it is the point; for tests only)")
@@ -752,6 +1060,7 @@ def main(argv=None):
 
     v = scoped(sub.add_parser("verify", help="prove the canonical seed is this session's"))
     v.add_argument("--session", help="this session's id (default: $CLAUDE_CODE_SESSION_ID)")
+    v.add_argument("--file", help="validate any seed's content only (including archives); NOT canonical proof")
     v.set_defaults(fn=cmd_verify)
 
     scoped(sub.add_parser("scope", help="print the resolved scope key")).set_defaults(fn=cmd_scope)
@@ -773,7 +1082,7 @@ def main(argv=None):
             try:
                 with open(a.body_file, encoding="utf-8") as f:
                     a.body = f.read()
-            except OSError as e:
+            except (OSError, UnicodeError) as e:
                 die("cannot read --body-file %s (%s)" % (a.body_file, e))
     elif a.cmd == "write":
         a.body = None

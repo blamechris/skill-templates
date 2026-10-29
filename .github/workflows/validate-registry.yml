@@ -428,6 +428,9 @@ jobs:
         # one until you point it at another session's file and watch it pass.
         run: ./assets/scripts/session-seed.test.sh
 
+      - name: offline session-pulse regression tests
+        run: ./assets/scripts/session-pulse.test.sh
+
       - name: usage-benchmark-row regression tests
         # #207: this script shipped in the registry WITHOUT the message.id dedup the
         # machine copy had, so the documented bootstrap

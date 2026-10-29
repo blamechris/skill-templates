@@ -1,6 +1,6 @@
 # /session-lifecycle
 
-The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`) by reference. Natural-language cues like *"resume"*, *"let's start"*, *"wrap up"*, or *"close out the session"* should route here.
+The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`, `/decide`, `/pulse`) by reference. Natural-language cues like *"resume"*, *"let's start"*, *"wrap up"*, or *"close out the session"* should route here.
 
 This skill is a **bundle head**: it does not re-implement the components, it drives them. Where a component skill is not yet installed in this repo, the install-on-miss rule applies — run `skill add <name>` first, then invoke it.
 
@@ -53,6 +53,16 @@ Run these in order; each step re-derives state rather than trusting memory:
    Without the guard `diff` just errors on a machine that has never installed `/next`, which reads
    as a failed check rather than as "install it". Install (or copy) first, then compare.
 6. **Prior-session state** — read this scope's seed, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir `~/Obsidian/no-it-all/handoffs/`), plus {{CUSTOMIZE: any session ledger or queue file this repo keeps, e.g. `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this list if the repo has none}}. `<scope>` is the main worktree's directory basename, resolved from git — `python3 ~/.claude/scripts/session-seed.py path` prints the exact file to open — so every worktree of a repo resolves to the same seed and no `$PWD` test is involved. There is exactly **one** canonical seed per scope, so nothing has to be ranked: no newest-wins rule, no mtime, no tie to resolve. Sibling files named `NEXT-<scope>.<UTC>-<sid>.md`, or `…-<sid>-<n>.md` when two archives landed in one second, are **archived** seeds — a previous session's, parked when this one collided with it. Do not read them by default, but if the canonical seed is missing, say so and list them: the newest archive is usually an unconsumed handoff, and a session that silently starts from nothing is how work gets repeated. Read the seed's header and TL;DR plus the ledger's STATE header — not the full history. Seeds are **perishable**: each is superseded by the next, and anything in one still worth reading after it is consumed belongs in `docs/records/`, linked from the seed. `/catchup` is the component skill for reconstructing a prior session where installed.
+   Before using a seed as actionable context, validate its content with
+   `python3 ~/.claude/scripts/session-seed.py verify --file /absolute/path/to/seed.md`.
+   This also works for an explicitly selected archive. It checks the same filled-content
+   contract as writing, and prints `content valid (NOT canonical proof):`; it never prints
+   `seed:` or proves the prior session is this session. A hollow legacy seed is context to
+   reconstruct through `/catchup`, not an executable work order. Do not invent missing
+   state or treat that refusal as permission to abandon already authorized work.
+   Read `Today's task` and state it as the selected work package with its observable
+   acceptance, unless the user's newer scope instruction supersedes it. The seed supplies
+   context and carries existing authority; it grants no new execution authority.
 7. **Verify the last claimed merge** — if the prior session's notes claim a merge, confirm it (`gh pr view <n>` reports `MERGED`) before building on it. State is re-derived, not trusted.
 
 Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others), drifted skills, the delegated outcome and observable acceptance, what is usable now, the selected work package and mode. Normal development is the default; `/prime-directive` or an explicit autonomous continuing mission selects prime mode. Preserve that mode on resume; user presence does not change it. Reuse the user's existing authorization; a seed is context, not a request for another scope approval.
@@ -96,18 +106,73 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
 
 1. **Handoff seed (artifact ②)** — **the seed is written outside every worktree, at an absolute path:** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`. It holds what shipped, what remains, and *why* each remaining item is blocked or deferred. Not in the repo, not in this session's worktree, not on a branch — an absolute path outside every *session's* workspace has **no worktree to be torn down with, no branch to be unreachable from, and no index to be confused with**, which is why nothing downstream has to be gated on it. Three earlier attempts to keep the seed inside a session's own workspace failed on exactly those surfaces, the last of them on a "committed" proof that had only staged the file. Read the property precisely: the default handoff dir is itself a git repo (the vault is versioned, and should be), and that takes nothing away — what the seed must be outside is the tree *this session* edits, branches and tears down, which is exactly what the write checks it against.
 
+   **Resolve the next task before writing.** If you are about to write a seed with more
+   than one next task, invoke `/decide` first. Pick and record a choice that is authorized
+   and reversible. For an owner-reserved choice, proactively use the host question UI
+   before the seed write, with concrete options, trade-offs, a recommendation and a
+   default. A default records the recommended plan only; no answer grants no reserved
+   execution authority. Keep the affected task blocked and record the open question in
+   DECISION with `recommend:` and `default:` until answered. Continue independent
+   authorized work. Select one next task with `(agent name)` or `OWNER: name`; alternatives
+   go only in the seed body. The task's observable acceptance belongs in `--next`.
+
+   **Capture the boundary pulse.** Run the offline reader before the full seed write:
+
+   ```bash
+   PULSE_SNAPSHOT=$(mktemp "${TMPDIR:-/tmp}/session-pulse.XXXXXX")
+   python3 ~/.claude/scripts/session-pulse.py --boundary --snapshot-file "$PULSE_SNAPSHOT"
+   ```
+
+   It prints eight lines and always exits zero; read WARN and snapshot-save failures.
+   Add `--source claude`, `codex` or `chroxy` only for the actual host. Without a named
+   source usage stays `n/a`; Claude's meter also requires its actual harness session ID.
+   Optional `--signals-file` takes already cached measurements under `/pulse`'s contract.
+   No network requests or test runs belong in this readout. A threshold warns, never stops
+   authorized work. Carry the resulting snapshot with `--pulse-file` below; if snapshot
+   creation failed, report that limitation and omit the unavailable snapshot rather than
+   inventing one. The full seed write remains subject to its content checks.
+
    **One command writes it.** It resolves the scope, resolves this session's id, archives whatever it collides with, writes the seed, and proves the result — all of it in `session-seed.py`, none of it transcribed here:
 
    ```bash
    python3 ~/.claude/scripts/session-seed.py write \
-     --picks-up-at "issue #209 — assets/scripts has no test coverage" \
-     --boundary-reason "wave boundary" \
+     --picks-up-at "Add the remaining script tests (agent Sol)" \
+     --boundary-reason "package complete" \
+     --next "Add coverage for the remaining script assets. Acceptance: their sibling suites pass." \
+     --alt "Review the queued documentation changes (agent Sol)" \
+     --pulse-file "$PULSE_SNAPSHOT" \
      --body-file /tmp/handoff-body.md
    ```
 
    It prints `seed: <absolute path>` — which is step 7's one line to paste — or a `REFUSE:` line with a nonzero exit. **A REFUSE never destroys an existing seed**: the archive is what earns the right to write, so a failed archive aborts before the write. It does *not* mean nothing happened, and reading it that way is the trap — the last thing the write does is run step 3's proof, so a REFUSE from *there* arrives after the seed is already on disk. Do not infer from the exit code; read the lines above it, which say what was done and in what order: `archived: <path>` iff an incumbent was moved, then `seed: <path>` iff the proof passed. Add `--topic <name>` for a fleet session with a named topic; never anywhere else.
 
-   `--body-file` is the seed's body, written first to a scratch path (`-` reads stdin). Omit it and the script writes a skeleton to fill in: `## STATE` (branch/HEAD, working tree, CI, tests, open PRs and issues) · a **"Verify before building on any of this — re-derive, don't trust"** block where every command carries its expected answer as a comment · `## TL;DR — what shipped` · `## Today's task` · `## Left undone, deliberately`.
+   `--body-file` carries the filled context, written first to a scratch path (`-` reads
+   stdin): `## STATE` (branch/HEAD, working tree, CI, tests, open PRs and issues), a
+   **"Verify before building on any of this — re-derive, don't trust"** block with each
+   command's expected answer, `## TL;DR — what shipped`, and remaining gaps or deliberate
+   deferrals. STATE and TL;DR must contain actual content; other useful headings are welcome.
+   The script requires this body and never writes a skeleton when it is omitted.
+
+   `--next` renders the single `## Today's task` section: one imperative task in one
+   paragraph, followed by `Acceptance:` and an observable result. `--alt` renders
+   `## Alternatives` and may be repeated zero to two times. Keep these generated sections
+   out of the body file. The short `picks_up_at` dispatch line must be at most 140 characters,
+   name one task and identify its executor with `(agent name)` or `OWNER: name`. It refuses
+   the case-insensitive multiple-task markers ` or `, `;`, `·`, `candidate` and `Next runs`.
+   Keep choices in alternatives rather than the dispatch line.
+
+   Carry every unresolved owner choice with `--decisions-file /tmp/handoff-decisions.json`:
+   a JSON list of objects with filled `text`, full UTC `opened_at`, and filled `default`.
+   Preserve each choice's original timestamp until it is answered. The default records the
+   proposed plan only. Omission writes an explicit empty list, so omit it only when no
+   decisions remain. Structured `decisions` and `last_pulse` use single-line JSON flow syntax
+   in YAML frontmatter; block-style YAML is not accepted by these stdlib-only readers.
+
+   Both write and verify refuse missing or `unstated` boundary reasons, hollow task or
+   context sections, the retired skeleton's explicit placeholders, and generic angle
+   placeholders outside fenced code. The proposed content is validated before an incumbent
+   is archived or any seed is written. These checks enforce a filled structure; they do not
+   prove that the claims are true or replace the resume protocol's evidence checks.
 
    Fill the body with the **delegated outcome and observable acceptance**, **what is usable today** (build/install and evidence, or unknown), **the remaining gap**, and **the actual execution state**: continuing/accepted next run, ready for user QA, budget/retry limit, specific blocker, host continuation limit, or complete. Preserve the stable run identity, authority, configured limits with their scope, consumed usage and attempts including pre-PR failures. Missing accounting remains unknown; recover it before spending against an uncertain allowance. Name a user action only when genuinely needed, with what it unblocks. The script writes and verifies the file; it does not infer these answers or schedule continuation.
 
@@ -129,7 +194,7 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
    date: 2026-08-11T21:40Z          # full UTC timestamp
    scope: skill-templates           # the main worktree's directory basename, or fleet
    session: a1b2c3d4                # this session's id
-   picks_up_at: "issue #205 — extract the seed logic into a tested script"
+   picks_up_at: "Extract the seed logic into a tested script (agent Sol)"
    sensitivity: public              # public | vault
    ---
    ```
@@ -149,12 +214,12 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
    - **Right file, wrong author.** The archive was destroyed and overwritten, so the canonical path holds someone else's seed. Reading `session:` back is what distinguishes "I wrote the seed" from "a seed exists": the same field the archive decides on, used a second time as the proof.
 
    A bare `[ -f "$SEED" ]` calls both a pass, and an unresolvable session id is a REFUSE too — otherwise an empty id matches a seed with no `session:` line and the check passes on nothing. There is no commit to make, no branch to push, and no `cat-file` to run: the previous three rounds of this checklist all failed inside that machinery. Whether the vault repo itself is committed and pushed is ordinary vault hygiene, not a precondition — the seed already exists at a stable absolute path that nothing this session does can delete.
-4. **Executive brief** — for a session that shipped real work (several PRs/issues, an epic), run `/visual-brief` into the vault (`$CLAUDE_BRIEF_DIR`). Skip for small sessions — say so.
+4. **Executive brief** — when a pulse delta crosses a WARN threshold or at package close, run `/visual-brief` into the vault (`$CLAUDE_BRIEF_DIR`) and open it. A warning is a reporting trigger, not a work-stopping gate.
 5. **Capture learnings** — run `/learn` for genuinely novel lessons; "nothing novel" is a valid outcome, stated.
 6. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
 
    This step is **ungated on purpose**: `git worktree remove --force` deletes untracked files without prompting, and the seed is not in any worktree to be deleted. Anything else durable that got written into a worktree is committed and pushed before removal, or it is lost — so do not write durable things there.
-7. **Closing message** — lead with the outcome, usable state and remaining gap from the seed. Include the verified absolute seed path (`seed:` from step 1) and any open PR number. End with the global `**Status:**` block and `**Next:**` line with exactly one state token — 🔴 BLOCKED, 🟢 RUNNING, ⚪ IDLE, or 🟠 FAILED — naming actual execution: accepted next task/session, continuing work, genuine QA/access/decision, a reached limit, or complete. The stable seed path is the one line to paste if a manual restart is truly required; its existence alone is never evidence that work will continue.
+7. **Closing message** — lead with the outcome, usable state and remaining gap from the seed. Include the verified absolute seed path (`seed:` from step 1) and any open PR number. End with the global `**Status:**` block and one `**Next:**` sentence. Both `Next` and `picks_up_at` name exactly one imperative task with executor `(agent name)` or `OWNER: name`; alternatives stay in the seed body, never as candidates in `Next`. Use exactly one of the four tokens: 🟢 RUNNING for authorized work actually continuing or an accepted continuation, ⚪ IDLE only when nothing waits on anyone, 🔴 BLOCKED whenever owner action, an external prerequisite or non-`none` DECISION remains, and 🟠 FAILED for a stopped job, budget, retry or host limit. Keep every pending choice in DECISION with `recommend:` and `default:`; a reserved choice stays blocked until answered, and its default records a recommended plan without granting execution authority. A required manual restart or owner QA is owner action and therefore BLOCKED. The stable seed path is the one line to paste when that restart is required; its existence alone is never evidence that work will continue.
 
 ### Follow-on protocol (when a task completes and work remains)
 
@@ -168,6 +233,8 @@ The canonical rules live in `~/.claude/CLAUDE.md` under **"Follow-on protocol"**
 | `/visual-brief` | End-of-session HTML executive brief | `skill add visual-brief` |
 | `/learn` | Persist novel lessons at end | `skill add learn` |
 | `/create-issue` | File scoped follow-on issues | `skill add create-issue` |
+| `/decide` | Select one next task or surface an owner-reserved choice | `skill add decide` |
+| `/pulse` | Read and record offline boundary signals | `skill add pulse` |
 
 Installing `session-lifecycle` should be followed by installing any missing components in the same pass — the bundle head without its components is a checklist that can't execute.
 
@@ -176,7 +243,7 @@ together per machine because End step 1 and `/next` use the same installed copie
 
 ```bash
 mkdir -p ~/.claude/scripts ~/.claude/usage-history
-cp assets/scripts/session-seed.py assets/scripts/usage-benchmark-row.py \
+cp assets/scripts/session-seed.py assets/scripts/session-pulse.py assets/scripts/usage-benchmark-row.py \
    assets/scripts/usage-checkpoint.py assets/scripts/usage_accounting.py \
    assets/scripts/usage-pace.py assets/scripts/usage-trend.py assets/scripts/filed-from.py \
    assets/scripts/review-result.py assets/scripts/rework-lag.py \
@@ -191,6 +258,11 @@ path and gives it a sibling shared module. Confirm that schedule before rollout;
 neither copy command is run by installing this repository alone.
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
+`session-pulse.py` imports that scope implementation and reports eight offline lines under
+one shared subprocess deadline. It reads cached tests/CI, source-labelled signals and the
+previous snapshot, without fetching or launching tests. `/pulse` persists a new snapshot
+only through `session-seed.py write --refresh-pulse`, with the actual session ID; that mode
+preserves the seed's date and body, carries decisions, and keeps archive and proof checks.
 `usage-checkpoint.py` emits artifact ①'s cumulative measurement; `usage-benchmark-row.py`
 emits the historical index row once; `usage-pace.py` answers "how much of the meter
 week is spent", records meter readings, and — on macOS with the Claude desktop app — measures

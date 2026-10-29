@@ -116,7 +116,7 @@ def restore_backup(args, home, codex_home):
     allowed = {home / '.fleet/AGENTS.md', codex_home / 'AGENTS.md',
                codex_home / 'config.toml', home / '.gemini/GEMINI.md',
                home / '.claude/CLAUDE.md',
-               *(home / '.claude/scripts' / name for name in ('fleet-check.py', 'session-seed.py'))}
+               *(home / '.claude/scripts' / name for name in ('fleet-check.py', 'session-seed.py', 'session-pulse.py'))}
     planned = []
     for index, target in enumerate(targets):
         path = Path(target)
@@ -217,7 +217,7 @@ def main():
         source_modes[home / '.claude/CLAUDE.md'] = stat.S_IMODE((registry / 'assets/global-CLAUDE.md').stat().st_mode)
     else:
         print('HOLD: Claude adapter unchanged until a fresh live import is verified')
-    for script in ('fleet-check.py', 'session-seed.py'):
+    for script in ('fleet-check.py', 'session-seed.py', 'session-pulse.py'):
         source = registry / 'assets/scripts' / script
         destination = home / '.claude/scripts' / script
         planned[destination] = source.read_text(encoding='utf-8')

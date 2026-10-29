@@ -209,6 +209,8 @@ assert mode(home / '.fleet/AGENTS.md') == 0o640
 assert mode(home / '.claude/scripts/fleet-check.py') == 0o751
 assert mode(home / '.codex/config.toml') == 0o644
 assert mode(home / '.claude/scripts/session-seed.py') == mode(registry / 'assets/scripts/session-seed.py')
+assert (home / '.claude/scripts/session-pulse.py').read_bytes() == (registry / 'assets/scripts/session-pulse.py').read_bytes()
+assert mode(home / '.claude/scripts/session-pulse.py') == mode(registry / 'assets/scripts/session-pulse.py')
 assert mode(home / '.gemini/GEMINI.md') == mode(registry / 'assets/AGENTS.md')
 PY
 mode_rc=$?

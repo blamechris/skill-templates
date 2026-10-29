@@ -14,6 +14,78 @@ Three staging incidents in one week motivated explicit path staging. In one, `gi
 
 The four-slot status block makes completed work, individual running agents, blockers and pending decisions visible at a glance. Its previous one-line form was retired because it did not scan in desktop/mobile views. A pending decision belongs in every block until resolved. The `Next` line assigns the next action after the block. A saved seed is only a file; it does not imply a scheduled continuation.
 
+The boundary needs one selected task, rather than a queue disguised as a dispatch line.
+Both `Next` and `picks_up_at` therefore carry one imperative task with `(agent name)` or
+`OWNER: name`. The dispatch line has a mechanical ceiling of 140 characters and rejects
+the case-insensitive markers ` or ` (including its surrounding spaces), `;`, `·`,
+`candidate` and `Next runs`. Alternatives have their own place in the seed body. A
+well-formed line still needs a meaningful task: `Today's task` supplies that same task's
+observable acceptance, rather than adding another task. These public examples define the
+intended shape without relying on a private handoff specimen:
+
+| Field or case | Example | Expected interpretation |
+|---|---|---|
+| One selected dispatch | `Add the seed refusal checks (agent Sol)` | Valid `picks_up_at`, below 140 characters, with one executor. |
+| Observable task acceptance | `Add the seed refusal checks. Acceptance: hollow writes refuse before archiving.` | One imperative task plus a result that can be checked. |
+| Choice in dispatch | `Add tests or review docs (agent Sol)` | Reject: the space-delimited ` or ` leaves two tasks unselected. |
+| Multiple task markers | `Add tests; review docs (agent Sol)` and `Add tests · review docs (agent Sol)` | Reject either separator in dispatch. |
+| Candidate queue | `Candidate: add tests (agent Sol)` and `Next runs: add tests (agent Sol)` | Reject either marker regardless of case; select one task first. |
+| Overlong dispatch | Python expression `"x" * 129 + " (agent Sol)"` produces 141 characters. | Reject even with an executor; 140 characters is the maximum. |
+| Missing executor | `Add the seed refusal checks` | Reject: name `(agent Sol)` or `OWNER: Chris`. |
+| Continuing execution | `🟢 RUNNING — Add the seed refusal checks (agent Sol)` | Valid only while that authorized task is continuing or its continuation is accepted. |
+| Owner work labelled idle | `⚪ IDLE — You run the smoke check OWNER: Chris` | Wrong state: the owner action requires BLOCKED. |
+| Owner terminal prerequisite | `⚪ IDLE — Run the smoke check from your terminal OWNER: Chris` | Wrong state: the terminal instruction requires BLOCKED. |
+| Manual restart | `⚪ IDLE — Paste the seed path into a fresh session OWNER: Chris` | Wrong state: the required paste action requires BLOCKED. |
+| Reserved approval | `⚪ IDLE — Start the rollout on your yes (agent Sol)` | Wrong state: the pending approval requires BLOCKED. |
+| Stopped execution | `🟠 FAILED — Restart the run after the host limit OWNER: Chris` | Name the reached limit and restart needed; do not claim execution is continuing. |
+
+IDLE means nothing waits on anyone. A non-`none` DECISION or required owner action makes
+the closing state BLOCKED, even if independent authorized work is still listed in flight.
+Phrases such as “you run”, “from your terminal”, “paste” and “on your yes” are owner
+prerequisites when used as instructions or approval conditions; a line cannot declare
+itself idle while assigning that prerequisite. The four state tokens remain RUNNING,
+IDLE, BLOCKED and FAILED; no fifth token is needed to disguise a pending choice.
+
+Before writing a seed with more than one next task, `/decide` selects an authorized,
+reversible choice and records why. A choice the owner reserves is presented proactively
+through the host question UI before writing the seed, with options, trade-offs, a
+recommendation and a default. For example, `recommend: approve the proposed smoke check;
+default: retain the proposed check pending an answer` records the recommended plan, not
+permission. The choice remains in DECISION and its dependent task remains BLOCKED until
+answered. Independent authorized work may continue; silence never grants reserved
+execution authority.
+
+The offline pulse makes those boundaries visible without turning a status request into a
+new investigation. Eight lines report scope; seed age and dispatch; local git state;
+commits/open items/turns; cached tests and CI; decisions; usage/context/compactions; and
+delta/WARN. It imports the seed's scope implementation and puts every subprocess under
+one 0.8-second deadline. No fetch, service query, test suite or model is part of the reader.
+Missing measurements remain `n/a`; Codex and chroxy do not inherit another host's Claude
+meter. Explicit cached signals must identify their actual source, observation timestamp
+and numeric types. Test and CI values remain labelled cached.
+
+The previous pulse is evidence, not a second status board. A scratch snapshot contains
+`at`, a readable `line`, and material `state`; only `session-seed.py write` persists it as
+`last_pulse`. The refresh mode preserves the seed's original date and body, carries its
+decisions, archives on a different session's collision, validates before moving anything,
+and runs fresh canonical proof. A missing identity or invalid legacy seed leaves the pulse
+observational. Snapshot failure does not become a work-stopping gate or a false claim that
+the baseline was saved. The bootstrap installs the reader beside the writer so this is
+usable after copy-out rather than only inside the registry checkout.
+
+No baseline means `no baseline`; unchanged material fields mean `no material change since
+TIME`. Raw ages and recurrence counters do not themselves invent a material change; stable
+threshold booleans make each crossing visible in delta without repeating a change on every
+subsequent pulse.
+Warnings surface a decision text present across at least two recorded pulses, more than
+three open items, a seed older than 24 hours, at least two compactions, dirt at a boundary,
+or stated estimate drift above 25 percent. A threshold warns rather than stops execution.
+Legacy pending DECISION prose is explicitly unknown-count state, with age when recoverable;
+it must not silently become zero open decisions merely because the structured list is
+absent or empty. Structured choices use `text`, full UTC `opened_at` and `default`, carried
+as JSON flow syntax in YAML frontmatter to keep parsing stdlib-only. A pulse delta crossing
+a WARN threshold or package close triggers the executive brief.
+
 Long sessions use a concise HTML executive brief for verified outcomes and a lower section for detailed records. HTML deliverables for Chris default to a dark palette because the Claude app's local browser pane rendered pages light even when the OS used dark mode (#306). Product UI, third-party reports and claude.ai Artifacts have separate styling contracts. Delegated generators need the dark instruction in their own brief because they may never read the root.
 
 ## Skills and delivery
