@@ -4,8 +4,9 @@
 # Canonical copy (skill-templates). Bootstrap: cp assets/scripts/session-seed.py ~/.claude/scripts/
 
 Usage:
-  python3 ~/.claude/scripts/session-seed.py write  --picks-up-at TEXT [--body-file F]
+  python3 ~/.claude/scripts/session-seed.py write  --picks-up-at TEXT --boundary-reason TEXT --next TEXT --body-file F [--alt TEXT]
   python3 ~/.claude/scripts/session-seed.py verify [--topic T] [--session ID]
+  python3 ~/.claude/scripts/session-seed.py verify --file PATH
   python3 ~/.claude/scripts/session-seed.py path   [--topic T]
   python3 ~/.claude/scripts/session-seed.py scope  [--topic T]
   python3 ~/.claude/scripts/session-seed.py list   [--archives]
@@ -39,8 +40,9 @@ WHAT IT REFUSES TO GUESS
     anonymous seed is one the next session cannot archive and this one cannot prove.
 
 Exit codes:
-  0  the operation succeeded (for `write` and `verify`: the canonical seed for this
-     scope exists, carries this session's id, and sits outside every worktree).
+  0  the operation succeeded (for `write` and canonical `verify`: the seed for this
+     scope exists, carries this session's id, has filled content, and sits outside
+     every worktree). `verify --file` checks content only, never canonical proof.
   1  REFUSE — stated on stderr. NO REFUSE EVER DESTROYS AN INCUMBENT SEED: the
      archive is what earns the right to write, so a failed archive aborts before
      the write. That is not the same as "nothing happened", and `write` must not be
@@ -308,18 +310,9 @@ def _quote(v):
     return '"%s"' % v.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def read_frontmatter(path):
-    """Parse the seed's YAML frontmatter. Missing file or no frontmatter -> {}.
-
-    One parser, used by archive-on-collide, by the proof, by `list` and by `header`,
-    so "what this file's `session:` says" cannot mean two different things in two
-    places — which is the whole reason the incumbent's identity was ever in doubt.
-    """
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-    except OSError:
-        return {}
+def parse_frontmatter(text):
+    """The frontmatter grammar shared by file readers and content validation."""
+    lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
     out = {}
@@ -330,6 +323,21 @@ def read_frontmatter(path):
         if m and m.group(1) not in out:
             out[m.group(1)] = _unquote(m.group(2))
     return out
+
+
+def read_frontmatter(path):
+    """Parse the seed's YAML frontmatter. Missing file or no frontmatter -> {}.
+
+    One parser, used by archive-on-collide, by the proof, by `list` and by `header`,
+    so "what this file's `session:` says" cannot mean two different things in two
+    places — which is the whole reason the incumbent's identity was ever in doubt.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return {}
+    return parse_frontmatter(text)
 
 
 def incumbent_session(path):
@@ -444,43 +452,109 @@ def archive(seed, scope, directory, stamp):
         "seed is not written" % seed)
 
 
+# ---------------------------------------------------------- content contract
+
+MULTIPLE_TASKS = re.compile(r" or |;|·|candidate|Next runs", re.I)
+TASK_CHOICES = re.compile(r" or |;|·|Next runs", re.I)
+EXECUTOR = re.compile(r"\(agent\s+[^()\s][^()\n]*\)|\bOWNER:\s*\S", re.I)
+ANGLE_PLACEHOLDER = re.compile(r"<[a-z][^>\n]{2,}>")
+# The retired default body's exact holes remain invalid even in fenced examples.
+# A generic code sample such as `List<T>` can otherwise remain in a filled seed.
+SKELETON_PLACEHOLDERS = (
+    "<clean | the files another session left>", "<last run and verdict>",
+    "<suite and result>", "<numbers>", "<n>", "<the commit this claims>",
+    "<one line per landed change>", "<the next two>", "<item>",
+    "<why it is blocked or deferred>", "{branch}", "{picks_up_at}",
+)
+CLOSING = ("Repeat the session-lifecycle protocol at this session's end: write the next seed\n"
+           "with `session-seed.py write`, and hand back the one line to paste.\n")
+
+
+def outside_fences(text):
+    """Keep prose only; honor backtick/tilde fence kind and closing length."""
+    out, fence, width = [], None, 0
+    for line in text.splitlines():
+        m = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence is None:
+            if m:
+                fence, width = m.group(1)[0], len(m.group(1))
+            else:
+                out.append(line)
+        elif m and m.group(1)[0] == fence and len(m.group(1)) >= width and not m.group(2).strip():
+            fence = None
+    return "\n".join(out)
+
+
+def sections(prose):
+    """Return level-two sections without constraining other useful headings."""
+    headings = list(re.finditer(r"^##[ \t]+(.+?)[ \t]*$", prose, re.M))
+    return [(heading.group(1), prose[heading.end():
+             headings[i + 1].start() if i + 1 < len(headings) else len(prose)].strip())
+            for i, heading in enumerate(headings)]
+
+
+def validate_content(text):
+    """The SAME filled-content test for proposed writes and existing seeds.
+
+    This is a structural check, not a claim that prose proves its own truth or
+    that an action is semantically imperative. Resume still re-derives evidence.
+    """
+    fm = parse_frontmatter(text)
+    if not fm or not re.match(r"\A---\s*\n[\s\S]*?\n---[ \t]*(?:\n|\Z)", text):
+        die("seed content needs closed frontmatter")
+    for placeholder in SKELETON_PLACEHOLDERS:
+        if placeholder.lower() in text.lower():
+            die("seed content still contains a skeleton placeholder: %s" % placeholder)
+    prose = outside_fences(text)
+    if ANGLE_PLACEHOLDER.search(prose):
+        die("seed content contains an angle placeholder outside fenced code")
+    picks = fm.get("picks_up_at", "").strip()
+    if not picks:
+        die("--picks-up-at is empty (or seed picks_up_at is missing)")
+    if CONTROL.search(picks):
+        die("picks_up_at contains a newline or control character")
+    if len(picks) > 140:
+        die("picks_up_at exceeds 140 characters; name one next task")
+    if MULTIPLE_TASKS.search(picks):
+        die("picks_up_at contains a multiple-task marker; name one next task")
+    if not EXECUTOR.search(picks):
+        die("picks_up_at needs an executor: (agent name) or OWNER: name")
+    boundaries = re.findall(r"^- \*\*Boundary reason:\*\*[ \t]*(.*)$", prose, re.M)
+    if len(boundaries) != 1 or not boundaries[0].strip() or boundaries[0].strip().lower() == "unstated":
+        die("seed content needs one explicit Boundary reason; missing or unstated is invalid")
+    if CONTROL.search(boundaries[0]):
+        die("Boundary reason contains a control character")
+    parts = sections(prose)
+    tasks = [body for title, body in parts if title.lower() == "today's task"]
+    if len(tasks) != 1:
+        die("seed content needs one Today's task section (write it with --next)")
+    task = tasks[0]
+    # The writer owns the closing protocol; do not mistake it for task text when
+    # there are no alternatives after Today's task.
+    task = task.split("Repeat the session-lifecycle protocol", 1)[0].strip()
+    acceptance = re.split(r"\bAcceptance:[ \t]*", task, maxsplit=1, flags=re.I)
+    if len(acceptance) != 2 or not acceptance[0].strip() or not acceptance[1].strip():
+        die("Today's task needs one task plus explicit Acceptance: text")
+    if TASK_CHOICES.search(acceptance[0]) or CONTROL.search(task):
+        die("Today's task must be one paragraph with one task plus Acceptance: text")
+    alternatives = [body for title, body in parts if title.lower() == "alternatives"]
+    if len(alternatives) > 1:
+        die("seed content has duplicate Alternatives sections")
+    if alternatives:
+        alternative_body = alternatives[0].split("Repeat the session-lifecycle protocol", 1)[0].strip()
+        lines = alternative_body.splitlines()
+        if not 1 <= len(lines) <= 2 or any(not re.match(r"^- \S", line) or CONTROL.search(line) for line in lines):
+            die("Alternatives must contain one or two filled bullet lines")
+    for name, pattern in (("STATE", r"state\b"), ("TL;DR", r"tl;dr\b")):
+        bodies = [body for title, body in parts if re.match(pattern, title, re.I)]
+        if len(bodies) != 1 or not re.search(r"[A-Za-z0-9]", re.sub(r"^#+.*$", "", bodies[0], flags=re.M)):
+            die("seed content needs a filled %s section in --body-file" % name)
+
+
 # ----------------------------------------------------------------------- write
 
-SKELETON = """## STATE
 
-- **Branch / HEAD:** {branch}
-- **Working tree:** <clean | the files another session left>
-- **CI:** <last run and verdict>
-- **Tests:** <suite and result>
-- **Open PRs / issues:** <numbers>
-
-Verify before building on any of this — re-derive, don't trust:
-
-```bash
-gh pr view <n> --json state -q .state      # expect: MERGED
-git log --oneline -3                       # expect: <the commit this claims>
-```
-
-## TL;DR — what shipped
-
-- <one line per landed change>
-
-## Today's task
-
-{picks_up_at}
-
-Alternatives, if that is blocked: <the next two>
-
-## Left undone, deliberately
-
-- <item> — <why it is blocked or deferred>
-
-Repeat the session-lifecycle protocol at this session's end: write the next seed
-with `session-seed.py write`, and hand back the one line to paste.
-"""
-
-
-def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body):
+def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body, next_task, alternatives):
     head = [
         "---",
         "type: handoff",
@@ -497,7 +571,10 @@ def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body):
         "",
         "",
     ]
-    return "\n".join(head) + body.rstrip("\n") + "\n"
+    tail = "\n\n## Today's task\n\n%s\n" % next_task
+    if alternatives:
+        tail += "\n## Alternatives\n\n" + "\n".join("- " + alt for alt in alternatives) + "\n"
+    return "\n".join(head) + body.rstrip("\n") + tail + "\n" + CLOSING
 
 
 def atomic_write(path, text):
@@ -531,10 +608,26 @@ def cmd_write(a):
         die("--picks-up-at is empty. It is the only line `/next` quotes, so a seed "
             "without it tells the next session nothing about where to start.")
     for name, val in (("--picks-up-at", a.picks_up_at), ("--title", a.title),
-                      ("--boundary-reason", a.boundary_reason)):
+                      ("--boundary-reason", a.boundary_reason), ("--next", a.next_task or ""),
+                      *(("--alt", alt) for alt in a.alt)):
         if "\n" in val or CONTROL.search(val):
             die("%s contains a newline or control character; it is a single "
                 "frontmatter line" % name)
+
+    if a.body is None:
+        die("--body-file is required with filled STATE and TL;DR sections; no skeleton is written")
+    if not a.next_task:
+        die("--next is required: one imperative task plus Acceptance: text")
+    if len(a.alt) > 2:
+        die("--alt accepts at most two alternatives")
+    if any(not alt.strip() for alt in a.alt):
+        die("--alt must not be empty")
+    text = render(scope, sid, now.strftime("%Y-%m-%dT%H:%MZ"), a.picks_up_at,
+                  a.title or a.picks_up_at, a.boundary_reason, a.sensitivity,
+                  a.body, a.next_task, a.alt)
+    # Validate BEFORE creating directories or moving an incumbent. A hollow new
+    # seed must not displace the useful context the next session would have read.
+    validate_content(text)
 
     directory = handoff_dir()
     try:
@@ -556,11 +649,7 @@ def cmd_write(a):
         if prev != sid:
             archived = archive(seed, scope, directory, now.strftime("%Y%m%dT%H%M%SZ"))
 
-    body = a.body if a.body is not None else SKELETON.format(
-        branch=current_branch(), picks_up_at=a.picks_up_at)
-    atomic_write(seed, render(
-        scope, sid, now.strftime("%Y-%m-%dT%H:%MZ"), a.picks_up_at,
-        a.title or a.picks_up_at, a.boundary_reason, a.sensitivity, body))
+    atomic_write(seed, text)
 
     if archived:
         print("archived: %s" % archived)
@@ -585,12 +674,6 @@ def cmd_write(a):
         # for "the write proved the path".
         print("wrote (UNPROVED): %s" % seed)
     return 0
-
-
-def current_branch():
-    r = _git("branch", "--show-current")
-    b = (r.stdout or "").strip() if r.returncode == 0 else ""
-    return b or "(detached or not in a repo)"
 
 
 def parse_now(s):
@@ -620,6 +703,13 @@ def cmd_verify(a):
       canonical path holds someone else's seed. Only reading `session:` back catches
       this; it is the same field the archive decides on, used a second time as proof.
     """
+    if a.file:
+        if a.topic is not None or a.session is not None:
+            die("--file is content validation only; do not combine it with --session or --topic")
+        path = os.path.abspath(a.file)
+        validate_content(read_seed_text(path))
+        print("content valid (NOT canonical proof): %s" % path)
+        return 0
     scope = resolve_scope(a.topic)
     sid = resolve_session_id(a.session)
     seed = seed_path(scope)
@@ -638,8 +728,17 @@ def cmd_verify(a):
     if mine != sid:
         die("%s carries session %r, not this session's %r%s"
             % (seed, mine, sid, _elsewhere(sid, scope)))
+    validate_content(read_seed_text(seed))
     print("seed: %s" % seed)
     return 0
+
+
+def read_seed_text(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except (OSError, UnicodeError) as e:
+        die("cannot read seed content %s (%s)" % (path, e))
 
 
 def _elsewhere(sid, scope):
@@ -743,8 +842,12 @@ def main(argv=None):
     w.add_argument("--title", default="", help="H1 text (default: --picks-up-at)")
     w.add_argument("--boundary-reason", default="unstated",
                    help="which global session-boundary rule fired")
+    w.add_argument("--next", dest="next_task",
+                   help="one imperative task followed by Acceptance: and an observable result")
+    w.add_argument("--alt", action="append", default=[],
+                   help="one alternative task, repeatable zero to two times")
     w.add_argument("--sensitivity", default="vault", choices=("public", "vault"))
-    w.add_argument("--body-file", help="seed body after the header; `-` reads stdin")
+    w.add_argument("--body-file", help="filled STATE/TL;DR and other context; `-` reads stdin; no skeleton default")
     w.add_argument("--now", help="pin the clock (ISO-8601 UTC) for `date:` and the archive stamp")
     w.add_argument("--no-verify", action="store_true",
                    help="skip the built-in proof (it is the point; for tests only)")
@@ -752,6 +855,7 @@ def main(argv=None):
 
     v = scoped(sub.add_parser("verify", help="prove the canonical seed is this session's"))
     v.add_argument("--session", help="this session's id (default: $CLAUDE_CODE_SESSION_ID)")
+    v.add_argument("--file", help="validate any seed's content only (including archives); NOT canonical proof")
     v.set_defaults(fn=cmd_verify)
 
     scoped(sub.add_parser("scope", help="print the resolved scope key")).set_defaults(fn=cmd_scope)
@@ -773,7 +877,7 @@ def main(argv=None):
             try:
                 with open(a.body_file, encoding="utf-8") as f:
                     a.body = f.read()
-            except OSError as e:
+            except (OSError, UnicodeError) as e:
                 die("cannot read --body-file %s (%s)" % (a.body_file, e))
     elif a.cmd == "write":
         a.body = None

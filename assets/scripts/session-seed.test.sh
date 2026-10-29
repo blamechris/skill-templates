@@ -41,6 +41,24 @@ ARCHIVE_RE='^NEXT-[^/]*\.[0-9]{8}T[0-9]{6}Z-[^.]+\.md$'
 STAMP=2026-08-11T00:00:00Z              # -> 20260811T000000Z in archive names
 MINE=beefcafe
 LOST='the thing that must not be lost'
+# Filled inputs are external fixture data, not an implementation of validation.
+GOOD_PICKS='Add seed validation (agent Sol)'
+GOOD_NEXT='Add seed validation. Acceptance: hollow writes and verifies refuse.'
+cat > "$TMP/filled-body.md" <<'BODY'
+## STATE
+
+- Branch main is clean; no PR is open. Prior seed checks passed.
+- Read assets/scripts/session-seed.py and its sibling regression suite first.
+
+## TL;DR — what shipped
+
+The session seed path and archive checks are usable; filled-content checks remain.
+
+## Left undone, deliberately
+
+No owner QA is needed before implementing the validator.
+BODY
+FILLED=(--boundary-reason 'package complete' --next "$GOOD_NEXT" --body-file "$TMP/filled-body.md")
 
 pass=0; fail=0; skip=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
@@ -82,16 +100,27 @@ put_seed() {            # $1 = case, $2 = filename, $3 = session ('-' = no line)
 }
 
 # run <case> <cwd-relative-to-case> [args...] -> $out, $rc
-run() {
+run_raw() {
   local c=$1 where=$2; shift 2
   out=$(cd "$TMP/$c/$where" && CLAUDE_HANDOFF_DIR="$TMP/$c/handoffs" \
         "$PY" "$SUT" "$@" 2>&1); rc=$?
+}
+# Legacy path/session/archive cases supply valid content so a content refusal
+# cannot accidentally satisfy the behavior each of those cases targets.
+run() {
+  local c=$1 where=$2; shift 2
+  if [ "${1:-}" = write ]; then
+    shift
+    run_raw "$c" "$where" write "${FILLED[@]}" "$@"
+  else
+    run_raw "$c" "$where" "$@"
+  fi
 }
 # write <case> <cwd> [extra args...] — the ordinary end-of-session call
 write() {
   local c=$1 where=$2; shift 2
   run "$c" "$where" write --session "$MINE" --now "$STAMP" \
-      --picks-up-at 'the next thing' "$@"
+      --picks-up-at 'the next thing (agent Sol)' "$@"
 }
 archives() { ls "$TMP/$1/handoffs" 2>/dev/null | grep -Ec "$ARCHIVE_RE"; }
 canon()    { ls "$TMP/$1/handoffs" 2>/dev/null | grep -E '^NEXT-.*\.md$' | grep -Evc "$ARCHIVE_RE"; }
@@ -267,15 +296,15 @@ out=$(cd "$VAULT" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
 # Resolving a fleet scope does not waive the floor: writing from inside the
 # vault would put a session seed in that session's own worktree.
 out=$(cd "$VAULT" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
-      "$PY" "$SUT" write --session "$MINE" --now "$STAMP" \
-      --picks-up-at 'vault floor' 2>&1); rc=$?
+      "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --now "$STAMP" \
+      --picks-up-at 'vault floor (agent Sol)' 2>&1); rc=$?
 [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'REFUSE.*inside the worktree' \
   && [ ! -f "$VAULT_HANDOFFS/NEXT-fleet.md" ] \
   && ok "writing from the vault still REFUSES an in-worktree seed" \
   || bad "writing from the vault still REFUSES an in-worktree seed" "rc=$rc $(flat "$out")"
 out=$(cd "$TMP/a8/vault-linked" && CLAUDE_HANDOFF_DIR="$VAULT_HANDOFFS" \
-      "$PY" "$SUT" write --session "$MINE" --now "$STAMP" \
-      --picks-up-at 'vault floor' 2>&1); rc=$?
+      "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --now "$STAMP" \
+      --picks-up-at 'vault floor (agent Sol)' 2>&1); rc=$?
 [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'REFUSE.*inside the worktree' \
   && [ ! -f "$VAULT_HANDOFFS/NEXT-fleet.md" ] \
   && ok "writing from a linked vault worktree still REFUSES" \
@@ -300,7 +329,7 @@ echo; echo "B. the handoff dir"
 new_case b1
 FAKE_HOME="$TMP/b1/home"; mkdir -p "$FAKE_HOME"
 out=$(cd "$TMP/b1/demo" && env -u CLAUDE_HANDOFF_DIR HOME="$FAKE_HOME" \
-      "$PY" "$SUT" write --session "$MINE" --now "$STAMP" --picks-up-at 'default dir' 2>&1); rc=$?
+      "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --now "$STAMP" --picks-up-at 'default dir (agent Sol)' 2>&1); rc=$?
 DEFAULT_SEED="$FAKE_HOME/Obsidian/no-it-all/handoffs/NEXT-demo.md"
 if [ "$rc" -eq 0 ] && [ -f "$DEFAULT_SEED" ]; then
   ok "CLAUDE_HANDOFF_DIR unset: the seed lands under the default vault dir"
@@ -343,7 +372,7 @@ fi
 # worktree, i.e. the one place the seed may not live.
 new_case b4
 out=$(cd "$TMP/b4/demo" && CLAUDE_HANDOFF_DIR=relative/handoffs \
-      "$PY" "$SUT" write --session "$MINE" --picks-up-at x 2>&1); rc=$?
+      "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --picks-up-at 'x (agent Sol)' 2>&1); rc=$?
 printf '%s' "$out" | grep -q 'REFUSE.*relative' \
   && ok "a relative CLAUDE_HANDOFF_DIR REFUSES" \
   || bad "a relative CLAUDE_HANDOFF_DIR REFUSES" "$(flat "$out")"
@@ -352,7 +381,7 @@ printf '%s' "$out" | grep -q 'REFUSE.*relative' \
 # is a seed that dies with `git worktree remove --force`.
 new_case b5
 out=$(cd "$TMP/b5/demo" && CLAUDE_HANDOFF_DIR="$TMP/b5/demo/in-tree-handoffs" \
-      "$PY" "$SUT" write --session "$MINE" --picks-up-at x 2>&1); rc=$?
+      "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --picks-up-at 'x (agent Sol)' 2>&1); rc=$?
 printf '%s' "$out" | grep -q 'REFUSE.*inside the worktree' \
   && ok "a handoff dir inside the worktree REFUSES" \
   || bad "a handoff dir inside the worktree REFUSES" "$(flat "$out")"
@@ -366,7 +395,7 @@ echo; echo "C. the session id"
 new_case c1
 out=$(cd "$TMP/c1/demo" && CLAUDE_HANDOFF_DIR="$TMP/c1/handoffs" \
       CLAUDE_CODE_SESSION_ID=5fc4a59c-394b-4c35-b512-d3a38e4c241c \
-      "$PY" "$SUT" write --now "$STAMP" --picks-up-at 'from the env' 2>&1); rc=$?
+      "$PY" "$SUT" write "${FILLED[@]}" --now "$STAMP" --picks-up-at 'from the env (agent Sol)' 2>&1); rc=$?
 grep -q '^session: 5fc4a59c$' "$TMP/c1/handoffs/NEXT-demo.md" 2>/dev/null \
   && ok "\$CLAUDE_CODE_SESSION_ID supplies the id, truncated the way artifact ① prints it" \
   || bad "\$CLAUDE_CODE_SESSION_ID supplies the id, truncated the way artifact ① prints it" \
@@ -407,7 +436,7 @@ seedid=$("$PY" "$SUT" header "$TMP/c1/handoffs/NEXT-demo.md" | "$PY" -c 'import 
 new_case c2
 put_seed c2 NEXT-demo.md f0f0f0f0 "$LOST"
 out=$(cd "$TMP/c2/demo" && env -u CLAUDE_CODE_SESSION_ID CLAUDE_HANDOFF_DIR="$TMP/c2/handoffs" \
-      "$PY" "$SUT" write --now "$STAMP" --picks-up-at x 2>&1); rc=$?
+      "$PY" "$SUT" write "${FILLED[@]}" --now "$STAMP" --picks-up-at 'x (agent Sol)' 2>&1); rc=$?
 [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'REFUSE.*no id' \
   && ok "no id anywhere: REFUSE instead of writing an anonymous seed" \
   || bad "no id anywhere: REFUSE instead of writing an anonymous seed" "rc=$rc $(flat "$out")"
@@ -429,7 +458,7 @@ with open(sys.argv[1], 'w', encoding='utf-8') as f:
                             "pad": "x" * 200}) + "\n")
 PY
 out=$(cd "$TMP/c2/demo" && env -u CLAUDE_CODE_SESSION_ID HOME="$TMP/c2/decoy" \
-      CLAUDE_HANDOFF_DIR="$TMP/c2/handoffs" "$PY" "$SUT" write --picks-up-at x 2>&1); rc=$?
+      CLAUDE_HANDOFF_DIR="$TMP/c2/handoffs" "$PY" "$SUT" write "${FILLED[@]}" --picks-up-at 'x (agent Sol)' 2>&1); rc=$?
 [ "$rc" -ne 0 ] && ! grep -q 'decafbad' "$TMP/c2/handoffs/NEXT-demo.md" \
   && ok "a HOME full of other sessions' transcripts is NOT an id source" \
   || bad "a HOME full of other sessions' transcripts is NOT an id source" "rc=$rc $(flat "$out")"
@@ -443,7 +472,7 @@ run c3 demo write --session "$(printf 'a\tb')" --picks-up-at x
 printf '%s' "$out" | grep -q 'REFUSE.*control character' \
   && ok "an id containing a control character REFUSES" \
   || bad "an id containing a control character REFUSES" "$(flat "$out")"
-run c3 demo write --session "$MINE" --picks-up-at x --now "$STAMP"
+run c3 demo write --session "$MINE" --picks-up-at 'x (agent Sol)' --now "$STAMP"
 [ "$rc" -eq 0 ] && ok "--session overrides the environment" \
   || bad "--session overrides the environment" "rc=$rc $(flat "$out")"
 
@@ -567,7 +596,7 @@ echo; echo "E. the seed body and header, round-tripped"
 # test. The harness never writes a seed it then asserts about — an earlier suite
 # did, and the shape it asserted was therefore its own.
 new_case e1
-PICKS='issue #205 — the "doc" said: extract it'
+PICKS='issue #205 — the "doc" said: extract it (agent Sol)'
 run e1 demo write --session "$MINE" --now "$STAMP" --picks-up-at "$PICKS" \
     --title 'what landed' --boundary-reason 'wave boundary' --sensitivity public
 [ "$rc" -eq 0 ] && ok "write with a full header succeeds" \
@@ -593,16 +622,16 @@ grep -q '^\- \*\*Boundary reason:\*\* wave boundary$' "$TMP/e1/handoffs/NEXT-dem
   && ok "the boundary-reason bullet is written" || bad "the boundary-reason bullet is written" "missing"
 for section in '## STATE' '## TL;DR' '## Left undone, deliberately'; do
   grep -qF "$section" "$TMP/e1/handoffs/NEXT-demo.md" \
-    && ok "the default body carries '$section'" || bad "the default body carries '$section'" "missing"
+    && ok "the filled body carries '$section'" || bad "the filled body carries '$section'" "missing"
 done
 
 new_case e2
-printf '## MY OWN BODY\n\nverbatim\n' > "$TMP/e2/body.md"
-run e2 demo write --session "$MINE" --now "$STAMP" --picks-up-at x --body-file "$TMP/e2/body.md"
+printf '## MY OWN BODY\n\nverbatim\n\n## STATE\n\nBranch main is clean.\n\n## TL;DR\n\nThe custom body was retained.\n' > "$TMP/e2/body.md"
+run e2 demo write --session "$MINE" --now "$STAMP" --picks-up-at 'x (agent Sol)' --body-file "$TMP/e2/body.md"
 grep -q '^## MY OWN BODY$' "$TMP/e2/handoffs/NEXT-demo.md" &&
-  ! grep -q '## TL;DR' "$TMP/e2/handoffs/NEXT-demo.md" \
-  && ok "--body-file replaces the skeleton, header still generated" \
-  || bad "--body-file replaces the skeleton, header still generated" "$(flat "$(cat "$TMP/e2/handoffs/NEXT-demo.md")")"
+  grep -q '^The custom body was retained'  "$TMP/e2/handoffs/NEXT-demo.md" \
+  && ok "--body-file retains filled custom content, header still generated" \
+  || bad "--body-file retains filled custom content, header still generated" "$(flat "$(cat "$TMP/e2/handoffs/NEXT-demo.md")")"
 
 run e2 demo write --session "$MINE" --picks-up-at '   '
 printf '%s' "$out" | grep -q 'REFUSE.*picks-up-at is empty' \
@@ -679,12 +708,12 @@ exec "$GIT_REAL" "\$@"
 STUB
 chmod +x "$TMP/f3b/stub/git"
 out=$(cd "$TMP/f3b/demo" && PATH="$TMP/f3b/stub:$PATH" CLAUDE_HANDOFF_DIR="$TMP/f3b/handoffs" \
-      "$PY" "$SUT" write --session "$MINE" --now "$STAMP" --picks-up-at x 2>&1); rc=$?
+      "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --now "$STAMP" --picks-up-at 'x (agent Sol)' 2>&1); rc=$?
 [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'REFUSE.*NEXT-other\.md' \
   && ok "write EXITS NONZERO when its own proof refuses (the proof is not decorative)" \
   || bad "write EXITS NONZERO when its own proof refuses (the proof is not decorative)" "rc=$rc $(flat "$out")"
 out=$(cd "$TMP/f3b/demo" && PATH="$TMP/f3b/stub:$PATH" CLAUDE_HANDOFF_DIR="$TMP/f3b/handoffs" \
-      "$PY" "$SUT" write --session "$MINE" --now "$STAMP" --picks-up-at x --no-verify 2>&1); rc=$?
+      "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --now "$STAMP" --picks-up-at 'x (agent Sol)' --no-verify 2>&1); rc=$?
 [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^wrote (UNPROVED): ' \
   && ! printf '%s' "$out" | grep -q '^seed: ' \
   && ok "--no-verify says UNPROVED and never emits the proved form" \
@@ -708,7 +737,7 @@ run f4 demo-wt verify --session "$MINE"
 # what makes the topic case first-class in both instead of remembered in one.
 echo; echo "F2. topic-scoped fleet seeds (regression 1)"
 mkdir -p "$TMP/g1/handoffs" "$TMP/g1/nowhere"
-run g1 nowhere write --session "$MINE" --now "$STAMP" --topic marathon --picks-up-at 'the wave'
+run g1 nowhere write --session "$MINE" --now "$STAMP" --topic marathon --picks-up-at 'the wave (agent Sol)'
 [ "$rc" -eq 0 ] && [ -f "$TMP/g1/handoffs/NEXT-fleet-marathon.md" ] \
   && ok "a topic-scoped fleet seed is written at NEXT-fleet-<topic>.md" \
   || bad "a topic-scoped fleet seed is written at NEXT-fleet-<topic>.md" "rc=$rc $(flat "$out")"
@@ -724,7 +753,7 @@ run g1 nowhere verify --session "$MINE"
   || bad "proving without the topic REFUSES and names the topic seed, not a bare 'not yours'" \
          "rc=$rc $(flat "$out")"
 # An untopicked fleet seed is a separate scope and is untouched by the topic write.
-run g1 nowhere write --session "$MINE" --now "$STAMP" --picks-up-at 'no topic'
+run g1 nowhere write --session "$MINE" --now "$STAMP" --picks-up-at 'no topic (agent Sol)'
 [ -f "$TMP/g1/handoffs/NEXT-fleet.md" ] && [ -f "$TMP/g1/handoffs/NEXT-fleet-marathon.md" ] \
   && [ "$(archives g1)" -eq 0 ] \
   && ok "NEXT-fleet.md and NEXT-fleet-<topic>.md are separate scopes, neither archives the other" \
@@ -763,7 +792,7 @@ run h1 demo list --archives
 # is why the discriminator anchors on `.<UTC>-<slug>.md` rather than on "has a dot".
 mkdir -p "$TMP/h2/handoffs"
 new_repo "$TMP/h2/blamechris.github.io"
-run h2 blamechris.github.io write --session "$MINE" --now "$STAMP" --picks-up-at 'dotted scope'
+run h2 blamechris.github.io write --session "$MINE" --now "$STAMP" --picks-up-at 'dotted scope (agent Sol)'
 [ "$rc" -eq 0 ] && [ -f "$TMP/h2/handoffs/NEXT-blamechris.github.io.md" ] \
   && ok "a dotted scope key writes and proves normally" \
   || bad "a dotted scope key writes and proves normally" "rc=$rc $(flat "$out")"
@@ -779,7 +808,7 @@ printf '%s' "$out" | grep -q '^blamechris.github.io	' \
 # scope `blamechris`, a scope that does not exist, at the one moment the user is
 # being told where their unconsumed handoff went.
 put_seed h2 NEXT-blamechris.github.io.md f0f0f0f0 'the dotted incumbent'
-run h2 blamechris.github.io write --session "$MINE" --now "$STAMP" --picks-up-at 'collide'
+run h2 blamechris.github.io write --session "$MINE" --now "$STAMP" --picks-up-at 'collide (agent Sol)'
 run h2 blamechris.github.io list --archives
 [ "$(nrows "$out")" -eq 1 ] && printf '%s' "$out" | grep -q '^blamechris.github.io	' \
   && ok "list --archives keeps a dotted scope key whole (no phantom scope)" \
@@ -787,6 +816,178 @@ run h2 blamechris.github.io list --archives
 ! printf '%s' "$out" | grep -q '^blamechris	' \
   && ok "list --archives reports no truncated scope that does not exist" \
   || bad "list --archives reports no truncated scope that does not exist" "$(flat "$out")"
+
+# ======================================================= GROUP H — filled content
+echo; echo "H. filled content and pre-archive refusal"
+new_case i1
+run i1 demo write --session "$MINE" --picks-up-at "$GOOD_PICKS" --now "$STAMP" \
+    --alt 'Review the documentation (agent Sol)' --alt 'Inspect the queued tests (agent Sol)'
+[ "$rc" -eq 0 ] && grep -q '^## Today' "$TMP/i1/handoffs/NEXT-demo.md" \
+  && grep -q '^## Alternatives$' "$TMP/i1/handoffs/NEXT-demo.md" \
+  && [ "$(grep -Ec '^\- (Review|Inspect)' "$TMP/i1/handoffs/NEXT-demo.md")" -eq 2 ] \
+  && ok "filled content with --next and two --alt values writes and proves" \
+  || bad "filled content with --next and two --alt values writes and proves" "rc=$rc $(flat "$out")"
+cp "$TMP/i1/handoffs/NEXT-demo.md" "$TMP/valid-seed.md"
+
+# A proposed invalid replacement may not move even a hollow legacy incumbent.
+new_case i2
+put_seed i2 NEXT-demo.md previous-session "$LOST"
+cp "$TMP/i2/handoffs/NEXT-demo.md" "$TMP/incumbent.md"
+refused_unchanged() {
+  local label=$1; shift
+  run i2 demo write --session "$MINE" --now "$STAMP" --picks-up-at "$GOOD_PICKS" "$@"
+  if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q '^REFUSE:' \
+     && cmp -s "$TMP/incumbent.md" "$TMP/i2/handoffs/NEXT-demo.md" \
+     && [ "$(archives i2)" -eq 0 ]; then
+    ok "$label: refuses before moving the incumbent"
+  else bad "$label: refuses before moving the incumbent" "rc=$rc $(flat "$out")"; fi
+}
+refused_unchanged 'unstated boundary' --boundary-reason unstated
+refused_unchanged 'empty boundary' --boundary-reason ''
+for picks in 'Add tests or review docs (agent Sol)' 'Add tests; review docs (agent Sol)' \
+             'Add tests · review docs (agent Sol)' 'Review CANDIDATE tests (agent Sol)' \
+             'NEXT RUNS add tests (agent Sol)'; do
+  refused_unchanged "multiple task marker '$picks'" --picks-up-at "$picks"
+done
+long_picks=$("$PY" -c 'print("x" * 129 + " (agent Sol)")')
+[ "${#long_picks}" -eq 141 ] || bad 'fixture: overlong dispatch has 141 characters'
+refused_unchanged 'dispatch longer than 140 characters' --picks-up-at "$long_picks"
+refused_unchanged 'missing executor' --picks-up-at 'Add the remaining script tests'
+refused_unchanged 'empty agent executor' --picks-up-at 'Add the remaining script tests (agent )'
+refused_unchanged 'empty owner executor' --picks-up-at 'Add the remaining script tests OWNER:'
+refused_unchanged 'missing next task' --next ''
+refused_unchanged 'missing acceptance' --next 'Add the remaining script tests.'
+refused_unchanged 'empty acceptance' --next 'Add the remaining script tests. Acceptance: '
+refused_unchanged 'two next tasks' --next 'Add tests or review docs. Acceptance: the suite passes.'
+refused_unchanged 'three alternatives' --alt one --alt two --alt three
+refused_unchanged 'empty alternative' --alt ''
+: > "$TMP/empty-body.md"
+refused_unchanged 'empty context body' --body-file "$TMP/empty-body.md"
+printf '## STATE\n\n## TL;DR\n\n\n' > "$TMP/empty-sections.md"
+refused_unchanged 'unfilled context headings' --body-file "$TMP/empty-sections.md"
+cp "$TMP/filled-body.md" "$TMP/placeholder-body.md"
+printf '\nRead <issue description> next.\n' >> "$TMP/placeholder-body.md"
+refused_unchanged 'generic angle placeholder in prose' --body-file "$TMP/placeholder-body.md"
+cp "$TMP/filled-body.md" "$TMP/skeleton-body.md"
+printf '\n```bash\ngh pr view <n> --json state\n```\n' >> "$TMP/skeleton-body.md"
+refused_unchanged 'retired skeleton hole even in a code fence' --body-file "$TMP/skeleton-body.md"
+cp "$TMP/filled-body.md" "$TMP/duplicate-task.md"
+printf "\n## Today's task\n\nAdd tests. Acceptance: suites pass.\n" >> "$TMP/duplicate-task.md"
+refused_unchanged 'body duplicates generated task' --body-file "$TMP/duplicate-task.md"
+
+# Missing switches use the raw runner, so fixture defaults cannot fill omissions.
+for missing in body next boundary; do
+  args=(--session "$MINE" --picks-up-at "$GOOD_PICKS")
+  [ "$missing" = body ] || args+=(--body-file "$TMP/filled-body.md")
+  [ "$missing" = next ] || args+=(--next "$GOOD_NEXT")
+  [ "$missing" = boundary ] || args+=(--boundary-reason 'package complete')
+  run_raw i2 demo write "${args[@]}"
+  [ "$rc" -eq 1 ] && cmp -s "$TMP/incumbent.md" "$TMP/i2/handoffs/NEXT-demo.md" \
+    && [ "$(archives i2)" -eq 0 ] \
+    && ok "omitting $missing refuses without a skeleton or archive" \
+    || bad "omitting $missing refuses without a skeleton or archive" "rc=$rc $(flat "$out")"
+done
+
+# Positive controls: exact length boundary, OWNER dispatch, stdin context,
+# zero/one alternatives and generic bracket syntax inside real code samples.
+new_case i3
+picks_140=$("$PY" -c 'print("x" * 128 + " (agent Sol)")')
+run i3 demo write --session "$MINE" --picks-up-at "$picks_140"
+[ "$rc" -eq 0 ] && ok '140-character dispatch is accepted' \
+  || bad '140-character dispatch is accepted' "rc=$rc $(flat "$out")"
+cp "$TMP/filled-body.md" "$TMP/code-body.md"
+cat >> "$TMP/code-body.md" <<'BODY'
+
+```typescript
+const sample = '<example value>';
+~~~
+```
+
+~~~~text
+<other sample>
+~~~
+~~~~
+BODY
+run i3 demo write --session "$MINE" --picks-up-at 'OWNER: Chris — Review the smoke result' \
+    --body-file "$TMP/code-body.md" --alt 'Inspect the queued docs (agent Sol)'
+[ "$rc" -eq 0 ] && ok 'OWNER executor, one alternative and fenced generic angles are accepted' \
+  || bad 'OWNER executor, one alternative and fenced generic angles are accepted' "rc=$rc $(flat "$out")"
+out=$(cd "$TMP/i3/demo" && CLAUDE_HANDOFF_DIR="$TMP/i3/handoffs" \
+      "$PY" "$SUT" write --session "$MINE" --picks-up-at "$GOOD_PICKS" \
+      --boundary-reason 'package complete' --next "$GOOD_NEXT" --body-file - < "$TMP/filled-body.md" 2>&1); rc=$?
+[ "$rc" -eq 0 ] && ! grep -q '^## Alternatives$' "$TMP/i3/handoffs/NEXT-demo.md" \
+  && ok 'filled stdin body and zero alternatives are accepted' \
+  || bad 'filled stdin body and zero alternatives are accepted' "rc=$rc $(flat "$out")"
+
+# Mutate a filled seed to ensure canonical and archive verification check content.
+new_case i4
+"$PY" - "$TMP/valid-seed.md" "$TMP/i4/handoffs" <<'PY'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+def picks(value):
+    import re
+    return re.sub(r'^picks_up_at:.*$', 'picks_up_at: "' + value + '"', text, flags=re.M)
+cases = {
+    'hollow': text[:text.index('## STATE')],
+    'no-boundary': text.replace('- **Boundary reason:** package complete\n', ''),
+    'unstated': text.replace('**Boundary reason:** package complete', '**Boundary reason:** unstated'),
+    'no-executor': picks('Add tests'),
+    'overlong': picks('x' * 129 + ' (agent Sol)'),
+    'missing-picks': text.replace('picks_up_at:', 'old_picks_up_at:'),
+    'placeholder': text + '\n<state description>\n',
+    'skeleton': text + '\n```\ngh pr view <n>\n```\n',
+    'no-task': text.replace("## Today's task", '## Old task'),
+    'no-acceptance': text.replace('Acceptance:', 'Result:'),
+    'empty-state': text[:text.index('## STATE')] + '## STATE\n\n' + text[text.index('## TL;DR'):],
+    'empty-tldr': text[:text.index('## TL;DR')] + '## TL;DR\n\n' + text[text.index('## Left undone'):],
+    'three-alts': text.replace('- Review the documentation (agent Sol)', '- Third alternative\n- Review the documentation (agent Sol)'),
+}
+for index, marker in enumerate((' OR ', ';', '·', 'Candidate', 'nExT rUnS')):
+    cases['marker-%d' % index] = picks('Add tests' + marker + 'review docs (agent Sol)')
+for name, value in cases.items():
+    pathlib.Path(sys.argv[2], name + '.md').write_text(value)
+PY
+for invalid in "$TMP/i4/handoffs/"*.md; do
+  cp "$invalid" "$TMP/i4/handoffs/NEXT-demo.md"
+  run i4 demo verify --session "$MINE"
+  [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q '^REFUSE:' \
+    && ! printf '%s' "$out" | grep -q '^seed:' \
+    && ok "canonical verify refuses $(basename "$invalid")" \
+    || bad "canonical verify refuses $(basename "$invalid")" "rc=$rc $(flat "$out")"
+  run_raw i4 demo verify --file "$invalid"
+  [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q '^REFUSE:' \
+    && ok "content-only verify refuses $(basename "$invalid")" \
+    || bad "content-only verify refuses $(basename "$invalid")" "rc=$rc $(flat "$out")"
+done
+archive_file="$TMP/i4/handoffs/NEXT-demo.20260811T000000Z-previous.md"
+cp "$TMP/valid-seed.md" "$archive_file"
+run_raw i4 demo verify --file "$archive_file"
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^content valid (NOT canonical proof):' \
+  && ! printf '%s' "$out" | grep -q '^seed:' \
+  && ok 'a filled archive validates without canonical proof or a session argument' \
+  || bad 'a filled archive validates without canonical proof or a session argument' "rc=$rc $(flat "$out")"
+run_raw i4 demo verify --file "$archive_file" --session "$MINE"
+[ "$rc" -eq 1 ] && ok '--file cannot be combined with canonical session proof' \
+  || bad '--file cannot be combined with canonical session proof' "rc=$rc $(flat "$out")"
+
+# Demonstrate the new assertion detects a broken validator. Disable only content
+# checks; the mutant still resolves the canonical path and session identity.
+"$PY" - "$SUT" "$TMP/mutant.py" <<'PY'
+import ast, pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'validate_content')
+lines = source.splitlines(keepends=True)
+lines[node.lineno - 1:node.end_lineno] = ['def validate_content(text):\n    return\n']
+pathlib.Path(sys.argv[2]).write_text(''.join(lines))
+PY
+cp "$TMP/i4/handoffs/hollow.md" "$TMP/i4/handoffs/NEXT-demo.md"
+run i4 demo verify --session "$MINE"
+real_rc=$rc
+out=$(cd "$TMP/i4/demo" && CLAUDE_HANDOFF_DIR="$TMP/i4/handoffs" \
+      "$PY" "$TMP/mutant.py" verify --session "$MINE" 2>&1); rc=$?
+[ "$real_rc" -eq 1 ] && [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^seed:' \
+  && ok 'negative control: hollow-seed refusal assertion fails with disabled-validator mutant' \
+  || bad 'negative control: hollow-seed refusal assertion fails with disabled-validator mutant' "real=$real_rc mutant=$rc $(flat "$out")"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

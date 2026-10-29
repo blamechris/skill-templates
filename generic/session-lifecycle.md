@@ -53,6 +53,13 @@ Run these in order; each step re-derives state rather than trusting memory:
    Without the guard `diff` just errors on a machine that has never installed `/next`, which reads
    as a failed check rather than as "install it". Install (or copy) first, then compare.
 6. **Prior-session state** — read this scope's seed, `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md` (default dir `~/Obsidian/no-it-all/handoffs/`), plus {{CUSTOMIZE: any session ledger or queue file this repo keeps, e.g. `autonomous-session-<date>.md`, `scratchpad/autonomous-queue.json` — or remove this list if the repo has none}}. `<scope>` is the main worktree's directory basename, resolved from git — `python3 ~/.claude/scripts/session-seed.py path` prints the exact file to open — so every worktree of a repo resolves to the same seed and no `$PWD` test is involved. There is exactly **one** canonical seed per scope, so nothing has to be ranked: no newest-wins rule, no mtime, no tie to resolve. Sibling files named `NEXT-<scope>.<UTC>-<sid>.md`, or `…-<sid>-<n>.md` when two archives landed in one second, are **archived** seeds — a previous session's, parked when this one collided with it. Do not read them by default, but if the canonical seed is missing, say so and list them: the newest archive is usually an unconsumed handoff, and a session that silently starts from nothing is how work gets repeated. Read the seed's header and TL;DR plus the ledger's STATE header — not the full history. Seeds are **perishable**: each is superseded by the next, and anything in one still worth reading after it is consumed belongs in `docs/records/`, linked from the seed. `/catchup` is the component skill for reconstructing a prior session where installed.
+   Before using a seed as actionable context, validate its content with
+   `python3 ~/.claude/scripts/session-seed.py verify --file /absolute/path/to/seed.md`.
+   This also works for an explicitly selected archive. It checks the same filled-content
+   contract as writing, and prints `content valid (NOT canonical proof):`; it never prints
+   `seed:` or proves the prior session is this session. A hollow legacy seed is context to
+   reconstruct through `/catchup`, not an executable work order. Do not invent missing
+   state or treat that refusal as permission to abandon already authorized work.
 7. **Verify the last claimed merge** — if the prior session's notes claim a merge, confirm it (`gh pr view <n>` reports `MERGED`) before building on it. State is re-derived, not trusted.
 
 Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others), drifted skills, the delegated outcome and observable acceptance, what is usable now, the selected work package and mode. Normal development is the default; `/prime-directive` or an explicit autonomous continuing mission selects prime mode. Preserve that mode on resume; user presence does not change it. Reuse the user's existing authorization; a seed is context, not a request for another scope approval.
@@ -100,14 +107,35 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
 
    ```bash
    python3 ~/.claude/scripts/session-seed.py write \
-     --picks-up-at "issue #209 — assets/scripts has no test coverage" \
-     --boundary-reason "wave boundary" \
+     --picks-up-at "Add the remaining script tests (agent Sol)" \
+     --boundary-reason "package complete" \
+     --next "Add coverage for the remaining script assets. Acceptance: their sibling suites pass." \
+     --alt "Review the queued documentation changes (agent Sol)" \
      --body-file /tmp/handoff-body.md
    ```
 
    It prints `seed: <absolute path>` — which is step 7's one line to paste — or a `REFUSE:` line with a nonzero exit. **A REFUSE never destroys an existing seed**: the archive is what earns the right to write, so a failed archive aborts before the write. It does *not* mean nothing happened, and reading it that way is the trap — the last thing the write does is run step 3's proof, so a REFUSE from *there* arrives after the seed is already on disk. Do not infer from the exit code; read the lines above it, which say what was done and in what order: `archived: <path>` iff an incumbent was moved, then `seed: <path>` iff the proof passed. Add `--topic <name>` for a fleet session with a named topic; never anywhere else.
 
-   `--body-file` is the seed's body, written first to a scratch path (`-` reads stdin). Omit it and the script writes a skeleton to fill in: `## STATE` (branch/HEAD, working tree, CI, tests, open PRs and issues) · a **"Verify before building on any of this — re-derive, don't trust"** block where every command carries its expected answer as a comment · `## TL;DR — what shipped` · `## Today's task` · `## Left undone, deliberately`.
+   `--body-file` carries the filled context, written first to a scratch path (`-` reads
+   stdin): `## STATE` (branch/HEAD, working tree, CI, tests, open PRs and issues), a
+   **"Verify before building on any of this — re-derive, don't trust"** block with each
+   command's expected answer, `## TL;DR — what shipped`, and remaining gaps or deliberate
+   deferrals. STATE and TL;DR must contain actual content; other useful headings are welcome.
+   The script requires this body and never writes a skeleton when it is omitted.
+
+   `--next` renders the single `## Today's task` section: one imperative task in one
+   paragraph, followed by `Acceptance:` and an observable result. `--alt` renders
+   `## Alternatives` and may be repeated zero to two times. Keep these generated sections
+   out of the body file. The short `picks_up_at` dispatch line must be at most 140 characters,
+   name one task and identify its executor with `(agent name)` or `OWNER: name`. It refuses
+   the case-insensitive multiple-task markers ` or `, `;`, `·`, `candidate` and `Next runs`.
+   Keep choices in alternatives rather than the dispatch line.
+
+   Both write and verify refuse missing or `unstated` boundary reasons, hollow task or
+   context sections, the retired skeleton's explicit placeholders, and generic angle
+   placeholders outside fenced code. The proposed content is validated before an incumbent
+   is archived or any seed is written. These checks enforce a filled structure; they do not
+   prove that the claims are true or replace the resume protocol's evidence checks.
 
    Fill the body with the **delegated outcome and observable acceptance**, **what is usable today** (build/install and evidence, or unknown), **the remaining gap**, and **the actual execution state**: continuing/accepted next run, ready for user QA, budget/retry limit, specific blocker, host continuation limit, or complete. Preserve the stable run identity, authority, configured limits with their scope, consumed usage and attempts including pre-PR failures. Missing accounting remains unknown; recover it before spending against an uncertain allowance. Name a user action only when genuinely needed, with what it unblocks. The script writes and verifies the file; it does not infer these answers or schedule continuation.
 
@@ -129,7 +157,7 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
    date: 2026-08-11T21:40Z          # full UTC timestamp
    scope: skill-templates           # the main worktree's directory basename, or fleet
    session: a1b2c3d4                # this session's id
-   picks_up_at: "issue #205 — extract the seed logic into a tested script"
+   picks_up_at: "Extract the seed logic into a tested script (agent Sol)"
    sensitivity: public              # public | vault
    ---
    ```
