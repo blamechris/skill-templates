@@ -103,6 +103,16 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
 
 1. **Handoff seed (artifact ②)** — **the seed is written outside every worktree, at an absolute path:** `$CLAUDE_HANDOFF_DIR/NEXT-<scope>.md`, default dir `~/Obsidian/no-it-all/handoffs/`. It holds what shipped, what remains, and *why* each remaining item is blocked or deferred. Not in the repo, not in this session's worktree, not on a branch — an absolute path outside every *session's* workspace has **no worktree to be torn down with, no branch to be unreachable from, and no index to be confused with**, which is why nothing downstream has to be gated on it. Three earlier attempts to keep the seed inside a session's own workspace failed on exactly those surfaces, the last of them on a "committed" proof that had only staged the file. Read the property precisely: the default handoff dir is itself a git repo (the vault is versioned, and should be), and that takes nothing away — what the seed must be outside is the tree *this session* edits, branches and tears down, which is exactly what the write checks it against.
 
+   **Resolve the next task before writing.** If you are about to write a seed with more
+   than one next task, invoke `/decide` first. Pick and record a choice that is authorized
+   and reversible. For an owner-reserved choice, proactively use the host question UI
+   before the seed write, with concrete options, trade-offs, a recommendation and a
+   default. A default records the recommended plan only; no answer grants no reserved
+   execution authority. Keep the affected task blocked and record the open question in
+   DECISION with `recommend:` and `default:` until answered. Continue independent
+   authorized work. Select one next task with `(agent name)` or `OWNER: name`; alternatives
+   go only in the seed body. The task's observable acceptance belongs in `--next`.
+
    **One command writes it.** It resolves the scope, resolves this session's id, archives whatever it collides with, writes the seed, and proves the result — all of it in `session-seed.py`, none of it transcribed here:
 
    ```bash
@@ -182,7 +192,7 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
 6. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations ({{CUSTOMIZE: repo-specific cleanup — daemons to stop, env files that get mutated during testing and must be restored, e.g. remove the marker if none}}).
 
    This step is **ungated on purpose**: `git worktree remove --force` deletes untracked files without prompting, and the seed is not in any worktree to be deleted. Anything else durable that got written into a worktree is committed and pushed before removal, or it is lost — so do not write durable things there.
-7. **Closing message** — lead with the outcome, usable state and remaining gap from the seed. Include the verified absolute seed path (`seed:` from step 1) and any open PR number. End with the global `**Status:**` block and `**Next:**` line with exactly one state token — 🔴 BLOCKED, 🟢 RUNNING, ⚪ IDLE, or 🟠 FAILED — naming actual execution: accepted next task/session, continuing work, genuine QA/access/decision, a reached limit, or complete. The stable seed path is the one line to paste if a manual restart is truly required; its existence alone is never evidence that work will continue.
+7. **Closing message** — lead with the outcome, usable state and remaining gap from the seed. Include the verified absolute seed path (`seed:` from step 1) and any open PR number. End with the global `**Status:**` block and one `**Next:**` sentence. Both `Next` and `picks_up_at` name exactly one imperative task with executor `(agent name)` or `OWNER: name`; alternatives stay in the seed body, never as candidates in `Next`. Use exactly one of the four tokens: 🟢 RUNNING for authorized work actually continuing or an accepted continuation, ⚪ IDLE only when nothing waits on anyone, 🔴 BLOCKED whenever owner action, an external prerequisite or non-`none` DECISION remains, and 🟠 FAILED for a stopped job, budget, retry or host limit. Keep every pending choice in DECISION with `recommend:` and `default:`; a reserved choice stays blocked until answered, and its default records a recommended plan without granting execution authority. A required manual restart or owner QA is owner action and therefore BLOCKED. The stable seed path is the one line to paste when that restart is required; its existence alone is never evidence that work will continue.
 
 ### Follow-on protocol (when a task completes and work remains)
 
