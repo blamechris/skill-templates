@@ -16,14 +16,14 @@ Read the project instructions and these installed customizations before executin
 - Distribution: {{CUSTOMIZE: Existing private-distribution helper and service, private configuration lookup for authorized app/project target and tester recipients, and commands to inspect release/notification state without exposing identities or credentials.}}
 - Artifact evidence: {{CUSTOMIZE: Artifact type, package ID, version/buildVersion, signing identity verification, checksum/provenance manifest and gate evidence paths; signing and monotonic buildVersion allocation belong to the project helper.}}
 - Phone QA: {{CUSTOMIZE: Automated smoke command, physical device prerequisites, tester install/checklist and evidence source; preserve any existing user hold on physical tests.}}
-- Storage: {{CUSTOMIZE: Absolute private output location outside every repo working tree for packages, logs and manifests; private credential/config sources, retention and cleanup policy.}}
+- Storage: {{CUSTOMIZE: Absolute configured private output root outside product/registry implementation worktrees for packages, logs and manifests; a configured private vault is allowed even when git-backed; private credential/config sources, retention and cleanup policy.}}
 
 Reuse the configured helpers; do not reproduce build, signing, version allocation or distribution logic in this skill. If their required contract is missing, report the exact missing prerequisite and complete independent preparation only.
 
 ## Execute
 
 1. Resolve the requested source to a full immutable commit SHA; record whether it matches the latest fetched configured source ref. Never call an unfetched or older commit “latest.”
-2. Use a clean isolated checkout of that SHA, respecting worktree and branch rules; reject dirty source rather than silently including or discarding changes. Keep durable output files outside every repo working tree; use the helper's external build/cache paths where supported.
+2. Use a clean isolated checkout of that SHA, respecting worktree and branch rules; reject dirty source rather than silently including or discarding changes. Keep durable output files outside product/registry implementation worktrees; a configured private vault is allowed even when git-backed. Require helpers to enforce the explicit private output root and reject active project worktrees; use external build/cache paths where supported.
 3. Run the configured build/test helper and required gates against that exact commit. Record commands, exit results and evidence. A previous green run counts only when tied to the same source and required configuration.
 4. Verify the resulting artifact exists, compute its checksum, and inspect package ID, version/buildVersion and signing identity through the helper. Require consistent signing and a monotonic buildVersion from the project helper before distribution; never invent or race an allocation.
 5. Record a private manifest linking commit, artifact checksum, signing/version metadata, gates and automated smoke results. Do not publish a failed or unverified artifact; report the failing prerequisite.
