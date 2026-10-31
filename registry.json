@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "2226b26",
+  "generatedFromCommit": "8a7ffa4",
   "skillCount": 44,
   "skills": [
     {
@@ -1474,7 +1474,7 @@
     },
     {
       "name": "phone-build",
-      "hash": "2226b26",
+      "hash": "8a7ffa4",
       "lines": 55,
       "description": "Build a verified native Android package for private phone testing, deliver it to authorized testers when requested, and report the remaining physical smoke checks.",
       "guards": [
