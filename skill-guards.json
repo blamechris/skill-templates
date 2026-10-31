@@ -2629,5 +2629,37 @@
         "[Rr]ead the last note.s series number and add one"
       ]
     }
+  ],
+  "phone-build": [
+    {
+      "label": "prepare-never-distributes",
+      "anyOf": [
+        "`--prepare` — build and verify only; never upload or notify\\."
+      ]
+    },
+    {
+      "label": "immutable-clean-source",
+      "anyOf": [
+        "Use a clean isolated checkout of that SHA, respecting worktree and branch rules; reject dirty source rather than silently including or discarding changes\\."
+      ]
+    },
+    {
+      "label": "authorized-private-target",
+      "anyOf": [
+        "If either is absent or ambiguous, prepare the artifact, then obtain explicit target/recipient confirmation before uploading or notifying\\."
+      ]
+    },
+    {
+      "label": "no-autonomous-install-or-store",
+      "anyOf": [
+        "Never autonomously install on a phone or publish to Google Play; those are separate explicitly authorized actions\\."
+      ]
+    },
+    {
+      "label": "delivery-evidence",
+      "anyOf": [
+        "Distinguish built, gates passed, uploaded, notification accepted, downloaded, installed and physical smoke passed; claim each only with direct evidence\\."
+      ]
+    }
   ]
 }

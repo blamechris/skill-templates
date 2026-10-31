@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "e3a4b43",
-  "skillCount": 43,
+  "generatedFromCommit": "2226b26",
+  "skillCount": 44,
   "skills": [
     {
       "name": "agent-review",
@@ -1469,6 +1469,44 @@
             "before (?:your |the )?first edit[^\\n]{0,120}before staging"
           ],
           "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
+        }
+      ]
+    },
+    {
+      "name": "phone-build",
+      "hash": "2226b26",
+      "lines": 55,
+      "description": "Build a verified native Android package for private phone testing, deliver it to authorized testers when requested, and report the remaining physical smoke checks.",
+      "guards": [
+        {
+          "label": "prepare-never-distributes",
+          "anyOf": [
+            "`--prepare` — build and verify only; never upload or notify\\."
+          ]
+        },
+        {
+          "label": "immutable-clean-source",
+          "anyOf": [
+            "Use a clean isolated checkout of that SHA, respecting worktree and branch rules; reject dirty source rather than silently including or discarding changes\\."
+          ]
+        },
+        {
+          "label": "authorized-private-target",
+          "anyOf": [
+            "If either is absent or ambiguous, prepare the artifact, then obtain explicit target/recipient confirmation before uploading or notifying\\."
+          ]
+        },
+        {
+          "label": "no-autonomous-install-or-store",
+          "anyOf": [
+            "Never autonomously install on a phone or publish to Google Play; those are separate explicitly authorized actions\\."
+          ]
+        },
+        {
+          "label": "delivery-evidence",
+          "anyOf": [
+            "Distinguish built, gates passed, uploaded, notification accepted, downloaded, installed and physical smoke passed; claim each only with direct evidence\\."
+          ]
         }
       ]
     },
