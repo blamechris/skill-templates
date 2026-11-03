@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "81b141c",
+  "generatedFromCommit": "8b2ae85",
   "skillCount": 44,
   "skills": [
     {
@@ -496,7 +496,7 @@
     },
     {
       "name": "check-pr",
-      "hash": "81b141c",
+      "hash": "8b2ae85",
       "lines": 500,
       "description": "Address PR review findings from inline threads and general review summaries, verify their disposition, and respond where each was raised.",
       "guards": [
@@ -2064,7 +2064,7 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "81b141c",
+      "hash": "8b2ae85",
       "lines": 340,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`, `/decide`, `/pulse`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
@@ -2764,7 +2764,7 @@
     },
     {
       "name": "unattended-merge",
-      "hash": "1bd866d",
+      "hash": "8b2ae85",
       "lines": 64,
       "description": "Define the delivery gate for delegated implementation in both ordinary and prime-directive runs. The historical skill name `unattended-merge` is retained for existing callers; user presence does not change merge authority. Once the gates pass, the agent merges, verifies delivery and records it without another routine confirmation.",
       "guards": [
