@@ -46,8 +46,6 @@ its git logic or guessing from the current directory or origin URL:
 python3 ~/.claude/scripts/session-seed.py scope
 ```
 
-Never add a second derivation to rules, skills or snippets.
-
 <!--default:status-block-->
 End user responses and subagent returns with this status block and the `Next`
 line. Use the four slots in order, with `none` when empty:
@@ -198,7 +196,9 @@ reviews or skip gates.
 Implementation delegation grants routine gated merge authority in normal and
 prime modes. Do not re-ask because Chris is present. Planning-only or review-only
 requests, unrelated PRs and explicit holds are excluded; actual external approvals
-and permission restrictions still apply.
+and permission restrictions still apply. A PR that widens agent authority or
+weakens a floor, gate, guard, review requirement or merge posture is delivered
+reviewed and left for Chris to merge.
 
 Merge scoped prerequisites in dependency order, then refresh and verify dependent
 PRs. Diagnose and repair failed gates within authority. Never bypass protections or use `--admin` or `--auto`.
@@ -354,7 +354,6 @@ python3 ~/.claude/scripts/usage-pace.py --caps
 They calibrate, record pairs, compare units and report implied caps. Commands prompt when needed; use no angle placeholders in runnable commands. `meter` is an optional
 machine alias, not shipped. Without desktop history, calibration fails with an explanation; other paths
 use recorded/measured fallbacks.
-Do not treat past caps as constants.
 
 Claude's `UserPromptSubmit` hook checks every 40 Fable turns only for a wall
 before half the remaining week or landing below 90% with less than one day left. It speaks once per verdict, is quiet
@@ -509,4 +508,4 @@ Running past min(ceiling, 1.5 hours) is an incident unless a longer norm is
 documented. Inspect logs, identify the stuck step, kill and file the cause;
 never wait on that run again. A rerun gets its own ceiling. Report queued runs
 past that mark as runner problems. In 🔄, list job, start, ceiling and last log
-advance. CI's one bounded watcher is ceiling/check-in; add no second waker.
+advance.
