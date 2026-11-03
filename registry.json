@@ -1,11 +1,11 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "8a7ffa4",
+  "generatedFromCommit": "ea57ec3",
   "skillCount": 44,
   "skills": [
     {
       "name": "agent-review",
-      "hash": "81d191b",
+      "hash": "d9c1913",
       "lines": 280,
       "description": "Launch an expert code reviewer agent with full project context.",
       "guards": [
@@ -75,7 +75,7 @@
     },
     {
       "name": "agentic-audit",
-      "hash": "a0b98e6",
+      "hash": "d9c1913",
       "lines": 151,
       "description": "Launch a panel of specialized agents to audit a pull request from multiple perspectives before merge.",
       "guards": [
@@ -141,8 +141,8 @@
     },
     {
       "name": "autonomous-dev-flow",
-      "hash": "84fe5f4",
-      "lines": 530,
+      "hash": "1bd866d",
+      "lines": 532,
       "description": "Carry delegated development through scope/design, reuse investigation, a proportional plan, model delegation, TDD, /full-review, gated synchronous merge and verified ledger updates. Both normal development and prime-directive include merge authority under Critical Rule 5. Normal development ends with a seed/status after the selected feature or work package is delivered; prime-directive continues to the next authorized item within its mission and original limits. Owner presence does not select or change that mode.",
       "guards": [
         {
@@ -292,7 +292,7 @@
     },
     {
       "name": "bug-hunt",
-      "hash": "600c374",
+      "hash": "d9c1913",
       "lines": 337,
       "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.",
       "guards": [
@@ -403,7 +403,7 @@
     },
     {
       "name": "catchup",
-      "hash": "3f7f775",
+      "hash": "d9c1913",
       "lines": 181,
       "description": "Answer **\"where did we leave off?\"** — a fast, read-only recap of a project's recent activity and current open state. Pulls recent commits, CI/deploy health, open PRs (with mergeability), open issues, local git state, and session memory into one scannable summary, ending with a single suggested next step.",
       "guards": [
@@ -442,7 +442,7 @@
     },
     {
       "name": "changelog",
-      "hash": "3254376",
+      "hash": "d9c1913",
       "lines": 99,
       "description": "Generate release notes from what actually merged: collect the merged PRs and commits since the last release, group them into meaningful sections, and write them to the project's changelog (or a draft release body). Turns \"what changed since the last version?\" into a formatted, linked summary instead of a hand-scrolled git log.",
       "guards": [
@@ -496,8 +496,8 @@
     },
     {
       "name": "check-pr",
-      "hash": "37866a5",
-      "lines": 498,
+      "hash": "ea57ec3",
+      "lines": 500,
       "description": "Address PR review findings from inline threads and general review summaries, verify their disposition, and respond where each was raised.",
       "guards": [
         {
@@ -762,7 +762,7 @@
     },
     {
       "name": "deps",
-      "hash": "04d63e7",
+      "hash": "d9c1913",
       "lines": 96,
       "description": "Keep this project's dependencies healthy: report what's outdated and vulnerable, flag native modules that can break across runtime upgrades, and apply the safe bumps with tests as the gate. A periodic checkup that catches dependency rot before it becomes a broken build or a security advisory.",
       "guards": [
@@ -797,7 +797,7 @@
     },
     {
       "name": "doctor",
-      "hash": "04d63e7",
+      "hash": "d9c1913",
       "lines": 93,
       "description": "Diagnose a broken local setup and propose the fix. Works through the layers that make a project runnable — runtime version, installed dependencies, native modules, build state, and the entrypoint actually starting — finds the first thing that's wrong, and explains the remedy before touching anything.",
       "guards": [
@@ -831,7 +831,7 @@
     },
     {
       "name": "fetch-docs",
-      "hash": "8913398",
+      "hash": "d9c1913",
       "lines": 106,
       "description": "Sync a companion documentation repo (e.g., Obsidian vault) so agents can reference design docs, architecture notes, and project knowledge during development.",
       "guards": [
@@ -869,7 +869,7 @@
     },
     {
       "name": "fix-ci",
-      "hash": "af9c1e4",
+      "hash": "1bd866d",
       "lines": 296,
       "description": "Diagnose CI failures or cancellations on a PR, take corrective action (re-trigger, fix, or escalate), and report status.",
       "guards": [
@@ -1046,7 +1046,7 @@
     },
     {
       "name": "learn",
-      "hash": "df2de5e",
+      "hash": "d9c1913",
       "lines": 296,
       "description": "Capture genuinely novel learnings from the current session and persist them to the correct memory layer. Designed to produce \"nothing to persist\" on most sessions -- that is the skill working correctly, not a failure.",
       "guards": [
@@ -1099,7 +1099,7 @@
     },
     {
       "name": "look-approve",
-      "hash": "4a39c94",
+      "hash": "d9c1913",
       "lines": 476,
       "description": "Get a visual deliverable **approved** — by showing it, not describing it. Runs the real app from an isolated worktree of the approval target, captures **moving** evidence (an animated GIF tour plus one still per feature under review), emits a SHORT one-screen approval card as a self-contained HTML file, puts a single approve / approve-with-notes / reject question to the owner, and records the verdict on the tracking issue. The deliverable is a visual and a *\"we gotta do this\"* — never six pages of prose. Reach for it when a UI/art/feel change is sitting on `main` waiting for a human to say yes.",
       "guards": [
@@ -1181,7 +1181,7 @@
     },
     {
       "name": "manual-testing-mode",
-      "hash": "a1368f4",
+      "hash": "d9c1913",
       "lines": 222,
       "description": "Bootstrap a dogfooding session, then capture issues as the user finds them — defaulting to filing GitHub issues over fixing.",
       "guards": [
@@ -1657,7 +1657,7 @@
     },
     {
       "name": "project-audit",
-      "hash": "600c374",
+      "hash": "d9c1913",
       "lines": 535,
       "description": "Launch a comprehensive multi-agent audit of the entire project. Agents with diverse perspectives analyze the codebase in parallel, then findings are synthesized into a master assessment with actionable recommendations.",
       "guards": [
@@ -1894,7 +1894,7 @@
     },
     {
       "name": "recon",
-      "hash": "af9c1e4",
+      "hash": "d9c1913",
       "lines": 284,
       "description": "Map an unfamiliar repository (or area within one) so you know where to start. Output is a **descriptive lay-of-the-land**, not a critique. Use this *before* `/tackle-issues`, `/bug-hunt`, or `/project-audit` — it produces the orientation those skills assume.",
       "guards": [
@@ -1954,7 +1954,7 @@
     },
     {
       "name": "release",
-      "hash": "af9c1e4",
+      "hash": "d9c1913",
       "lines": 119,
       "description": "Ship a new version of this project end to end: run the release gates, bump the version, build the artifacts, publish, tag, and verify. One command that encodes the project's release checklist so a release never skips a step or ships a broken build.",
       "guards": [
@@ -2014,7 +2014,7 @@
     },
     {
       "name": "rollback",
-      "hash": "969295a",
+      "hash": "d9c1913",
       "lines": 95,
       "description": "Back out a bad change or a broken release safely — revert the offending merged PR, mark the bad published version so nobody new installs it, and ship a corrected version. The counterpart to `/release`: when something shipped that shouldn't have, this is the controlled path back to a good state without breaking people who already have the bad version.",
       "guards": [
@@ -2064,8 +2064,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "e3a4b43",
-      "lines": 339,
+      "hash": "ea57ec3",
+      "lines": 340,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`, `/decide`, `/pulse`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
@@ -2219,7 +2219,7 @@
     },
     {
       "name": "skill",
-      "hash": "af9c1e4",
+      "hash": "d9c1913",
       "lines": 353,
       "description": "The package manager for Claude Code skills — `npm`/`brew` for the skill registry at [`blamechris/skill-templates`](https://github.com/blamechris/skill-templates). Install, list, and update skills **on demand**, tailored to the current repo by the agent running this command. No central fan-out, no per-repo deploy PRs.",
       "guards": [
@@ -2250,7 +2250,7 @@
     },
     {
       "name": "smoke-form",
-      "hash": "4a39c94",
+      "hash": "d9c1913",
       "lines": 346,
       "description": "Generate an interactive, **self-contained HTML smoke-test form** that guides a human through a manual verification pass — the hand-driven sibling of `/smoke-test` (which runs an automated browser pass). Use it before releases, after a feature batch lands, or whenever a change set needs eyes on a real device. With its **wake-on-save loop** (section 6 + `assets/smoke-intake.mjs`), the tester's Pass / Pass-with-note / Fail marks **stream live to the driving agent**, which triages and files issues in real time — no copy-paste, no waiting.",
       "guards": [
@@ -2292,7 +2292,7 @@
     },
     {
       "name": "smoke-test",
-      "hash": "8913398",
+      "hash": "d9c1913",
       "lines": 229,
       "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results.",
       "guards": [
@@ -2334,7 +2334,7 @@
     },
     {
       "name": "start-working",
-      "hash": "5df829a",
+      "hash": "d9c1913",
       "lines": 356,
       "description": "Scan all work sources — GitHub issues, open PRs, roadmap files, audit outputs, codebase TODOs — to determine what to work on next. If nothing actionable is found, perform a lightweight codebase audit to surface potential investigations.",
       "guards": [
@@ -2385,7 +2385,7 @@
     },
     {
       "name": "swarm-audit",
-      "hash": "a0b98e6",
+      "hash": "d9c1913",
       "lines": 222,
       "description": "Launch a swarm of specialized agents to perform a multi-perspective audit of any design document, architecture, codebase, or proposal.",
       "guards": [
@@ -2691,7 +2691,7 @@
     },
     {
       "name": "tiered-delegation",
-      "hash": "8196307",
+      "hash": "d9c1913",
       "lines": 66,
       "description": "The cost-discipline constitution for multi-agent work: the **session's top model orchestrates; cheaper tiers execute**. Invoke it when a session is about to fan out subagents or workflows (audits, marathons, parallel implementation, large research) to load the delegation rules — who does what tier of work, how far down to push each task, and when a claim must be re-verified before it drives an action. It composes with the marathon machinery (`/prime-directive`, `/tackle-issues`, `/parallel-dev`) and with ad-hoc Workflow/Agent fan-outs alike.",
       "guards": [
@@ -2764,8 +2764,8 @@
     },
     {
       "name": "unattended-merge",
-      "hash": "37866a5",
-      "lines": 63,
+      "hash": "ea57ec3",
+      "lines": 64,
       "description": "Define the delivery gate for delegated implementation in both ordinary and prime-directive runs. The historical skill name `unattended-merge` is retained for existing callers; user presence does not change merge authority. Once the gates pass, the agent merges, verifies delivery and records it without another routine confirmation.",
       "guards": [
         {
@@ -2818,7 +2818,7 @@
     },
     {
       "name": "visual-brief",
-      "hash": "4a39c94",
+      "hash": "d9c1913",
       "lines": 244,
       "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together.",
       "guards": [
@@ -2876,7 +2876,7 @@
     },
     {
       "name": "weekly-review",
-      "hash": "4a39c94",
+      "hash": "d9c1913",
       "lines": 271,
       "description": "The **Monday TPM pass over everything on this machine**: scan every repo for the trailing week's git activity, fan out one read-only scan agent per active repo, sweep the quiet tail, aggregate local session usage from the transcripts, and write a dated Markdown note plus a self-contained HTML brief into the vault. The chat message it ends with is **a short list of decisions waiting on the owner and one pointer to the note** — never a recap of the week, which is what the note is for. Reach for it at the top of the week, or any time \"what happened across all my projects, and what needs me?\" is the actual question.",
       "guards": [
