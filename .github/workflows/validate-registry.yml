@@ -426,7 +426,9 @@ jobs:
         # between them, and every substring a scan could look for was present in the
         # broken version; a `[ -f "$SEED" ]` proof is indistinguishable from a real
         # one until you point it at another session's file and watch it pass.
-        run: ./assets/scripts/session-seed.test.sh
+        run: |
+          ./assets/scripts/session-seed.test.sh
+          python3 ./assets/scripts/session-seed-announce.test.py
 
       - name: offline session-pulse regression tests
         run: ./assets/scripts/session-pulse.test.sh
