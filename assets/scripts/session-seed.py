@@ -69,6 +69,44 @@ from datetime import datetime, timezone
 DEFAULT_HANDOFF_DIR = "~/Obsidian/no-it-all/handoffs"
 
 
+def read_ingest_secret(path):
+    """Read only a stable, regular credential inode, including without O_NOFOLLOW.
+
+    The descriptor and both path observations must agree. Missing file identities
+    fail closed rather than treating a platform's absent O_NOFOLLOW as permission
+    to follow links. No credential bytes are read before these checks succeed.
+    """
+    fd = None
+    try:
+        before = os.lstat(path)
+        if not stat.S_ISREG(before.st_mode):
+            return None
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(path, flags)
+        info = os.fstat(fd)
+        after = os.lstat(path)
+        identities = []
+        for observation in (before, info, after):
+            device, inode = getattr(observation, "st_dev", None), getattr(observation, "st_ino", None)
+            if (not stat.S_ISREG(observation.st_mode) or type(device) is not int
+                    or type(inode) is not int or device < 0 or inode <= 0):
+                return None
+            identities.append((device, inode))
+        if identities[0] != identities[1] or identities[1] != identities[2]:
+            return None
+        if os.name != "nt" and (stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid()):
+            return None
+        return os.read(fd, 4096).decode("utf-8").strip() or None
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def announce_seed_http(seed):
     """Best-effort path-only announce, isolated by announce_seed's hard deadline.
 
@@ -79,15 +117,7 @@ def announce_seed_http(seed):
     directory = os.environ.get("CHROXY_CONFIG_DIR") or os.path.expanduser("~/.chroxy")
     secret = os.environ.get("CHROXY_INGEST_SECRET")
     if not secret:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        fd = os.open(os.path.join(directory, "ingest-secret"), flags)
-        with os.fdopen(fd, "r", encoding="utf-8") as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode):
-                return
-            if os.name != "nt" and (stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid()):
-                return
-            secret = stream.read(4096).strip()
+        secret = read_ingest_secret(os.path.join(directory, "ingest-secret"))
     if not secret or "\r" in secret or "\n" in secret:
         return
     url = os.environ.get("CHROXY_INGEST_URL")

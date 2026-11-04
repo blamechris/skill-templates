@@ -8,6 +8,7 @@ from pathlib import Path
 import queue
 import runpy
 import secrets
+import stat
 import subprocess
 import sys
 import tempfile
@@ -158,6 +159,53 @@ class AnnouncementTests(unittest.TestCase):
             self.env["CHROXY_SEED_ANNOUNCE"] = "0"
             self.assert_success(self.write())
             self.assertTrue(received.empty())
+
+    def test_without_nofollow_reads_a_trusted_regular_file(self):
+        reader = runpy.run_path(str(SCRIPT))["read_ingest_secret"]
+        with mock.patch.object(os, "O_NOFOLLOW", 0, create=True):
+            self.assertEqual(reader(str(self.secret_file)), self.secret)
+
+    def test_without_nofollow_rejects_symlink_before_open(self):
+        reader = runpy.run_path(str(SCRIPT))["read_ingest_secret"]
+        link = mock.Mock(st_mode=stat.S_IFLNK | 0o777, st_dev=1, st_ino=1)
+        with mock.patch.object(os, "O_NOFOLLOW", 0, create=True), mock.patch("os.lstat", return_value=link), mock.patch("os.open") as opener:
+            self.assertIsNone(reader(str(self.secret_file)))
+            opener.assert_not_called()
+
+    def test_without_nofollow_rejects_replacement_between_lstat_and_open(self):
+        reader = runpy.run_path(str(SCRIPT))["read_ingest_secret"]
+        replacement = self.config / "replacement"
+        replacement.write_text(secrets.token_hex(32))
+        replacement.chmod(0o600)
+        original_open = os.open
+
+        def swapped_open(path, flags):
+            os.replace(str(replacement), str(self.secret_file))
+            return original_open(path, flags)
+
+        with mock.patch.object(os, "O_NOFOLLOW", 0, create=True), mock.patch("os.open", side_effect=swapped_open), mock.patch("os.read") as read:
+            self.assertIsNone(reader(str(self.secret_file)))
+            read.assert_not_called()
+
+    def test_without_nofollow_rejects_link_swap_after_descriptor_open(self):
+        reader = runpy.run_path(str(SCRIPT))["read_ingest_secret"]
+        initial = os.lstat(str(self.secret_file))
+        link = mock.Mock(st_mode=stat.S_IFLNK | 0o777, st_dev=initial.st_dev, st_ino=initial.st_ino)
+        with mock.patch.object(os, "O_NOFOLLOW", 0, create=True), mock.patch("os.lstat", side_effect=[initial, link]), mock.patch("os.read") as read:
+            self.assertIsNone(reader(str(self.secret_file)))
+            read.assert_not_called()
+
+    def test_without_nofollow_missing_unreadable_or_unidentified_secret_fails_closed(self):
+        reader = runpy.run_path(str(SCRIPT))["read_ingest_secret"]
+        with mock.patch.object(os, "O_NOFOLLOW", 0, create=True):
+            self.assertIsNone(reader(str(self.config / "missing")))
+            with mock.patch("os.open", side_effect=PermissionError("fixture unreadable")):
+                self.assertIsNone(reader(str(self.secret_file)))
+            info = os.stat(str(self.secret_file))
+            unidentified = mock.Mock(st_mode=info.st_mode, st_dev=info.st_dev, st_ino=0, st_uid=info.st_uid)
+            with mock.patch("os.fstat", return_value=unidentified), mock.patch("os.read") as read:
+                self.assertIsNone(reader(str(self.secret_file)))
+                read.assert_not_called()
 
     def test_remote_plaintext_url_never_sends(self):
         self.env["CHROXY_INGEST_URL"] = "http://192.0.2.1/api/events"
