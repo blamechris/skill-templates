@@ -961,7 +961,8 @@ def finish_write(a, scope, sid, now, text):
         sys.stderr.write(r.stderr)
         if r.returncode != 0:
             sys.exit(r.returncode)
-        announce_seed(seed)
+        if not a.refresh_pulse:
+            announce_seed(seed)
     else:
         # A DIFFERENT string on purpose. `seed: <path>` is the proved form and only
         # the proof emits it, so "the write printed a path" can never be mistaken

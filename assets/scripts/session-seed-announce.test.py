@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import runpy
 import secrets
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).with_name("session-seed.py")
 
@@ -42,17 +44,22 @@ class AnnouncementTests(unittest.TestCase):
                         CLAUDE_HANDOFF_DIR=str(self.root / "handoffs"), CLAUDE_CODE_SESSION_ID="fixture-session")
 
     @contextlib.contextmanager
-    def receiver(self, delay=0, status=200):
+    def receiver(self, delay=0, status=200, redirect_url="/redirect-target"):
         received = queue.Queue()
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(handler):
                 received.put((handler.path, handler.headers.get("Authorization"),
-                              json.loads(handler.rfile.read(int(handler.headers["Content-Length"])))))
+                              json.loads(handler.rfile.read(int(handler.headers["Content-Length"]))), "POST"))
                 time.sleep(delay)
                 handler.send_response(status)
                 if status == 302:
-                    handler.send_header("Location", "/redirect-target")
+                    handler.send_header("Location", redirect_url)
+                handler.end_headers()
+
+            def do_GET(handler):
+                received.put((handler.path, handler.headers.get("Authorization"), None, "GET"))
+                handler.send_response(200)
                 handler.end_headers()
 
             def log_message(handler, *args):
@@ -70,8 +77,8 @@ class AnnouncementTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
-    def write(self, *extra, cwd=None):
-        return subprocess.run([sys.executable, str(SCRIPT), "write", "--picks-up-at", "Verify HTTP continuation (agent Sol)",
+    def write(self, *extra, cwd=None, script=SCRIPT):
+        return subprocess.run([sys.executable, str(script), "write", "--picks-up-at", "Verify HTTP continuation (agent Sol)",
                                "--boundary-reason", "package complete", "--next",
                                "Verify continuation. Acceptance: paths arrive without seed content.", "--body-file", str(self.body), *extra],
                               cwd=cwd or self.repo, env=self.env, capture_output=True, text=True, timeout=5)
@@ -89,7 +96,8 @@ class AnnouncementTests(unittest.TestCase):
             del self.env["CHROXY_INGEST_URL"]
             (self.config / "config.json").write_text(json.dumps({"host": "0.0.0.0", "port": port}))
             seed = self.assert_success(self.write())
-            path, auth, event = received.get(timeout=1)
+            path, auth, event, method = received.get(timeout=1)
+            self.assertEqual(method, "POST")
             self.assertEqual(path, "/api/events")
             self.assertEqual(auth, "Bearer " + self.secret)
             self.assertEqual(set(event), {"source", "type", "ts", "data"})
@@ -154,6 +162,47 @@ class AnnouncementTests(unittest.TestCase):
     def test_remote_plaintext_url_never_sends(self):
         self.env["CHROXY_INGEST_URL"] = "http://192.0.2.1/api/events"
         self.assert_success(self.write())
+        module = runpy.run_path(str(SCRIPT))
+        seed = str(self.root / "handoffs" / "NEXT-demo.md")
+        with mock.patch.dict(os.environ, self.env, clear=True), mock.patch("urllib.request.OpenerDirector.open") as transport:
+            module["announce_seed_http"](seed)
+            transport.assert_not_called()
+        # Negative control: deleting the loopback guard must reach transport.
+        source = SCRIPT.read_text()
+        mutant = source.replace("if not loopback:\n            return", "if False:\n            return", 1)
+        self.assertNotEqual(source, mutant)
+        namespace = {"__file__": str(SCRIPT), "__name__": "fixture_mutant"}
+        exec(compile(mutant, str(SCRIPT), "exec"), namespace)
+        with mock.patch.dict(os.environ, self.env, clear=True), mock.patch("urllib.request.OpenerDirector.open") as transport:
+            namespace["announce_seed_http"](seed)
+            self.assertEqual(transport.call_count, 1, "remote guard mutant must be detected")
+
+    def test_cross_origin_redirect_is_observed_and_guard_removal_goes_red(self):
+        with self.receiver() as (target, target_port):
+            with self.receiver(status=302, redirect_url="http://127.0.0.1:%s/redirect-target" % target_port) as (origin, _):
+                self.assert_success(self.write())
+                self.assertEqual(origin.qsize(), 1)
+                self.assertTrue(target.empty(), "redirect destination must see no request of any method")
+                source = SCRIPT.read_text()
+                mutant = source.replace("urllib.request.ProxyHandler({}), NoRedirect()", "urllib.request.ProxyHandler({})", 1)
+                self.assertNotEqual(source, mutant)
+                mutant_script = self.root / "redirect-mutant.py"
+                mutant_script.write_text(mutant)
+                self.assert_success(self.write(script=mutant_script))
+                self.assertEqual(target.get(timeout=1)[3], "GET", "redirect guard mutant must be detected")
+
+    def test_pulse_only_refresh_does_not_announce_wave_completion(self):
+        with self.receiver() as (received, _):
+            seed = self.assert_success(self.write())
+            received.get(timeout=1)
+            pulse = self.root / "pulse.json"
+            pulse.write_text(json.dumps({"at": "2026-08-11T00:00:00Z", "line": "delta: no baseline | WARN: none",
+                                         "state": {"scope": "demo", "tests": "PASS #123"}}))
+            result = subprocess.run([sys.executable, str(SCRIPT), "write", "--refresh-pulse", str(pulse)],
+                                    cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=5)
+            self.assert_success(result)
+            self.assertIn("last_pulse:", seed.read_text())
+            self.assertTrue(received.empty(), "metadata refresh is not wave completion")
 
     def test_unproved_write_does_not_announce(self):
         with self.receiver() as (received, _):
