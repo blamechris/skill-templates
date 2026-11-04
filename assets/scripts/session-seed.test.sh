@@ -33,6 +33,8 @@ trap cleanup EXIT
 export GIT_CEILING_DIRECTORIES="$TMP"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 unset CLAUDE_HANDOFF_DIR CLAUDE_CODE_SESSION_ID
+# These offline fixtures must never discover a developer's running daemon.
+export CHROXY_SEED_ANNOUNCE=0
 
 # The archive-vs-canonical discriminator, written out HERE rather than imported, so
 # the script cannot satisfy these assertions by redefining its own rule. This is

@@ -57,11 +57,102 @@ import errno
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import time
+import ipaddress
+import urllib.request
+import urllib.parse
 from datetime import datetime, timezone
 
 DEFAULT_HANDOFF_DIR = "~/Obsidian/no-it-all/handoffs"
+
+
+def announce_seed_http(seed):
+    """Best-effort path-only announce, isolated by announce_seed's hard deadline.
+
+    Discovery follows chroxy-hooks: CHROXY_INGEST_URL/SECRET, then
+    CHROXY_CONFIG_DIR (default ~/.chroxy). HTTP is loopback-only; remote
+    endpoints require an explicit HTTPS URL. No proxy, redirect, retry or spool.
+    """
+    directory = os.environ.get("CHROXY_CONFIG_DIR") or os.path.expanduser("~/.chroxy")
+    secret = os.environ.get("CHROXY_INGEST_SECRET")
+    if not secret:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(os.path.join(directory, "ingest-secret"), flags)
+        with os.fdopen(fd, "r", encoding="utf-8") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return
+            if os.name != "nt" and (stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid()):
+                return
+            secret = stream.read(4096).strip()
+    if not secret or "\r" in secret or "\n" in secret:
+        return
+    url = os.environ.get("CHROXY_INGEST_URL")
+    if not url:
+        config = {}
+        try:
+            with open(os.path.join(directory, "config.json"), encoding="utf-8") as stream:
+                config = json.load(stream)
+        except (OSError, ValueError):
+            pass
+        if not isinstance(config, dict):
+            config = {}
+        port = config.get("port", 8765)
+        if type(port) is not int or not 1 <= port <= 65535:
+            port = 8765
+        host = next((h.strip() for h in (os.environ.get("CHROXY_HOST"), config.get("host"))
+                     if isinstance(h, str) and h.strip() and h.strip() not in ("0.0.0.0", "::", "*")), "127.0.0.1")
+        url = "http://%s:%s/api/events" % ("[%s]" % host if ":" in host else host, port)
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.username or parsed.password or parsed.fragment or parsed.path != "/api/events" or parsed.query:
+        return
+    if parsed.scheme == "http":
+        try:
+            loopback = ipaddress.ip_address(parsed.hostname).is_loopback
+        except ValueError:
+            loopback = parsed.hostname == "localhost"
+        if not loopback:
+            return
+    elif parsed.scheme != "https":
+        return
+    roots = _worktree_roots()
+    cwd = roots[-1] if roots else os.getcwd()
+    if len(seed) > 4096 or len(cwd) > 4096:
+        return
+    payload = {"source": "session-seed", "type": "wave_complete", "ts": int(time.time() * 1000),
+               "data": {"seedPath": seed, "cwd": cwd}}
+    request = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                     headers={"Content-Type": "application/json", "Authorization": "Bearer " + secret},
+                                     method="POST")
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    with opener.open(request, timeout=0.25):
+        pass
+
+
+def announce_seed(seed):
+    """Fail silent with a wall-clock deadline, including config reads and DNS.
+
+    The child reads its own credential; neither command arguments nor output
+    contain it. Announcement cannot change a proved writer's output or exit.
+    CHROXY_SEED_ANNOUNCE=0 disables discovery for offline/private workflows.
+    """
+    if os.environ.get("CHROXY_SEED_ANNOUNCE") == "0":
+        return
+    try:
+        subprocess.run([sys.executable, "-c",
+                        "import runpy,sys; runpy.run_path(sys.argv[1])['announce_seed_http'](sys.argv[2])",
+                        os.path.abspath(__file__), seed], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.75, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 # The name shape that tells an ARCHIVED seed from a canonical one, and the single
 # definition of it. `/next` ranks canonical seeds and never archives, so both sides
@@ -870,6 +961,7 @@ def finish_write(a, scope, sid, now, text):
         sys.stderr.write(r.stderr)
         if r.returncode != 0:
             sys.exit(r.returncode)
+        announce_seed(seed)
     else:
         # A DIFFERENT string on purpose. `seed: <path>` is the proved form and only
         # the proof emits it, so "the write printed a path" can never be mistaken
