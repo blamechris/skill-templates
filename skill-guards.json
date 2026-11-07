@@ -1453,6 +1453,72 @@
         "[Dd]o not (hand-write the seed|reimplement any of this)"
       ],
       "note": "The seed's scope key, session id, archive-on-collide, write and proof are ONE implementation with its own test suite (assets/scripts/session-seed.test.sh). Five adversarial rounds went into prose-containing-bash that every wave template then restated in a near-copy, and the copies drifted; a customized copy that reintroduces an inline version is that regression returning. Alternate 1 is the invocation, alternate 2 the prohibition on replacing it — both state the same rule, and neither matches a heading or a path mention."
+    },
+    {
+      "label": "run-report-pick-record",
+      "anyOf": [
+        "Before investigating, append the pick record to the ledger History \\(see `/run-report`, Pick record\\); recording never stops or defers a pick, review or merge"
+      ]
+    },
+    {
+      "label": "run-report-done-stop",
+      "anyOf": [
+        "then append the DONE line from GitHub facts, or a STOP line for a pick that will not merge, before selecting more work\\."
+      ]
+    },
+    {
+      "label": "run-report-at-stop",
+      "anyOf": [
+        "Produce the run report with `/run-report`\\."
+      ]
+    },
+    {
+      "label": "run-report-lane-record",
+      "anyOf": [
+        "Record each pick's lane and the observable it closes, as `/run-report` defines\\."
+      ]
+    },
+    {
+      "label": "run-report-run-record",
+      "anyOf": [
+        "Every seed and every reload instruction in a compaction summary names the run id, the run-record path and the ledger path\\."
+      ]
+    },
+    {
+      "label": "run-report-install-once",
+      "anyOf": [
+        "Install `run-report` once at run start, in the run's own worktree, or not at all; never `skill add` mid-pick\\."
+      ]
+    },
+    {
+      "label": "run-report-start-record",
+      "anyOf": [
+        "For a new run, first create the run record with the charter and the start snapshot \\(`/run-report`, Run record\\), under a stable run id, the one the ledger STATE header and `usage-checkpoint\\.py --run-id` use, then initialize tracking\\."
+      ]
+    },
+    {
+      "label": "run-report-first-pick-proceeds",
+      "anyOf": [
+        "If the record cannot be written, the first pick proceeds and the gap goes in Status\\."
+      ]
+    },
+    {
+      "label": "run-report-reload-finds-ledger",
+      "anyOf": [
+        "find the session log as `/run-report` Arguments does"
+      ]
+    },
+    {
+      "label": "run-report-minimal-fallback",
+      "anyOf": [
+        "Without it write the minimal record: `started`, `direction` verbatim and `ledger` in the run record, then"
+      ]
+    },
+    {
+      "label": "run-report-review-line",
+      "anyOf": [
+        "Append one `REVIEW #<pr> r<n> head=<7> <verdict>` ledger line for each full-review round of the PR"
+      ]
     }
   ],
   "project-audit": [
@@ -1899,6 +1965,24 @@
         "[Dd]o not (hand-write the seed|reimplement any of this)"
       ],
       "note": "The seed's scope key, session id, archive-on-collide, write and proof are ONE implementation with its own test suite (assets/scripts/session-seed.test.sh). Five adversarial rounds went into prose-containing-bash that every wave template then restated in a near-copy, and the copies drifted; a customized copy that reintroduces an inline version is that regression returning. Alternate 1 is the invocation, alternate 2 the prohibition on replacing it — both state the same rule, and neither matches a heading or a path mention."
+    },
+    {
+      "label": "run-report-read-run-record",
+      "anyOf": [
+        "Also read the run record named in the seed; the seed names the run's ledger path too"
+      ]
+    },
+    {
+      "label": "run-report-at-run-stop",
+      "anyOf": [
+        "Run `/run-report` instead of a bare `/visual-brief` only when this session ran `prime-directive` or `tackle-issues` and that run has stopped or reached package close; otherwise, including a WARN-only or wave-boundary brief mid-run, stay with `/visual-brief`, which never marks the run stopped\\."
+      ]
+    },
+    {
+      "label": "run-report-follow-on-row",
+      "anyOf": [
+        "\\| `/run-report` \\| Run-level report and record"
+      ]
     }
   ],
   "skill": [
@@ -2292,6 +2376,66 @@
         "[Dd]o not (hand-write the seed|reimplement any of this)"
       ],
       "note": "The seed's scope key, session id, archive-on-collide, write and proof are ONE implementation with its own test suite (assets/scripts/session-seed.test.sh). Five adversarial rounds went into prose-containing-bash that every wave template then restated in a near-copy, and the copies drifted; a customized copy that reintroduces an inline version is that regression returning. Alternate 1 is the invocation, alternate 2 the prohibition on replacing it — both state the same rule, and neither matches a heading or a path mention."
+    },
+    {
+      "label": "run-report-pick-record",
+      "anyOf": [
+        "Before investigating, append the pick record to the ledger History \\(see `/run-report`, Pick record\\); recording never stops or defers a pick, review or merge"
+      ]
+    },
+    {
+      "label": "run-report-done-stop",
+      "anyOf": [
+        "then append the DONE line from GitHub facts, or a STOP line for a pick that will not merge, before selecting more work\\."
+      ]
+    },
+    {
+      "label": "run-report-at-stop",
+      "anyOf": [
+        "Produce the run report with `/run-report`\\."
+      ]
+    },
+    {
+      "label": "run-report-run-record",
+      "anyOf": [
+        "Create the run record at run start as `/run-report` defines"
+      ]
+    },
+    {
+      "label": "run-report-install-once",
+      "anyOf": [
+        "Install `run-report` once at run start, in the run's own worktree, or not at all; never `skill add` mid-pick\\."
+      ]
+    },
+    {
+      "label": "run-report-why-column",
+      "anyOf": [
+        "The Why cell is the pick's lane and reason, as its PICK line will record them \\(see `/run-report`\\)\\."
+      ]
+    },
+    {
+      "label": "run-report-start-record",
+      "anyOf": [
+        "For a new run, first create the run record with the charter and the start snapshot \\(`/run-report`, Run record\\), under a stable run id, the one the ledger STATE header and `usage-checkpoint\\.py --run-id` use, then initialize tracking\\."
+      ]
+    },
+    {
+      "label": "run-report-first-pick-proceeds",
+      "anyOf": [
+        "If the record cannot be written, the first pick proceeds and the gap goes in Status\\."
+      ]
+    },
+    {
+      "label": "run-report-minimal-fallback",
+      "anyOf": [
+        "Without it write the minimal record: `started`, `direction` verbatim and `ledger` in the run record, then"
+      ]
+    },
+    {
+      "label": "run-report-review-line",
+      "anyOf": [
+        "Append one `REVIEW #<pr> r<n> head=<7> <verdict>` ledger line for each full-review round of the PR"
+      ]
     }
   ],
   "test-plan": [
@@ -2659,6 +2803,362 @@
       "label": "delivery-evidence",
       "anyOf": [
         "Distinguish built, gates passed, uploaded, notification accepted, downloaded, installed and physical smoke passed; claim each only with direct evidence\\."
+      ]
+    }
+  ],
+  "run-report": [
+    {
+      "label": "section-order",
+      "anyOf": [
+        "Answer these sections in this order, each ending with its source\\."
+      ]
+    },
+    {
+      "label": "every-number-sourced",
+      "anyOf": [
+        "Every number comes from a command or file; a number with no source is left out\\."
+      ]
+    },
+    {
+      "label": "reconstructed-label",
+      "anyOf": [
+        "A field with no pick record prints as `reconstructed from PR text` or `not recorded`, never filled silently\\."
+      ]
+    },
+    {
+      "label": "private-finding-detail",
+      "anyOf": [
+        "Never copy private-finding detail into the report; a withheld finding appears only as a count \\(`1 finding withheld`\\)\\. Its vault path stays in the ledger, the seed and the chat status\\."
+      ]
+    },
+    {
+      "label": "fresh-recompute",
+      "anyOf": [
+        "Before publishing, a fresh subagent at the workhorse tier or cheaper, never Fable, rechecks the headline numbers: the Result counts, the headline-band count, the Reach comparison, and the cost session count\\. It answers one line per number, `match` or the differing value"
+      ]
+    },
+    {
+      "label": "attribute-by-done-line",
+      "anyOf": [
+        "A PR or issue belongs to the run if and only if it has a DONE or STOP line\\. Anything else merged or closed in the window is `other sessions or owner`, counted apart\\."
+      ]
+    },
+    {
+      "label": "hotspots-not-defects",
+      "anyOf": [
+        "Hotspots are files touched by at least max\\(4, 5% of the run's PRs\\) merged PRs, and top-level packages by PR count, printed with the threshold\\."
+      ]
+    },
+    {
+      "label": "hotspot-noise-excluded",
+      "anyOf": [
+        "Leave out lockfiles, generated files \\(including those marked in `\\.gitattributes`\\), and version and changelog files\\."
+      ]
+    },
+    {
+      "label": "tech-debt-needs-cause",
+      "anyOf": [
+        "Call something tech debt only where a recorded `hard` code or reviewer finding names the cause\\."
+      ]
+    },
+    {
+      "label": "age-snapshot-headline",
+      "anyOf": [
+        "Compute age in whole days from `createdAt` to one stated UTC snapshot time, print that time beside every count, and use the count at or above the run's old-debt threshold from `selection_policy`, else 60 days, as the headline band\\."
+      ]
+    },
+    {
+      "label": "unreached-channel-undelivered",
+      "anyOf": [
+        "A fix that is not on a channel is not delivered to that channel\\."
+      ]
+    },
+    {
+      "label": "deploy-needs-readback",
+      "anyOf": [
+        "A claim that auto-deploy happened is not a read-back: read the running commit or version\\."
+      ]
+    },
+    {
+      "label": "no-skip-on-judgement",
+      "anyOf": [
+        "Recording steps are not skipped on the agent's own judgement; one that cannot run is reported as not run, with the reason, and the work continues\\."
+      ]
+    },
+    {
+      "label": "run-record-at-start",
+      "anyOf": [
+        "Create the run record when the run starts, before the first pick, with the owner's words verbatim, the charter, the start snapshot and the selection policy\\."
+      ]
+    },
+    {
+      "label": "records-stay-private",
+      "anyOf": [
+        "They stay in their private directories and never go into a repository, issue or PR\\."
+      ]
+    },
+    {
+      "label": "no-authority",
+      "anyOf": [
+        "It adds no gate and no authority, and it never changes a review or a merge posture\\."
+      ]
+    },
+    {
+      "label": "mid-run-brief-not-stop",
+      "anyOf": [
+        "A mid-run WARN brief or wave boundary is a bare `/visual-brief` and does not stop the run\\."
+      ]
+    },
+    {
+      "label": "recording-never-blocks",
+      "anyOf": [
+        "Recording never stops, defers or reorders a pick, a review or a merge\\."
+      ]
+    },
+    {
+      "label": "backfill-reconstructed",
+      "anyOf": [
+        "is back-filled before the next pick as `PICK \\.\\.\\. reconstructed`, and the report prints it so\\. A failed write goes in Status and the work continues\\."
+      ]
+    },
+    {
+      "label": "done-or-stop-at-merge",
+      "anyOf": [
+        "Append the DONE line at merge and a STOP line before moving on from any pick that will not merge, from GitHub facts and the ledger, before selecting more work\\."
+      ]
+    },
+    {
+      "label": "closed-lane-list",
+      "anyOf": [
+        "Lane is exactly one of these, so counts aggregate\\. If none fits use `other` and say why in `because`\\."
+      ]
+    },
+    {
+      "label": "hard-evidence-rule",
+      "anyOf": [
+        "Every other code needs `ev=<code>:<ref>`, where `ref` is a PR comment URL, a run id or a ledger line, and without it print `not recorded`\\."
+      ]
+    },
+    {
+      "label": "hard-trigger-table",
+      "anyOf": [
+        "\\| `review-churn` \\| `rounds` is 3 or more \\|"
+      ]
+    },
+    {
+      "label": "security-lane-silent-on-issue",
+      "anyOf": [
+        "Never post a \\\"selected because\\\" comment on the public issue for a `security-private` pick, since the reason can reveal motive\\."
+      ]
+    },
+    {
+      "label": "ledger-outside-worktree",
+      "anyOf": [
+        "Pick lines are append-only History lines in the private ledger, `\\$CLAUDE_LEDGER_DIR/<run-id>\\.md` \\(default dir `~/Obsidian/no-it-all/ledgers/`\\), written outside every worktree\\."
+      ]
+    },
+    {
+      "label": "seed-names-run-and-ledger",
+      "anyOf": [
+        "Every seed the run writes, and every reload instruction in a compaction summary, names the run id, the run-record path and the ledger path\\."
+      ]
+    },
+    {
+      "label": "old-ledger-path-kept",
+      "anyOf": [
+        "A run whose ledger already sits at an older path keeps it, recorded in `ledger:`, and is not migrated mid-run\\."
+      ]
+    },
+    {
+      "label": "install-once-not-mid-pick",
+      "anyOf": [
+        "Install `run-report` once, at run start, in the run's own worktree, or not at all\\. Never run `skill add` mid-pick\\."
+      ]
+    },
+    {
+      "label": "charter-only-records",
+      "anyOf": [
+        "The charter only records\\. A field the owner did not give is written `not stated` and never invented\\."
+      ]
+    },
+    {
+      "label": "owner-never-stated",
+      "anyOf": [
+        "State what the owner never stated about selection, such as a priority order or an age rule; do not infer one\\."
+      ]
+    },
+    {
+      "label": "truncation-rule",
+      "anyOf": [
+        "If a list returns exactly its `--limit` rows, rerun with a higher limit or slice it by date; otherwise report that section as not run\\."
+      ]
+    },
+    {
+      "label": "cost-rule",
+      "anyOf": [
+        "Link the row that `usage-benchmark-row\\.py` appended to the usage benchmark table, whose default path that script prints, under the brief directory\\. Find it by this session's id prefix, or say `none appended`\\. Add none, and give no tier to a multi-package run\\."
+      ]
+    },
+    {
+      "label": "no-session-metrics",
+      "anyOf": [
+        "Leave out its session-metrics chips\\."
+      ]
+    },
+    {
+      "label": "ran-in-line",
+      "anyOf": [
+        "a `ran in` line giving each session's host and hours"
+      ]
+    },
+    {
+      "label": "run-id-is-checkpoint-id",
+      "anyOf": [
+        "The run id is the stable run id passed to `usage-checkpoint\\.py --run-id` and written in the ledger STATE header\\."
+      ]
+    },
+    {
+      "label": "resume-skips-stopped-record",
+      "anyOf": [
+        "that has no `stopped:` field, or the newest if all are stopped"
+      ]
+    },
+    {
+      "label": "mid-run-report-writes-report-only",
+      "anyOf": [
+        "A mid-run report on demand writes `report` only\\."
+      ]
+    },
+    {
+      "label": "start-snapshot-one-command",
+      "anyOf": [
+        "Take the start snapshot with one command, `gh issue list --repo \"\\$REPO\" --state open --limit 10000 --json number,createdAt,labels`\\."
+      ]
+    },
+    {
+      "label": "done-time-command",
+      "anyOf": [
+        "Take the merge facts at that moment with `gh pr view <pr> --json mergeCommit,reviews,comments,files,changedFiles`\\."
+      ]
+    },
+    {
+      "label": "rounds-from-ledger",
+      "anyOf": [
+        "`rounds` is the count of the PR's `REVIEW` lines in the ledger\\."
+      ]
+    },
+    {
+      "label": "closed-without-pr-done",
+      "anyOf": [
+        "An issue the run closes without a PR gets the `pr=- closed=` form of DONE\\."
+      ]
+    },
+    {
+      "label": "wave-written-each-end",
+      "anyOf": [
+        "Append `WAVE` at each wave end, or `WAVE w0` once at stop for a run with no waves\\."
+      ]
+    },
+    {
+      "label": "cost-aggregate-command",
+      "anyOf": [
+        "python3 ~/\\.claude/scripts/usage-checkpoint\\.py --aggregate-dir \"\\$T\""
+      ]
+    },
+    {
+      "label": "reach-release-by-tag-glob",
+      "anyOf": [
+        "is the first tag matching its `tags` glob that contains the SHA"
+      ]
+    },
+    {
+      "label": "reach-deployed-is-ancestor",
+      "anyOf": [
+        "a commit read-back is compared with `git merge-base --is-ancestor <sha> <deployed>`"
+      ]
+    },
+    {
+      "label": "reach-untagged-not-verifiable",
+      "anyOf": [
+        "A channel with `tags: none` is `not verifiable`\\."
+      ]
+    },
+    {
+      "label": "review-line-per-round",
+      "anyOf": [
+        "Append one `REVIEW` line for each `/full-review` round as it returns, and at the latest before the DONE line\\."
+      ]
+    },
+    {
+      "label": "rounds-fallback-labelled",
+      "anyOf": [
+        "If it has none, use the count of its `## Code Review` comments in `comments`, labelled `rounds-src=comments`\\."
+      ]
+    },
+    {
+      "label": "hours-from-checkpoint",
+      "anyOf": [
+        "`captured_at` of its final checkpoint minus its `started`, in hours to one decimal\\."
+      ]
+    },
+    {
+      "label": "channel-paths-n-a",
+      "anyOf": [
+        "A fix applies to a channel only if one of its PR's `files` matches the channel's `paths`; otherwise print `n/a` for that channel\\."
+      ]
+    },
+    {
+      "label": "reach-prefix-strip",
+      "anyOf": [
+        "removing the literal prefix of the `tags` glob \\(the text before its first `\\*`\\) from the tag"
+      ]
+    },
+    {
+      "label": "reach-tagged-not-published",
+      "anyOf": [
+        "A tag newer than `released` is `tagged, not published`\\."
+      ]
+    },
+    {
+      "label": "bug-label-recorded",
+      "anyOf": [
+        "The stop report reuses the recorded value and never re-guesses it\\."
+      ]
+    },
+    {
+      "label": "passed-over-no-semicolon",
+      "anyOf": [
+        "A `passed-over` reason must not contain `;`\\. Replace any with a comma\\."
+      ]
+    },
+    {
+      "label": "cost-needs-complete-count",
+      "anyOf": [
+        "If N is 0 or lower than M, print `cost: not recorded \\(N of M sessions checkpointed\\)` and never quote a dollar figure\\. Only when N equals M, quote the printed figures"
+      ]
+    },
+    {
+      "label": "cost-compares-sessions",
+      "anyOf": [
+        "compare its `sessions` count N with the number M of entries in the run record's `sessions`\\."
+      ]
+    },
+    {
+      "label": "ran-in-wall-clock",
+      "anyOf": [
+        "each printed `wall-clock <n>h \\(includes idle\\)` or `not recorded`"
+      ]
+    },
+    {
+      "label": "hero-outcome-chips",
+      "anyOf": [
+        "the hero carries outcome chips \\(verified merges, closures, gates passed\\) and a two- or three-sentence result"
+      ]
+    },
+    {
+      "label": "per-pr-table-in-section-5",
+      "anyOf": [
+        "Section 5 holds the per-PR table the root rule asks for\\."
       ]
     }
   ]
