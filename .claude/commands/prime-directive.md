@@ -114,4 +114,4 @@ Verify the agreed acceptance criteria and report the usable result, its evidence
 - **This directive:** invoke `/prime-directive` (compiled live artifact: `.claude/skills/prime-directive/SKILL.md`). Do not depend on the `.claude/commands/` path resolving (Reliability rule 1).
 - **Issue list:** `gh issue list --state open`.
 
-<!-- skill-templates: prime-directive 7104f88 2026-11-07 -->
+<!-- skill-templates: prime-directive a6398c1 2026-11-07 -->
