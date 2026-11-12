@@ -21,14 +21,46 @@ PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # added skip, or a new case go uncounted), and skips are capped. Move EXPECTED_TOTAL
 # whenever an assertion is added or removed.
 EXPECTED_TOTAL=216
-# MAX_SKIPPED is the sum of every skip site that can fire on one host:
-#   root-conditional  : unreadable repo 2 + seed dir 3 + seed file 3 + subdir 2 + unwritable parent 3 = 13
-#   platform-conditional: case-variant path 2 (case-sensitive fs, e.g. Linux)
-#                         firmlink spelling 3 (no /System/Volumes/Data alias, i.e. everywhere but macOS)
-# so 18 is the ceiling; the exact EXPECTED_TOTAL check still binds pass + skipped.
-MAX_SKIPPED=18
+# Skips are checked for an EXACT per-host value (EXPECTED_SKIPPED, computed below from
+# independent host probes), not against a global ceiling: a real case that wrongly took a
+# skip branch on a host that should have none would otherwise still pass.
 TMP=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/worktree-audit-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
+
+# --- Expected skips for THIS host, computed once from probes that are separate from the
+# skip sites (a check derived from its own subject could not go red). Per-site counts:
+SKIP_ROOT_UNREADABLE_REPO=2   # case 15: unreadable repo (root can read anything)
+SKIP_ROOT_SEED_DIR=3          # case 17: unreadable seed dir
+SKIP_ROOT_SEED_FILE=3         # case 17: unreadable seed file
+SKIP_ROOT_UNREADABLE_SUBDIR=2 # unreadable subdir
+SKIP_ROOT_UNWRITABLE_PARENT=3 # case 32: unwritable parent (root can write anywhere)
+SKIP_CASE_VARIANT=2           # case 33: case-variant cache path (case-sensitive fs)
+SKIP_FIRMLINK=3               # case 32: /System/Volumes/Data spelling (not the same inode)
+SKIP_ROOT_TOTAL=$((SKIP_ROOT_UNREADABLE_REPO + SKIP_ROOT_SEED_DIR + SKIP_ROOT_SEED_FILE + SKIP_ROOT_UNREADABLE_SUBDIR + SKIP_ROOT_UNWRITABLE_PARENT))
+
+is_root() { [ "$(id -u)" = 0 ]; }
+case_sensitive_fs() { # true when a case-variant name does NOT resolve to the probe file
+  : > "$TMP/HostCaseProbe"; [ ! -e "$TMP/hostcaseprobe" ]; local rc=$?; rm -f "$TMP/HostCaseProbe"; return $rc
+}
+firmlink_same_inode() { # true when /System/Volumes/Data<realpath of $1> is the same inode as $1
+  python3 - "$1" <<'PYS'
+import os, sys
+try:
+    p = os.path.realpath(sys.argv[1])
+    a, b = os.stat(p), os.stat("/System/Volumes/Data" + p)
+    sys.exit(0 if (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino) else 1)
+except OSError:
+    sys.exit(1)
+PYS
+}
+# The firmlink site probes the fixture repo ($TMP/cN/proj/repo); this probe uses its
+# ancestor $TMP. Both are plain directories created under the same mktemp volume, with no
+# mount points between them, so the firmlink alias exists for both or for neither.
+HOST_ROOT=no; HOST_CASESENS=no; HOST_FIRMLINK=no
+EXPECTED_SKIPPED=0
+if is_root; then HOST_ROOT=yes; EXPECTED_SKIPPED=$((EXPECTED_SKIPPED + SKIP_ROOT_TOTAL)); fi
+if case_sensitive_fs; then HOST_CASESENS=yes; EXPECTED_SKIPPED=$((EXPECTED_SKIPPED + SKIP_CASE_VARIANT)); fi
+if firmlink_same_inode "$TMP"; then HOST_FIRMLINK=yes; else EXPECTED_SKIPPED=$((EXPECTED_SKIPPED + SKIP_FIRMLINK)); fi
 
 pass=0; fail=0; skipped=0
 ok()  { pass=$((pass+1)); echo "  ok   $1"; }
@@ -227,7 +259,7 @@ audit --root /nonexistent-wa-root; eq "good root still read, exit 2" "$RC" 2; eq
 fixture; mkwt one b1; age "$WT"; mkwt two b2; rm -rf "$WT"
 audit; eq "removed dir exit 0" "$RC" 0; eq "removed dir -> PRUNABLE-REF" "$(V two)" PRUNABLE-REF; eq "content class n/a" "$(C two)" "n/a"
 fixture; mkwt one b1; age "$WT"; chmod 000 "$REPO/.git" 2>/dev/null
-audit; if [ "$(id -u)" = 0 ]; then skip 2 "unreadable repo (running as root)"; else eq "unreadable repo -> exit 2" "$RC" 2; has "names it" "$ERR" "$REPO"; fi
+audit; if [ "$(id -u)" = 0 ]; then skip "$SKIP_ROOT_UNREADABLE_REPO" "unreadable repo (running as root)"; else eq "unreadable repo -> exit 2" "$RC" 2; has "names it" "$ERR" "$REPO"; fi
 chmod 755 "$REPO/.git" 2>/dev/null
 audit --repo "$REPO"; eq "--repo dedupes with --root" "$(q "len(d['repos'])")" 1
 
@@ -250,12 +282,12 @@ eq "default absent dir: exit 0" "$RC" 0; eq "default absent dir: KEEP" "$(V one)
 OUT=$(CLAUDE_HANDOFF_DIR="$T/absent" "$PY" "$SUT" --root "$ROOT" --json --no-seeds 2>/dev/null); RC=$?
 eq "--no-seeds exit 0" "$RC" 0; eq "--no-seeds skips the check -> A" "$(V one)" A
 mkdir -p "$T/sd"; chmod 000 "$T/sd"
-if [ "$(id -u)" = 0 ]; then skip 3 "unreadable seed dir (running as root)"; else
+if [ "$(id -u)" = 0 ]; then skip "$SKIP_ROOT_SEED_DIR" "unreadable seed dir (running as root)"; else
   audit --seed-dir "$T/sd"; eq "unreadable seed dir: no traceback, exit 2" "$RC" 2; eq "unreadable seed dir -> KEEP" "$(V one)" KEEP
   has "names the dir" "$ERR" "$T/sd"; fi
 chmod 755 "$T/sd"
 echo "see b1" > "$T/sd/NEXT-q.md"; chmod 000 "$T/sd/NEXT-q.md"
-if [ "$(id -u)" = 0 ]; then skip 3 "unreadable seed file (running as root)"; else
+if [ "$(id -u)" = 0 ]; then skip "$SKIP_ROOT_SEED_FILE" "unreadable seed file (running as root)"; else
   audit --seed-dir "$T/sd"; eq "unreadable seed file: exit 2" "$RC" 2; eq "unreadable seed file -> KEEP" "$(V one)" KEEP
   has "reason names file" "$(R one)" "NEXT-q.md"; fi
 chmod 644 "$T/sd/NEXT-q.md"
@@ -340,7 +372,7 @@ echo "23. scan robustness"
 fixture; mkwt one b1; age "$WT"; echo "only repo-one-20261101 here" > "$SEEDS/NEXT-b.md"
 audit; eq "basename-only seed mention -> KEEP" "$(V one)" KEEP; has "names seed" "$(R one)" "NEXT-b.md"
 fixture; mkwt one b1; age "$WT"; mkdir -p "$ROOT/sub"; chmod 000 "$ROOT/sub"
-if [ "$(id -u)" = 0 ]; then skip 2 "unreadable subdir (running as root)"; else
+if [ "$(id -u)" = 0 ]; then skip "$SKIP_ROOT_UNREADABLE_SUBDIR" "unreadable subdir (running as root)"; else
   audit; eq "unreadable subdir: exit 2" "$RC" 2; has "named in unverified" "$(q "' '.join(u['path'] for u in d['unverified'])")" "$ROOT/sub"; fi
 chmod 755 "$ROOT/sub"
 fixture; mkwt one b1; age "$WT"; mkdir -p "$T/vol"; git -C "$REPO" worktree add -q -b b3 "$T/vol/repo-three-20261101" origin/main; rm -rf "$T/vol"
@@ -495,7 +527,7 @@ if [ "$FIRM_SAME" = yes ]; then
   eq "firmlink spelling: file absent" "$([ -e "$REPO/firm.json" ] && echo yes || echo no)" no
   has "firmlink spelling listed in unverified" "$(q "' '.join(u['path'] for u in d['unverified'])")" "$FIRM/firm.json"
 else
-  skip 3 "firmlink spelling of the repo (no /System/Volumes/Data alias for this path; macOS only)"
+  skip "$SKIP_FIRMLINK" "firmlink spelling of the repo (no /System/Volumes/Data alias for this path; macOS only)"
 fi
 ln -s "$REPO" "$TMP/repolink"; audit --write-cache "$TMP/repolink/viasymlinkdir.json"
 eq "via a symlinked parent into the repo: exit 2" "$RC" 2; eq "via a symlinked parent: absent" "$([ -e "$REPO/viasymlinkdir.json" ] && echo yes || echo no)" no
@@ -506,7 +538,7 @@ eq "symlink path: exit 2" "$RC" 2; eq "symlink target untouched" "$(cat "$TMP/ta
 mkdir -p "$TMP/dircache"; audit --write-cache "$TMP/dircache"
 eq "directory path: exit 2" "$RC" 2; has "directory named" "$ERR" "directory"
 eq "failed write is listed in unverified" "$(q "any('cache not written' in u['reason'] for u in d['unverified'])")|$(q "d['summary']['unverified']")" "True|1"
-if [ "$(id -u)" = 0 ]; then skip 3 "unwritable parent (root can write anywhere)"; else
+if [ "$(id -u)" = 0 ]; then skip "$SKIP_ROOT_UNWRITABLE_PARENT" "unwritable parent (root can write anywhere)"; else
   mkdir -p "$TMP/ro32"; chmod 555 "$TMP/ro32"; audit --write-cache "$TMP/ro32/c.json"
   eq "unwritable parent: exit 2" "$RC" 2; eq "unwritable parent: nothing written" "$(ls -A "$TMP/ro32")" ""
   has "write failure reported, not success" "$ERR" "cache not written"; chmod 755 "$TMP/ro32"
@@ -522,7 +554,7 @@ if [ -e "$TMP/caseprobe33" ]; then
   audit --write-cache "$UPPER/case.json"
   eq "case-variant path into the repo: exit 2" "$RC" 2; eq "case-variant path: file absent" "$([ -e "$REPO/case.json" ] && echo yes || echo no)" no
 else
-  skip 2 "case-variant cache path (case-sensitive filesystem)"
+  skip "$SKIP_CASE_VARIANT" "case-variant cache path (case-sensitive filesystem)"
 fi
 ALIAS=$("$PY" - "$SUT" "$REPO" "$TMP/alias33" <<'PYS'
 import importlib.util, os, sys, tempfile
@@ -548,5 +580,5 @@ echo "$pass passed, $fail failed, $skipped skipped"
 TOTAL=$((pass + skipped))
 if [ "$TOTAL" -lt "$EXPECTED_TOTAL" ]; then echo "FAIL: count too low: $TOTAL assertions accounted for, expected exactly $EXPECTED_TOTAL (zero-case guard)"; exit 1; fi
 if [ "$TOTAL" -gt "$EXPECTED_TOTAL" ]; then echo "FAIL: count too high: $TOTAL assertions accounted for, expected exactly $EXPECTED_TOTAL; update EXPECTED_TOTAL (zero-case guard)"; exit 1; fi
-if [ "$skipped" -gt "$MAX_SKIPPED" ]; then echo "FAIL: $skipped assertions skipped, at most $MAX_SKIPPED allowed"; exit 1; fi
+if [ "$skipped" -ne "$EXPECTED_SKIPPED" ]; then echo "FAIL: skipped $skipped, expected $EXPECTED_SKIPPED on this host (root=$HOST_ROOT case-sensitive=$HOST_CASESENS firmlink-same-inode=$HOST_FIRMLINK)"; exit 1; fi
 exit 0
