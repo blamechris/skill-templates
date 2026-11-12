@@ -4,6 +4,12 @@
 Raw invocation observes only. --snapshot-file writes a scratch JSON snapshot, never
 an actual seed; only session-seed.py write may persist it. Optional --signals-file
 accepts explicitly cached, source-labelled measurements; no model/network calls.
+
+Worktree hygiene (#435) comes from the worktree-audit cache (--worktree-cache, default
+$WORKTREE_AUDIT_CACHE or ~/.claude/state/worktree-audit.json, written by
+`worktree-audit.py --write-cache`). It is read with plain file I/O: the audit is never
+run, no subprocess, no network. A missing/invalid cache is `n/a` and never warns. Free
+disk is a `shutil.disk_usage` syscall on the home directory, outside the subprocess Budget.
 """
 import time
 STARTED = time.monotonic()
@@ -18,6 +24,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -27,6 +34,11 @@ from datetime import datetime, timezone
 sys.dont_write_bytecode = True
 SOURCES = {"claude", "codex", "chroxy"}
 LIMIT = 0.8
+# Worktree-hygiene WARN thresholds (#435). Each is a strict comparison on a known value.
+WT_REPO_MAX = 15           # warn when any one repo has MORE than this many registered worktrees
+FREE_GIB_MIN = 50          # warn when free space on the home filesystem is UNDER this many GiB
+WT_CACHE_STALE_DAYS = 7    # label (never warn on) a cache older than this
+WT_CACHE_LIMIT = 16 * 1024 * 1024  # a large audit is a few MB of JSON; still bounded
 
 
 class Budget:
@@ -101,10 +113,10 @@ def usage_signature(oneline):
     return values or None
 
 
-def read_text(path):
+def read_text(path, limit=512 * 1024):
     # A pipe/device supplied as a cache path must not block the eight-line reader.
     info = os.stat(path)
-    if not stat.S_ISREG(info.st_mode) or info.st_size > 512 * 1024:
+    if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
         raise ValueError("not a bounded regular cache file")
     return Path(path).read_text(encoding="utf-8")
 
@@ -128,6 +140,59 @@ def age_text(seconds):
     if seconds is None:
         return "n/a"
     return "%dm" % (seconds // 60) if seconds < 3600 else "%.1fh" % (seconds / 3600)
+
+
+def worktree_cache_path(explicit=None):
+    return explicit or os.environ.get("WORKTREE_AUDIT_CACHE") or os.path.join(
+        os.path.expanduser("~"), ".claude", "state", "worktree-audit.json")
+
+
+def worktree_summary(path, now):
+    """Summarize the worktree-audit cache by plain file I/O (no subprocess, no audit run).
+
+    Returns None for anything missing, unreadable or malformed -- unknown, never zero.
+    """
+    try:
+        value = json.loads(read_text(path, WT_CACHE_LIMIT))
+        if not isinstance(value, dict) or not isinstance(value.get("repos"), list):
+            return None
+        cache_age = age(value.get("generated_at"), now)
+        if cache_age is None:
+            return None
+        total, biggest, biggest_repo, stale_b = 0, 0, None, 0
+        for repo in value["repos"]:
+            if not isinstance(repo, dict) or not isinstance(repo.get("worktrees"), list):
+                return None
+            if not all(isinstance(w, dict) for w in repo["worktrees"]):
+                return None
+            count = len(repo["worktrees"])
+            total += count
+            stale_b += sum(1 for w in repo["worktrees"] if w.get("content_class") == "B" and w.get("stale") is True)
+            if count > biggest:
+                biggest, biggest_repo = count, os.path.basename(str(repo.get("path", "")).rstrip("/")) or "?"
+        return {"total": total, "max": biggest, "repo": biggest_repo or "n/a", "stale_b": stale_b,
+                "generated_at": value["generated_at"], "age": cache_age,
+                "old": cache_age > WT_CACHE_STALE_DAYS * 86400}
+    except (OSError, ValueError, UnicodeError, TypeError, RecursionError):
+        return None
+
+
+def free_gib():
+    try:
+        return shutil.disk_usage(os.path.expanduser("~")).free / 2 ** 30
+    except (OSError, ValueError):
+        return None
+
+
+def worktree_text(wt, free):
+    if wt is None:
+        parts = "worktrees n/a"
+    else:
+        days = wt["age"] / 86400
+        shown = "%dm" % (wt["age"] // 60) if wt["age"] < 3600 else "%.1fh" % (wt["age"] / 3600) if days < 2 else "%.1fd" % days
+        parts = "worktrees %d (max %d in %s, stale B %d, audit %s%s)" % (
+            wt["total"], wt["max"], wt["repo"], wt["stale_b"], shown, " stale" if wt["old"] else "")
+    return "%s | free %s" % (parts, "n/a" if free is None else "%.1f GiB" % free)
 
 
 def cached_signals(path, source, warnings):
@@ -230,9 +295,11 @@ def prior_snapshot(fm, seed_module, warnings):
 def delta(state, previous):
     if previous is None:
         return "no baseline"
-    # Ages and recurrence counters are observations, not material state changes.
+    # Ages and recurrence counters are observations, not material state changes; so is
+    # the worktree cache's own timestamp. The worktree COUNTS are material. Free GiB is
+    # never state (it moves every run); only its threshold boolean is.
     fields = set(state) | set(previous["state"])
-    changed = sorted(key for key in fields if key not in ("decision_streaks", "signals_observed_at")
+    changed = sorted(key for key in fields if key not in ("decision_streaks", "signals_observed_at", "worktree_audit_at")
                      and state.get(key) != previous["state"].get(key))
     return ("changed " + ", ".join(changed)) if changed else "no material change since " + previous["at"]
 
@@ -249,6 +316,7 @@ def pulse(argv=None):
     parser.add_argument("--source", default="unknown")
     parser.add_argument("--signals-file")
     parser.add_argument("--snapshot-file")
+    parser.add_argument("--worktree-cache")
     parser.add_argument("--boundary", action="store_true")
     parser.add_argument("--now")
     args = parser.parse_args(argv)
@@ -322,6 +390,17 @@ def pulse(argv=None):
         if drift > 0.25:
             estimate_drift = True
             warnings.append("stated estimate drift >25%")
+    wt = worktree_summary(worktree_cache_path(args.worktree_cache), now)
+    free = free_gib()
+    warn_repo = wt is not None and wt["max"] > WT_REPO_MAX
+    warn_free = free is not None and free < FREE_GIB_MIN
+    warn_stale_b = wt is not None and wt["stale_b"] > 0
+    if warn_repo:
+        warnings.append("worktrees >%d in %s" % (WT_REPO_MAX, wt["repo"]))
+    if warn_free:
+        warnings.append("free disk <%d GiB" % FREE_GIB_MIN)
+    if warn_stale_b:
+        warnings.append("stale class-B worktrees %d" % wt["stale_b"])
     usage, usage_measurements = None, None
     # An explicitly selected Claude host and the actual harness session id are
     # both required. Codex/chroxy never consult Claude's unrelated meter.
@@ -344,7 +423,13 @@ def pulse(argv=None):
              "warn_seed_age": seed_age is not None and seed_age > 24 * 3600,
              "warn_compactions": compactions is not None and compactions >= 2,
              "warn_dirty_boundary": args.boundary and tree == "dirty",
-             "warn_estimate_drift": estimate_drift}
+             "warn_estimate_drift": estimate_drift,
+             "worktrees_total": wt["total"] if wt else None,
+             "worktrees_max_repo": wt["max"] if wt else None,
+             "worktrees_stale_b": wt["stale_b"] if wt else None,
+             "worktree_audit_at": wt["generated_at"] if wt else None,
+             "warn_worktrees_repo": warn_repo, "warn_free_disk": warn_free,
+             "warn_stale_b": warn_stale_b}
     change = delta(state, previous)
     last_line = "delta: %s | %s" % (change, "WARN: " + "; ".join(warnings) if warnings else "WARN: none")
     if args.snapshot_file:
@@ -371,7 +456,7 @@ def pulse(argv=None):
             "seed: age %s | picks %s" % (age_text(seed_age), picks),
             "git: HEAD %s | branch %s | tree %s | ahead %s / behind %s" % tuple(map(clean, (head, branch, tree, ahead, behind))),
             "work: commits since seed %s | open items %s | turns %s" % tuple(map(clean, (commits, open_items, turns))),
-            "cached: tests %s | CI %s" % (clean(tests), clean(ci)),
+            "cached: tests %s | CI %s | %s" % (clean(tests), clean(ci), worktree_text(wt, free)),
             "decisions: " + decisions_line,
             "usage: %s | context %s | compactions %s" % (clean(usage, 1200), clean(cache.get("context_pct")), clean(compactions)),
             last_line]
@@ -384,7 +469,7 @@ def main(argv=None):
         lines = ["scope: n/a", "seed: age n/a | picks n/a",
                  "git: HEAD n/a | branch n/a | tree n/a | ahead n/a / behind n/a",
                  "work: commits since seed n/a | open items n/a | turns n/a",
-                 "cached: tests n/a | CI n/a", "decisions: n/a | age n/a | default n/a",
+                 "cached: tests n/a | CI n/a | worktrees n/a | free n/a", "decisions: n/a | age n/a | default n/a",
                  "usage: n/a | context n/a | compactions n/a",
                  "delta: no baseline | WARN: pulse source unavailable"]
     for line in lines:

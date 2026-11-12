@@ -19,7 +19,7 @@ PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # explicitly counted as skipped (root cannot make a path unreadable), so the total
 # must equal EXPECTED_TOTAL exactly or more, and skips are capped. Raise
 # EXPECTED_TOTAL when cases are added.
-EXPECTED_TOTAL=170
+EXPECTED_TOTAL=203
 MAX_SKIPPED=10
 TMP=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/worktree-audit-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
@@ -432,6 +432,50 @@ fixture; mkwt one b1; age "$WT"; ADM=$(git -C "$WT" rev-parse --absolute-git-dir
 REL="$ROOT/rel-20261101"; mkdir -p "$REL"; echo "gitdir: ../repo/.git/worktrees/$(basename "$ADM")" > "$REL/.git"
 ( cd / && "$PY" "$SUT" --root "$ROOT" --seed-dir "$SEEDS" --json > "$TMP/rel.json" 2>/dev/null )
 eq "relative gitdir to a valid repo is not an orphan" "$("$PY" -c 'import json;print(len(json.load(open("'"$TMP"'/rel.json"))["leftovers"]))')" 0
+
+echo "32. --write-cache: the only write; atomic, identical to --json, refused when unsafe (#435)"
+fixture; mkwt one b1; age "$WT"; mkwt two b2; age "$WT"; echo c >> "$WT/a.txt"
+CACHE="$TMP/cache32/state/worktree-audit.json"
+B1=$(snap); audit --write-cache "$CACHE"; B2=$(snap)
+eq "write-cache run: exit 0" "$RC" 0
+eq "cache file written" "$([ -f "$CACHE" ] && echo yes)" yes
+eq "cache equals the --json output byte for byte" "$(cat "$CACHE")" "$OUT"
+eq "missing parent created mode 0700" "$("$PY" -c 'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$(dirname "$CACHE")")" 0o700
+eq "no temp files left beside the cache" "$(ls -A "$(dirname "$CACHE")")" "worktree-audit.json"
+eq "fixture tree hash unchanged with --write-cache pointed outside it" "$B1" "$B2"
+audit --write-cache "$CACHE"; eq "overwrite is atomic and identical again" "$(cat "$CACHE")" "$OUT"
+OUT2=$("$PY" "$SUT" --root "$ROOT" --seed-dir "$SEEDS" --write-cache "$CACHE" 2>/dev/null); RC=$?
+has "human output combined with the cache" "$OUT2" "Summary:"; eq "human + cache exit 0" "$RC" 0
+eq "cache is still JSON after a human-output run" "$("$PY" -c 'import json,sys;print(json.load(open(sys.argv[1]))["summary"]["worktrees"])' "$CACHE")" 2
+CD="$TMP/cache-env"; WORKTREE_AUDIT_CACHE="$CD/e.json" audit --write-cache
+eq "bare --write-cache uses \$WORKTREE_AUDIT_CACHE" "$(cat "$CD/e.json")" "$OUT"
+EH="$TMP/home-default"; mkdir -p "$EH"
+OUT=$(env -u WORKTREE_AUDIT_CACHE HOME="$EH" "$PY" "$SUT" --root "$ROOT" --seed-dir "$SEEDS" --json --write-cache 2>/dev/null)
+eq "bare --write-cache default is ~/.claude/state/worktree-audit.json" "$(cat "$EH/.claude/state/worktree-audit.json")" "$OUT"
+# refusals: nothing written, exit 2, report still printed
+INREPO="$REPO/inside.json"; audit --write-cache "$INREPO"
+eq "inside the main working tree: exit 2" "$RC" 2; eq "inside the main working tree: absent" "$([ -e "$INREPO" ] && echo yes || echo no)" no
+has "refusal named on stderr" "$ERR" "inside repository"; has "report still printed" "$(q "d['summary']['worktrees']")" 2
+INWT="$WT/inside.json"; audit --write-cache "$INWT"
+eq "inside a linked worktree: exit 2" "$RC" 2; eq "inside a linked worktree: absent" "$([ -e "$INWT" ] && echo yes || echo no)" no
+INGIT="$REPO/.git/cache.json"; audit --write-cache "$INGIT"
+eq "inside .git: exit 2" "$RC" 2; eq "inside .git: absent" "$([ -e "$INGIT" ] && echo yes || echo no)" no
+ln -s "$REPO" "$TMP/repolink"; audit --write-cache "$TMP/repolink/viasymlinkdir.json"
+eq "via a symlinked parent into the repo: exit 2" "$RC" 2; eq "via a symlinked parent: absent" "$([ -e "$REPO/viasymlinkdir.json" ] && echo yes || echo no)" no
+audit --write-cache "$REPO/new/sub/x.json"
+eq "nested missing dirs inside the repo are not created" "$([ -e "$REPO/new" ] && echo yes || echo no)" no
+echo keep > "$TMP/target32"; ln -s "$TMP/target32" "$TMP/symcache.json"; audit --write-cache "$TMP/symcache.json"
+eq "symlink path: exit 2" "$RC" 2; eq "symlink target untouched" "$(cat "$TMP/target32")" keep; has "symlink named" "$ERR" "symlink"
+mkdir -p "$TMP/dircache"; audit --write-cache "$TMP/dircache"
+eq "directory path: exit 2" "$RC" 2; has "directory named" "$ERR" "directory"
+eq "failed write is listed in unverified" "$(q "any('cache not written' in u['reason'] for u in d['unverified'])")|$(q "d['summary']['unverified']")" "True|1"
+if [ "$(id -u)" = 0 ]; then skip 3 "unwritable parent (root can write anywhere)"; else
+  mkdir -p "$TMP/ro32"; chmod 555 "$TMP/ro32"; audit --write-cache "$TMP/ro32/c.json"
+  eq "unwritable parent: exit 2" "$RC" 2; eq "unwritable parent: nothing written" "$(ls -A "$TMP/ro32")" ""
+  has "write failure reported, not success" "$ERR" "cache not written"; chmod 755 "$TMP/ro32"
+fi
+printf 'old' > "$TMP/prior32.json"
+audit --write-cache "$REPO/prior.json"; eq "refused write never touches an existing file elsewhere" "$(cat "$TMP/prior32.json")" old
 
 echo "24. gh was never given bad args anywhere in this run"
 [ -e "$GH_MISMATCH" ] && bad "fake gh saw bad args during the suite" "$(cat "$GH_MISMATCH")" || ok "no gh mismatch recorded"

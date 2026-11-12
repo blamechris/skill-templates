@@ -8,6 +8,8 @@ readout. The underlying stdlib script calls no model, network service or test su
 
 - `$ARGUMENTS` — optional `--boundary`, `--topic`, `--source` or `--signals-file` options for
   `session-pulse.py`. Pass `--topic` only for a fleet topic, consistently to reader and writer.
+- `--worktree-cache PATH` — optional override for the worktree-audit cache (see Worktree
+  hygiene below); the default is `$WORKTREE_AUDIT_CACHE`, else `~/.claude/state/worktree-audit.json`.
 - `--source` names the actual host: `claude`, `codex` or `chroxy`. Leave it unspecified when
   unknown. Never consult Claude's meter for Codex/chroxy; the Claude arm additionally
   requires the real `$CLAUDE_CODE_SESSION_ID`.
@@ -60,7 +62,7 @@ nonempty `unit`. Keep their source and timestamp in the cached input; missing da
 unknown. Do not estimate usage or context from spend, elapsed time or another host.
 
 The eight lines cover scope; seed age and dispatch; HEAD/branch/tree/ahead/behind; commits
-since seed/open items/turns; cached tests and CI; decisions count/age/default; usage/context/
+since seed/open items/turns; cached tests, CI, worktree hygiene and free disk; decisions count/age/default; usage/context/
 compactions; and delta/WARN. Claude usage may come only from `usage-pace.py --oneline`.
 All subprocesses share a 0.8-second deadline; unavailable sources degrade to `n/a`.
 
@@ -80,8 +82,42 @@ manufacture material changes, but stable threshold booleans make a newly crossed
 visible in delta and remain unchanged while the threshold remains crossed. WARN thresholds
 are a repeated decision text across at least two recorded pulses,
 more than three open items, a seed older than 24 hours, at least two compactions, a dirty
-working tree at a boundary, or stated estimate drift above 25 percent. Legacy pending
+working tree at a boundary, stated estimate drift above 25 percent, more than 15 worktrees in
+any one repo (`worktrees >15 in <repo>`), free disk under 50 GiB (`free disk <50 GiB`), or any
+stale class-B worktree (`stale class-B worktrees N`). The worktree and disk warnings only
+fire on known values and are advisory: nothing is deleted or scheduled. Legacy pending
 DECISION prose warns with known age and unknown count until structured metadata is supplied.
+
+## Worktree hygiene (line 5)
+
+Line 5 is `cached: tests X | CI Y | worktrees <total> (max <n> in <repo>, stale B <k>, audit <age>[ stale]) | free <G> GiB`.
+It is still one of the eight lines. The worktree part comes from the cache written by the
+audit, never from running it: the pulse reads that file with plain file I/O (no subprocess, no
+network, no `worktree-audit.py` run), so it adds nothing to the 0.8-second subprocess deadline.
+Populate or refresh the cache at a deliberate moment, not from the pulse:
+
+```bash
+python3 ~/.claude/scripts/worktree-audit.py --liveness none --write-cache
+```
+
+`--write-cache [PATH]` writes the audit's `--json` report atomically to `PATH`, default
+`$WORKTREE_AUDIT_CACHE`, else `~/.claude/state/worktree-audit.json`, and refuses a path inside
+any discovered repository, a symlink or a directory. `<total>` counts every registered linked
+worktree, `max` is the largest count in one repo (named by directory basename), `stale B` counts
+worktrees whose content class is B and that are stale, and `audit` is the cache's age. A cache
+older than 7 days is labelled `stale`; that label is not a WARN. `free` is the free space of the
+home filesystem, a `shutil.disk_usage` syscall (no subprocess).
+
+A missing, unreadable or malformed cache (not a JSON object, `repos` not a list of objects with
+`worktrees` lists, or `generated_at` not a UTC timestamp not in the future) leaves the worktree
+part `n/a` with no WARN and never counts as zero; an unreadable disk reading likewise shows
+`free n/a`. The pulse still prints eight lines and exits zero.
+
+Snapshot state gains `worktrees_total`, `worktrees_max_repo`, `worktrees_stale_b`,
+`worktree_audit_at` and the stable booleans `warn_worktrees_repo`, `warn_free_disk`,
+`warn_stale_b`. The three counts are material delta fields; `worktree_audit_at` (like
+`signals_observed_at`) and the free GiB figure are not, so a refreshed audit or a shifting
+disk never manufactures a delta, while a newly crossed threshold names its boolean.
 
 ## Seed metadata contract
 
