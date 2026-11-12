@@ -20,7 +20,7 @@ PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # must equal EXPECTED_TOTAL EXACTLY (a floor would let a deleted case hide behind an
 # added skip, or a new case go uncounted), and skips are capped. Move EXPECTED_TOTAL
 # whenever an assertion is added or removed.
-EXPECTED_TOTAL=231
+EXPECTED_TOTAL=244
 # Skips are checked for an EXACT per-host value (EXPECTED_SKIPPED, computed below from
 # independent host probes), not against a global ceiling: a real case that wrongly took a
 # skip branch on a host that should have none would otherwise still pass.
@@ -584,12 +584,12 @@ ADMRES=$("$PY" - "$SUT" "$REPO" "$WT" "$ADM33" "$SEP33/work" "$SEP33/ext.git" "$
 import importlib.util, os, sys
 sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
 repo, wt, adm, sepwork, sepgit, tmp = sys.argv[2:8]
-protected = [repo, wt, sepwork]
+mains, linked = [repo, sepwork], [wt]
 os.path.realpath = lambda p: p
 def attempt(label, alias, target, rel):
     os.symlink(target, os.path.join(tmp, alias))
     try:
-        m.write_cache_file(os.path.join(tmp, alias, rel), "{}", protected); r = "WROTE"
+        m.write_cache_file(os.path.join(tmp, alias, rel), "{}", mains, linked); r = "WROTE"
     except ValueError as e:
         r = "refused:" + str(e)[:60]
     print("%s=%s" % (label, r))
@@ -598,28 +598,68 @@ attempt("sub", "a33sub", os.path.join(adm, "logs"), "x.json")
 attempt("deep", "a33deep", adm, "no/such/dir/x.json")
 attempt("sep", "a33sep", sepgit, "x.json")
 attempt("ctl", "a33ctl", os.path.join(tmp, "unrelated33"), "x.json")
-# fail closed 1: git cannot name one protected root's admin dir
+# git cannot name a LINKED worktree's admin dir: skipped (its admin dir is under the protected main repo)
 real_git = m.git
-def flaky(args, cwd, **kw):
-    if cwd == wt: raise m.GitError("simulated rev-parse failure")
-    return real_git(args, cwd, **kw)
-m.git = flaky
+def flaky(target):
+    def f(args, cwd, **kw):
+        if cwd == target: raise m.GitError("simulated rev-parse failure")
+        return real_git(args, cwd, **kw)
+    return f
+m.git = flaky(wt)
 try:
-    m.write_cache_file(os.path.join(tmp, "unrelated33", "fc1.json"), "{}", protected); print("gitfail=WROTE")
+    m.write_cache_file(os.path.join(tmp, "unrelated33", "fc0.json"), "{}", mains, linked); print("linkedgitfail=WROTE")
+except ValueError as e:
+    print("linkedgitfail=refused:" + str(e)[:80])
+# fail closed 1: git cannot name a MAIN root's admin dir
+m.git = flaky(repo)
+try:
+    m.write_cache_file(os.path.join(tmp, "unrelated33", "fc1.json"), "{}", mains, linked); print("gitfail=WROTE")
 except ValueError as e:
     print("gitfail=refused:" + str(e)[:80])
 m.git = real_git
-# fail closed 2: the parent chain cannot be walked
-real_stat = os.stat
-def stat_no_dotdot(p, *a, **k):
-    if str(p).endswith(os.sep + ".."): raise PermissionError(13, "simulated")
-    return real_stat(p, *a, **k)
-os.stat = stat_no_dotdot
+# fail closed 2: the parent chain cannot be walked (".." cannot be opened)
+real_open = os.open
+def open_no_dotdot(p, *a, **k):
+    if p == ".." and k.get("dir_fd") is not None: raise PermissionError(13, "simulated")
+    return real_open(p, *a, **k)
+os.open = open_no_dotdot
 try:
-    m.write_cache_file(os.path.join(tmp, "unrelated33", "fc2.json"), "{}", protected); print("walkfail=WROTE")
+    m.write_cache_file(os.path.join(tmp, "unrelated33", "fc2.json"), "{}", mains, linked); print("walkfail=WROTE")
 except ValueError as e:
     print("walkfail=refused:" + str(e)[:80])
+os.open = real_open
+# fail closed 3: a protected root's identity cannot be read (PermissionError, not absence)
+real_stat = os.stat
+def stat_denied(p, *a, **k):
+    if p == repo: raise PermissionError(13, "simulated")
+    return real_stat(p, *a, **k)
+os.stat = stat_denied
+try:
+    m.write_cache_file(os.path.join(tmp, "unrelated33", "fc3.json"), "{}", mains, linked); print("idfail=WROTE")
+except ValueError as e:
+    print("idfail=refused:" + str(e)[:80])
 os.stat = real_stat
+# deep path: ~300 one-letter components, longer than PATH_MAX once ".." is appended per level
+deep = os.path.join(tmp, "unrelated33", *(["d"] * 300), "x.json")
+try:
+    m.write_cache_file(deep, "{}", mains, linked); print("longpath=WROTE")
+except (ValueError, OSError) as e:
+    print("longpath=failed:" + str(e)[:80])
+# TOCTOU: the spelled path is swapped to point into the repo between the check of the nearest
+# existing ancestor and the descriptor we then hold. The write must refuse (we hold the repo).
+os.makedirs(os.path.join(tmp, "swapdest33"))
+os.symlink(os.path.join(tmp, "swapdest33"), os.path.join(tmp, "swap33"))
+os.makedirs(os.path.join(repo, "sub"), exist_ok=True)
+real_makedirs = os.makedirs
+def swapping_makedirs(p, *a, **k):
+    real_makedirs(p, *a, **k)
+    os.unlink(os.path.join(tmp, "swap33")); os.symlink(repo, os.path.join(tmp, "swap33"))
+os.makedirs = swapping_makedirs
+try:
+    m.write_cache_file(os.path.join(tmp, "swap33", "sub", "x.json"), "{}", mains, linked); print("race=WROTE")
+except ValueError as e:
+    print("race=refused:" + str(e)[:80])
+os.makedirs = real_makedirs
 PYS
 )
 res33() { printf '%s\n' "$ADMRES" | sed -n "s/^$1=//p"; }
@@ -633,11 +673,45 @@ eq "alias into a separate-git-dir repo's external git dir is refused" "$(res33 s
 eq "separate git dir: nothing written" "$([ -e "$SEP33/ext.git/x.json" ] && echo yes || echo no)" no
 eq "control: alias to an unrelated directory is written" "$(res33 ctl)" WROTE
 eq "control: the file is really there" "$([ -s "$TMP/unrelated33/x.json" ] && echo yes || echo no)" yes
-eq "fail closed: git cannot name a protected root's admin dir -> refused" "$(res33 gitfail | cut -d: -f1)" refused
+eq "a LINKED worktree whose git dir cannot be named is skipped, the write still succeeds" "$(res33 linkedgitfail | cut -d: -f1)" WROTE
+eq "fail closed: git cannot name a MAIN root's admin dir -> refused" "$(res33 gitfail | cut -d: -f1)" refused
 has "fail closed (git): the refusal says why" "$(res33 gitfail)" "refus"
 eq "fail closed: nothing written when git failed" "$([ -e "$TMP/unrelated33/fc1.json" ] && echo yes || echo no)" no
 eq "fail closed: an unwalkable parent chain -> refused" "$(res33 walkfail | cut -d: -f1)" refused
 eq "fail closed: nothing written when the walk failed" "$([ -e "$TMP/unrelated33/fc2.json" ] && echo yes || echo no)" no
+eq "fail closed: a protected root whose identity cannot be read (PermissionError) -> refused" "$(res33 idfail | cut -d: -f1)" refused
+eq "fail closed: nothing written when an identity was unreadable" "$([ -e "$TMP/unrelated33/fc3.json" ] && echo yes || echo no)" no
+eq "a 300-component path outside every repo is written (no path-length false refusal)" "$(res33 longpath)" WROTE
+eq "TOCTOU: spelled path swapped into the repo after the first check -> refused" "$(res33 race | cut -d: -f1)" refused
+eq "TOCTOU: nothing landed in the repo" "$(ls -A "$REPO/sub")" ""
+
+echo "33c. review round 1 (#439): broken linked worktree, odd admin names, separate-git-dir CLI"
+fixture; mkwt one b1; age "$WT"; rm -f "$WT/.git"
+audit --write-cache "$TMP/brk33/c.json"
+eq "broken linked worktree (its .git removed): cache still written" "$([ -s "$TMP/brk33/c.json" ] && echo yes || echo no)" yes
+eq "broken linked worktree: exit code is the audit's own (not a cache refusal)" "$(printf '%s' "$ERR" | grep -c 'cache not written')" 0
+fixture
+SEPT="$TMP/sep33c"; mkdir -p "$SEPT"
+git init -q --separate-git-dir "$SEPT/admin" "$SEPT/work" >/dev/null 2>&1
+audit --repo "$SEPT/work" --write-cache "$SEPT/work/cache.json"
+eq "separate-git-dir: cache inside the REAL working tree: exit 2" "$RC" 2
+eq "separate-git-dir: cache inside the working tree: absent" "$([ -e "$SEPT/work/cache.json" ] && echo yes || echo no)" no
+has "separate-git-dir: refusal named" "$ERR" "inside repository"
+SP33="$TMP/sp33"; mkdir -p "$SP33"
+git init -q --separate-git-dir "$SP33/admin " "$SP33/work" >/dev/null 2>&1
+ln -s "$SP33/admin " "$TMP/spalias33"
+SPRES=$("$PY" - "$SUT" "$SP33/work" "$TMP/spalias33" <<'PYS'
+import importlib.util, os, sys
+sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+os.path.realpath = lambda p: p
+try:
+    m.write_cache_file(os.path.join(sys.argv[3], "x.json"), "{}", [sys.argv[2]]); print("WROTE")
+except ValueError as e:
+    print("refused")
+PYS
+)
+eq "alias into an admin dir whose name ends with a space is refused" "$SPRES" refused
+eq "trailing-space admin dir: nothing written" "$([ -e "$SP33/admin /x.json" ] && echo yes || echo no)" no
 
 echo "24. gh was never given bad args anywhere in this run"
 [ -e "$GH_MISMATCH" ] && bad "fake gh saw bad args during the suite" "$(cat "$GH_MISMATCH")" || ok "no gh mismatch recorded"
