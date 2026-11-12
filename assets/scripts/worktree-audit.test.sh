@@ -17,9 +17,10 @@ PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # Zero-case guard: a harness that reports success over zero (or too few) cases is
 # a false-safety guard (#7653-class). Every assertion is either counted as passed or
 # explicitly counted as skipped (root cannot make a path unreadable), so the total
-# must equal EXPECTED_TOTAL exactly or more, and skips are capped. Raise
-# EXPECTED_TOTAL when cases are added.
-EXPECTED_TOTAL=207
+# must equal EXPECTED_TOTAL EXACTLY (a floor would let a deleted case hide behind an
+# added skip, or a new case go uncounted), and skips are capped. Move EXPECTED_TOTAL
+# whenever an assertion is added or removed.
+EXPECTED_TOTAL=209
 MAX_SKIPPED=10
 TMP=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/worktree-audit-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
@@ -372,6 +373,9 @@ git --git-dir="$BARE" update-ref refs/heads/b1 "$(git --git-dir="$BARE" rev-pars
 audit; eq "upstream branch rewound, stale tracking ref -> not A" "$(V one)" B
 fixture; mkwt one feat/x; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin feat/x 2>/dev/null )
 audit; eq "slash-named branch pushed and live -> A" "$(V one)" A
+fixture; mkwt one a/b/c; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin a/b/c 2>/dev/null )
+eq "precondition: a/b/c is live on origin at the worktree sha" "$(git -C "$REPO" ls-remote origin refs/heads/a/b/c | cut -f1)" "$(git -C "$WT" rev-parse HEAD)"
+audit; eq "multi-level slash branch a/b/c pushed and live -> A" "$(V one)" A
 # refs/remotes/origin/HEAD is excluded by an explicit guard, but a live ls-remote
 # can never name a branch "HEAD" in practice, so the guard is redundant defence and
 # has no cleanly observable effect; it is not separately pinned.
@@ -508,6 +512,8 @@ echo "24. gh was never given bad args anywhere in this run"
 echo
 echo "$pass passed, $fail failed, $skipped skipped"
 [ "$fail" -gt 0 ] && exit 1
-if [ $((pass + skipped)) -lt "$EXPECTED_TOTAL" ]; then echo "FAIL: only $((pass + skipped)) assertions accounted for, expected $EXPECTED_TOTAL (zero-case guard)"; exit 1; fi
+TOTAL=$((pass + skipped))
+if [ "$TOTAL" -lt "$EXPECTED_TOTAL" ]; then echo "FAIL: count too low: $TOTAL assertions accounted for, expected exactly $EXPECTED_TOTAL (zero-case guard)"; exit 1; fi
+if [ "$TOTAL" -gt "$EXPECTED_TOTAL" ]; then echo "FAIL: count too high: $TOTAL assertions accounted for, expected exactly $EXPECTED_TOTAL; update EXPECTED_TOTAL (zero-case guard)"; exit 1; fi
 if [ "$skipped" -gt "$MAX_SKIPPED" ]; then echo "FAIL: $skipped assertions skipped, at most $MAX_SKIPPED allowed"; exit 1; fi
 exit 0
