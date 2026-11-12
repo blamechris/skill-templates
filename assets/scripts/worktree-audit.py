@@ -6,7 +6,7 @@
 Usage:
   python3 ~/.claude/scripts/worktree-audit.py [--root DIR]... [--repo PATH]...
       [--json] [--stale-days N] [--liveness auto|lsof|none] [--no-gh]
-      [--seed-dir DIR] [--sizes]
+      [--seed-dir DIR | --no-seeds] [--sizes]
 
 THE PROBLEM: a machine that runs many agent sessions accumulates linked git
 worktrees (`~/Projects/<repo>-<slug>-<date>`) and dated scratch folders, and
@@ -24,14 +24,21 @@ repeats:
 
 THIS SCRIPT NEVER WRITES. It reports; removal is somebody else's decision. Every
 git call runs with GIT_OPTIONAL_LOCKS=0 (and `status` with --no-optional-locks)
-so even `.git/index` is not refreshed, and the command set is restricted to
-readers: no worktree add/remove/prune/lock/unlock, fetch, gc, checkout, reset,
+so even `.git/index` is not refreshed. Every git call also carries
+`-c core.fsmonitor=false -c core.untrackedCache=false`: GIT_OPTIONAL_LOCKS does not
+stop `git status` from STARTING the fsmonitor daemon (writes `.git/fsmonitor--daemon*`,
+leaves a process running) nor from running a repo-configured fsmonitor hook command.
+The command set is restricted to readers: no worktree add/remove/prune/lock/unlock, fetch, gc, checkout, reset,
 stash or branch -d.
 
 CLASSES per linked worktree (the main checkout is never classified):
   KEEP  in use or liveness unknown / locked by a live or unparseable pid / open
-        PR, or PR state unknown for a branch whose head is not in the base /
-        named in a session seed / created <24h ago and head not preserved.
+        PR, or PR state unknown for ANY branch worktree (even if its head is in the
+        base: the issue says unknown -> KEEP) / named in a session seed, or the seed
+        check unavailable (seed dir absent or unreadable; `--no-seeds` is the
+        explicit opt-out) / created <24h ago and head not preserved.
+        A repo with an `upstream` remote (a fork) has PR state unknown: PRs target
+        the upstream repo, which `gh pr list -R <origin>` cannot see.
   A     clean (no tracked edits, no untracked files, no ignored file outside the
         rooted rebuildable allowlist) and HEAD preserved: in the default branch,
         in some remote branch, or equal to a merged PR's head.
@@ -45,8 +52,9 @@ Dated directories directly under a root with no `.git` entry are `leftovers`
 (verdict REVIEW): no git facts exist, so they are listed with an mtime age.
 
 EXIT: 0 when everything requested was read; 2 when an explicitly requested
-root/repo, or any discovered repo's worktree list, could not be read (what was
-read is still printed, with the unverified items listed).
+root/repo/seed dir/`--liveness lsof`, any unreadable directory met while scanning,
+or any discovered repo's worktree list, could not be read (what was read is still
+printed, with the unverified items listed).
 
 Python 3 stdlib only.
 """
@@ -58,6 +66,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 DEFAULT_ROOTS = ["~/Projects", "~/StudioProjects", "~/VSCodeProjects"]
 MAX_DEPTH = 3
@@ -79,9 +88,10 @@ REBUILDABLE = [
     re.compile(r"^packages/app/src/components/xterm-bundle\.generated\.ts$"),
     re.compile(r"(^|/)\.DS_Store$"),
     re.compile(r"(^|/)__pycache__/"),
-    re.compile(r"\.pyc$"),
+    re.compile(r"(^|/)[^/]*\.pyc$"),
 ]
 
+GIT_BASE = ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"]
 GIT_ENV = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0", LC_ALL="C")
 KEEP_FRESH_DAYS = 1.0
 
@@ -93,7 +103,7 @@ class GitError(Exception):
 def git(args, cwd, ok=(0,)):
     """Run a read-only git command; returns stdout bytes. Raises GitError."""
     try:
-        p = subprocess.run(["git"] + args, cwd=cwd, env=GIT_ENV, capture_output=True, timeout=300)
+        p = subprocess.run(GIT_BASE + args, cwd=cwd, env=GIT_ENV, capture_output=True, timeout=300)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise GitError("git %s: %s" % (" ".join(args[:2]), e))
     if p.returncode not in ok:
@@ -109,14 +119,16 @@ def tilde(path):
 
 # --------------------------------------------------------------- discovery
 
-def find_repos(root):
-    """Main checkouts (.git is a DIRECTORY) under root, depth <= MAX_DEPTH."""
+def find_repos(root, unverified):
+    """Main checkouts (.git is a DIRECTORY) under root, depth <= MAX_DEPTH.
+    An unreadable directory is recorded in `unverified`, never skipped silently."""
     found = []
 
     def walk(d, depth):
         try:
             entries = sorted(os.scandir(d), key=lambda e: e.name)
-        except OSError:
+        except OSError as e:
+            unverified.append({"path": d, "reason": "directory unreadable while scanning for repos: %s" % e})
             return
         for e in entries:
             if depth + 1 > MAX_DEPTH or e.name == "node_modules" or e.name == ".git":
@@ -124,26 +136,34 @@ def find_repos(root):
             try:
                 if not e.is_dir(follow_symlinks=False):
                     continue
-            except OSError:
+            except OSError as ex:
+                unverified.append({"path": e.path, "reason": "unreadable: %s" % ex})
                 continue
             gp = os.path.join(e.path, ".git")
             if os.path.isdir(gp) and not os.path.islink(gp):
                 found.append(e.path)
-            elif not os.path.exists(gp):
+            elif not os.path.lexists(gp):
                 walk(e.path, depth + 1)
 
     walk(root, 0)
     return found
 
 
-def common_dir(path):
-    out, _ = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], path)
-    return os.path.realpath(out.decode().strip())
+def main_checkout(path):
+    """The main checkout of the repo containing `path`: the FIRST entry of the
+    worktree list, which git always reports first. Used as the dedupe key too."""
+    raw, _ = git(["worktree", "list", "--porcelain", "-z"], path)
+    ents = parse_porcelain(raw)
+    if not ents:
+        raise GitError("git worktree list returned nothing")
+    return os.path.realpath(ents[0]["path"]), ents
 
 
 def parse_porcelain(raw):
+    """Parse `git worktree list --porcelain -z`: NUL-terminated fields, an empty
+    field ends a record. -z keeps a path containing a newline in one piece."""
     entries, cur = [], None
-    for line in raw.decode("utf-8", "surrogateescape").split("\n"):
+    for line in raw.decode("utf-8", "surrogateescape").split("\0"):
         if not line:
             if cur:
                 entries.append(cur)
@@ -151,6 +171,8 @@ def parse_porcelain(raw):
             continue
         key, _, val = line.partition(" ")
         if key == "worktree":
+            if cur:
+                entries.append(cur)
             cur = {"path": val, "head": None, "branch": None, "detached": False,
                    "locked": False, "lock_reason": "", "prunable": False, "prunable_reason": ""}
         elif cur is None:
@@ -183,22 +205,33 @@ def default_base(repo):
     return None
 
 
-def gh_slug(repo):
-    out, rc = git(["config", "--get", "remote.origin.url"], repo, ok=(0, 1))
-    url = out.decode().strip()
-    # Raw config, not `remote get-url`: the latter applies url.*.insteadOf, and the
-    # slug must name the GitHub repo even when the transport is rewritten.
+def slug_from_url(url):
+    """owner/repo for a github.com remote URL (https, ssh, scp-style), else None."""
     m = re.match(r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
-                 r"([^/]+/[^/]+?)(?:\.git)?/?$", url)
+                 r"([^/]+/[^/]+?)(?:\.git)?/?$", url.strip())
     return m.group(1) if m else None
 
 
-def pr_facts(slug, branch, head, use_gh):
+def gh_slug(repo):
+    # Raw config, not `remote get-url`: the latter applies url.*.insteadOf, and the
+    # slug must name the GitHub repo even when the transport is rewritten.
+    out, _ = git(["config", "--get", "remote.origin.url"], repo, ok=(0, 1))
+    return slug_from_url(out.decode())
+
+
+def has_upstream_remote(repo):
+    # A fork's PRs target the upstream repo; `gh pr list -R <origin>` would answer
+    # "none" (known!) for them. Treat the PR state of such a repo as unknown.
+    out, _ = git(["remote"], repo)
+    return "upstream" in out.decode().split()
+
+
+def pr_facts(slug, branch, head, use_gh, fork=False):
     """-> dict(known, open, merged_head, note)."""
     if branch is None:
         return {"known": True, "open": False, "merged_head": False, "state": "n/a"}
     unknown = {"known": False, "open": False, "merged_head": False, "state": "unknown"}
-    if not use_gh or not slug or not shutil.which("gh"):
+    if not use_gh or fork or not slug or not shutil.which("gh"):
         return unknown
     try:
         p = subprocess.run(["gh", "pr", "list", "-R", slug, "--head", branch, "--state", "all",
@@ -244,20 +277,43 @@ def pid_alive(pid):
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    except PermissionError:
+    except (OSError, OverflowError, ValueError):
+        # PermissionError means it exists; an out-of-range pid (OverflowError) or
+        # anything else we cannot interpret is NOT proof of death. Alive => KEEP.
         return True
-    except OSError:
-        return False
     return True
 
 
 def parse_pid(reason):
     m = re.search(r"\(pid (\d+)\)", reason) or re.search(r"pid[:= ]\s*(\d+)", reason, re.I)
-    return int(m.group(1)) if m else None
+    pid = int(m.group(1)) if m else None
+    # pid 0 would make os.kill(0, 0) signal our own process GROUP (always "alive")
+    # and says nothing about the lock holder; treat it as unparseable (also KEEP).
+    return pid if pid and pid > 0 else None
 
 
 def age_days(ts, now):
     return None if ts is None else max(0.0, (now - ts) / 86400.0)
+
+
+def ignored_nonrebuildable(wt):
+    """Ignored files that are not rooted-rebuildable. `--directory` keeps node_modules
+    and target/ from being listed file by file; a collapsed dir that the rooted
+    patterns do not cover is expanded again so nothing hides behind the collapse."""
+    base = ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"]
+    out, _ = git(base + ["--directory"], wt)
+    res = []
+    for p in nul_list(out):
+        if rebuildable(p):
+            continue
+        if p.endswith("/"):
+            sub, _ = git(base + ["--", ":(literal)" + p], wt)
+            res.extend(x for x in nul_list(sub) if not rebuildable(x))
+        else:
+            res.append(p)
+    # git can list a directory AND files inside it; count each path once.
+    res = list(dict.fromkeys(res))
+    return res
 
 
 def collect(repo, ent, ctx):
@@ -270,24 +326,29 @@ def collect(repo, ent, ctx):
         f["lock_pid"] = parse_pid(ent["lock_reason"])
     if not os.path.isdir(wt):
         f["missing"] = True
+        # A vanished PARENT suggests an unmounted volume, not a deleted worktree.
+        f["parent_missing"] = not os.path.isdir(os.path.dirname(wt))
         return f
     f["missing"] = False
     head = ent["head"]
     out, _ = git(["log", "-1", "--format=%ct", head], wt)
     f["head_age_days"] = age_days(int(out.strip() or 0), now)
     out, _ = git(["rev-parse", "--absolute-git-dir"], wt)
+    # Creation proxy: mtime of <admin>/gitdir, written when the worktree is added.
+    # `git worktree repair/move` rewrites it, which only makes a worktree look younger
+    # (safer: KEEP sooner).
     gd = os.path.join(out.decode().strip(), "gitdir")
     try:
         f["creation_age_days"] = age_days(os.stat(gd).st_mtime, now)
     except OSError:
         f["creation_age_days"] = None
     out, _ = git(["--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=no", "-z"], wt)
+    # status -z renames add a second NUL field; that overcounts by at most the
+    # number of renames. Only zero vs non-zero and the printed count depend on it.
     f["tracked_dirty"] = sum(1 for x in out.split(b"\0") if x and x[:2] != b"??")
-    # status -z renames add a second NUL field; that overcounts by at most the number of renames
     out, _ = git(["ls-files", "-z", "--others", "--exclude-standard"], wt)
     f["untracked"] = len(nul_list(out))
-    out, _ = git(["ls-files", "-z", "--others", "--ignored", "--exclude-standard"], wt)
-    ign = [p for p in nul_list(out) if not rebuildable(p)]
+    ign = ignored_nonrebuildable(wt)
     f["ignored_nonrebuildable"] = len(ign)
     f["ignored_nonrebuildable_sample"] = ign[:5]
     base = ctx["bases"].get(repo)
@@ -298,7 +359,7 @@ def collect(repo, ent, ctx):
         f["in_base"] = (rc == 0)
     out, _ = git(["for-each-ref", "--contains", head, "refs/remotes"], wt)
     f["in_remote_branch"] = bool(out.strip())
-    pr = pr_facts(ctx["slugs"].get(repo), ent["branch"], head, ctx["use_gh"])
+    pr = pr_facts(ctx["slugs"].get(repo), ent["branch"], head, ctx["use_gh"], ctx["forks"].get(repo, False))
     f["pr"] = pr
     f["merged_pr_head"] = pr["merged_head"]
     cw = ctx["cwds"]
@@ -308,6 +369,7 @@ def collect(repo, ent, ctx):
         rp = os.path.realpath(wt)
         f["in_use"] = any(c == rp or c.startswith(rp + os.sep) for c in cw)
     f["seeds"] = seed_mentions(ctx["seeds"], wt, ent["branch"])
+    f["seed_unavailable"] = ctx["seed_unavailable"]
     if ctx["sizes"]:
         try:
             p = subprocess.run(["du", "-sk", wt], capture_output=True, timeout=300)
@@ -320,18 +382,25 @@ def collect(repo, ent, ctx):
 def seed_mentions(seeds, wt, branch):
     hits = []
     forms = {wt, tilde(wt), os.path.realpath(wt)}
-    bre = None
-    if branch:
-        bre = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(branch) + r"(?![A-Za-z0-9_.-])")
+
+    def word(x):  # whole-token match: not glued to other name characters
+        return re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(x) + r"(?![A-Za-z0-9_.-])")
+
+    words = [word(os.path.basename(wt.rstrip("/")))] + ([word(branch)] if branch else [])
     for name, text in seeds:
-        if any(x in text for x in forms) or (bre and bre.search(text)):
+        if any(x in text for x in forms) or any(w.search(text) for w in words):
             hits.append(name)
     return hits
 
 
 def classify(f, stale_days):
     if f.get("missing"):
-        f.update(verdict="PRUNABLE-REF", content_class="n/a", reasons=["directory missing; ref remains (git worktree prune)"], needs=[])
+        if f.get("parent_missing"):
+            f.update(verdict="KEEP", content_class="n/a", needs=[],
+                     reasons=["parent directory missing (unmounted volume?)"])
+        else:
+            f.update(verdict="PRUNABLE-REF", content_class="n/a", needs=[],
+                     reasons=["directory missing; ref remains (git worktree prune)"])
         return
     pr = f["pr"]
     preserved = bool(f["in_base"] or f["in_remote_branch"] or f["merged_pr_head"])
@@ -362,8 +431,11 @@ def classify(f, stale_days):
         reasons.append("locked by %s" % ("unparseable pid" if f["lock_pid"] is None else "live pid %d" % f["lock_pid"]))
     if pr["open"]:
         reasons.append("open PR")
-    elif f["branch"] and not pr["known"] and f["in_base"] is not True:
+    elif f["branch"] and not pr["known"]:
+        # Even when the head is in the base: the issue says unknown -> KEEP.
         reasons.append("PR state unknown")
+    if f["seed_unavailable"]:
+        reasons.append("seed check unavailable (%s)" % f["seed_unavailable"])
     for s in f["seeds"]:
         reasons.append("named in seed %s" % s)
     if (ca is None or ca < KEEP_FRESH_DAYS) and not preserved:
@@ -378,6 +450,19 @@ def classify(f, stale_days):
 
 
 # ------------------------------------------------------------------ output
+
+def orphan_note(gitfile):
+    """A `.git` FILE whose gitdir target is gone: a stranded worktree, not a repo."""
+    try:
+        if os.path.isfile(gitfile):
+            with open(gitfile, encoding="utf-8", errors="replace") as fh:
+                m = re.match(r"gitdir:\s*(.+)", fh.read().strip())
+            if m and not os.path.exists(m.group(1).strip()):
+                return ".git file points at missing repo"
+    except OSError:
+        pass
+    return None
+
 
 def free_gib(path):
     try:
@@ -406,9 +491,10 @@ def human(rep):
     if rep["leftovers"]:
         L.append("== leftovers (dated dirs with no .git; verdict REVIEW)")
         for x in rep["leftovers"]:
-            L.append("  REVIEW       %s  (mtime age %.1f days)" % (tilde(x["path"]), x["age_days"]))
-    if rep["seed_dir_missing"]:
-        L.append("note: seed dir %s does not exist; no seed mentions checked" % tilde(rep["seed_dir"]))
+            L.append("  REVIEW       %s  (mtime age %.1f days)%s" % (tilde(x["path"]), x["age_days"],
+                                                              "  " + x["note"] if x.get("note") else ""))
+    if rep["seed_unavailable"]:
+        L.append("note: seed check unavailable (%s); every worktree is KEEP" % rep["seed_unavailable"])
     if rep["unverified"]:
         L.append("== UNVERIFIED (could not be read; exit 2)")
         for u in rep["unverified"]:
@@ -431,6 +517,8 @@ def main(argv=None):
     ap.add_argument("--liveness", choices=["auto", "lsof", "none"], default="auto")
     ap.add_argument("--no-gh", action="store_true")
     ap.add_argument("--seed-dir", default=None)
+    ap.add_argument("--no-seeds", action="store_true",
+                    help="skip the session-seed check entirely (no KEEP reason, no unverified entry)")
     ap.add_argument("--sizes", action="store_true")
     a = ap.parse_args(argv)
 
@@ -450,45 +538,59 @@ def main(argv=None):
         else:
             unverified.append({"path": p, "reason": "repo does not exist or is not a directory"})
     for r in roots:
-        repo_paths.extend(find_repos(r))
+        repo_paths.extend(find_repos(r, unverified))
 
     repos, seen = [], set()
     for p in repo_paths:
         try:
-            cd = common_dir(p)
+            main_path, ents = main_checkout(p)
         except GitError as e:
             unverified.append({"path": p, "reason": "not readable as a git repo: %s" % e})
             continue
-        if cd in seen:
+        if main_path in seen:
             continue
-        seen.add(cd)
-        main_path = os.path.dirname(cd) if os.path.basename(cd) == ".git" else p
-        repos.append((main_path, cd))
+        seen.add(main_path)
+        repos.append((main_path, ents))
 
+    seed_explicit = a.seed_dir is not None
     seed_dir = os.path.abspath(os.path.expanduser(
         a.seed_dir or os.environ.get("CLAUDE_HANDOFF_DIR") or "~/Obsidian/no-it-all/handoffs"))
-    seeds, seed_missing = [], not os.path.isdir(seed_dir)
-    if not seed_missing:
-        for n in sorted(os.listdir(seed_dir)):
+    seeds, seed_missing, seed_unavailable = [], not os.path.isdir(seed_dir), None
+    if a.no_seeds:
+        seed_missing = False
+    elif seed_missing:
+        seed_unavailable = "seed dir %s absent: seed mentions not checked" % seed_dir
+        if seed_explicit:
+            unverified.append({"path": seed_dir, "reason": "--seed-dir does not exist or is not a directory"})
+    else:
+        try:
+            names = sorted(os.listdir(seed_dir))
+        except OSError as e:
+            names = []
+            seed_unavailable = "seed dir %s unreadable: %s" % (seed_dir, e)
+            unverified.append({"path": seed_dir, "reason": "seed dir unreadable: %s" % e})
+        for n in names:
             fp = os.path.join(seed_dir, n)
             if n.startswith("NEXT-") and n.endswith(".md") and os.path.isfile(fp):
                 try:
                     with open(fp, encoding="utf-8", errors="replace") as fh:
                         seeds.append((n, fh.read()))
-                except OSError:
-                    unverified.append({"path": fp, "reason": "seed file unreadable"})
+                except OSError as e:
+                    seed_unavailable = "seed file %s unreadable: %s" % (n, e)
+                    unverified.append({"path": fp, "reason": "seed file unreadable: %s" % e})
 
-    import time
-    ctx = {"now": time.time(), "use_gh": not a.no_gh, "cwds": lsof_cwds(a.liveness) if a.liveness != "none" else None,
-           "seeds": seeds, "sizes": a.sizes, "bases": {}, "slugs": {}}
+    cwds = lsof_cwds(a.liveness)
+    if a.liveness == "lsof" and cwds is None:
+        unverified.append({"path": "lsof", "reason": "--liveness lsof requested but lsof is missing or failed"})
+    ctx = {"now": time.time(), "use_gh": not a.no_gh, "cwds": cwds, "seed_unavailable": seed_unavailable,
+           "seeds": seeds, "sizes": a.sizes, "bases": {}, "slugs": {}, "forks": {}}
 
     out_repos, counts = [], {}
-    for main_path, cd in repos:
+    for main_path, ents in repos:
         try:
-            raw, _ = git(["worktree", "list", "--porcelain"], main_path)
-            ents = parse_porcelain(raw)
             ctx["bases"][main_path] = default_base(main_path)
             ctx["slugs"][main_path] = gh_slug(main_path)
+            ctx["forks"][main_path] = has_upstream_remote(main_path)
         except GitError as e:
             unverified.append({"path": main_path, "reason": "worktree list unreadable: %s" % e})
             continue
@@ -509,10 +611,16 @@ def main(argv=None):
     for r in roots:
         try:
             for e in sorted(os.scandir(r), key=lambda e: e.name):
-                if e.is_dir(follow_symlinks=False) and not os.path.lexists(os.path.join(e.path, ".git")) \
-                        and DATE_RE.search(e.name):
-                    leftovers.append({"path": e.path, "verdict": "REVIEW",
-                                      "age_days": age_days(e.stat().st_mtime, ctx["now"])})
+                if not e.is_dir(follow_symlinks=False) or not DATE_RE.search(e.name):
+                    continue
+                gp = os.path.join(e.path, ".git")
+                note = None
+                if os.path.lexists(gp):
+                    note = orphan_note(gp)
+                    if note is None:
+                        continue
+                leftovers.append({"path": e.path, "verdict": "REVIEW", "note": note,
+                                  "age_days": age_days(e.stat().st_mtime, ctx["now"])})
         except OSError as e:
             unverified.append({"path": r, "reason": "root unreadable: %s" % e})
 
@@ -521,7 +629,7 @@ def main(argv=None):
         free[p] = free_gib(p)
     rep = {"generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
            "roots": roots, "repos": out_repos, "leftovers": leftovers, "unverified": unverified,
-           "seed_dir": seed_dir, "seed_dir_missing": seed_missing,
+           "seed_dir": seed_dir, "seed_dir_missing": seed_missing, "seed_unavailable": seed_unavailable,
            "summary": {"repos": len(out_repos), "worktrees": sum(counts.values()), "verdicts": counts,
                        "leftovers": len(leftovers), "unverified": len(unverified),
                        "free_on_filesystem": free}}

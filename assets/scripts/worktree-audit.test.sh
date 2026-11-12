@@ -16,7 +16,7 @@ SUT="$HERE/worktree-audit.py"
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # Zero-case guard: a harness that reports success over zero (or too few) cases is
 # a false-safety guard (#7653-class). Raise this when cases are added.
-MIN_PASS=75
+MIN_PASS=120
 TMP=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/worktree-audit-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -36,7 +36,14 @@ export CLAUDE_HANDOFF_DIR="$TMP/no-seeds"
 FAKEBIN="$TMP/fakebin"; mkdir -p "$FAKEBIN"
 cat > "$FAKEBIN/gh" <<'GH'
 #!/usr/bin/env bash
-# fake gh: prints $FAKE_GH_FILE (a JSON array) for `pr list`; "[]" if unset
+# fake gh: prints $FAKE_GH_FILE (a JSON array) for `pr list`; "[]" if unset.
+# It ASSERTS its argv (`pr list -R <slug> --head <branch> --state all ...`) and fails
+# loudly -- exit 64 plus a line in gh.mismatch -- on anything else, so a call that
+# drops -R or --state all cannot be answered "no PRs" by a permissive fake.
+echo "$*" >> "$GH_CALLS"
+if [ "$1 $2 $3 $4 $5 $7 $8" != "pr list -R ${FAKE_GH_SLUG:-t/repo} --head --state all" ] || [ -z "$6" ]; then
+  echo "BAD ARGS: $*" >> "$GH_MISMATCH"; echo "fake gh: unexpected args: $*" >&2; exit 64
+fi
 if [ "${FAKE_GH_FAIL:-}" = 1 ]; then exit 1; fi
 if [ -n "${FAKE_GH_FILE:-}" ] && [ -f "$FAKE_GH_FILE" ]; then cat "$FAKE_GH_FILE"; else echo "[]"; fi
 GH
@@ -47,6 +54,9 @@ cat > "$FAKEBIN/lsof" <<'LS'
 exit 0
 LS
 chmod +x "$FAKEBIN/gh" "$FAKEBIN/lsof"
+export GH_CALLS="$TMP/gh.calls" GH_MISMATCH="$TMP/gh.mismatch"
+: > "$GH_CALLS"
+REALGIT=$(command -v git); export REALGIT
 export PATH="$FAKEBIN:$PATH"
 
 N=0
@@ -170,7 +180,7 @@ fixture; mkwt one b1; age "$WT"; mkdir -p "$ROOT/scratch-20261001/sub" "$ROOT/no
 mkdir -p "$ROOT/gitfile-20261003"; echo "gitdir: /nowhere" > "$ROOT/gitfile-20261003/.git"
 audit; LO=$(q "' '.join(x['path'].rsplit('/',1)[-1] for x in d['leftovers'])")
 has "dated dir listed" "$LO" scratch-20261001; has "dashed date listed" "$LO" notes-2026-10-02-x
-lacks "undated not listed" "$LO" plain; lacks "dated dir with .git not listed" "$LO" gitfile; lacks "worktree not a leftover" "$LO" repo-one
+lacks "undated not listed" "$LO" plain; has "orphaned .git-file dir listed" "$LO" gitfile-20261003; has "with a note" "$(q "' '.join(str(x['note']) for x in d['leftovers'])")" "points at missing repo"; lacks "worktree not a leftover" "$LO" repo-one
 eq "leftover verdict REVIEW" "$(q "d['leftovers'][0]['verdict']")" REVIEW
 
 echo "14. read-only: byte-identical fixture, .git/index untouched"
@@ -205,15 +215,129 @@ audit --root /nonexistent-wa-root; eq "good root still read, exit 2" "$RC" 2; eq
 fixture; mkwt one b1; age "$WT"; mkwt two b2; rm -rf "$WT"
 audit; eq "removed dir exit 0" "$RC" 0; eq "removed dir -> PRUNABLE-REF" "$(V two)" PRUNABLE-REF; eq "content class n/a" "$(C two)" "n/a"
 fixture; mkwt one b1; age "$WT"; chmod 000 "$REPO/.git" 2>/dev/null
-audit; if [ "$(id -u)" = 0 ]; then ok "unreadable worktree list (skipped as root)"; else eq "unreadable repo -> exit 2" "$RC" 2; has "names it" "$ERR" "repo"; fi
+audit; if [ "$(id -u)" = 0 ]; then ok "unreadable worktree list (skipped as root)"; else eq "unreadable repo -> exit 2" "$RC" 2; has "names it" "$ERR" "$REPO"; fi
 chmod 755 "$REPO/.git" 2>/dev/null
 audit --repo "$REPO"; eq "--repo dedupes with --root" "$(q "len(d['repos'])")" 1
 
 echo "16. human output"
 fixture; mkwt one b1; age "$WT"
-H=$("$PY" "$SUT" --root "$ROOT" --seed-dir "$T/absent" 2>&1); RC=$?
+H=$("$PY" "$SUT" --root "$ROOT" --seed-dir "$SEEDS" 2>&1); RC=$?
 eq "exit 0" "$RC" 0; has "summary line" "$H" "Summary:"; has "free on filesystem" "$H" "free on filesystem"
-has "verdict shown" "$H" "A  "; has "seed note" "$H" "does not exist"
+has "verdict shown" "$H" "A  "
+H=$("$PY" "$SUT" --root "$ROOT" --seed-dir "$T/absent" 2>&1); RC=$?
+eq "explicit absent seed dir: exit 2" "$RC" 2; has "seed note in human output" "$H" "seed check unavailable"; has "still has summary" "$H" "Summary:"
+
+echo "17. seed check cannot be skipped silently"
+fixture; mkwt one b1; age "$WT"
+audit --seed-dir "$T/absent"
+eq "explicit absent --seed-dir exit 2" "$RC" 2; eq "KEEP, not A" "$(V one)" KEEP; has "reason" "$(R one)" "seed check unavailable"
+has "unverified names the dir" "$(q "' '.join(u['path'] for u in d['unverified'])")" "$T/absent"
+eq "content class still shown" "$(C one)" A
+OUT=$(CLAUDE_HANDOFF_DIR="$T/absent" "$PY" "$SUT" --root "$ROOT" --json 2>/dev/null); RC=$?
+eq "default absent dir: exit 0" "$RC" 0; eq "default absent dir: KEEP" "$(V one)" KEEP; has "default absent reason" "$(R one)" "seed check unavailable"
+OUT=$(CLAUDE_HANDOFF_DIR="$T/absent" "$PY" "$SUT" --root "$ROOT" --json --no-seeds 2>/dev/null); RC=$?
+eq "--no-seeds exit 0" "$RC" 0; eq "--no-seeds skips the check -> A" "$(V one)" A
+mkdir -p "$T/sd"; chmod 000 "$T/sd"
+if [ "$(id -u)" = 0 ]; then echo "  skip unreadable seed dir (running as root)"; else
+  audit --seed-dir "$T/sd"; eq "unreadable seed dir: no traceback, exit 2" "$RC" 2; eq "unreadable seed dir -> KEEP" "$(V one)" KEEP
+  has "names the dir" "$ERR" "$T/sd"; fi
+chmod 755 "$T/sd"
+echo "see b1" > "$T/sd/NEXT-q.md"; chmod 000 "$T/sd/NEXT-q.md"
+if [ "$(id -u)" = 0 ]; then echo "  skip unreadable seed file (running as root)"; else
+  audit --seed-dir "$T/sd"; eq "unreadable seed file: exit 2" "$RC" 2; eq "unreadable seed file -> KEEP" "$(V one)" KEEP
+  has "reason names file" "$(R one)" "NEXT-q.md"; fi
+chmod 644 "$T/sd/NEXT-q.md"
+
+echo "18. pid edge cases"
+fixture; mkwt one b1; age "$WT"; git -C "$REPO" worktree lock --reason "agent pid 99999999999999999999" "$WT"
+audit; eq "overflowing pid: no crash, exit 0" "$RC" 0; eq "overflowing pid -> KEEP" "$(V one)" KEEP
+fixture; mkwt one b1; age "$WT"; git -C "$REPO" worktree lock --reason "agent (pid 0)" "$WT"
+audit; eq "pid 0 -> KEEP" "$(V one)" KEEP; has "pid 0 unparseable" "$(R one)" "unparseable pid"
+
+echo "19. every git call is read-only-hardened (fsmonitor, untracked cache, optional locks)"
+fixture; mkwt one b1; age "$WT"; WRAP="$T/wrapbin"; mkdir -p "$WRAP"; GITLOG="$T/git.log"; : > "$GITLOG"; export GITLOG
+cat > "$WRAP/git" <<'W'
+#!/usr/bin/env bash
+echo "GOL=${GIT_OPTIONAL_LOCKS-unset} $*" >> "$GITLOG"
+exec "$REALGIT" "$@"
+W
+chmod +x "$WRAP/git"
+git -C "$REPO" config core.fsmonitor true
+PATH="$WRAP:$PATH" audit
+NCALL=$(wc -l < "$GITLOG" | tr -d ' ')
+BADCALL=$(grep -v -c '^GOL=0 -c core.fsmonitor=false -c core.untrackedCache=false ' "$GITLOG")
+[ "$NCALL" -ge 8 ] && ok "git wrapper saw the run ($NCALL calls)" || bad "git wrapper saw too few calls" "$NCALL"
+eq "no git call lacks the hardening" "$BADCALL" 0
+# Platform note: the daemon only exists where git ships the builtin fsmonitor (macOS,
+# Windows); on Linux CI this assertion is vacuous and the log check above is the real pin.
+FSM=$(ls -d "$REPO"/.git/fsmonitor--daemon* 2>/dev/null | wc -l | tr -d ' ')
+git -C "$REPO" -c core.fsmonitor=false fsmonitor--daemon stop >/dev/null 2>&1
+eq "no fsmonitor daemon artifacts" "$FSM" 0
+eq "wt still classified" "$(V one)" A
+
+echo "20. gh is called with the expected args"
+fixture; mkwt one b1; age "$WT"; rm -f "$GH_MISMATCH"; : > "$GH_CALLS"; audit
+has "gh args" "$(cat "$GH_CALLS")" "pr list -R t/repo --head b1 --state all"
+[ -e "$GH_MISMATCH" ] && bad "fake gh saw bad args" "$(cat "$GH_MISMATCH")" || ok "no gh argument mismatch"
+fixture; mkwt one b1; age "$WT"; ( cd "$REPO" && git remote add upstream https://github.com/o/up.git )
+audit; eq "repo with upstream remote: PR unknown -> KEEP" "$(V one)" KEEP; has "reason" "$(R one)" "PR state unknown"
+fixture; mkwt one b1; age "$WT"; ( cd "$REPO" && git config remote.origin.url https://gitlab.com/t/repo.git )
+audit; eq "non-GitHub origin: PR unknown even though head is in base" "$(V one)" KEEP
+
+echo "21. slug parsing (module import)"
+SL=$("$PY" - "$SUT" <<'PYS'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+for u in ("https://github.com/o/r.git", "https://github.com/o/r", "https://github.com/o/r/", "git@github.com:o/r.git",
+          "ssh://git@github.com/o/r.git", "https://tok@github.com/o/r.git", "https://gitlab.com/o/r.git",
+          "https://github.com.evil.com/o/r.git", "/local/path", ""):
+    print(m.slug_from_url(u))
+PYS
+)
+eq "slug forms" "$(echo $SL)" "o/r o/r o/r o/r o/r o/r None None None None"
+
+echo "22. unknown default branch / stale-days / creation age"
+fixture; mkwt one b1; age "$WT"
+git -C "$REPO" symbolic-ref --delete refs/remotes/origin/HEAD; git -C "$REPO" update-ref -d refs/remotes/origin/main
+audit; [ "$(C one)" != A ] && ok "no base ref: not class A" || bad "no base ref: not class A" "$(C one)"
+has "needs names default branch unknown" "$(ND one)" "default branch unknown"; eq "in_base is null" "$(q "w['one']['in_base']")" None
+fixture; mkwt one b1; age "$WT"
+audit; eq "old creation, fresh head: not stale at 14d" "$(q "w['one']['stale']")" False
+audit --stale-days=-1; eq "stale with a negative threshold" "$(q "w['one']['stale']")" True
+# git hides a worktree whose admin gitdir file is gone, so "creation age unknown" is
+# reachable only via a failed stat; pin the classifier branch directly.
+CA=$("$PY" - "$SUT" <<'PYS'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+def fact(**kw):
+    f = dict(path="/x/wt", branch="b", head="h", detached=False, locked=False, lock_reason="", lock_pid=None, missing=False,
+             head_age_days=1.0, creation_age_days=None, tracked_dirty=0, untracked=0, ignored_nonrebuildable=0,
+             in_base=False, in_remote_branch=False, merged_pr_head=False, pr=dict(known=True, open=False, merged_head=False, state="none"),
+             in_use=False, seeds=[], seed_unavailable=None)
+    f.update(kw); return f
+a = fact(); m.classify(a, 14); print(a["verdict"], "creation age unknown" in " ".join(a["reasons"]))
+b = fact(in_base=True); m.classify(b, 14); print(b["verdict"])
+PYS
+)
+eq "creation age unknown + head unpreserved -> KEEP naming it" "$(echo $CA)" "KEEP True A"
+
+echo "23. scan robustness"
+fixture; mkwt one b1; age "$WT"; echo "only repo-one-20261101 here" > "$SEEDS/NEXT-b.md"
+audit; eq "basename-only seed mention -> KEEP" "$(V one)" KEEP; has "names seed" "$(R one)" "NEXT-b.md"
+fixture; mkwt one b1; age "$WT"; mkdir -p "$ROOT/sub"; chmod 000 "$ROOT/sub"
+if [ "$(id -u)" = 0 ]; then echo "  skip unreadable subdir (running as root)"; else
+  audit; eq "unreadable subdir: exit 2" "$RC" 2; has "named in unverified" "$(q "' '.join(u['path'] for u in d['unverified'])")" "$ROOT/sub"; fi
+chmod 755 "$ROOT/sub"
+fixture; mkwt one b1; age "$WT"; mkdir -p "$T/vol"; git -C "$REPO" worktree add -q -b b3 "$T/vol/repo-three-20261101" origin/main; rm -rf "$T/vol"
+audit; eq "missing parent dir -> KEEP, not PRUNABLE" "$(q "w['three']['verdict']")" KEEP; has "reason" "$(q "w['three']['reasons'][0]")" "parent directory missing"
+fixture; mkwt one b1; age "$WT"; NLWT="$ROOT/repo-nl
+x-20261101"; git -C "$REPO" worktree add -q -b b4 "$NLWT" origin/main; age "$NLWT"
+audit; eq "newline-in-path worktree is real, not PRUNABLE-REF" "$(q "[x['verdict'] for x in w.values() if '\n' in x['path']]")" "['A']"
+fixture; mkwt one b1; age "$WT"; mkdir -p "$WT/packages/a/dist" "$WT/packages/a/node_modules/z" "$WT/src/node_modules"; echo 1 > "$WT/packages/a/dist/x.js"; echo 1 > "$WT/packages/a/node_modules/z/i.js"; echo 1 > "$WT/src/node_modules/x"
+audit; eq "collapsed dir not covered by allowlist is expanded -> B" "$(V one)" B; eq "only the src one counts" "$(q "w['one']['ignored_nonrebuildable']")" 1
+
+echo "24. gh was never given bad args anywhere in this run"
+[ -e "$GH_MISMATCH" ] && bad "fake gh saw bad args during the suite" "$(cat "$GH_MISMATCH")" || ok "no gh mismatch recorded"
 
 echo
 echo "$pass passed, $fail failed"
