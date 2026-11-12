@@ -6,7 +6,7 @@
 Usage:
   python3 ~/.claude/scripts/worktree-audit.py [--root DIR]... [--repo PATH]...
       [--json] [--stale-days N] [--liveness auto|lsof|none] [--no-gh] [--offline]
-      [--seed-dir DIR | --no-seeds] [--sizes]
+      [--seed-dir DIR | --no-seeds] [--sizes] [--write-cache [PATH]]
 
 THE PROBLEM: a machine that runs many agent sessions accumulates linked git
 worktrees (`~/Projects/<repo>-<slug>-<date>`) and dated scratch folders, and
@@ -22,7 +22,18 @@ repeats:
     directories. REBUILDABLE below is ROOTED: it matches only at the named
     locations, never by bare folder name.
 
-THIS SCRIPT NEVER WRITES. It reports; removal is somebody else's decision. Every
+THE REPOS ARE READ-ONLY, and the only file this script ever writes (apart from creating
+the cache's missing parent directory, mode 0700) is the optional
+`--write-cache [PATH]` report (default `$WORKTREE_AUDIT_CACHE`, else
+`~/.claude/state/worktree-audit.json`): the same JSON `--json` prints, so the offline
+session pulse can warn on worktree hygiene without running the audit (#435). It is
+written atomically (temp file in the same directory, then os.replace). Containment is
+decided by file IDENTITY (st_dev/st_ino of the target's existing ancestors against every
+repo, worktree and .git root), not path spelling, because default APFS is case-insensitive
+and realpath does not canonicalise case. The write is REFUSED -- exit 2, listed in `unverified`, nothing
+written -- when PATH is a symlink, a directory, or resolves inside any discovered repo's
+working tree, linked worktree or .git dir; a failed write is likewise reported and never
+claimed as success. It reports; removal is somebody else's decision. Every
 git call runs with GIT_OPTIONAL_LOCKS=0 (and `status` with --no-optional-locks)
 so even `.git/index` is not refreshed. Every git call also carries
 `-c core.fsmonitor=false -c core.untrackedCache=false`: GIT_OPTIONAL_LOCKS does not
@@ -84,6 +95,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 DEFAULT_ROOTS = ["~/Projects", "~/StudioProjects", "~/VSCodeProjects"]
@@ -576,6 +588,83 @@ def human(rep):
     return "\n".join(L)
 
 
+CACHE_DEFAULT = object()
+
+
+def default_cache_path():
+    return os.path.abspath(os.path.expanduser(
+        os.environ.get("WORKTREE_AUDIT_CACHE") or "~/.claude/state/worktree-audit.json"))
+
+
+def report_text(rep):
+    return json.dumps(rep, indent=2, default=str)
+
+
+def _inside(path, root):
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+
+
+def _ids(paths):
+    out = set()
+    for p in paths:
+        try:
+            st = os.stat(p)
+            out.add((st.st_dev, st.st_ino))
+        except OSError:
+            pass
+    return out
+
+
+def _ancestor_in(path, ids):
+    """First existing ancestor of `path` (itself included) whose identity is in `ids`."""
+    d = path
+    while True:
+        try:
+            st = os.stat(d)
+            if (st.st_dev, st.st_ino) in ids:
+                return d
+        except OSError:
+            pass
+        up = os.path.dirname(d)
+        if up == d:
+            return None
+        d = up
+
+
+def write_cache_file(path, text, protected):
+    """The one write this script performs. Raises ValueError (refused) or OSError (failed);
+    in both cases nothing is left at `path` and no temp file survives."""
+    if os.path.islink(path):
+        raise ValueError("refusing a symlink cache path")
+    if os.path.isdir(path):
+        raise ValueError("refusing a directory as the cache path")
+    parent = os.path.dirname(path)
+    resolved = os.path.join(os.path.realpath(parent), os.path.basename(path))
+    for repo in protected:
+        if _inside(resolved, os.path.realpath(repo)):
+            raise ValueError("refusing a cache path inside repository %s" % repo)
+    hit = _ancestor_in(path, _ids(list(protected) + [os.path.join(r, ".git") for r in protected]))
+    if hit:
+        raise ValueError("refusing a cache path inside repository %s" % hit)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".worktree-audit-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Read-only worktree inventory and classifier.")
     ap.add_argument("--root", action="append", default=[])
@@ -590,6 +679,9 @@ def main(argv=None):
     ap.add_argument("--no-seeds", action="store_true",
                     help="skip the session-seed check entirely (no KEEP reason, no unverified entry)")
     ap.add_argument("--sizes", action="store_true")
+    ap.add_argument("--write-cache", nargs="?", const=CACHE_DEFAULT, default=None, metavar="PATH",
+                    help="also write the JSON report atomically to PATH (default $WORKTREE_AUDIT_CACHE "
+                         "or ~/.claude/state/worktree-audit.json); the only write this script performs")
     a = ap.parse_args(argv)
 
     unverified, notes, linked_paths, orphan_paths = [], [], [], []
@@ -725,7 +817,19 @@ def main(argv=None):
            "summary": {"repos": len(out_repos), "worktrees": sum(counts.values()), "verdicts": counts,
                        "leftovers": len(leftovers), "unverified": len(unverified),
                        "free_on_filesystem": free}}
-    print(json.dumps(rep, indent=2, default=str) if a.json else human(rep))
+    if a.write_cache is not None:
+        protected = [m for m, _ in repos] + [e["path"] for _, ents in repos for e in ents[1:]]
+        cache_path = default_cache_path() if a.write_cache is CACHE_DEFAULT else os.path.abspath(
+            os.path.expanduser(a.write_cache))
+        # The cache is part of the report it stores: a failed write must show up in
+        # `unverified` (and the summary count) before anything is printed or stored.
+        try:
+            text = report_text(rep)
+            write_cache_file(cache_path, text, protected)
+        except (OSError, ValueError) as e:
+            unverified.append({"path": cache_path, "reason": "cache not written: %s" % e})
+            rep["summary"]["unverified"] = len(unverified)
+    print(report_text(rep) if a.json else human(rep))
     if unverified:
         for u in unverified:
             print("worktree-audit: UNVERIFIED %s: %s" % (u["path"], u["reason"]), file=sys.stderr)

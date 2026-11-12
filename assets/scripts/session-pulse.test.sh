@@ -31,7 +31,7 @@ The seed path and content checks passed; the offline pulse remains to verify.
 '''
 
 
-class PulseTests(unittest.TestCase):
+class PulseBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='session-pulse-test-')
         self.root = Path(self.tmp.name)
@@ -44,6 +44,12 @@ class PulseTests(unittest.TestCase):
                         GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t',
                         PYTHONDONTWRITEBYTECODE='1')
         self.env.pop('CLAUDE_CODE_SESSION_ID', None)
+        # Hermetic worktree-cache default: never read or write the real ~/.claude/state.
+        self.home = self.root / 'home'
+        self.home.mkdir()
+        self.env['HOME'] = str(self.home)
+        self.env.pop('WORKTREE_AUDIT_CACHE', None)
+        self.free_gib = 500
         self.body = self.root / 'body.md'
         self.body.write_text(BODY)
         self.cmd(['git', '-c', 'init.defaultBranch=main', 'init', '-q', str(self.repo)], cwd=self.root)
@@ -68,8 +74,9 @@ class PulseTests(unittest.TestCase):
 
     def pulse(self, *extra, env=None, cwd=None, script=PULSE):
         started = time.monotonic()
-        result = self.cmd([sys.executable, str(script), '--source', 'codex', '--now', NOW, *extra],
-                          cwd=cwd, env=env)
+        # Run through the disk seam so no test depends on the host's free space.
+        result = self.cmd([sys.executable, '-c', PATCHED, str(script), str(self.free_gib), '--source', 'codex',
+                           '--now', NOW, *extra], cwd=cwd, env=env)
         elapsed = time.monotonic() - started
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, '')
@@ -88,6 +95,8 @@ class PulseTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result
 
+
+class PulseTests(PulseBase):
     def test_eight_lines_cached_sources_and_real_timing(self):
         out = self.pulse()
         self.assertIn('scope: demo', out)
@@ -398,6 +407,255 @@ class PulseTests(unittest.TestCase):
         self.assertIn('no baseline', good)
         self.assertNotIn('no baseline', broken)
         print('  mutant: missing-baseline assertion rejects invented unchanged state', flush=True)
+
+
+GENERATED = '2026-10-28T12:00:00Z'  # one hour before NOW
+PATCHED = r"""
+import collections, importlib.util, sys
+spec = importlib.util.spec_from_file_location('session_pulse_under_test', sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+free = sys.argv[2]
+def usage(path):
+    assert path == m.os.path.expanduser('~'), path
+    if free == 'oserror':
+        raise OSError('no statvfs')
+    return collections.namedtuple('U', 'total used free')(1 << 40, 0, int(float(free) * 2 ** 30))
+m.shutil.disk_usage = usage
+sys.exit(m.main(sys.argv[3:]))
+"""
+
+
+class WorktreePulseTests(PulseBase):
+    """Worktree hygiene from the worktree-audit cache (#435)."""
+
+    def wt_cache(self, repos, generated=GENERATED, name='wt.json', pad=0):
+        """repos: {basename: [(content_class, stale), ...]} -> path of a cache file."""
+        doc = {'generated_at': generated, 'roots': [], 'leftovers': [], 'unverified': [], 'notes': [],
+               'repos': [{'path': '/work/' + repo, 'default_base': 'origin/main',
+                          'worktrees': [{'path': '/work/%s-%d' % (repo, i), 'branch': 'b%d' % i,
+                                         'verdict': 'KEEP', 'content_class': cls, 'stale': stale,
+                                         'creation_age_days': 20, 'head_age_days': 20,
+                                         'reasons': ['x' * pad]}
+                                        for i, (cls, stale) in enumerate(items)]}
+                         for repo, items in repos.items()]}
+        path = self.root / name
+        path.write_text(json.dumps(doc))
+        return path
+
+    def patched(self, free, *extra, cache=None, env=None):
+        started = time.monotonic()
+        argv = [sys.executable, '-c', PATCHED, str(PULSE), str(free), '--source', 'codex', '--now', NOW, *extra]
+        if cache is not None:
+            argv += ['--worktree-cache', str(cache)]
+        result = self.cmd(argv, env=env)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, '')
+        self.assertEqual(len(result.stdout.splitlines()), 8, result.stdout)
+        self.assertLess(elapsed, 1.5)
+        return result.stdout
+
+    def state(self, free, cache, *extra):
+        snapshot = self.root / 'wt-snapshot.json'
+        self.patched(free, '--snapshot-file', str(snapshot), *extra, cache=cache)
+        return json.loads(snapshot.read_text())['state']
+
+    WT_WARNS = ('worktrees >', 'stale class-B worktrees', 'free disk <')
+
+    def test_below_thresholds_show_line_and_no_warning(self):
+        cache = self.wt_cache({'alpha': [('A', True), ('B', False)], 'beta': [('B', False)] * 1})
+        out = self.patched(500, cache=cache)
+        self.assertIn('cached: tests unit PASS (cached) | CI green (cached) | '
+                      'worktrees 3 (max 2 in alpha, stale B 0, audit 1.0h) | free 500.0 GiB', out)
+        self.assertIn('WARN: none', out)
+        state = self.state(500, cache)
+        self.assertEqual((state['worktrees_total'], state['worktrees_max_repo'], state['worktrees_stale_b']), (3, 2, 0))
+        self.assertEqual(state['worktree_audit_at'], GENERATED)
+        for key in ('warn_worktrees_repo', 'warn_free_disk', 'warn_stale_b'):
+            self.assertIs(state[key], False, key)
+        self.assertNotIn('free_gib', state)
+
+    def test_repo_worktree_count_threshold_is_strictly_above_15(self):
+        out = self.patched(500, cache=self.wt_cache({'big': [('A', False)] * 16, 'small': [('A', False)]}))
+        self.assertIn('worktrees >15 in big', out)
+        self.assertIn('worktrees 17 (max 16 in big,', out)
+        state = self.state(500, self.wt_cache({'big': [('A', False)] * 16}))
+        self.assertIs(state['warn_worktrees_repo'], True)
+        self.assertIs(state['warn_stale_b'], False)
+        out = self.patched(500, cache=self.wt_cache({'big': [('A', False)] * 15, 'other': [('A', False)] * 15}))
+        self.assertNotIn('worktrees >', out)  # 30 in total, but no ONE repo over 15
+
+    def test_stale_class_b_threshold(self):
+        out = self.patched(500, cache=self.wt_cache({'r': [('B', True), ('B', True), ('B', False), ('A', True)]}))
+        self.assertIn('stale class-B worktrees 2', out)
+        self.assertIn('stale B 2', out)
+        self.assertIs(self.state(500, self.wt_cache({'r': [('B', True)]}))['warn_stale_b'], True)
+        for items in ([('B', False)], [('A', True)], [('?', True)], [('B', 'true')], [('B', None)]):
+            self.assertNotIn('stale class-B', self.patched(500, cache=self.wt_cache({'r': items})), items)
+
+    def test_free_disk_threshold_and_unknown(self):
+        cache = self.wt_cache({'r': [('A', False)]})
+        out = self.patched(49.9, cache=cache)
+        self.assertIn('free disk <50 GiB', out)
+        self.assertIn('| free 49.9 GiB', out)
+        self.assertIs(self.state(49.9, cache)['warn_free_disk'], True)
+        self.assertNotIn('free disk', self.patched(50, cache=cache))
+        out = self.patched('oserror', cache=cache)
+        self.assertIn('| free n/a', out)
+        self.assertNotIn('free disk', out)
+        self.assertIs(self.state('oserror', cache)['warn_free_disk'], False)
+        # Free disk needs no cache: a missing cache still warns on a nearly full disk.
+        out = self.patched(10, cache=self.root / 'absent.json')
+        self.assertIn('free disk <50 GiB', out)
+        self.assertIn('worktrees n/a | free 10.0 GiB', out)
+
+    def test_missing_or_invalid_cache_is_unknown_never_zero(self):
+        good = json.loads(self.wt_cache({'r': [('A', False)]}).read_text())
+        cases = {'missing': None, 'not json': '{nope', 'empty': '', 'list': '[]', 'null': 'null',
+                 'repos not a list': json.dumps({**good, 'repos': {}}),
+                 'no repos': json.dumps({'generated_at': GENERATED}),
+                 'repo not a dict': json.dumps({**good, 'repos': ['x']}),
+                 'repo without worktrees': json.dumps({**good, 'repos': [{'path': '/w/r'}]}),
+                 'worktrees not a list': json.dumps({**good, 'repos': [{'path': '/w/r', 'worktrees': 3}]}),
+                 'worktree not a dict': json.dumps({**good, 'repos': [{'path': '/w/r', 'worktrees': [1]}]}),
+                 'no generated_at': json.dumps({k: v for k, v in good.items() if k != 'generated_at'}),
+                 'non-UTC generated_at': json.dumps({**good, 'generated_at': '2026-10-28T12:00:00+02:00'}),
+                 'naive generated_at': json.dumps({**good, 'generated_at': '2026-10-28T12:00:00'}),
+                 'date only generated_at': json.dumps({**good, 'generated_at': '2026-10-28'}),
+                 'numeric generated_at': json.dumps({**good, 'generated_at': 1761652800}),
+                 'future generated_at': json.dumps({**good, 'generated_at': '2026-10-28T14:00:00Z'})}
+        for name, text in cases.items():
+            path = self.root / 'bad-cache.json'
+            path.unlink(missing_ok=True)
+            if text is not None:
+                path.write_text(text)
+            out = self.pulse('--worktree-cache', str(path))
+            self.assertIn('worktrees n/a', out, name)
+            self.assertNotIn('worktrees 0', out, name)
+            for warning in ('worktrees >', 'stale class-B worktrees'):
+                self.assertNotIn(warning, out, name)
+            state = self.state(500, path)
+            self.assertEqual((state['worktrees_total'], state['worktrees_max_repo'], state['worktrees_stale_b'],
+                              state['worktree_audit_at']), (None,) * 4, name)
+            self.assertEqual((state['warn_worktrees_repo'], state['warn_stale_b']), (False, False), name)
+        directory = self.root / 'a-directory'
+        directory.mkdir()
+        self.assertIn('worktrees n/a', self.pulse('--worktree-cache', str(directory)))
+
+    def test_old_cache_is_labelled_stale_without_a_warning(self):
+        cache = lambda ts: self.wt_cache({'r': [('A', False)]}, generated=ts)
+        out = self.patched(500, cache=cache('2026-10-20T13:00:00Z'))  # 8 days
+        self.assertIn('worktrees 1 (max 1 in r, stale B 0, audit 8.0d stale)', out)
+        self.assertIn('WARN: none', out)
+        out = self.patched(500, cache=cache('2026-10-21T13:00:01Z'))  # just under 7 days
+        self.assertIn('audit 7.0d)', out)
+        self.assertNotIn('stale)', out)
+        self.assertIn('audit 20m)', self.patched(500, cache=cache('2026-10-28T12:40:00Z')))
+
+    def test_newly_crossed_worktree_warning_is_a_delta_but_free_gib_and_audit_time_are_not(self):
+        snapshot = self.root / 'wt-baseline.json'
+        low = self.wt_cache({'r': [('A', False)] * 3})
+        self.patched(500, '--snapshot-file', str(snapshot), cache=low)
+        self.refresh(snapshot)
+        # Same counts, a fresher audit and different free space: not material.
+        again = self.wt_cache({'r': [('A', False)] * 3}, generated='2026-10-28T12:30:00Z', name='again.json')
+        out = self.patched(400, cache=again)
+        self.assertIn('no material change since', out)
+        self.assertNotIn('worktree_audit_at', out)
+        # Crossing the per-repo threshold names the stable boolean.
+        high = self.wt_cache({'r': [('A', False)] * 16}, name='high.json')
+        out = self.patched(500, cache=high)
+        self.assertIn('warn_worktrees_repo', out)
+        self.assertIn('worktrees_total', out)  # the count itself is material
+        # Crossing free disk names its boolean, and only that one.
+        out = self.patched(10, cache=low)
+        self.assertIn('changed warn_free_disk', out)
+        self.assertNotIn('warn_worktrees_repo', out)
+        # Staying crossed is quiet.
+        self.patched(10, '--snapshot-file', str(snapshot), cache=low)
+        self.refresh(snapshot)
+        self.assertIn('no material change since', self.patched(11, cache=low))
+        stale = self.wt_cache({'r': [('B', True)] * 3}, name='stale.json')
+        self.assertIn('warn_stale_b', self.patched(10, cache=stale))
+
+    def test_large_cache_finishes_within_the_contract(self):
+        cache = self.wt_cache({'r%d' % i: [('B' if j % 3 == 0 else 'A', j % 2 == 0) for j in range(100)]
+                               for i in range(20)}, pad=300)
+        self.assertGreater(cache.stat().st_size, 512 * 1024)  # past the small-file bound
+        started = time.monotonic()
+        out = self.patched(500, cache=cache)
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertIn('worktrees 2000 (max 100 in r0, stale B ', out)
+        self.assertIn('worktrees >15 in r0', out)
+
+    def test_cache_read_spawns_no_subprocess(self):
+        import unittest.mock as mock
+        spec = importlib.util.spec_from_file_location('pulse_pymod', PULSE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cache = self.wt_cache({'r': [('B', True)] * 2})
+        boom = AssertionError('subprocess spawned by the worktree-cache read')
+        with mock.patch.object(subprocess, 'Popen', side_effect=boom), \
+                mock.patch.object(subprocess, 'run', side_effect=boom), \
+                mock.patch.object(os, 'system', side_effect=boom):
+            summary = module.worktree_summary(str(cache), module.timestamp(NOW))
+            self.assertEqual((summary['total'], summary['max'], summary['stale_b']), (2, 2, 2))
+            self.assertIsNone(module.worktree_summary(str(self.root / 'absent.json'), module.timestamp(NOW)))
+            module.free_gib()
+            module.worktree_text(summary, 12.0)
+        self.assertEqual(module.WT_REPO_MAX, 15)
+        self.assertEqual(module.FREE_GIB_MIN, 50)
+
+    def test_cache_path_resolution_flag_env_home(self):
+        flag = self.wt_cache({'flagrepo': [('A', False)]}, name='flag.json')
+        env_cache = self.wt_cache({'envrepo': [('A', False)] * 2}, name='env.json')
+        env = {**self.env, 'WORKTREE_AUDIT_CACHE': str(env_cache)}
+        self.assertIn('max 2 in envrepo', self.pulse(env=env))
+        self.assertIn('max 1 in flagrepo', self.pulse('--worktree-cache', str(flag), env=env))
+        self.assertIn('worktrees n/a', self.pulse())  # hermetic HOME has no cache
+        state_dir = self.home / '.claude' / 'state'
+        state_dir.mkdir(parents=True)
+        (state_dir / 'worktree-audit.json').write_text(env_cache.read_text())
+        self.assertIn('max 2 in envrepo', self.pulse())  # default under $HOME
+
+    def test_old_snapshot_without_new_keys_is_not_a_delta(self):
+        cache = self.wt_cache({'r': [('A', False)]})
+        snapshot = self.root / 'old.json'
+        self.patched(500, '--snapshot-file', str(snapshot), cache=cache)
+        data = json.loads(snapshot.read_text())
+        for key in ('worktrees_total', 'worktrees_max_repo', 'worktrees_stale_b', 'worktree_audit_at',
+                    'warn_worktrees_repo', 'warn_free_disk', 'warn_stale_b'):
+            del data['state'][key]
+        snapshot.write_text(json.dumps(data))
+        self.refresh(snapshot)
+        out = self.patched(500, cache=self.wt_cache({'r': [('A', False)]}, name='same.json'))
+        self.assertIn('no material change since', out)
+        out = self.patched(500, cache=self.wt_cache({'r': [('B', True)]}, name='stale.json'))
+        self.assertIn('warn_stale_b', out)
+        self.assertNotIn('warn_free_disk', out)
+        self.assertNotIn('warn_worktrees_repo', out)
+
+    def test_control_characters_in_repo_name_keep_the_snapshot_valid(self):
+        cache = self.wt_cache({'bad\x07name\x1b[31m': [('A', False)] * 16})
+        snapshot = self.root / 'ctl.json'
+        out = self.patched(500, '--snapshot-file', str(snapshot), cache=cache)
+        self.assertIn('worktrees >15 in bad', out)
+        self.assertNotIn('snapshot not saved', out)
+        self.assertTrue(snapshot.exists())
+        spec = importlib.util.spec_from_file_location('seed_mod', SEED)
+        seed_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(seed_module)
+        seed_module.validate_pulse_snapshot(json.loads(snapshot.read_text()))
+        self.refresh(snapshot)
+
+    def test_fallback_line_keeps_eight_lines_and_the_new_shape(self):
+        lines = self.pulse('--unsupported-option').splitlines()
+        self.assertEqual(lines[4], 'cached: tests n/a | CI n/a | worktrees n/a | free n/a')
+
+    def test_cache_and_signals_files_are_not_conflated(self):
+        # A signals file passed as the worktree cache is invalid there, not accepted.
+        self.assertIn('worktrees n/a', self.pulse('--worktree-cache', str(self.signals(turns=1)[1])))
 
 
 unittest.main(argv=['session-pulse.test.sh'], verbosity=2)
