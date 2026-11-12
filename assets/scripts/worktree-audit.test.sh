@@ -15,13 +15,18 @@ export PYTHONDONTWRITEBYTECODE=1
 SUT="$HERE/worktree-audit.py"
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # Zero-case guard: a harness that reports success over zero (or too few) cases is
-# a false-safety guard (#7653-class). Raise this when cases are added.
-MIN_PASS=155
+# a false-safety guard (#7653-class). Every assertion is either counted as passed or
+# explicitly counted as skipped (root cannot make a path unreadable), so the total
+# must equal EXPECTED_TOTAL exactly or more, and skips are capped. Raise
+# EXPECTED_TOTAL when cases are added.
+EXPECTED_TOTAL=170
+MAX_SKIPPED=10
 TMP=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/worktree-audit-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 
-pass=0; fail=0
+pass=0; fail=0; skipped=0
 ok()  { pass=$((pass+1)); echo "  ok   $1"; }
+skip() { skipped=$((skipped+$1)); echo "  skip $2 ($1 assertions)"; }  # root cannot make a path unreadable
 bad() { fail=$((fail+1)); echo "  FAIL $1"; [ -n "${2:-}" ] && echo "       $2"; }
 eq()  { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "got '$2' want '$3'"; fi; }
 has() { case "$2" in *"$3"*) ok "$1";; *) bad "$1" "'$2' lacks '$3'";; esac; }
@@ -216,7 +221,7 @@ audit --root /nonexistent-wa-root; eq "good root still read, exit 2" "$RC" 2; eq
 fixture; mkwt one b1; age "$WT"; mkwt two b2; rm -rf "$WT"
 audit; eq "removed dir exit 0" "$RC" 0; eq "removed dir -> PRUNABLE-REF" "$(V two)" PRUNABLE-REF; eq "content class n/a" "$(C two)" "n/a"
 fixture; mkwt one b1; age "$WT"; chmod 000 "$REPO/.git" 2>/dev/null
-audit; if [ "$(id -u)" = 0 ]; then ok "unreadable worktree list (skipped as root)"; else eq "unreadable repo -> exit 2" "$RC" 2; has "names it" "$ERR" "$REPO"; fi
+audit; if [ "$(id -u)" = 0 ]; then skip 2 "unreadable repo (running as root)"; else eq "unreadable repo -> exit 2" "$RC" 2; has "names it" "$ERR" "$REPO"; fi
 chmod 755 "$REPO/.git" 2>/dev/null
 audit --repo "$REPO"; eq "--repo dedupes with --root" "$(q "len(d['repos'])")" 1
 
@@ -239,12 +244,12 @@ eq "default absent dir: exit 0" "$RC" 0; eq "default absent dir: KEEP" "$(V one)
 OUT=$(CLAUDE_HANDOFF_DIR="$T/absent" "$PY" "$SUT" --root "$ROOT" --json --no-seeds 2>/dev/null); RC=$?
 eq "--no-seeds exit 0" "$RC" 0; eq "--no-seeds skips the check -> A" "$(V one)" A
 mkdir -p "$T/sd"; chmod 000 "$T/sd"
-if [ "$(id -u)" = 0 ]; then echo "  skip unreadable seed dir (running as root)"; else
+if [ "$(id -u)" = 0 ]; then skip 3 "unreadable seed dir (running as root)"; else
   audit --seed-dir "$T/sd"; eq "unreadable seed dir: no traceback, exit 2" "$RC" 2; eq "unreadable seed dir -> KEEP" "$(V one)" KEEP
   has "names the dir" "$ERR" "$T/sd"; fi
 chmod 755 "$T/sd"
 echo "see b1" > "$T/sd/NEXT-q.md"; chmod 000 "$T/sd/NEXT-q.md"
-if [ "$(id -u)" = 0 ]; then echo "  skip unreadable seed file (running as root)"; else
+if [ "$(id -u)" = 0 ]; then skip 3 "unreadable seed file (running as root)"; else
   audit --seed-dir "$T/sd"; eq "unreadable seed file: exit 2" "$RC" 2; eq "unreadable seed file -> KEEP" "$(V one)" KEEP
   has "reason names file" "$(R one)" "NEXT-q.md"; fi
 chmod 644 "$T/sd/NEXT-q.md"
@@ -329,7 +334,7 @@ echo "23. scan robustness"
 fixture; mkwt one b1; age "$WT"; echo "only repo-one-20261101 here" > "$SEEDS/NEXT-b.md"
 audit; eq "basename-only seed mention -> KEEP" "$(V one)" KEEP; has "names seed" "$(R one)" "NEXT-b.md"
 fixture; mkwt one b1; age "$WT"; mkdir -p "$ROOT/sub"; chmod 000 "$ROOT/sub"
-if [ "$(id -u)" = 0 ]; then echo "  skip unreadable subdir (running as root)"; else
+if [ "$(id -u)" = 0 ]; then skip 2 "unreadable subdir (running as root)"; else
   audit; eq "unreadable subdir: exit 2" "$RC" 2; has "named in unverified" "$(q "' '.join(u['path'] for u in d['unverified'])")" "$ROOT/sub"; fi
 chmod 755 "$ROOT/sub"
 fixture; mkwt one b1; age "$WT"; mkdir -p "$T/vol"; git -C "$REPO" worktree add -q -b b3 "$T/vol/repo-three-20261101" origin/main; rm -rf "$T/vol"
@@ -352,9 +357,24 @@ has "note in JSON" "$(q "' '.join(d['notes'])")" "not verified live"; eq "exit 0
 fixture; mkwt one b1; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin b1 2>/dev/null ); : > "$GH_CALLS"
 audit --offline; eq "--offline: remote unknown -> not A" "$(V one)" KEEP; has "PR unknown" "$(R one)" "PR state unknown"
 eq "--offline made no gh call" "$(wc -c < "$GH_CALLS" | tr -d ' ')" 0
-fixture; mkwt one b1; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q "$BARE" b1 2>/dev/null )
-git -C "$REPO" remote add other "$BARE"; git -C "$REPO" fetch -q other
+# A SEPARATE bare repo: $BARE is origin's own repository (via insteadOf), so pushing
+# there would make the branch genuinely live on origin.
+fixture; mkwt one b1; age "$WT"; OTHER="$T/other.git"; git init -q --bare -b main "$OTHER"
+( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q "$OTHER" b1:b1 HEAD:refs/heads/main 2>/dev/null )
+git -C "$REPO" remote add other "$OTHER"; git -C "$REPO" fetch -q other
+eq "precondition: origin does not have b1" "$(git -C "$REPO" ls-remote origin refs/heads/b1 | wc -l | tr -d ' ')" 0
+eq "precondition: other tracking ref exists" "$(git -C "$REPO" rev-parse --verify -q refs/remotes/other/b1 >/dev/null && echo yes)" yes
 audit; eq "only a non-origin remote has it -> not counted" "$(V one)" B
+
+echo "25b. live ref must be at the SAME sha; slash branch names"
+fixture; mkwt one b1; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin b1 2>/dev/null )
+git --git-dir="$BARE" update-ref refs/heads/b1 "$(git --git-dir="$BARE" rev-parse refs/heads/main)"
+audit; eq "upstream branch rewound, stale tracking ref -> not A" "$(V one)" B
+fixture; mkwt one feat/x; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin feat/x 2>/dev/null )
+audit; eq "slash-named branch pushed and live -> A" "$(V one)" A
+# refs/remotes/origin/HEAD is excluded by an explicit guard, but a live ls-remote
+# can never name a branch "HEAD" in practice, so the guard is redundant defence and
+# has no cleanly observable effect; it is not separately pinned.
 
 echo "26. near-miss names are not rebuildable"
 fixture; mkwt one b1; age "$WT"; mkdir -p "$WT/packages/a/dist-evidence"; echo 1 > "$WT/packages/a/dist-evidence/x.log"
@@ -403,11 +423,22 @@ PYS
 )
 eq "head unreadable -> KEEP, no crash" "$HU" "KEEP head unreadable"
 
+echo "31. dangling .git file anywhere; relative gitdir"
+fixture; mkwt one b1; age "$WT"; mkdir -p "$ROOT/sub/nodate"; echo "gitdir: /nonexistent/x" > "$ROOT/sub/nodate/.git"
+audit; eq "undated nested orphan reported" "$(q "any(x['path'].endswith('sub/nodate') and 'missing repo' in x['note'] for x in d['leftovers'])")" True
+eq "orphan REVIEW, exit 0" "$(q "[x['verdict'] for x in d['leftovers'] if x['path'].endswith('sub/nodate')]")|$RC" "['REVIEW']|0"
+eq "not listed twice" "$(q "len(d['leftovers'])")" 1
+fixture; mkwt one b1; age "$WT"; ADM=$(git -C "$WT" rev-parse --absolute-git-dir)
+REL="$ROOT/rel-20261101"; mkdir -p "$REL"; echo "gitdir: ../repo/.git/worktrees/$(basename "$ADM")" > "$REL/.git"
+( cd / && "$PY" "$SUT" --root "$ROOT" --seed-dir "$SEEDS" --json > "$TMP/rel.json" 2>/dev/null )
+eq "relative gitdir to a valid repo is not an orphan" "$("$PY" -c 'import json;print(len(json.load(open("'"$TMP"'/rel.json"))["leftovers"]))')" 0
+
 echo "24. gh was never given bad args anywhere in this run"
 [ -e "$GH_MISMATCH" ] && bad "fake gh saw bad args during the suite" "$(cat "$GH_MISMATCH")" || ok "no gh mismatch recorded"
 
 echo
-echo "$pass passed, $fail failed"
+echo "$pass passed, $fail failed, $skipped skipped"
 [ "$fail" -gt 0 ] && exit 1
-if [ "$pass" -lt "$MIN_PASS" ]; then echo "FAIL: only $pass cases ran, expected at least $MIN_PASS (zero-case guard)"; exit 1; fi
+if [ $((pass + skipped)) -lt "$EXPECTED_TOTAL" ]; then echo "FAIL: only $((pass + skipped)) assertions accounted for, expected $EXPECTED_TOTAL (zero-case guard)"; exit 1; fi
+if [ "$skipped" -gt "$MAX_SKIPPED" ]; then echo "FAIL: $skipped assertions skipped, at most $MAX_SKIPPED allowed"; exit 1; fi
 exit 0

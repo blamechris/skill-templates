@@ -61,7 +61,12 @@ a fork or mirror proves nothing about where the work is meant to live. `--offlin
 skips ls-remote and gh, making both facts unknown.
 
 LIMITATIONS: `git status` may run configured clean filters (e.g. git-lfs) on
-stat-dirty files; that is not disabled. GIT_DIR and similar inherited variables are
+stat-dirty files; that is not disabled. `ls-remote` may run repo-configured ssh
+or credential helpers (core.sshCommand, insteadOf), the same class as the fsmonitor
+hook; stdin is closed and GIT_TERMINAL_PROMPT=0 so it cannot prompt, and it is
+bounded to 60s per repo. The default base ref (origin/HEAD, origin/main) is the
+LOCAL tracking ref and is not verified live: a rewound upstream default branch
+with a stale local ref can overstate "in base". GIT_DIR and similar inherited variables are
 stripped so the repo being audited is the one named, never the caller's.
 
 EXIT: 0 when everything requested was read; 2 when an explicitly requested
@@ -121,7 +126,7 @@ class GitError(Exception):
 def git(args, cwd, ok=(0,), timeout=300):
     """Run a read-only git command; returns stdout bytes. Raises GitError."""
     try:
-        p = subprocess.run(GIT_BASE + args, cwd=cwd, env=GIT_ENV, capture_output=True, timeout=timeout)
+        p = subprocess.run(GIT_BASE + args, cwd=cwd, env=GIT_ENV, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise GitError("git %s: %s" % (" ".join(args[:2]), e))
     if p.returncode not in ok:
@@ -140,7 +145,7 @@ def tilde(path):
 def find_repos(root, unverified):
     """Main checkouts (.git is a DIRECTORY) under root, depth <= MAX_DEPTH.
     An unreadable directory is recorded in `unverified`, never skipped silently."""
-    found, linked = [], []
+    found, linked, orphans = [], [], []
 
     def walk(d, depth):
         try:
@@ -161,12 +166,15 @@ def find_repos(root, unverified):
             if os.path.isdir(gp) and not os.path.islink(gp):
                 found.append(e.path)
             elif os.path.isfile(gp):
-                linked.append(e.path)  # a linked worktree; its main checkout may be outside every root
+                if orphan_note(gp):
+                    orphans.append(e.path)  # stranded: .git file points at a missing repo
+                else:
+                    linked.append(e.path)  # a linked worktree; its main checkout may be outside every root
             elif not os.path.lexists(gp):
                 walk(e.path, depth + 1)
 
     walk(root, 0)
-    return found, linked
+    return found, linked, orphans
 
 
 def main_checkout(path):
@@ -270,7 +278,7 @@ def pr_facts(slug, branch, head, use_gh, fork=False):
     try:
         p = subprocess.run(["gh", "pr", "list", "-R", slug, "--head", branch, "--state", "all",
                             "--json", "number,state,headRefOid", "--limit", "20"],
-                           capture_output=True, timeout=60, env=dict(os.environ, GH_PROMPT_DISABLED="1"))
+                           capture_output=True, timeout=60, stdin=subprocess.DEVNULL, env=dict(os.environ, GH_PROMPT_DISABLED="1"))
         if p.returncode != 0:
             return dict(unknown, failed=True)
         prs = json.loads(p.stdout.decode() or "null")
@@ -297,7 +305,7 @@ def lsof_cwds(mode):
     if mode == "none" or not shutil.which("lsof"):
         return None
     try:
-        p = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fn"], capture_output=True, timeout=120)
+        p = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fn"], capture_output=True, timeout=120, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return None
     out = p.stdout.decode("utf-8", "replace")
@@ -421,7 +429,7 @@ def collect(repo, ent, ctx):
     f["seed_unavailable"] = ctx["seed_unavailable"]
     if ctx["sizes"]:
         try:
-            p = subprocess.run(["du", "-sk", wt], capture_output=True, timeout=300)
+            p = subprocess.run(["du", "-sk", wt], capture_output=True, timeout=300, stdin=subprocess.DEVNULL)
             f["du_kb"] = int(p.stdout.split()[0]) if p.returncode == 0 and p.stdout.split() else None
         except (OSError, ValueError, subprocess.TimeoutExpired):
             f["du_kb"] = None
@@ -514,7 +522,8 @@ def orphan_note(gitfile):
         if os.path.isfile(gitfile):
             with open(gitfile, encoding="utf-8", errors="replace") as fh:
                 m = re.match(r"gitdir:\s*(.+)", fh.read().strip())
-            if m and not os.path.exists(m.group(1).strip()):
+            # a relative gitdir is relative to the directory holding the .git file
+            if m and not os.path.exists(os.path.join(os.path.dirname(gitfile), m.group(1).strip())):
                 return ".git file points at missing repo"
     except OSError:
         pass
@@ -583,7 +592,7 @@ def main(argv=None):
     ap.add_argument("--sizes", action="store_true")
     a = ap.parse_args(argv)
 
-    unverified, notes, linked_paths = [], [], []
+    unverified, notes, linked_paths, orphan_paths = [], [], [], []
     roots, repo_paths = [], []
     explicit = bool(a.root or a.repo)
     absent_defaults = []
@@ -604,7 +613,8 @@ def main(argv=None):
     if absent_defaults:
         notes.append("default roots absent (skipped): " + ", ".join(absent_defaults))
     for r in roots:
-        found, linked = find_repos(r, unverified)
+        found, linked, orphans = find_repos(r, unverified)
+        orphan_paths.extend(orphans)
         repo_paths.extend(found)
         linked_paths.extend(linked)
 
@@ -613,8 +623,6 @@ def main(argv=None):
         try:
             main_path, ents = main_checkout(p)
         except GitError as e:
-            if p in linked_paths and orphan_note(os.path.join(p, ".git")):
-                continue  # dangling worktree: reported as a dated leftover, not a repo
             unverified.append({"path": p, "reason": "not readable as a git repo: %s" % e})
             continue
         if main_path in seen:
@@ -682,18 +690,22 @@ def main(argv=None):
         out_repos.append({"path": main_path, "default_base": ctx["bases"].get(main_path), "worktrees": wts})
 
     leftovers = []
+    # Stranded worktrees (dangling .git file) found anywhere in the walk, any name.
+    for op in orphan_paths:
+        try:
+            leftovers.append({"path": op, "verdict": "REVIEW", "note": ".git file points at missing repo",
+                              "age_days": age_days(os.stat(op).st_mtime, ctx["now"])})
+        except OSError as e:
+            unverified.append({"path": op, "reason": "unreadable: %s" % e})
     for r in roots:
         try:
             for e in sorted(os.scandir(r), key=lambda e: e.name):
+                # Dated dirs with no .git entry. (A dangling .git FILE is an orphan above.)
                 if not e.is_dir(follow_symlinks=False) or not DATE_RE.search(e.name):
                     continue
-                gp = os.path.join(e.path, ".git")
-                note = None
-                if os.path.lexists(gp):
-                    note = orphan_note(gp)
-                    if note is None:
-                        continue
-                leftovers.append({"path": e.path, "verdict": "REVIEW", "note": note,
+                if os.path.lexists(os.path.join(e.path, ".git")):
+                    continue
+                leftovers.append({"path": e.path, "verdict": "REVIEW", "note": None,
                                   "age_days": age_days(e.stat().st_mtime, ctx["now"])})
         except OSError as e:
             unverified.append({"path": r, "reason": "root unreadable: %s" % e})
