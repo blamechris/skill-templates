@@ -225,6 +225,9 @@ gh issue create \
   --title "${TITLE}" \
   --label "bug,from-review" \
   --body "$(cat <<EOF
+## Context
+Filed from: session ${CLAUDE_CODE_SESSION_ID}
+
 ## Symptom
 ${SYMPTOM}
 
