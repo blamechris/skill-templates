@@ -17,10 +17,16 @@ PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # Zero-case guard: a harness that reports success over zero (or too few) cases is
 # a false-safety guard (#7653-class). Every assertion is either counted as passed or
 # explicitly counted as skipped (root cannot make a path unreadable), so the total
-# must equal EXPECTED_TOTAL exactly or more, and skips are capped. Raise
-# EXPECTED_TOTAL when cases are added.
-EXPECTED_TOTAL=207
-MAX_SKIPPED=10
+# must equal EXPECTED_TOTAL EXACTLY (a floor would let a deleted case hide behind an
+# added skip, or a new case go uncounted), and skips are capped. Move EXPECTED_TOTAL
+# whenever an assertion is added or removed.
+EXPECTED_TOTAL=216
+# MAX_SKIPPED is the sum of every skip site that can fire on one host:
+#   root-conditional  : unreadable repo 2 + seed dir 3 + seed file 3 + subdir 2 + unwritable parent 3 = 13
+#   platform-conditional: case-variant path 2 (case-sensitive fs, e.g. Linux)
+#                         firmlink spelling 3 (no /System/Volumes/Data alias, i.e. everywhere but macOS)
+# so 18 is the ceiling; the exact EXPECTED_TOTAL check still binds pass + skipped.
+MAX_SKIPPED=18
 TMP=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/worktree-audit-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -372,6 +378,9 @@ git --git-dir="$BARE" update-ref refs/heads/b1 "$(git --git-dir="$BARE" rev-pars
 audit; eq "upstream branch rewound, stale tracking ref -> not A" "$(V one)" B
 fixture; mkwt one feat/x; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin feat/x 2>/dev/null )
 audit; eq "slash-named branch pushed and live -> A" "$(V one)" A
+fixture; mkwt one a/b/c; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin a/b/c 2>/dev/null )
+eq "precondition: a/b/c is live on origin at the worktree sha" "$(git -C "$REPO" ls-remote origin refs/heads/a/b/c | cut -f1)" "$(git -C "$WT" rev-parse HEAD)"
+audit; eq "multi-level slash branch a/b/c pushed and live -> A" "$(V one)" A
 # refs/remotes/origin/HEAD is excluded by an explicit guard, but a live ls-remote
 # can never name a branch "HEAD" in practice, so the guard is redundant defence and
 # has no cleanly observable effect; it is not separately pinned.
@@ -460,6 +469,34 @@ INWT="$WT/inside.json"; audit --write-cache "$INWT"
 eq "inside a linked worktree: exit 2" "$RC" 2; eq "inside a linked worktree: absent" "$([ -e "$INWT" ] && echo yes || echo no)" no
 INGIT="$REPO/.git/cache.json"; audit --write-cache "$INGIT"
 eq "inside .git: exit 2" "$RC" 2; eq "inside .git: absent" "$([ -e "$INGIT" ] && echo yes || echo no)" no
+# A linked worktree's admin dir lives under <repo>/.git/worktrees/<name>/ (#438).
+INADM="$(git -C "$WT" rev-parse --absolute-git-dir)/x.json"
+case "$INADM" in "$REPO"/.git/worktrees/*/x.json) ok "precondition: admin path is under <repo>/.git/worktrees/<name>";; *) bad "precondition: admin path shape" "$INADM";; esac
+audit --write-cache "$INADM"
+eq "inside a linked worktree's .git/worktrees admin dir: exit 2" "$RC" 2
+eq "admin dir path: file absent" "$([ -e "$INADM" ] && echo yes || echo no)" no
+has "admin dir path listed in unverified" "$(q "' '.join(u['path'] for u in d['unverified'])")" "$INADM"
+# macOS firmlink spelling: /System/Volumes/Data<realpath> names the same inode through a
+# path whose string does not start with the repo's realpath, so only the identity check
+# (st_dev, st_ino) can refuse it. Run only where that spelling is the SAME directory.
+FIRM="/System/Volumes/Data$("$PY" -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$REPO")"
+FIRM_SAME=$("$PY" - "$REPO" "$FIRM" <<'PYS'
+import os, sys
+try:
+    a, b = os.stat(sys.argv[1]), os.stat(sys.argv[2])
+    print("yes" if (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino) else "no")
+except OSError:
+    print("no")
+PYS
+)
+if [ "$FIRM_SAME" = yes ]; then
+  audit --write-cache "$FIRM/firm.json"
+  eq "firmlink spelling of the repo: exit 2" "$RC" 2
+  eq "firmlink spelling: file absent" "$([ -e "$REPO/firm.json" ] && echo yes || echo no)" no
+  has "firmlink spelling listed in unverified" "$(q "' '.join(u['path'] for u in d['unverified'])")" "$FIRM/firm.json"
+else
+  skip 3 "firmlink spelling of the repo (no /System/Volumes/Data alias for this path; macOS only)"
+fi
 ln -s "$REPO" "$TMP/repolink"; audit --write-cache "$TMP/repolink/viasymlinkdir.json"
 eq "via a symlinked parent into the repo: exit 2" "$RC" 2; eq "via a symlinked parent: absent" "$([ -e "$REPO/viasymlinkdir.json" ] && echo yes || echo no)" no
 audit --write-cache "$REPO/new/sub/x.json"
@@ -508,6 +545,8 @@ echo "24. gh was never given bad args anywhere in this run"
 echo
 echo "$pass passed, $fail failed, $skipped skipped"
 [ "$fail" -gt 0 ] && exit 1
-if [ $((pass + skipped)) -lt "$EXPECTED_TOTAL" ]; then echo "FAIL: only $((pass + skipped)) assertions accounted for, expected $EXPECTED_TOTAL (zero-case guard)"; exit 1; fi
+TOTAL=$((pass + skipped))
+if [ "$TOTAL" -lt "$EXPECTED_TOTAL" ]; then echo "FAIL: count too low: $TOTAL assertions accounted for, expected exactly $EXPECTED_TOTAL (zero-case guard)"; exit 1; fi
+if [ "$TOTAL" -gt "$EXPECTED_TOTAL" ]; then echo "FAIL: count too high: $TOTAL assertions accounted for, expected exactly $EXPECTED_TOTAL; update EXPECTED_TOTAL (zero-case guard)"; exit 1; fi
 if [ "$skipped" -gt "$MAX_SKIPPED" ]; then echo "FAIL: $skipped assertions skipped, at most $MAX_SKIPPED allowed"; exit 1; fi
 exit 0
