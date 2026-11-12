@@ -10,8 +10,9 @@
       ]
     },
     "bug-hunt": {
-      "hash": "a0b98e6",
-      "installed": "2026-08-21",
+      "hash": "600c374",
+      "installed": "2026-11-12",
+      "profileHash": "a6d2d73",
       "targets": [
         "claude"
       ]
@@ -24,7 +25,7 @@
       ]
     },
     "prime-directive": {
-      "hash": "a6398c1",
+      "hash": "0f0cc15",
       "installed": "2026-11-07",
       "profileHash": "a6d2d73",
       "targets": [
@@ -39,7 +40,7 @@
       ]
     },
     "session-lifecycle": {
-      "hash": "a6398c1",
+      "hash": "0f0cc15",
       "installed": "2026-11-07",
       "profileHash": "a6d2d73",
       "targets": [
@@ -79,8 +80,8 @@
       ]
     },
     "check-pr": {
-      "hash": "37866a5",
-      "installed": "2026-10-28",
+      "hash": "bcb8822",
+      "installed": "2026-11-12",
       "profileHash": "a6d2d73",
       "targets": [
         "claude"

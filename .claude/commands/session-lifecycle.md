@@ -330,4 +330,4 @@ Run with no arguments it prompts for the two `/usage` percentages, so neither fo
 placeholder substitution — which is the point: a documented command carrying `<angle brackets>`
 is read by the shell as a redirection and cannot be run as written.
 
-<!-- skill-templates: session-lifecycle a6398c1 2026-11-07 -->
+<!-- skill-templates: session-lifecycle 0f0cc15 2026-11-07 -->
