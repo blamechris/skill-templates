@@ -618,25 +618,75 @@ def _ids(paths):
     return out
 
 
+def _admin_dirs(roots):
+    """Real git admin directory of every protected root (main .git, linked
+    .git/worktrees/<name>, or an external separate-git-dir), asked of git itself.
+    A root that exists but cannot be asked is a ValueError (fail closed): protecting
+    less than intended must refuse the write, never silently proceed."""
+    out = []
+    for r in roots:
+        try:
+            os.stat(r)
+        except OSError:
+            continue  # no such directory: no identity to protect
+        try:
+            raw, _ = git(["rev-parse", "--absolute-git-dir"], r)
+        except GitError as e:
+            raise ValueError("cannot determine the git admin directory of %s (%s); "
+                             "refusing rather than protecting less" % (r, e))
+        d = raw.decode("utf-8", "replace").strip()
+        if not d:
+            raise ValueError("empty git admin directory for %s; refusing" % r)
+        out.append(d)
+    return out
+
+
 def _ancestor_in(path, ids):
-    """First existing ancestor of `path` (itself included) whose identity is in `ids`."""
-    d = path
+    """First directory on the PHYSICAL parent chain of `path` (its containing directory first) whose identity is in `ids`.
+
+    Start at the first existing ancestor of `path` by spelling (the target may not
+    exist yet), then step with os.path.join(cur, ".."). The kernel resolves symlinks
+    before "..", so this follows the real parent chain whatever the path was spelled
+    as. Stops at the filesystem root (parent has the same dev/ino). Any OSError
+    mid-walk, or exhausting the step bound, is a ValueError (fail closed)."""
+    cur = os.path.dirname(path) or "."  # `path` itself is a file (or absent), never a walk start
     while True:
         try:
-            st = os.stat(d)
+            os.stat(cur)
+            break
+        except FileNotFoundError:
+            up = os.path.dirname(cur)
+            if up == cur:
+                raise ValueError("no existing ancestor for %s; refusing" % path)
+            cur = up
+        except OSError as e:
+            raise ValueError("cannot stat %s (%s); refusing" % (cur, e))
+    try:
+        st = os.stat(cur)
+        for _ in range(4096):
             if (st.st_dev, st.st_ino) in ids:
-                return d
-        except OSError:
-            pass
-        up = os.path.dirname(d)
-        if up == d:
-            return None
-        d = up
+                return cur
+            nxt = os.path.join(cur, "..")
+            nst = os.stat(nxt)
+            if (nst.st_dev, nst.st_ino) == (st.st_dev, st.st_ino):
+                return None
+            cur, st = nxt, nst
+    except OSError as e:
+        raise ValueError("cannot walk the parent chain of %s (%s); refusing" % (path, e))
+    raise ValueError("parent chain of %s too deep to verify; refusing" % path)
 
 
 def write_cache_file(path, text, protected):
     """The one write this script performs. Raises ValueError (refused) or OSError (failed);
-    in both cases nothing is left at `path` and no temp file survives."""
+    in both cases nothing is left at `path` and no temp file survives.
+
+    DEFENCE IN DEPTH, two independent layers keep the cache out of every repository
+    (the lexical layer already refuses the known routes; the second backs it up):
+      1. lexical: realpath(parent) must not sit under any protected repo's realpath;
+      2. identity: no directory on the physical parent chain may be the same
+         (st_dev, st_ino) as a protected root or as its git admin directory
+         (`rev-parse --absolute-git-dir`: main .git, .git/worktrees/<name>, or an
+         external separate git dir)."""
     if os.path.islink(path):
         raise ValueError("refusing a symlink cache path")
     if os.path.isdir(path):
@@ -646,7 +696,8 @@ def write_cache_file(path, text, protected):
     for repo in protected:
         if _inside(resolved, os.path.realpath(repo)):
             raise ValueError("refusing a cache path inside repository %s" % repo)
-    hit = _ancestor_in(path, _ids(list(protected) + [os.path.join(r, ".git") for r in protected]))
+    hit = _ancestor_in(path, _ids(list(protected) + [os.path.join(r, ".git") for r in protected]
+                                  + _admin_dirs(protected)))
     if hit:
         raise ValueError("refusing a cache path inside repository %s" % hit)
     os.makedirs(parent, mode=0o700, exist_ok=True)
