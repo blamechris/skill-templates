@@ -623,6 +623,11 @@ def _ids(paths):
     return out
 
 
+def _chomp(raw):
+    """Remove exactly ONE trailing newline (git's line terminator); a path may itself end in one."""
+    return raw[:-1] if raw.endswith(b"\n") else raw
+
+
 def _admin_dirs(mains, linked=()):
     """Real git admin directory of every protected root (main .git, linked
     .git/worktrees/<name>, or an external separate-git-dir), asked of git itself.
@@ -639,7 +644,7 @@ def _admin_dirs(mains, linked=()):
                 continue  # no such directory: no identity to protect
             try:
                 raw, _ = git(["rev-parse", "--absolute-git-dir"], r)
-                d = os.fsdecode(raw.rstrip(b"\n"))
+                d = os.fsdecode(_chomp(raw))
                 if not d:
                     raise GitError("empty git admin directory")
             except GitError as e:
@@ -656,33 +661,44 @@ _DIRFLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
 
 def _walk_fd(fd, ids, label):
     """Walk the physical parent chain starting from the open directory `fd` (not closed
-    here). Each step opens ".." relative to the previous descriptor, so no path string
-    is built (no length limit) and a later change to any spelling cannot matter. Returns
-    `label` if a directory on the chain is in `ids`, None at the filesystem root. Any
-    OSError mid-walk, or exhausting the step bound, is a ValueError (fail closed)."""
-    cur, own = fd, False
+    here). Each step opens ".." relative to the last descriptor we hold, so no long path
+    string is built and a later change to any spelling cannot matter. A parent that is
+    traversable but unreadable (mode 0311) cannot be opened: the chain then continues by
+    stat of a short relative path ("../..") from the last descriptor we did open, rebased
+    on every successful open (bounded at ~900 bytes, beyond that: refuse). Returns `label`
+    if a directory on the chain is in `ids`, None at the filesystem root. Any other OSError
+    mid-walk, or exhausting the step bound, is a ValueError (fail closed)."""
+    base, own, rel = fd, False, ""
     try:
-        st = os.fstat(cur)
+        st = os.fstat(base)
         for _ in range(4096):
             if (st.st_dev, st.st_ino) in ids:
                 return label
-            up = os.open("..", _DIRFLAGS, dir_fd=cur)
+            up = rel + "/.." if rel else ".."
             try:
-                ust = os.fstat(up)
-            except BaseException:
-                os.close(up)
-                raise
-            if own:
-                os.close(cur)
-            cur, own, st2 = up, True, ust
-            if (st2.st_dev, st2.st_ino) == (st.st_dev, st.st_ino):
+                nfd = os.open(up, _DIRFLAGS, dir_fd=base)
+            except PermissionError:
+                if len(up) > 900:
+                    raise ValueError("unreadable ancestors of %s are too deep to verify; refusing" % label)
+                ust = os.stat(up, dir_fd=base)
+                rel = up
+            else:
+                try:
+                    ust = os.fstat(nfd)
+                except BaseException:
+                    os.close(nfd)
+                    raise
+                if own:
+                    os.close(base)
+                base, own, rel = nfd, True, ""
+            if (ust.st_dev, ust.st_ino) == (st.st_dev, st.st_ino):
                 return None
-            st = st2
+            st = ust
     except OSError as e:
         raise ValueError("cannot walk the parent chain of %s (%s); refusing" % (label, e))
     finally:
         if own:
-            os.close(cur)
+            os.close(base)
     raise ValueError("parent chain of %s too deep to verify; refusing" % label)
 
 
@@ -700,14 +716,30 @@ def _first_existing(d):
             raise ValueError("cannot stat %s (%s); refusing" % (d, e))
 
 
-def _refuse_if_protected(directory, ids):
-    fd = os.open(directory, _DIRFLAGS)
+def _open_parent(parent, ids):
+    """Open `parent` for writing, creating missing components, entirely relative to a
+    descriptor: open the nearest existing ancestor, run the identity walk from that
+    descriptor, then mkdir/open each missing component with dir_fd (no path-based makedirs,
+    O_NOFOLLOW on what we create). Returns the final descriptor; the caller closes it."""
+    anc = _first_existing(parent)
+    fd = os.open(anc, _DIRFLAGS)
     try:
-        hit = _walk_fd(fd, ids, directory)
-    finally:
+        hit = _walk_fd(fd, ids, anc)
+        if hit:
+            raise ValueError("refusing a cache path inside repository %s" % hit)
+        rest = os.path.relpath(parent, anc)
+        for name in ([] if rest == "." else rest.split(os.sep)):
+            try:
+                os.mkdir(name, 0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            nfd = os.open(name, _DIRFLAGS | getattr(os, "O_NOFOLLOW", 0), dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        return fd
+    except BaseException:
         os.close(fd)
-    if hit:
-        raise ValueError("refusing a cache path inside repository %s" % hit)
+        raise
 
 
 def write_cache_file(path, text, mains, linked=()):
@@ -731,9 +763,8 @@ def write_cache_file(path, text, mains, linked=()):
 
     Limitations: a bind-mounted repository SUBDIRECTORY (Linux, needs mount privileges)
     has its own identity and a physical parent chain that leaves the repo, so it escapes
-    both layers. Directories created for a missing parent are made after the first check
-    on the nearest existing ancestor and before the descriptor check; a race there can
-    leave empty directories, never the cache file, inside a repo."""
+    both layers. A concurrent process of the same user that RENAMES the already-checked
+    directory into a repository after the check cannot be prevented from userspace."""
     path = os.path.abspath(path)
     protected = list(mains) + list(linked)
     if os.path.islink(path):
@@ -747,14 +778,8 @@ def write_cache_file(path, text, mains, linked=()):
             raise ValueError("refusing a cache path inside repository %s" % repo)
     ids = _ids(protected + [os.path.join(r, ".git") for r in protected]
                + _admin_dirs(mains, linked))
-    # never create directories inside a protected place: check the nearest existing ancestor first
-    _refuse_if_protected(_first_existing(parent), ids)
-    os.makedirs(parent, mode=0o700, exist_ok=True)
-    pfd = os.open(parent, _DIRFLAGS)
+    pfd = _open_parent(parent, ids)
     try:
-        hit = _walk_fd(pfd, ids, parent)
-        if hit:
-            raise ValueError("refusing a cache path inside repository %s" % hit)
         tmp = ".worktree-audit-%s.tmp" % secrets.token_hex(8)
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=pfd)
         try:
@@ -934,7 +959,7 @@ def main(argv=None):
                 raw, _ = git(["rev-parse", "--show-toplevel"], p)
             except GitError:
                 return None
-            return os.path.realpath(os.fsdecode(raw.rstrip(b"\n"))) or None
+            return os.path.realpath(os.fsdecode(_chomp(raw))) or None
         mains = [m for m, _ in repos]
         linked = [e["path"] for _, ents in repos for e in ents[1:]]
         for p in repo_paths + [m for m, _ in repos]:
