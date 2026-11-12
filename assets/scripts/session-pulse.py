@@ -35,7 +35,10 @@ sys.dont_write_bytecode = True
 SOURCES = {"claude", "codex", "chroxy"}
 LIMIT = 0.8
 # Worktree-hygiene WARN thresholds (#435). Each is a strict comparison on a known value.
-WT_REPO_MAX = 15           # warn when any one repo has MORE than this many registered worktrees
+# WT_REPO_MAX counts LINKED worktrees as the audit reports them (the main checkout is
+# excluded, so 16 linked = 17 in `git worktree list`). Stale B follows the audit run's own
+# --stale-days (default 14), not a threshold fixed here.
+WT_REPO_MAX = 15           # warn when any one repo has MORE than this many linked worktrees
 FREE_GIB_MIN = 50          # warn when free space on the home filesystem is UNDER this many GiB
 WT_CACHE_STALE_DAYS = 7    # label (never warn on) a cache older than this
 WT_CACHE_LIMIT = 16 * 1024 * 1024  # a large audit is a few MB of JSON; still bounded
@@ -169,9 +172,9 @@ def worktree_summary(path, now):
             total += count
             stale_b += sum(1 for w in repo["worktrees"] if w.get("content_class") == "B" and w.get("stale") is True)
             if count > biggest:
-                biggest, biggest_repo = count, os.path.basename(str(repo.get("path", "")).rstrip("/")) or "?"
+                biggest, biggest_repo = count, clean(os.path.basename(str(repo.get("path", "")).rstrip("/")), 60) or "?"
         return {"total": total, "max": biggest, "repo": biggest_repo or "n/a", "stale_b": stale_b,
-                "generated_at": value["generated_at"], "age": cache_age,
+                "generated_at": clean(value["generated_at"], 40), "age": cache_age,
                 "old": cache_age > WT_CACHE_STALE_DAYS * 86400}
     except (OSError, ValueError, UnicodeError, TypeError, RecursionError):
         return None
@@ -299,8 +302,12 @@ def delta(state, previous):
     # the worktree cache's own timestamp. The worktree COUNTS are material. Free GiB is
     # never state (it moves every run); only its threshold boolean is.
     fields = set(state) | set(previous["state"])
+    # A key the previous snapshot never recorded (an older pulse) is first observed, not
+    # changed: only a newly crossed warn_* boolean (True) is reported. A first-seen count
+    # such as worktrees_total is not, or every upgrade would open with a spurious delta.
     changed = sorted(key for key in fields if key not in ("decision_streaks", "signals_observed_at", "worktree_audit_at")
-                     and state.get(key) != previous["state"].get(key))
+                     and state.get(key) != previous["state"].get(key)
+                     and not (key not in previous["state"] and state.get(key) is not True))
     return ("changed " + ", ".join(changed)) if changed else "no material change since " + previous["at"]
 
 

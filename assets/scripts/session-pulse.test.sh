@@ -49,6 +49,7 @@ class PulseBase(unittest.TestCase):
         self.home.mkdir()
         self.env['HOME'] = str(self.home)
         self.env.pop('WORKTREE_AUDIT_CACHE', None)
+        self.free_gib = 500
         self.body = self.root / 'body.md'
         self.body.write_text(BODY)
         self.cmd(['git', '-c', 'init.defaultBranch=main', 'init', '-q', str(self.repo)], cwd=self.root)
@@ -73,8 +74,9 @@ class PulseBase(unittest.TestCase):
 
     def pulse(self, *extra, env=None, cwd=None, script=PULSE):
         started = time.monotonic()
-        result = self.cmd([sys.executable, str(script), '--source', 'codex', '--now', NOW, *extra],
-                          cwd=cwd, env=env)
+        # Run through the disk seam so no test depends on the host's free space.
+        result = self.cmd([sys.executable, '-c', PATCHED, str(script), str(self.free_gib), '--source', 'codex',
+                           '--now', NOW, *extra], cwd=cwd, env=env)
         elapsed = time.monotonic() - started
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, '')
@@ -616,6 +618,36 @@ class WorktreePulseTests(PulseBase):
         state_dir.mkdir(parents=True)
         (state_dir / 'worktree-audit.json').write_text(env_cache.read_text())
         self.assertIn('max 2 in envrepo', self.pulse())  # default under $HOME
+
+    def test_old_snapshot_without_new_keys_is_not_a_delta(self):
+        cache = self.wt_cache({'r': [('A', False)]})
+        snapshot = self.root / 'old.json'
+        self.patched(500, '--snapshot-file', str(snapshot), cache=cache)
+        data = json.loads(snapshot.read_text())
+        for key in ('worktrees_total', 'worktrees_max_repo', 'worktrees_stale_b', 'worktree_audit_at',
+                    'warn_worktrees_repo', 'warn_free_disk', 'warn_stale_b'):
+            del data['state'][key]
+        snapshot.write_text(json.dumps(data))
+        self.refresh(snapshot)
+        out = self.patched(500, cache=self.wt_cache({'r': [('A', False)]}, name='same.json'))
+        self.assertIn('no material change since', out)
+        out = self.patched(500, cache=self.wt_cache({'r': [('B', True)]}, name='stale.json'))
+        self.assertIn('warn_stale_b', out)
+        self.assertNotIn('warn_free_disk', out)
+        self.assertNotIn('warn_worktrees_repo', out)
+
+    def test_control_characters_in_repo_name_keep_the_snapshot_valid(self):
+        cache = self.wt_cache({'bad\x07name\x1b[31m': [('A', False)] * 16})
+        snapshot = self.root / 'ctl.json'
+        out = self.patched(500, '--snapshot-file', str(snapshot), cache=cache)
+        self.assertIn('worktrees >15 in bad', out)
+        self.assertNotIn('snapshot not saved', out)
+        self.assertTrue(snapshot.exists())
+        spec = importlib.util.spec_from_file_location('seed_mod', SEED)
+        seed_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(seed_module)
+        seed_module.validate_pulse_snapshot(json.loads(snapshot.read_text()))
+        self.refresh(snapshot)
 
     def test_fallback_line_keeps_eight_lines_and_the_new_shape(self):
         lines = self.pulse('--unsupported-option').splitlines()

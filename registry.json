@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "0f0cc15",
+  "generatedFromCommit": "83373fc",
   "skillCount": 45,
   "skills": [
     {
@@ -1954,8 +1954,8 @@
     },
     {
       "name": "pulse",
-      "hash": "84fe5f4",
-      "lines": 131,
+      "hash": "83373fc",
+      "lines": 135,
       "description": "Read eight offline session signals and record the observation through the canonical seed writer. Use when the user requests `/pulse`, a quick session health check, or a boundary readout. The underlying stdlib script calls no model, network service or test suite."
     },
     {

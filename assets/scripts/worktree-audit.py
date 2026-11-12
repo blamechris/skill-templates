@@ -22,12 +22,15 @@ repeats:
     directories. REBUILDABLE below is ROOTED: it matches only at the named
     locations, never by bare folder name.
 
-THE REPOS ARE READ-ONLY, and the only file this script ever writes is the optional
+THE REPOS ARE READ-ONLY, and the only file this script ever writes (apart from creating
+the cache's missing parent directory, mode 0700) is the optional
 `--write-cache [PATH]` report (default `$WORKTREE_AUDIT_CACHE`, else
 `~/.claude/state/worktree-audit.json`): the same JSON `--json` prints, so the offline
 session pulse can warn on worktree hygiene without running the audit (#435). It is
-written atomically (temp file in the same directory, then os.replace; a missing parent
-is created mode 0700). The write is REFUSED -- exit 2, listed in `unverified`, nothing
+written atomically (temp file in the same directory, then os.replace). Containment is
+decided by file IDENTITY (st_dev/st_ino of the target's existing ancestors against every
+repo, worktree and .git root), not path spelling, because default APFS is case-insensitive
+and realpath does not canonicalise case. The write is REFUSED -- exit 2, listed in `unverified`, nothing
 written -- when PATH is a symlink, a directory, or resolves inside any discovered repo's
 working tree, linked worktree or .git dir; a failed write is likewise reported and never
 claimed as success. It reports; removal is somebody else's decision. Every
@@ -604,6 +607,33 @@ def _inside(path, root):
         return False
 
 
+def _ids(paths):
+    out = set()
+    for p in paths:
+        try:
+            st = os.stat(p)
+            out.add((st.st_dev, st.st_ino))
+        except OSError:
+            pass
+    return out
+
+
+def _ancestor_in(path, ids):
+    """First existing ancestor of `path` (itself included) whose identity is in `ids`."""
+    d = path
+    while True:
+        try:
+            st = os.stat(d)
+            if (st.st_dev, st.st_ino) in ids:
+                return d
+        except OSError:
+            pass
+        up = os.path.dirname(d)
+        if up == d:
+            return None
+        d = up
+
+
 def write_cache_file(path, text, protected):
     """The one write this script performs. Raises ValueError (refused) or OSError (failed);
     in both cases nothing is left at `path` and no temp file survives."""
@@ -616,6 +646,9 @@ def write_cache_file(path, text, protected):
     for repo in protected:
         if _inside(resolved, os.path.realpath(repo)):
             raise ValueError("refusing a cache path inside repository %s" % repo)
+    hit = _ancestor_in(path, _ids(list(protected) + [os.path.join(r, ".git") for r in protected]))
+    if hit:
+        raise ValueError("refusing a cache path inside repository %s" % hit)
     os.makedirs(parent, mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=parent, prefix=".worktree-audit-", suffix=".tmp")
     try:

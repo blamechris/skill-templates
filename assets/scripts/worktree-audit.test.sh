@@ -19,7 +19,7 @@ PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # explicitly counted as skipped (root cannot make a path unreadable), so the total
 # must equal EXPECTED_TOTAL exactly or more, and skips are capped. Raise
 # EXPECTED_TOTAL when cases are added.
-EXPECTED_TOTAL=203
+EXPECTED_TOTAL=207
 MAX_SKIPPED=10
 TMP=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/worktree-audit-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
@@ -476,6 +476,31 @@ if [ "$(id -u)" = 0 ]; then skip 3 "unwritable parent (root can write anywhere)"
 fi
 printf 'old' > "$TMP/prior32.json"
 audit --write-cache "$REPO/prior.json"; eq "refused write never touches an existing file elsewhere" "$(cat "$TMP/prior32.json")" old
+
+echo "33. cache containment is by identity, not spelling (case-insensitive FS, aliases)"
+fixture; mkwt one b1; age "$WT"
+touch "$TMP/CaseProbe33"
+if [ -e "$TMP/caseprobe33" ]; then
+  UPPER="$ROOT/$(basename "$REPO" | tr a-z A-Z)"
+  audit --write-cache "$UPPER/case.json"
+  eq "case-variant path into the repo: exit 2" "$RC" 2; eq "case-variant path: file absent" "$([ -e "$REPO/case.json" ] && echo yes || echo no)" no
+else
+  skip 2 "case-variant cache path (case-sensitive filesystem)"
+fi
+ALIAS=$("$PY" - "$SUT" "$REPO" "$TMP/alias33" <<'PYS'
+import importlib.util, os, sys, tempfile
+sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+repo, alias = sys.argv[2], sys.argv[3]
+os.symlink(repo, alias)
+os.path.realpath = lambda p: p   # a filesystem whose realpath does not canonicalise (APFS case)
+try:
+    m.write_cache_file(os.path.join(alias, "x.json"), "{}", [repo]); print("WROTE")
+except ValueError as e:
+    print("refused" if "inside repository" in str(e) else "other:%s" % e)
+PYS
+)
+eq "alias that string-compares differently is still refused by identity" "$ALIAS" refused
+eq "alias write left nothing in the repo" "$([ -e "$REPO/x.json" ] && echo yes || echo no)" no
 
 echo "24. gh was never given bad args anywhere in this run"
 [ -e "$GH_MISMATCH" ] && bad "fake gh saw bad args during the suite" "$(cat "$GH_MISMATCH")" || ok "no gh mismatch recorded"

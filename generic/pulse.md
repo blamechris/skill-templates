@@ -82,9 +82,9 @@ manufacture material changes, but stable threshold booleans make a newly crossed
 visible in delta and remain unchanged while the threshold remains crossed. WARN thresholds
 are a repeated decision text across at least two recorded pulses,
 more than three open items, a seed older than 24 hours, at least two compactions, a dirty
-working tree at a boundary, stated estimate drift above 25 percent, more than 15 worktrees in
+working tree at a boundary, stated estimate drift above 25 percent, more than 15 linked worktrees in
 any one repo (`worktrees >15 in <repo>`), free disk under 50 GiB (`free disk <50 GiB`), or any
-stale class-B worktree (`stale class-B worktrees N`). The worktree and disk warnings only
+stale class-B worktree (per the audit's `--stale-days`) (`stale class-B worktrees N`). The worktree and disk warnings only
 fire on known values and are advisory: nothing is deleted or scheduled. Legacy pending
 DECISION prose warns with known age and unknown count until structured metadata is supplied.
 
@@ -102,9 +102,13 @@ python3 ~/.claude/scripts/worktree-audit.py --liveness none --write-cache
 
 `--write-cache [PATH]` writes the audit's `--json` report atomically to `PATH`, default
 `$WORKTREE_AUDIT_CACHE`, else `~/.claude/state/worktree-audit.json`, and refuses a path inside
-any discovered repository, a symlink or a directory. `<total>` counts every registered linked
-worktree, `max` is the largest count in one repo (named by directory basename), `stale B` counts
-worktrees whose content class is B and that are stale, and `audit` is the cache's age. A cache
+any discovered repository (decided by file identity, so a differently-cased spelling on a
+case-insensitive filesystem is refused too), a symlink or a directory. `<total>` counts every
+LINKED worktree as the audit reports it (the main checkout is excluded, so a repo showing 16
+has 17 in `git worktree list`), `max` is the largest count in one repo (named by directory
+basename), `stale B` counts worktrees whose content class is B and that are stale (staleness
+follows the audit run's own `--stale-days`, default 14, so a cache written with another value
+changes what the warning means), and `audit` is the cache's age. A cache
 older than 7 days is labelled `stale`; that label is not a WARN. `free` is the free space of the
 home filesystem, a `shutil.disk_usage` syscall (no subprocess).
 
