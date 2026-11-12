@@ -16,7 +16,7 @@ SUT="$HERE/worktree-audit.py"
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # Zero-case guard: a harness that reports success over zero (or too few) cases is
 # a false-safety guard (#7653-class). Raise this when cases are added.
-MIN_PASS=120
+MIN_PASS=155
 TMP=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/worktree-audit-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -50,6 +50,7 @@ GH
 cat > "$FAKEBIN/lsof" <<'LS'
 #!/usr/bin/env bash
 # fake lsof: prints $FAKE_LSOF_FILE verbatim (n<path> lines), nothing if unset
+[ "${FAKE_LSOF_FAIL:-}" = 1 ] && exit 1
 [ -n "${FAKE_LSOF_FILE:-}" ] && [ -f "$FAKE_LSOF_FILE" ] && cat "$FAKE_LSOF_FILE"
 exit 0
 LS
@@ -269,9 +270,12 @@ BADCALL=$(grep -v -c '^GOL=0 -c core.fsmonitor=false -c core.untrackedCache=fals
 [ "$NCALL" -ge 8 ] && ok "git wrapper saw the run ($NCALL calls)" || bad "git wrapper saw too few calls" "$NCALL"
 eq "no git call lacks the hardening" "$BADCALL" 0
 # Platform note: the daemon only exists where git ships the builtin fsmonitor (macOS,
-# Windows); on Linux CI this assertion is vacuous and the log check above is the real pin.
-FSM=$(ls -d "$REPO"/.git/fsmonitor--daemon* 2>/dev/null | wc -l | tr -d ' ')
+# Windows); on Linux CI the artifact assertion is vacuous and the log check above is
+# the real, platform-independent pin. For a LINKED worktree git writes the daemon
+# files under .git/worktrees/<id>/, so glob the main .git and every admin dir.
+FSM=$(ls -d "$REPO"/.git/fsmonitor--daemon* "$REPO"/.git/worktrees/*/fsmonitor--daemon* 2>/dev/null | wc -l | tr -d ' ')
 git -C "$REPO" -c core.fsmonitor=false fsmonitor--daemon stop >/dev/null 2>&1
+git -C "$WT" -c core.fsmonitor=false fsmonitor--daemon stop >/dev/null 2>&1
 eq "no fsmonitor daemon artifacts" "$FSM" 0
 eq "wt still classified" "$(V one)" A
 
@@ -335,6 +339,69 @@ x-20261101"; git -C "$REPO" worktree add -q -b b4 "$NLWT" origin/main; age "$NLW
 audit; eq "newline-in-path worktree is real, not PRUNABLE-REF" "$(q "[x['verdict'] for x in w.values() if '\n' in x['path']]")" "['A']"
 fixture; mkwt one b1; age "$WT"; mkdir -p "$WT/packages/a/dist" "$WT/packages/a/node_modules/z" "$WT/src/node_modules"; echo 1 > "$WT/packages/a/dist/x.js"; echo 1 > "$WT/packages/a/node_modules/z/i.js"; echo 1 > "$WT/src/node_modules/x"
 audit; eq "collapsed dir not covered by allowlist is expanded -> B" "$(V one)" B; eq "only the src one counts" "$(q "w['one']['ignored_nonrebuildable']")" 1
+
+echo "25. remote preservation is verified live (stale tracking refs do not count)"
+fixture; mkwt one b1; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin b1 2>/dev/null )
+audit; eq "pushed + live -> A" "$(V one)" A; eq "in_remote_branch true" "$(q "w['one']['in_remote_branch']")" True
+git --git-dir="$BARE" update-ref -d refs/heads/b1
+audit; eq "branch deleted upstream, tracking ref stale -> not A" "$(V one)" B; has "needs commits" "$(ND one)" "commits"
+fixture; mkwt one b1; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin b1 2>/dev/null )
+git -C "$REPO" config --unset "url.$BARE.insteadOf"; git -C "$REPO" config "url.$T/nowhere.git.insteadOf" https://github.com/t/repo.git
+audit; eq "ls-remote failing: remote does not count" "$(V one)" B; has "needs says not verified" "$(ND one)" "not verified live"
+has "note in JSON" "$(q "' '.join(d['notes'])")" "not verified live"; eq "exit 0 (unknown is named, not an error)" "$RC" 0
+fixture; mkwt one b1; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q origin b1 2>/dev/null ); : > "$GH_CALLS"
+audit --offline; eq "--offline: remote unknown -> not A" "$(V one)" KEEP; has "PR unknown" "$(R one)" "PR state unknown"
+eq "--offline made no gh call" "$(wc -c < "$GH_CALLS" | tr -d ' ')" 0
+fixture; mkwt one b1; age "$WT"; ( cd "$WT" && echo u > u.txt && git add u.txt && git commit -q -m u && git push -q "$BARE" b1 2>/dev/null )
+git -C "$REPO" remote add other "$BARE"; git -C "$REPO" fetch -q other
+audit; eq "only a non-origin remote has it -> not counted" "$(V one)" B
+
+echo "26. near-miss names are not rebuildable"
+fixture; mkwt one b1; age "$WT"; mkdir -p "$WT/packages/a/dist-evidence"; echo 1 > "$WT/packages/a/dist-evidence/x.log"
+audit; eq "packages/a/dist-evidence -> B" "$(V one)" B
+fixture; echo 'node_modules-old/' >> "$REPO/.git/info/exclude"; mkwt one b1; age "$WT"; mkdir -p "$WT/node_modules-old"; echo 1 > "$WT/node_modules-old/x"
+audit; eq "node_modules-old -> B" "$(V one)" B
+
+echo "27. --liveness lsof failures are reported"
+fixture; mkwt one b1; age "$WT"
+FAKE_LSOF_FAIL=1 audit --liveness lsof; eq "failing lsof: exit 2" "$RC" 2; eq "failing lsof: KEEP" "$(V one)" KEEP; has "liveness unknown" "$(R one)" "liveness unknown"
+has "unverified names lsof" "$(q "' '.join(u['path'] for u in d['unverified'])")" lsof
+NL="$T/nolsof"; mkdir -p "$NL"; ln -s "$REALGIT" "$NL/git"; ln -s "$FAKEBIN/gh" "$NL/gh"
+OUT=$(PATH="$NL:/usr/bin-none" "$PY" "$SUT" --root "$ROOT" --seed-dir "$SEEDS" --json --liveness lsof 2>/dev/null); RC=$?
+eq "absent lsof: exit 2" "$RC" 2; eq "absent lsof: KEEP" "$(V one)" KEEP
+OUT=$(PATH="$NL:/usr/bin-none" "$PY" "$SUT" --root "$ROOT" --seed-dir "$SEEDS" --json 2>/dev/null); RC=$?
+eq "absent lsof under auto: exit 0, KEEP" "$RC.$(V one)" "0.KEEP"
+
+echo "28. inherited GIT_* variables are stripped"
+fixture; mkwt one b1; age "$WT"
+GIT_DIR=/nonexistent/bogus GIT_WORK_TREE=/nonexistent/wt GIT_INDEX_FILE=/nonexistent/idx audit
+eq "bogus GIT_DIR/WORK_TREE/INDEX_FILE: same verdict" "$(V one).$RC" "A.0"
+
+echo "29. linked worktree whose main checkout is outside every root"
+fixture; OUTSIDE="$T/outside/main2"; mkdir -p "$OUTSIDE"; ( cd "$OUTSIDE" && git init -q -b main && echo 1 > f && git add f && git commit -q -m i && git worktree add -q -b bx "$ROOT/main2-x-20261101" )
+age "$ROOT/main2-x-20261101"
+audit; eq "outside main repo discovered" "$(q "any(r['path']=='$OUTSIDE' for r in d['repos'])")" True
+eq "its worktree is listed" "$(q "sum(len(r['worktrees']) for r in d['repos'] if r['path']=='$OUTSIDE')")" 1
+eq "repo not duplicated" "$(q "len([r for r in d['repos'] if r['path']=='$OUTSIDE'])")" 1
+
+echo "30. notes and odd states"
+fixture; mkwt one b1; age "$WT"
+FAKE_GH_FAIL=1 audit; has "gh failure note" "$(q "' '.join(d['notes'])")" "gh calls failed: PR state unknown for 1 branch worktrees"; eq "gh failure: no exit change" "$RC" 0
+OUT=$("$PY" "$SUT" --json --seed-dir "$SEEDS" 2>/dev/null); RC=$?
+eq "absent default roots: exit 0" "$RC" 0; has "default roots note" "$(printf '%s' "$OUT" | "$PY" -c 'import json,sys;print(" ".join(json.load(sys.stdin)["notes"]))')" "default roots absent"
+H=$("$PY" "$SUT" --seed-dir "$SEEDS" 2>&1); has "human default roots note" "$H" "default roots absent"
+fixture; mkwt one b1; age "$WT"; git -C "$REPO" worktree lock "$WT"; mv "$WT" "$WT.gone"; rm -rf "$WT.gone"
+audit; eq "locked + missing dir -> KEEP, not PRUNABLE" "$(V one)" KEEP; has "reason" "$(R one)" "locked"
+fixture; mkwt one b1; age "$WT"; ln -s "$T/nope.md" "$SEEDS/NEXT-d.md"
+audit; eq "dangling seed symlink: exit 2" "$RC" 2; eq "dangling seed symlink -> KEEP" "$(V one)" KEEP; has "reason" "$(R one)" "dangling symlink"
+HU=$("$PY" - "$SUT" <<'PYS'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+f = dict(path="/x/wt", branch="b", head=None, detached=False, locked=False, lock_reason="", lock_pid=None, missing=False, head_unreadable=True)
+m.classify(f, 14); print(f["verdict"], f["reasons"][0])
+PYS
+)
+eq "head unreadable -> KEEP, no crash" "$HU" "KEEP head unreadable"
 
 echo "24. gh was never given bad args anywhere in this run"
 [ -e "$GH_MISMATCH" ] && bad "fake gh saw bad args during the suite" "$(cat "$GH_MISMATCH")" || ok "no gh mismatch recorded"
