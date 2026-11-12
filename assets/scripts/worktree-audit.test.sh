@@ -20,7 +20,7 @@ PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # must equal EXPECTED_TOTAL EXACTLY (a floor would let a deleted case hide behind an
 # added skip, or a new case go uncounted), and skips are capped. Move EXPECTED_TOTAL
 # whenever an assertion is added or removed.
-EXPECTED_TOTAL=216
+EXPECTED_TOTAL=231
 # Skips are checked for an EXACT per-host value (EXPECTED_SKIPPED, computed below from
 # independent host probes), not against a global ceiling: a real case that wrongly took a
 # skip branch on a host that should have none would otherwise still pass.
@@ -570,6 +570,74 @@ PYS
 )
 eq "alias that string-compares differently is still refused by identity" "$ALIAS" refused
 eq "alias write left nothing in the repo" "$([ -e "$REPO/x.json" ] && echo yes || echo no)" no
+
+# #439 (defence in depth): the identity layer protects each repo's real git ADMIN directory
+# (main .git, linked .git/worktrees/<name>, an external separate git dir) on the PHYSICAL
+# parent chain. Every alias below lives OUTSIDE the repo and realpath is neutralised exactly
+# as above, so the lexical guard cannot see it: only the identity layer can refuse.
+echo "33b. admin directories are protected by identity on the physical parent chain (#439)"
+ADM33=$(git -C "$WT" rev-parse --absolute-git-dir); mkdir -p "$ADM33/logs"
+SEP33="$TMP/sep33"; mkdir -p "$SEP33"
+git init -q --separate-git-dir "$SEP33/ext.git" "$SEP33/work" >/dev/null 2>&1
+mkdir -p "$TMP/unrelated33"
+ADMRES=$("$PY" - "$SUT" "$REPO" "$WT" "$ADM33" "$SEP33/work" "$SEP33/ext.git" "$TMP" <<'PYS'
+import importlib.util, os, sys
+sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+repo, wt, adm, sepwork, sepgit, tmp = sys.argv[2:8]
+protected = [repo, wt, sepwork]
+os.path.realpath = lambda p: p
+def attempt(label, alias, target, rel):
+    os.symlink(target, os.path.join(tmp, alias))
+    try:
+        m.write_cache_file(os.path.join(tmp, alias, rel), "{}", protected); r = "WROTE"
+    except ValueError as e:
+        r = "refused:" + str(e)[:60]
+    print("%s=%s" % (label, r))
+attempt("admin", "a33admin", adm, "x.json")
+attempt("sub", "a33sub", os.path.join(adm, "logs"), "x.json")
+attempt("deep", "a33deep", adm, "no/such/dir/x.json")
+attempt("sep", "a33sep", sepgit, "x.json")
+attempt("ctl", "a33ctl", os.path.join(tmp, "unrelated33"), "x.json")
+# fail closed 1: git cannot name one protected root's admin dir
+real_git = m.git
+def flaky(args, cwd, **kw):
+    if cwd == wt: raise m.GitError("simulated rev-parse failure")
+    return real_git(args, cwd, **kw)
+m.git = flaky
+try:
+    m.write_cache_file(os.path.join(tmp, "unrelated33", "fc1.json"), "{}", protected); print("gitfail=WROTE")
+except ValueError as e:
+    print("gitfail=refused:" + str(e)[:80])
+m.git = real_git
+# fail closed 2: the parent chain cannot be walked
+real_stat = os.stat
+def stat_no_dotdot(p, *a, **k):
+    if str(p).endswith(os.sep + ".."): raise PermissionError(13, "simulated")
+    return real_stat(p, *a, **k)
+os.stat = stat_no_dotdot
+try:
+    m.write_cache_file(os.path.join(tmp, "unrelated33", "fc2.json"), "{}", protected); print("walkfail=WROTE")
+except ValueError as e:
+    print("walkfail=refused:" + str(e)[:80])
+os.stat = real_stat
+PYS
+)
+res33() { printf '%s\n' "$ADMRES" | sed -n "s/^$1=//p"; }
+eq "identity-only alias into .git/worktrees/<name> is refused" "$(res33 admin | cut -d: -f1)" refused
+eq "alias into admin dir: nothing written under the real admin dir" "$([ -e "$ADM33/x.json" ] && echo yes || echo no)" no
+eq "alias into a SUBDIRECTORY of the admin dir is refused" "$(res33 sub | cut -d: -f1)" refused
+eq "alias into admin subdir: nothing written" "$([ -e "$ADM33/logs/x.json" ] && echo yes || echo no)" no
+eq "alias plus not-yet-existing dirs under the admin dir is refused" "$(res33 deep | cut -d: -f1)" refused
+eq "alias plus missing dirs: nothing created under the admin dir" "$([ -e "$ADM33/no" ] && echo yes || echo no)" no
+eq "alias into a separate-git-dir repo's external git dir is refused" "$(res33 sep | cut -d: -f1)" refused
+eq "separate git dir: nothing written" "$([ -e "$SEP33/ext.git/x.json" ] && echo yes || echo no)" no
+eq "control: alias to an unrelated directory is written" "$(res33 ctl)" WROTE
+eq "control: the file is really there" "$([ -s "$TMP/unrelated33/x.json" ] && echo yes || echo no)" yes
+eq "fail closed: git cannot name a protected root's admin dir -> refused" "$(res33 gitfail | cut -d: -f1)" refused
+has "fail closed (git): the refusal says why" "$(res33 gitfail)" "refus"
+eq "fail closed: nothing written when git failed" "$([ -e "$TMP/unrelated33/fc1.json" ] && echo yes || echo no)" no
+eq "fail closed: an unwalkable parent chain -> refused" "$(res33 walkfail | cut -d: -f1)" refused
+eq "fail closed: nothing written when the walk failed" "$([ -e "$TMP/unrelated33/fc2.json" ] && echo yes || echo no)" no
 
 echo "24. gh was never given bad args anywhere in this run"
 [ -e "$GH_MISMATCH" ] && bad "fake gh saw bad args during the suite" "$(cat "$GH_MISMATCH")" || ok "no gh mismatch recorded"
