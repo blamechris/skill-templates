@@ -20,7 +20,7 @@ PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 # must equal EXPECTED_TOTAL EXACTLY (a floor would let a deleted case hide behind an
 # added skip, or a new case go uncounted), and skips are capped. Move EXPECTED_TOTAL
 # whenever an assertion is added or removed.
-EXPECTED_TOTAL=249
+EXPECTED_TOTAL=262
 # Skips are checked for an EXACT per-host value (EXPECTED_SKIPPED, computed below from
 # independent host probes), not against a global ceiling: a real case that wrongly took a
 # skip branch on a host that should have none would otherwise still pass.
@@ -37,7 +37,9 @@ SKIP_ROOT_UNWRITABLE_PARENT=3 # case 32: unwritable parent (root can write anywh
 SKIP_CASE_VARIANT=2           # case 33: case-variant cache path (case-sensitive fs)
 SKIP_FIRMLINK=3               # case 32: /System/Volumes/Data spelling (not the same inode)
 SKIP_ROOT_UNREADABLE_ANCESTOR=2  # case 33d: 0311 ancestor (root reads everything)
-SKIP_ROOT_TOTAL=$((SKIP_ROOT_UNREADABLE_ANCESTOR + SKIP_ROOT_UNREADABLE_REPO + SKIP_ROOT_SEED_DIR + SKIP_ROOT_SEED_FILE + SKIP_ROOT_UNREADABLE_SUBDIR + SKIP_ROOT_UNWRITABLE_PARENT))
+SKIP_ROOT_DEEP_ANCESTORS=4       # case 33e: 310 nested 0311 ancestors (root reads everything)
+SKIP_ROOT_STAT_FALLBACK_ERR=5    # case 33f: 0311 ancestor + failing fallback stat (root never needs the fallback)
+SKIP_ROOT_TOTAL=$((SKIP_ROOT_DEEP_ANCESTORS + SKIP_ROOT_STAT_FALLBACK_ERR + SKIP_ROOT_UNREADABLE_ANCESTOR + SKIP_ROOT_UNREADABLE_REPO + SKIP_ROOT_SEED_DIR + SKIP_ROOT_SEED_FILE + SKIP_ROOT_UNREADABLE_SUBDIR + SKIP_ROOT_UNWRITABLE_PARENT))
 
 is_root() { [ "$(id -u)" = 0 ]; }
 case_sensitive_fs() { # true when a case-variant name does NOT resolve to the probe file
@@ -766,6 +768,121 @@ PYS
   eq "0311 ancestor outside every repo: written" "$(printf '%s\n' "$ULRES" | sed -n 's/^outside=//p')|$([ -s "$TMP/p33/locked/sub/c.json" ] && echo yes || echo no)" "WROTE|yes"
   eq "0311 ancestor INSIDE a repo chain (alias, realpath neutralised): still refused" "$(printf '%s\n' "$ULRES" | sed -n 's/^inside=//p')|$([ -e "$REPO/locked/sub/c.json" ] && echo yes || echo no)" "refused|no"
 fi
+
+echo "33e. the 900-byte bound on the unreadable-ancestor fallback is enforced (#446)"
+if is_root; then skip "$SKIP_ROOT_DEEP_ANCESTORS" "310 nested 0311 ancestors (root reads everything)"; else
+  fixture
+  DPRES=$("$PY" - "$SUT" "$REPO" "$TMP/deep446" <<'PYS'
+import importlib.util, os, sys
+sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+repo, base = sys.argv[2:4]
+# 310 single-letter levels; every level but the deepest is mode 0311, so each ".." step
+# falls back to a relative stat that grows by 3 bytes. 301 steps pass 900 bytes, still
+# under PATH_MAX (1024 on macOS), so the OS's own ENAMETOOLONG is never what refuses.
+levels = [base] + [os.path.join(base, *(["d"] * i)) for i in range(1, 311)]
+os.makedirs(levels[-1])
+short = [base + "s"] + [os.path.join(base + "s", *(["d"] * i)) for i in range(1, 151)]
+os.makedirs(short[-1])
+try:
+    for d in levels[1:-1]:
+        os.chmod(d, 0o311)
+    deepest = levels[-1]
+    try:
+        m.write_cache_file(os.path.join(deepest, "c.json"), "{}", [repo]); print("deep=WROTE")
+    except ValueError as e:
+        print("deep=refused:" + str(e))
+    except OSError as e:
+        print("deep=oserror:" + str(e))
+    # control: the same kind of chain, 150 levels (450 bytes), stays within the bound
+    for d in short[1:-1]:
+        os.chmod(d, 0o311)
+    try:
+        m.write_cache_file(os.path.join(short[-1], "c.json"), "{}", [repo]); print("shallow=WROTE")
+    except (ValueError, OSError) as e:
+        print("shallow=failed:" + str(e))
+finally:
+    for d in levels[1:-1] + short[1:-1]:
+        os.chmod(d, 0o755)
+print("leftover=" + str(any(n.startswith(".worktree-audit-") for n in os.listdir(levels[-1]))))
+PYS
+)
+  resdp() { printf '%s\n' "$DPRES" | sed -n "s/^$1=//p"; }
+  eq "310 nested 0311 ancestors: the write is refused" "$(resdp deep | cut -d: -f1)" refused
+  has "the refusal is the 900-byte bound (not the OS ENAMETOOLONG)" "$(resdp deep)" "too deep to verify"
+  eq "too-deep chain: nothing written, no temp file left" "$([ -e "$TMP/deep446/$(printf 'd/%.0s' $(seq 1 310))c.json" ] && echo yes || echo no)|$(resdp leftover)" "no|False"
+  eq "control: a 150-level 0311 chain is within the bound and is written" "$(resdp shallow)" WROTE
+fi
+
+echo "33f. an error other than PermissionError in the fallback stat refuses the write (#446)"
+if is_root; then skip "$SKIP_ROOT_STAT_FALLBACK_ERR" "0311 ancestor with a failing fallback stat (root never needs the fallback)"; else
+  fixture; mkdir -p "$TMP/p446/locked/sub"; chmod 311 "$TMP/p446/locked"
+  FBRES=$("$PY" - "$SUT" "$REPO" "$TMP/p446/locked/sub" <<'PYS'
+import errno, importlib.util, os, sys
+sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+repo, outside = sys.argv[2:4]
+real_stat = os.stat
+hits = []
+def stat_eio(p, *a, **k):
+    if k.get("dir_fd") is not None and p == "..":   # only the walk's relative fallback stat
+        hits.append(p); raise OSError(errno.EIO, "simulated EIO")
+    return real_stat(p, *a, **k)
+os.stat = stat_eio
+try:
+    m.write_cache_file(os.path.join(outside, "c.json"), "{}", [repo]); print("eio=WROTE")
+except ValueError as e:
+    print("eio=refused:" + str(e)[:90])
+except OSError as e:
+    print("eio=oserror")
+os.stat = real_stat
+print("hits=%d" % len(hits))
+try:
+    m.write_cache_file(os.path.join(outside, "ctl.json"), "{}", [repo]); print("ctl=WROTE")
+except (ValueError, OSError) as e:
+    print("ctl=failed:" + str(e)[:60])
+PYS
+)
+  chmod 755 "$TMP/p446/locked"
+  resfb() { printf '%s\n' "$FBRES" | sed -n "s/^$1=//p"; }
+  eq "fallback stat raising EIO: the write is refused" "$(resfb eio | cut -d: -f1)" refused
+  has "the refusal names the walk failure" "$(resfb eio)" "cannot walk the parent chain"
+  eq "the fallback stat was really reached" "$([ "$(resfb hits)" -ge 1 ] 2>/dev/null && echo yes || echo no)" yes
+  eq "EIO in the fallback: nothing written" "$([ -e "$TMP/p446/locked/sub/c.json" ] && echo yes || echo no)" no
+  eq "control: the same chain without the injected error is written" "$(resfb ctl)|$([ -s "$TMP/p446/locked/sub/ctl.json" ] && echo yes || echo no)" "WROTE|yes"
+fi
+
+echo "33g. the identity walk follows the physical parent chain, not the spelled path (#446)"
+fixture; mkdir -p "$REPO/inner" "$TMP/al446" "$TMP/plain446"
+ln -s "$REPO/inner" "$TMP/al446/link"
+FDRES=$("$PY" - "$SUT" "$REPO" "$TMP/al446/link" "$TMP/plain446" <<'PYS'
+import importlib.util, os, sys
+sp = importlib.util.spec_from_file_location("wa", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+repo, alias, plain = sys.argv[2:5]
+os.path.realpath = lambda p: p   # neutralise the lexical layer: only the identity walk can refuse
+ids = m._ids([repo])
+fl = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+# The alias lives outside the repo, and its spelled parent chain (al446, TMP, ...) never meets
+# it; the directory it opens is repo/inner, whose PHYSICAL parent is the repo.
+fd = os.open(alias, fl)
+try:
+    print("walk=" + str(m._walk_fd(fd, ids, alias)))
+finally:
+    os.close(fd)
+fd = os.open(plain, fl)
+try:
+    print("ctlwalk=" + str(m._walk_fd(fd, ids, plain)))
+finally:
+    os.close(fd)
+try:
+    m.write_cache_file(os.path.join(alias, "c.json"), "{}", [repo]); print("write=WROTE")
+except ValueError as e:
+    print("write=refused")
+PYS
+)
+resfd() { printf '%s\n' "$FDRES" | sed -n "s/^$1=//p"; }
+eq "walk from an fd opened through an alias reports the repo hit on its physical parent chain" "$(resfd walk)" "$TMP/al446/link"
+eq "control: a plain directory outside every repo walks to the root with no hit" "$(resfd ctlwalk)" None
+eq "write through an alias into repo/inner (realpath neutralised) is refused" "$(resfd write)" refused
+eq "nothing was written into the repo through the alias" "$(ls -A "$REPO/inner")" ""
 
 echo "24. gh was never given bad args anywhere in this run"
 [ -e "$GH_MISMATCH" ] && bad "fake gh saw bad args during the suite" "$(cat "$GH_MISMATCH")" || ok "no gh mismatch recorded"
