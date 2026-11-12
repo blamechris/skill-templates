@@ -92,10 +92,10 @@ import datetime
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 DEFAULT_ROOTS = ["~/Projects", "~/StudioProjects", "~/VSCodeProjects"]
@@ -608,61 +608,194 @@ def _inside(path, root):
 
 
 def _ids(paths):
+    """(st_dev, st_ino) of every path that exists. A path that is absent is skipped;
+    any other failure (e.g. PermissionError) is a ValueError: an identity we could not
+    read is an identity we would silently stop protecting."""
     out = set()
     for p in paths:
         try:
             st = os.stat(p)
-            out.add((st.st_dev, st.st_ino))
-        except OSError:
-            pass
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError as e:
+            raise ValueError("cannot read the identity of protected path %s (%s); refusing" % (p, e))
+        out.add((st.st_dev, st.st_ino))
     return out
 
 
-def _ancestor_in(path, ids):
-    """First existing ancestor of `path` (itself included) whose identity is in `ids`."""
-    d = path
+def _chomp(raw):
+    """Remove exactly ONE trailing newline (git's line terminator); a path may itself end in one."""
+    return raw[:-1] if raw.endswith(b"\n") else raw
+
+
+def _admin_dirs(mains, linked=()):
+    """Real git admin directory of every protected root (main .git, linked
+    .git/worktrees/<name>, or an external separate-git-dir), asked of git itself.
+    A MAIN root that exists but cannot be asked is a ValueError (fail closed). A LINKED
+    worktree whose git dir cannot be resolved (e.g. its .git file was removed) is skipped:
+    its admin directory lives under its main repo's git dir, which is protected, and one
+    broken worktree must not stop the cache from being written."""
+    out = []
+    for roots, strict in ((mains, True), (linked, False)):
+        for r in roots:
+            try:
+                os.stat(r)
+            except OSError:
+                continue  # no such directory: no identity to protect
+            try:
+                raw, _ = git(["rev-parse", "--absolute-git-dir"], r)
+                d = os.fsdecode(_chomp(raw))
+                if not d:
+                    raise GitError("empty git admin directory")
+            except GitError as e:
+                if strict:
+                    raise ValueError("cannot determine the git admin directory of %s (%s); "
+                                     "refusing rather than protecting less" % (r, e))
+                continue
+            out.append(d)
+    return out
+
+
+_DIRFLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+
+
+def _walk_fd(fd, ids, label):
+    """Walk the physical parent chain starting from the open directory `fd` (not closed
+    here). Each step opens ".." relative to the last descriptor we hold, so no long path
+    string is built and a later change to any spelling cannot matter. A parent that is
+    traversable but unreadable (mode 0311) cannot be opened: the chain then continues by
+    stat of a short relative path ("../..") from the last descriptor we did open, rebased
+    on every successful open (bounded at ~900 bytes, beyond that: refuse). Returns `label`
+    if a directory on the chain is in `ids`, None at the filesystem root. Any other OSError
+    mid-walk, or exhausting the step bound, is a ValueError (fail closed)."""
+    base, own, rel = fd, False, ""
+    try:
+        st = os.fstat(base)
+        for _ in range(4096):
+            if (st.st_dev, st.st_ino) in ids:
+                return label
+            up = rel + "/.." if rel else ".."
+            try:
+                nfd = os.open(up, _DIRFLAGS, dir_fd=base)
+            except PermissionError:
+                if len(up) > 900:
+                    raise ValueError("unreadable ancestors of %s are too deep to verify; refusing" % label)
+                ust = os.stat(up, dir_fd=base)
+                rel = up
+            else:
+                try:
+                    ust = os.fstat(nfd)
+                except BaseException:
+                    os.close(nfd)
+                    raise
+                if own:
+                    os.close(base)
+                base, own, rel = nfd, True, ""
+            if (ust.st_dev, ust.st_ino) == (st.st_dev, st.st_ino):
+                return None
+            st = ust
+    except OSError as e:
+        raise ValueError("cannot walk the parent chain of %s (%s); refusing" % (label, e))
+    finally:
+        if own:
+            os.close(base)
+    raise ValueError("parent chain of %s too deep to verify; refusing" % label)
+
+
+def _first_existing(d):
     while True:
         try:
-            st = os.stat(d)
-            if (st.st_dev, st.st_ino) in ids:
-                return d
-        except OSError:
-            pass
-        up = os.path.dirname(d)
-        if up == d:
-            return None
-        d = up
+            os.stat(d)
+            return d
+        except FileNotFoundError:
+            up = os.path.dirname(d)
+            if up == d:
+                raise ValueError("no existing ancestor for %s; refusing" % d)
+            d = up
+        except OSError as e:
+            raise ValueError("cannot stat %s (%s); refusing" % (d, e))
 
 
-def write_cache_file(path, text, protected):
+def _open_parent(parent, ids):
+    """Open `parent` for writing, creating missing components, entirely relative to a
+    descriptor: open the nearest existing ancestor, run the identity walk from that
+    descriptor, then mkdir/open each missing component with dir_fd (no path-based makedirs,
+    O_NOFOLLOW on what we create). Returns the final descriptor; the caller closes it."""
+    anc = _first_existing(parent)
+    fd = os.open(anc, _DIRFLAGS)
+    try:
+        hit = _walk_fd(fd, ids, anc)
+        if hit:
+            raise ValueError("refusing a cache path inside repository %s" % hit)
+        rest = os.path.relpath(parent, anc)
+        for name in ([] if rest == "." else rest.split(os.sep)):
+            try:
+                os.mkdir(name, 0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            nfd = os.open(name, _DIRFLAGS | getattr(os, "O_NOFOLLOW", 0), dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def write_cache_file(path, text, mains, linked=()):
     """The one write this script performs. Raises ValueError (refused) or OSError (failed);
-    in both cases nothing is left at `path` and no temp file survives."""
+    in both cases nothing is left at `path` and no temp file survives.
+
+    `mains` are main repo roots (a failure to resolve one's git dir refuses the write);
+    `linked` are linked worktree roots (an unresolvable one is skipped, see _admin_dirs).
+
+    DEFENCE IN DEPTH, two independent layers keep the cache out of every repository
+    (the lexical layer already refuses the known routes; the second backs it up):
+      1. lexical: realpath(parent) must not sit under any protected repo's realpath;
+      2. identity: no directory on the physical parent chain may be the same
+         (st_dev, st_ino) as a protected root or as its git admin directory
+         (`rev-parse --absolute-git-dir`: main .git, .git/worktrees/<name>, or an
+         external separate git dir).
+    The identity walk is done through file descriptors, and the temp file is created and
+    renamed relative to the SAME parent descriptor, so the directory that was checked is
+    the directory that is written to even if a symlink in the spelled path is swapped
+    afterwards.
+
+    Limitations: a bind-mounted repository SUBDIRECTORY (Linux, needs mount privileges)
+    has its own identity and a physical parent chain that leaves the repo, so it escapes
+    both layers. A concurrent process of the same user that RENAMES the already-checked
+    directory into a repository after the check cannot be prevented from userspace."""
+    path = os.path.abspath(path)
+    protected = list(mains) + list(linked)
     if os.path.islink(path):
         raise ValueError("refusing a symlink cache path")
     if os.path.isdir(path):
         raise ValueError("refusing a directory as the cache path")
-    parent = os.path.dirname(path)
-    resolved = os.path.join(os.path.realpath(parent), os.path.basename(path))
+    parent, base = os.path.dirname(path), os.path.basename(path)
+    resolved = os.path.join(os.path.realpath(parent), base)
     for repo in protected:
         if _inside(resolved, os.path.realpath(repo)):
             raise ValueError("refusing a cache path inside repository %s" % repo)
-    hit = _ancestor_in(path, _ids(list(protected) + [os.path.join(r, ".git") for r in protected]))
-    if hit:
-        raise ValueError("refusing a cache path inside repository %s" % hit)
-    os.makedirs(parent, mode=0o700, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".worktree-audit-", suffix=".tmp")
+    ids = _ids(protected + [os.path.join(r, ".git") for r in protected]
+               + _admin_dirs(mains, linked))
+    pfd = _open_parent(parent, ids)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
+        tmp = ".worktree-audit-%s.tmp" % secrets.token_hex(8)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=pfd)
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, base, src_dir_fd=pfd, dst_dir_fd=pfd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=pfd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(pfd)
 
 
 def main(argv=None):
@@ -818,14 +951,32 @@ def main(argv=None):
                        "leftovers": len(leftovers), "unverified": len(unverified),
                        "free_on_filesystem": free}}
     if a.write_cache is not None:
-        protected = [m for m, _ in repos] + [e["path"] for _, ents in repos for e in ents[1:]]
+        # `worktree list` names a separate-git-dir repo's ADMIN dir as its main worktree, so the
+        # real working tree is added from `rev-parse --show-toplevel` of every path we were
+        # given or found. A toplevel git cannot name (e.g. a bare repo) adds nothing.
+        def toplevel(p):
+            try:
+                raw, _ = git(["rev-parse", "--show-toplevel"], p)
+            except GitError:
+                return None
+            return os.path.realpath(os.fsdecode(_chomp(raw))) or None
+        mains = [m for m, _ in repos]
+        linked = [e["path"] for _, ents in repos for e in ents[1:]]
+        for p in repo_paths + [m for m, _ in repos]:
+            t = toplevel(p)
+            if t and t not in mains:
+                mains.append(t)
+        for p in linked_paths:
+            t = toplevel(p)
+            if t and t not in mains and t not in linked:
+                linked.append(t)
         cache_path = default_cache_path() if a.write_cache is CACHE_DEFAULT else os.path.abspath(
             os.path.expanduser(a.write_cache))
         # The cache is part of the report it stores: a failed write must show up in
         # `unverified` (and the summary count) before anything is printed or stored.
         try:
             text = report_text(rep)
-            write_cache_file(cache_path, text, protected)
+            write_cache_file(cache_path, text, mains, linked)
         except (OSError, ValueError) as e:
             unverified.append({"path": cache_path, "reason": "cache not written: %s" % e})
             rep["summary"]["unverified"] = len(unverified)
