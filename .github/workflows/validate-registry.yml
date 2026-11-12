@@ -506,6 +506,13 @@ jobs:
         # an unfetchable origin refuses rather than reporting agreement.
         run: ./assets/scripts/fleet-check.test.sh
 
+      - name: worktree-audit regression tests
+        # Pins the read-only worktree classifier (#432): every KEEP reason and class
+        # A/B has a fixture, the ignored-file and name-anywhere-allowlist gaps are
+        # regressions, a run leaves fixtures byte-identical (.git/index included), an
+        # unreadable root exits 2, and a harness that ran too few cases fails.
+        run: ./assets/scripts/worktree-audit.test.sh
+
       - name: genesis standard self-check (rule<->probe parity)
         # Principle 2 of the Fleet Genesis Standard: every rule has a probe in
         # genesis-verify.py or is classed advisory, so a rule nobody can check never
