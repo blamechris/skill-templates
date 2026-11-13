@@ -4,7 +4,7 @@
 # Canonical copy (skill-templates). Bootstrap: cp assets/scripts/usage-benchmark-row.py ~/.claude/scripts/
 
 Usage:
-  python3 ~/.claude/scripts/usage-benchmark-row.py [session-id-or-jsonl-path] [--tier TIER]
+  python3 ~/.claude/scripts/usage-benchmark-row.py [--tier TIER] [--] [session-id-or-jsonl-path]
   python3 ~/.claude/scripts/usage-benchmark-row.py --figures
 
 With no session argument, targets $CLAUDE_CODE_SESSION_ID's transcript — the
@@ -148,11 +148,18 @@ def parse_args(args):
     and exits here, before any transcript is looked for."""
     target = tier = None
     figures = False
+    options_ended = False       # after a bare `--` every argument is the session argument (#474)
     i = 0
     while i < len(args):
         a = args[i]
         i += 1
-        if a == "--figures":
+        if not options_ended and a == "--":
+            options_ended = True
+        elif options_ended:
+            if target is not None:
+                die(f"more than one session argument ({target!r} and {a!r}) — pass one id or path.")
+            target = a
+        elif a == "--figures":
             if figures:
                 die("--figures given twice — it takes no other argument.")
             figures = True
@@ -172,7 +179,7 @@ def parse_args(args):
             tier = value
         elif a.startswith("-"):
             die(f"unknown option {a!r} — usage: usage-benchmark-row.py "
-                "[session-id-or-jsonl-path] [--tier TIER] | --figures.")
+                "[--tier TIER] [--] [session-id-or-jsonl-path] | --figures.")
         elif target is not None:
             die(f"more than one session argument ({target!r} and {a!r}) — pass one id or path.")
         else:
@@ -484,12 +491,18 @@ lower, upper = parent_cost + child_cost, parent_upper + child_upper
 cost_note = f"${cents(lower)}–{cents(upper)}"
 if unpriced:
     cost_note += f" ({unpriced} unpriced)"
+# A response Responses drops as an ambiguous identity is in neither bound either (#474).
+ambiguous = selected.ambiguous_identities
+if ambiguous:
+    cost_note += f" ({ambiguous} ambiguous excluded)"
 if tier:
     figure = TIER_FIGURES[tier]
     ratio = cents(lower / figure)             # two places, half up
     # Decided on the unrounded values, and strictly: exactly 1.5 times is not over.
     over = lower > OVER_FACTOR * figure
     ratio_note = ("≥" if unpriced else "") + f"{fmt(ratio)}x"
+    if ambiguous and not unpriced:
+        ratio_note = "≥" + ratio_note       # excluded ambiguous responses make it a subtotal too
     if over:
         ratio_note += f", over {fmt(OVER_FACTOR)}x"
     cost_note += f" vs ${fmt(figure)} {tier} ({ratio_note})"
@@ -497,8 +510,17 @@ dur = (datetime.fromisoformat(t1.replace("Z", "+00:00"))
        - datetime.fromisoformat(t0.replace("Z", "+00:00"))).total_seconds() / 3600
 sid = os.path.basename(path)[:8]
 date = t0[5:10]
-print(f"| {date} | {sid} | {dur:.1f} | {n} | {eff/1e6:.1f} | {out/1e3:.0f} | {eff/n/1e3:.1f} "
-      f"| <workload note> · subagents: {sub_note} · work: {work_note} · cost: {cost_note} |")
+row = (f"| {date} | {sid} | {dur:.1f} | {n} | {eff/1e6:.1f} | {out/1e3:.0f} | {eff/n/1e3:.1f} "
+       f"| <workload note> · subagents: {sub_note} · work: {work_note} · cost: {cost_note} |")
+# The row carries `–` and `≥`, which a Latin-1 stdout cannot encode. REFUSE before printing
+# rather than die in a traceback with no row; the characters are never substituted (#474).
+_enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+try:
+    row.encode(_enc)
+except UnicodeEncodeError:
+    die(f"stdout encoding {_enc!r} cannot represent the row (it contains '–' and possibly "
+        "'≥') — rerun with a UTF-8 stdout, e.g. PYTHONIOENCODING=utf-8.")
+print(row)
 print(f"\nresolved {sid} via {how}", file=sys.stderr)
 if split:
     # stderr only: End step 2 appends stdout to a shared table verbatim.
@@ -512,12 +534,18 @@ print(f"  selected responses: parent {n}, children {child_responses}; "
       f"child transcript files {sub_count}", file=sys.stderr)
 print(f"  model-priced USD ({RATE_CARD_VERSION}): parent {parent_cost}–{parent_upper}; "
       f"children {child_cost}–{child_upper}; all-in {parent_cost + child_cost}–"
-      f"{parent_upper + child_upper}; {unpriced} unpriced responses", file=sys.stderr)
+      f"{parent_upper + child_upper}; {unpriced} unpriced responses"
+      + (f"; {ambiguous} ambiguous-identity responses excluded" if ambiguous else ""),
+      file=sys.stderr)
 if tier:
     line = (f"  reference: {tier} figure ${fmt(figure)}; all-in lower bound ${cents(lower)}; "
             f"ratio {'≥' if unpriced else ''}{fmt(ratio)}x")
     if unpriced:
         line += f" ({unpriced} unpriced, so the lower bound is a subtotal)"
+    if ambiguous:
+        line += f" ({ambiguous} ambiguous excluded, so the lower bound is a subtotal)"
+        if not unpriced:
+            line = line.replace("ratio ", "ratio ≥", 1)
     if over:
         line += (f". This package passed {fmt(OVER_FACTOR)} times its reference figure: "
                  "the workload note must say why.")
