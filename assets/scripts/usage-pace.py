@@ -1635,16 +1635,48 @@ def fable_reading(rows, now):
 
 
 def suppress_incomplete_cost_guidance(p):
-    """Keep direct meter facts, but remove forecasts based on incomplete dollars."""
+    """Keep direct meter facts, but remove forecasts based on incomplete dollars.
+
+    Geography-unknown responses are NOT a gate here (#393): an unknown route is a priced
+    bracket (standard rate to 1.1x), where the three gated causes leave dollars out or
+    open-ended. `apply_geo_bracket` carries the upper bound instead.
+    """
     p["cost_guidance_unavailable"] = bool(
         p["unpriced_responses"] or p["unidentified_responses"] or
-        p["geo_unknown_responses"] or p["cache_ttl_unknown_tokens"])
+        p["cache_ttl_unknown_tokens"])
     if p["cost_guidance_unavailable"]:
         for field in ("rate", "usd_left", "hours_to_wall", "landing",
                       "need_per_hour", "pct_now", "burn_1h", "burn_3h"):
             p[field] = None
             if field + "_hi" in p:
                 p[field + "_hi"] = None
+    return p
+
+
+GEO_UPPER = 1.1     # the US-route multiplier usage_accounting prices the upper bound with
+
+
+def apply_geo_bracket(p):
+    """Carry the 1.0x-1.1x geography bracket on every dollar figure that has an upper end.
+
+    Figures are computed on the lower bound (standard rate). Only the dollar-valued figures
+    get an upper end here. Hours to the wall, the landing and pct_now are ratios of dollars
+    to dollars: when every response is geography-unknown the 1.1x multiplier is uniform and
+    they do not move, but in a week where only some responses are, they can shift by up to
+    about 10% across the range, and they are reported on the lower bound. The 1.1x end is a
+    bound, reached only if every geography-unknown response was in fact routed at the US
+    rate.
+    """
+    p["geo_bracket"] = None
+    if not p.get("geo_unknown_responses") or p.get("cost_guidance_unavailable"):
+        return p
+    p["geo_bracket"] = GEO_UPPER
+    for field in ("spend", "fable", "rate", "usd_left", "need_per_hour"):
+        base = p.get(field + "_hi")
+        if base is None:
+            base = p.get(field)
+        if base is not None:
+            p[field + "_hi"] = max(base, p[field] or 0.0) * GEO_UPPER
     return p
 
 
@@ -1720,12 +1752,21 @@ def pace(now=None, force=False, prefer="live"):
                     p["geo_unknown_responses"] or p["cache_ttl_unknown_tokens"]):
         # No observed percentage is available. Do not fit or persist an anchor
         # from a priced subtotal, then present that estimate as meter capacity.
+        # Geography stays a condition HERE (#393 leaves it): with a live sample it is a
+        # bracket, but a cap fitted from a lower-bound subtotal would be a capacity
+        # claim with no meter reading behind it.
         p.update({"source": "unavailable", "sd": None, "fh": None,
                   "sample_at": None, "sample_age_min": None, "stale": False,
                   "pct": None, "spend": tot.get("all", 0.0),
                   "fable": tot.get("fable", 0.0),
                   "live_rejected": rejected})
         suppress_incomplete_cost_guidance(p)
+        p["cost_guidance_unavailable"] = True
+        for field in ("rate", "usd_left", "hours_to_wall", "landing", "need_per_hour",
+                      "pct_now", "burn_1h", "burn_3h"):
+            p[field] = None
+            if field + "_hi" in p:
+                p[field + "_hi"] = None
         p["wall_at"] = None
         p["warnings"] = []
         return p
@@ -1808,6 +1849,7 @@ def pace(now=None, force=False, prefer="live"):
             p[k + "_hi"] = v
     p["live_rejected"] = rejected
     suppress_incomplete_cost_guidance(p)
+    apply_geo_bracket(p)
     w = p.get("hours_to_wall")
     p["wall_at"] = (f"{(now + timedelta(hours=w)).astimezone(PT):%a %H:%M} PT"
                     if w is not None and math.isfinite(w) else None)
@@ -1857,9 +1899,11 @@ def warnings_for(p):
     hour of a week anyway", which is a different proposition, true of neither gate, and
     would have made the absent gate look accidental rather than decided.
     """
+    # Geography-unknown responses do not gate (#393): the figures are evaluated on the lower
+    # bound of a 1.0x-1.1x bracket, as the docstring above says of every range; a partly
+    # unknown week can move the wall and landing by up to ~10% across it.
     if (p.get("cost_guidance_unavailable") or p.get("unpriced_responses") or
-            p.get("unidentified_responses") or p.get("geo_unknown_responses") or
-            p.get("cache_ttl_unknown_tokens")):
+            p.get("unidentified_responses") or p.get("cache_ttl_unknown_tokens")):
         return []
     out = []
     h, w = p.get("hours_to_reset"), p.get("hours_to_wall")
@@ -2008,6 +2052,10 @@ def fmt(p, margin=None):
     if p.get("cache_ttl_unknown_tokens"):
         line += (" | cache-write TTL unknown for %,.0f tokens; dollar figures use "
                  "the 5m lower bound" % p["cache_ttl_unknown_tokens"])
+    if p.get("geo_unknown_responses"):
+        line += (" | %s geography unknown responses; dollar figures are a 1.0x-1.1x "
+                 "range (standard rate to the 1.1x US rate)"
+                 % format(int(p["geo_unknown_responses"]), ","))
     if p.get("unpriced_responses"):
         line += " | %d unpriced responses omitted from dollars" % p["unpriced_responses"]
     if p.get("unidentified_responses"):

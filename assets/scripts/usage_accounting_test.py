@@ -374,9 +374,13 @@ class UsageAccountingTests(unittest.TestCase):
             self.assertFalse(invalid["tokens_cover_selected_responses"])
 
     def test_incomplete_cost_coverage_suppresses_pace_guidance(self):
+        # Pins WHICH conditions gate: unpriced, unidentified and unknown cache-write TTL
+        # withhold every cost-derived figure. Geography-unknown does NOT (#393): it is a
+        # 1.0x-1.1x priced bracket, so it is asserted separately below.
         pace = load("usage_pace_incomplete", HERE / "usage-pace.py")
-        for cause in ("unpriced_responses", "unidentified_responses",
-                      "geo_unknown_responses", "cache_ttl_unknown_tokens"):
+        gating = ("unpriced_responses", "unidentified_responses",
+                  "cache_ttl_unknown_tokens")
+        for cause in gating + ("geo_unknown_responses",):
             p = {"source": "live", "sd": 19, "fh": 0,
                  "sample_at": "2026-10-01T17:00:00Z", "sample_age_min": 5,
                  "spend": 0.61, "hours_to_reset": 3, "stale": False,
@@ -390,6 +394,16 @@ class UsageAccountingTests(unittest.TestCase):
                  "unpriced_responses": 0, "unidentified_responses": 0,
                  "geo_unknown_responses": 0, "cache_ttl_unknown_tokens": 0}
             p[cause] = 6
+            if cause not in gating:
+                pace.suppress_incomplete_cost_guidance(p)
+                self.assertFalse(p["cost_guidance_unavailable"], cause)
+                for field in ("rate", "usd_left", "hours_to_wall", "landing",
+                              "need_per_hour", "pct_now", "burn_1h", "burn_3h"):
+                    self.assertIsNotNone(p[field], (cause, field))
+                self.assertIn(
+                    "lockout",
+                    [k for k, _ in pace.warnings_for(dict(p, hours_to_reset=10))])
+                continue
             self.assertEqual(pace.warnings_for(p), [], cause)
             pace.suppress_incomplete_cost_guidance(p)
             self.assertTrue(p["cost_guidance_unavailable"])
@@ -415,6 +429,93 @@ class UsageAccountingTests(unittest.TestCase):
         self.assertIsNone(p["need_per_hour"])
         self.assertEqual(p["warnings"], [])
         self.assertIn("no direct meter sample", pace.fmt(p))
+
+    NOW = "2026-10-01T17:00:00+00:00"
+
+    def _pace_week(self, **gaps):
+        """pace() over a stubbed week: meter at 50% five minutes ago, $10/pt, $100/h burn,
+        so the wall is ~5h away with ~150h to the reset."""
+        pace = load("usage_pace_geo", HERE / "usage-pace.py")
+        now = pace.datetime.fromisoformat(self.NOW)
+        now_ms = now.timestamp() * 1000
+        open_ms = pace.week_bounds(pace.week_close(now))[0].timestamp() * 1000
+        bk = {}
+        per_min = 500.0 / ((now_ms - 3600_000 - open_ms) / 60000.0 - 1)
+        # $500 up to an hour ago, then $100 in the last hour
+        m = pace.bucket_of(open_ms) + 1
+        while m <= pace.bucket_of(now_ms - 3600_000):
+            bk[m] = [per_min, 0.0]
+            m += 1
+        while m <= pace.bucket_of(now_ms):
+            bk[m] = [100.0 / 60.0, 0.0]
+            m += 1
+        tot = {"all": 0.0, "unpriced_responses": 0, "unidentified_responses": 0,
+               "cache_ttl_unknown_tokens": 0.0, "geo_unknown_responses": 0}
+        tot["all"] = sum(v[0] for v in bk.values())
+        tot.update(gaps)
+        pace.scan_detail = lambda week, force=False: (dict(tot), bk)
+        pace.read_readings = lambda: []
+        pace._plan_raw = lambda: [(now_ms - 300_000, 50.0, 0.0)]
+        pace.meter_offset = lambda *a, **k: self.fail("live path must not use meter_offset")
+        return pace, now
+
+    def test_geography_unknown_only_keeps_guidance_as_a_range(self):
+        pace, now = self._pace_week(geo_unknown_responses=9270)
+        p = pace.pace(now=now)
+        self.assertFalse(p["cost_guidance_unavailable"])
+        for field in ("rate", "usd_left", "hours_to_wall", "landing",
+                      "need_per_hour", "burn_1h", "burn_3h"):
+            self.assertIsNotNone(p[field], field)
+        self.assertAlmostEqual(p["rate_hi"], p["rate"] * 1.1)
+        self.assertAlmostEqual(p["usd_left_hi"], p["usd_left"] * 1.1)
+        self.assertAlmostEqual(p["spend_hi"], p["spend"] * 1.1)
+        self.assertEqual([k for k, _ in pace.warnings_for(p)], ["lockout"])
+        line = pace.fmt(p)
+        self.assertRegex(line, r"\$\d+\.\d-\$\d+\.\d/pt")
+        self.assertIn("→ lands", line)
+        self.assertIn("need $", line)
+        self.assertIn("burn $", line)
+        self.assertIn("9,270 geography unknown responses", line)
+        self.assertIn("1.0x-1.1x", line)
+        self.assertNotIn("unavailable", line)
+        # With no geography gap the line carries no bracket at all.
+        pace, now = self._pace_week()
+        clean = pace.pace(now=now)
+        self.assertNotIn("1.0x-1.1x", pace.fmt(clean))
+        self.assertEqual(clean["rate_hi"], clean["rate"])
+
+    def test_other_gaps_still_withhold_guidance_beside_geography(self):
+        for gap in ({"unpriced_responses": 2}, {"unidentified_responses": 2},
+                    {"cache_ttl_unknown_tokens": 500.0}):
+            pace, now = self._pace_week(geo_unknown_responses=9270, **gap)
+            p = pace.pace(now=now)
+            self.assertTrue(p["cost_guidance_unavailable"], gap)
+            self.assertIsNone(p["hours_to_wall"], gap)
+            self.assertIsNone(p["landing"], gap)
+            self.assertEqual(p["warnings"], [], gap)
+            self.assertIn("cost-derived burn, landing, wall and need unavailable",
+                          pace.fmt(p))
+
+    def test_hook_raises_lockout_on_a_geography_unknown_week(self):
+        pace, now = self._pace_week(geo_unknown_responses=9270)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pace.HIST = root / "usage-history"
+            pace.STATE = pace.HIST / "pace-state.json"
+            transcript = root / "t.jsonl"
+            transcript.write_text(json.dumps(
+                {"type": "assistant", "message": {"model": "claude-fable-5"}}) + "\n")
+            args = mock.Mock(every=1)
+            out = io.StringIO()
+            payload = json.dumps({"session_id": "s1", "transcript_path": str(transcript)})
+            pace_orig = pace.pace
+            pace.pace = lambda *a, **k: pace_orig(now=now)
+            with mock.patch.object(sys, "stdin", io.StringIO(payload)), redirect_stdout(out):
+                self.assertEqual(pace.hook(args), 0)
+        text = out.getvalue()
+        self.assertIn("<usage-pace>", text)
+        self.assertIn("reach the wall", text)
+        self.assertIn("geography unknown responses", text)
 
     def test_continuation_checkpoints_use_latest_parent_and_child_snapshot(self):
         script = HERE / "usage-checkpoint.py"
