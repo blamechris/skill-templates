@@ -1430,6 +1430,16 @@ closer(900, moid(546))
 # 547: URL-form keyword, same repo counted, other repo ignored
 pr(547, [], "Fixes https://github.com/acme/widgets/issues/801\nFixes https://github.com/other/x/issues/802")
 closer(801, moid(547)); closer(802, moid(547))
+# 548-551: commits API answers 200 with an unexpected shape (#456). refs [12]
+# is the fallback; "Fixes #950" would be a confirmable candidate if the
+# message were (wrongly) read from the odd body, so it must NOT appear.
+for n, shape in ((548, {"commit": {}}),
+                 (549, {"commit": {"message": None}}),
+                 (550, {"commit": {"message": 42}}),
+                 (551, [])):
+    pr(n, [12], "Fixes #950", commit_fixture=False)
+    jfile(f"commit_{moid(n)}.json", shape)
+    closer(950, moid(n))
 PYEOF
 touch "$FAKE_GH_DIR/fail_closer_700"
 touch "$FAKE_GH_DIR/fail_commit_$(printf '546%.0s' $(seq 14) | cut -c1-40)"
@@ -1454,6 +1464,18 @@ py_check "I7 cap: overflow named in unknown[]" "any('pr_meta.closes' in u and '8
 run_split --repo "$REPO" --stdout 546
 py_check "I8 commits API fails -> closes falls back to closingIssuesReferences" "d['pr_meta']['closes'] == [12]"
 py_check "I8 commits API failure named in unknown[]" "any('pr_meta.closes' in u and 'merge commit' in u for u in d['unknown'])"
+run_split --repo "$REPO" --stdout 548
+py_check "I11 missing commit.message -> closes is closingIssuesReferences only" "d['pr_meta']['closes'] == [12]"
+py_check "I11 missing commit.message -> unexpected shape named in unknown[]" "any('pr_meta.closes' in u and 'unexpected commits API shape' in u and 'merge commit 548548548548' in u for u in d['unknown'])"
+run_split --repo "$REPO" --stdout 549
+py_check "I11 null commit.message -> closes is closingIssuesReferences only" "d['pr_meta']['closes'] == [12]"
+py_check "I11 null commit.message -> unexpected shape named in unknown[]" "any('pr_meta.closes' in u and 'unexpected commits API shape' in u and 'merge commit 549549549549' in u for u in d['unknown'])"
+run_split --repo "$REPO" --stdout 550
+py_check "I11 non-string commit.message -> closes is closingIssuesReferences only" "d['pr_meta']['closes'] == [12]"
+py_check "I11 non-string commit.message -> unexpected shape named in unknown[]" "any('pr_meta.closes' in u and 'unexpected commits API shape' in u and 'merge commit 550550550550' in u for u in d['unknown'])"
+run_split --repo "$REPO" --stdout 551
+py_check "I11 non-dict top level -> closes is closingIssuesReferences only" "d['pr_meta']['closes'] == [12]"
+py_check "I11 non-dict top level -> unexpected shape named in unknown[]" "any('pr_meta.closes' in u and 'unexpected commits API shape' in u and 'merge commit 551551551551' in u for u in d['unknown'])"
 run_split --repo "$REPO" --stdout 547
 py_check "I9 URL-form keyword: same repo counted, other repo ignored" "d['pr_meta']['closes'] == [801]"
 # I10: the fake pr-view mergeCommit is REAL-shaped (oid only); I1 passing
