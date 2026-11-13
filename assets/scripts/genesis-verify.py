@@ -545,7 +545,7 @@ def parse_flow(s, prefix=False):
     ValueError on anything it cannot read, so a caller can fall back to "unknown".
     `prefix=True` reads one node off the front of `s` and returns `(node, end)`, leaving the text
     after it to the caller (the path filters' trailing-comment rule, #459); there a plain scalar
-    containing whitespace + `#` is unreadable, since YAML ends a flow plain scalar at the comment
+    containing whitespace + `#`, or starting with `#`, is unreadable, since YAML ends a flow plain scalar at the comment
     and the node would then be unterminated -- never read as a different path."""
     pos = [0]
 
@@ -564,7 +564,9 @@ def parse_flow(s, prefix=False):
                 break
             pos[0] += 1
         token = s[start:pos[0]].strip()
-        if prefix and re.search(r"[ \t]#", token):
+        # A plain scalar cannot start with `#` (YAML reads a leading `#` after the separator as a
+        # comment), so `[ #a]` / `[a, #b]` are unterminated lists, never the path `#a`.
+        if prefix and (token.startswith("#") or re.search(r"[ \t]#", token)):
             raise ValueError("comment inside a flow scalar")
         return token
 
