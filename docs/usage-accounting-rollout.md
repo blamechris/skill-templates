@@ -43,7 +43,8 @@ cumulative aggregate with a narrower meter interval without checking that its
 run IDs and response time bounds belong to the work window. Checkpoint files
 contain response usage metadata and source hashes, never prompt or tool text. They do
 hold local file paths (`source_coverage`, `selected_responses[].source` and
-`session_project_dirs`); the `--aggregate-dir` output carries none of them. Store
+`session_project_dirs`); the `--aggregate-dir` output carries no paths (its `source_coverage` key holds
+byte counts and hashes only). Store
 checkpoint files with the same access controls as the transcript-derived ledgers.
 
 The scheduled trend LaunchAgent uses `~/.claude/scripts/usage-trend.py`; on this

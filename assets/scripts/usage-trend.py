@@ -34,17 +34,22 @@ reported as a lower/upper valuation, never silently called a 5m write.
 Partial periods (skill-templates#392): transcripts are pruned, so after a rate-card
 change a past period is repriced from whatever transcripts are left. A period whose scan
 read under 99.5% of the responses an earlier snapshot recorded for it is marked with `!`
-(console) or `(partial N%)` (vault), and every console view and the vault list the counts
-(read and on record); `--json` carries them per day. A week is bucketed on the fixed
+(console) or `(partial N%)` (vault). The threshold is a materiality tolerance, not a noise
+floor: a smaller shortfall is persisted but not marked. `--week`, the vault and `--json`
+show a shortfall under it (the vault and `--json` carry every one); the daily console does
+not list it, only marked days and days with nothing read. Every view that lists a period
+gives the counts (read and on record); `--json` carries them per day. A week is bucketed on the fixed
 US-Pacific reset boundary, so a shortfall there means pruned transcripts. A DAY is
 bucketed in this machine's local time: a snapshot taken in another timezone files the same
 responses under different days, which reads as a shortfall just as pruning does, so a
 marked day names both causes. See "partial periods" below.
 """
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 from datetime import datetime, timedelta
 from fractions import Fraction
@@ -210,9 +215,14 @@ def scan():
 # side of local midnight, which the old first-record dedupe and the current complete-record
 # rule file under different days, each loss matched by an equal gain on the next day.
 # Pruning measured larger: 8 responses (0.32% of a day) was real, as was 413 (1.39% of a
-# week). So the threshold sits between the two, and a shortfall under it is still
-# persisted and listed, just not marked. Not an absolute minimum: a tiny day missing
-# a few responses is genuinely partial.
+# week). So the threshold does NOT separate the two: at 99.5% it sits above both, and the
+# 8-response day is not marked. It is a materiality tolerance on how much of a period may
+# be missing before the period is called partial, not a noise floor. A shortfall under it
+# is still persisted. Where it shows: `--week`, the vault and `--json` list it (the console
+# lists it as "too small to mark" for weeks, and the vault and `--json` carry every one);
+# the daily console lists only the marked days and the days with nothing read, so an
+# unmarked day's shortfall appears there only as its persisted count. Not an absolute
+# minimum: a tiny day missing a few responses is genuinely partial.
 PARTIAL_BELOW = 0.995
 LIST_CAP = 10   # lines per listing in a console view; --json (and the vault table) carry all
 READ_NOTE = ('("read" counts priced and unpriced responses; the reqs column counts priced '
@@ -372,10 +382,36 @@ def day_json(r):
     return out
 
 
+def write_atomic(path, text):
+    """Write `text` to `path` through a temp file in the same dir and an os.replace, so a
+    reader (or a crash mid-write) sees the old file or the whole new one, never a truncated
+    one. The temp file is removed if anything fails. The file keeps the mode it had, or gets
+    the umask default a plain write would give it: mkstemp's 0600 must not leak through."""
+    try:
+        mode = path.stat().st_mode & 0o7777
+    except FileNotFoundError:
+        umask = os.umask(0)
+        os.umask(umask)
+        mode = 0o666 & ~umask
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def merge_own(fresh, own_file, earlier_file=None):
+    # Read unguarded on purpose: treating a corrupt own file as empty would overwrite it.
     hist = json.loads(own_file.read_text()) if own_file.exists() else {}
     merge_period_records(hist, fresh, read_records(earlier_file) if earlier_file else {})
-    own_file.write_text(json.dumps(dict(sorted(hist.items())), indent=1))
+    write_atomic(own_file, json.dumps(dict(sorted(hist.items())), indent=1))
     return hist
 
 
@@ -551,7 +587,7 @@ def merged_weekly(fresh, machine, write):
     earlier = read_records(HIST_DIR / f"weekly-{machine}.json")
     merge_period_records(own_hist, fresh, earlier)
     if write:
-        own_file.write_text(json.dumps(dict(sorted(own_hist.items())), indent=1))
+        write_atomic(own_file, json.dumps(dict(sorted(own_hist.items())), indent=1))
     # printed view = other machines' persisted snapshots + this machine's best record.
     # Own fresh data must never be compared against (or replace) the cross-machine SUM.
     merged = {}
@@ -693,7 +729,7 @@ def week_main():
             sys.exit("--weeks needs a number")
     write = "--write" in sys.argv
     earlier_card = has_earlier_card("weekly", machine)   # before the merge can replace any record
-    pre_v2_file = (HIST_DIR / f"weekly-{machine}.json").exists()
+    pre_v2_file = bool(read_records(HIST_DIR / f"weekly-{machine}.json"))   # empty or unreadable names nothing
     fresh = scan_weeks()
     hist = merged_weekly(fresh, machine, write)
     rows = week_rows(hist, n)
@@ -707,8 +743,9 @@ def week_main():
                   f"{r['cache_ttl_unknown_tokens']:,.0f} unknown-TTL tokens, "
                   f"{r['unpriced_responses']:,.0f} unpriced responses, "
                   f"{r['geo_unknown_responses']:,.0f} geography-unknown responses"
-                  + (f"; partial: the scan read {read_pct_label(r['read'], r['on_record'])} of the "
-                     f"{r['on_record']:,} requests on record" if r["partial"] else ""))
+                  + (f"; partial: the scan read {read_pct_label(r['read'], r['on_record'])} "
+                     f"({r['read']:,} of {r['on_record']:,}) of the requests on record"
+                     if r["partial"] else ""))
         else:
             print(f"week closing {now_close}: no activity recorded yet")
         return

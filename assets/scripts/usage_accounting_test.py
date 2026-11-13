@@ -1047,14 +1047,27 @@ class SessionFixture(unittest.TestCase):
         self.addCleanup(patch.stop)
 
 
+def chmod_restricts(path):
+    """After a chmod: does reading `path` now fail? Root, and filesystems that ignore mode
+    bits, read anything, so the answer is probed rather than assumed from the uid."""
+    try:
+        if path.is_dir():
+            os.listdir(path)
+        else:
+            path.open("rb").close()
+    except OSError:
+        return True
+    return False
+
+
 def unreadable(test, path):
-    """chmod `path` to 0 for the test, restoring it so the temporary tree can be removed."""
+    """chmod `path` to 0 for the test, restoring it so the temporary tree can be removed.
+    Skips the test, explicitly, where the chmod did not restrict the reader."""
     mode = path.stat().st_mode & 0o777
     path.chmod(0)
     test.addCleanup(path.chmod, mode)
-
-
-needs_non_root = unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any file")
+    if not chmod_restricts(path):
+        test.skipTest("chmod(0) does not restrict reading here (root, or a filesystem that ignores modes)")
 
 
 class ScanFixture(SessionFixture):
@@ -1264,6 +1277,44 @@ class SessionScopedCheckpointTests(ScanFixture):
                          (len(raw), hashlib.sha256(raw).hexdigest()))
 
 
+    def test_a_valid_record_with_a_stray_bad_byte_in_a_string_is_counted_not_skipped(self):
+        # The line is valid JSON once the byte is replaced, so the replacement decode counts
+        # the response; a `continue` in its place would drop it (and disagree with the row).
+        main = self.projects / "-demo-new" / (SPLIT + ".jsonl")
+        write_records(main, [priced_parent("p1")])
+        child = main.with_suffix("") / "subagents" / "agent.jsonl"
+        child.parent.mkdir(parents=True)
+        record = dict(priced_child("c2"), note="before-MARK-after")
+        stray = (json.dumps(priced_child("c1")) + "\n").encode() + \
+            (json.dumps(record) + "\n").encode().replace(b"MARK", b"\xff")
+        with self.assertRaises(UnicodeDecodeError):
+            json.loads(stray.splitlines()[1])          # the fixture really needs the fallback
+        child.write_bytes(stray)
+        doc, _ = self.capture(main)
+        self.assertEqual(doc["children"]["responses"], 2)
+        self.assertEqual(doc["source_coverage"][1]["sha256"], hashlib.sha256(stray).hexdigest())
+        row = self.run_row(main)
+        self.assertEqual(row.returncode, 0, row.stderr)
+        self.assertEqual(self.checkpoint_figures(doc), self.row_figures(row))
+
+    def test_session_project_dirs_holds_the_realpath_of_a_symlinked_transcript_dir(self):
+        target = self.projects / "-demo-target"
+        target.mkdir()
+        link = self.projects / "-demo-link"
+        os.symlink(target, link)
+        main = link / (SPLIT + ".jsonl")
+        write_records(main, [priced_parent("p1")])
+        doc, _ = self.capture(main)                       # one dir: no split
+        self.assertEqual(doc["session_project_dirs"], [os.path.realpath(target)])
+        self.assertEqual(doc["quality"]["split_project_dirs"], 0)
+        # a child in another dir splits it; the link's own spelling must not appear
+        write_records(self.projects / "-demo-old" / SPLIT / "subagents" / "agent.jsonl", [priced_child("c1")])
+        doc, _ = self.capture(main)
+        self.assertEqual(doc["session_project_dirs"],
+                         sorted([os.path.realpath(target), os.path.realpath(self.projects / "-demo-old")]))
+        self.assertEqual(doc["quality"]["split_project_dirs"], 2)
+
+
 class ChildScanAgreementTests(ScanFixture):
     """usage-checkpoint.py and usage-benchmark-row.py read children through one walker, so
     for the same session they read the same files and price the same children, or both
@@ -1364,10 +1415,10 @@ class ChildScanAgreementTests(ScanFixture):
                  ("a symlinked file counts", self.build_symlinked_file, 2, 2),
                  ("a bad byte is not a refusal", self.build_bad_byte, 1, 2),
                  ("a line cut inside a multi-byte character", self.build_cut_tail, 1, 1)]
-        refuse = [("a dangling symlink", self.build_dangling_symlink, False),
-                  ("an unreadable subdirectory", self.build_unreadable_subdir, True),
-                  ("an unreadable root", self.build_unreadable_root, True),
-                  ("an unreadable root in the old dir", self.build_unreadable_old_root, True)]
+        refuse = [("a dangling symlink", self.build_dangling_symlink),
+                  ("an unreadable subdirectory", self.build_unreadable_subdir),
+                  ("an unreadable root", self.build_unreadable_root),
+                  ("an unreadable root in the old dir", self.build_unreadable_old_root)]
         for index, (name, build, files, children) in enumerate(agree):
             with self.subTest(name):
                 main = build(self.sid(index))
@@ -1376,10 +1427,8 @@ class ChildScanAgreementTests(ScanFixture):
                 figures = self.checkpoint_figures(json.loads(cp.stdout))
                 self.assertEqual(figures, self.row_figures(row))
                 self.assertEqual((figures["files"], figures["children"]), (files, children))
-        for index, (name, build, needs_chmod) in enumerate(refuse, len(agree)):
-            if needs_chmod and hasattr(os, "geteuid") and os.geteuid() == 0:
-                continue                       # root reads any file
-            with self.subTest(name):
+        for index, (name, build) in enumerate(refuse, len(agree)):
+            with self.subTest(name):   # a builder that chmods skips its own subtest where chmod is inert
                 main = build(self.sid(index))
                 cp, row = self.run_checkpoint("--session", str(main)), self.run_row(main)
                 self.assertEqual((cp.returncode, cp.stdout), (1, ""))
@@ -1423,7 +1472,6 @@ class SessionChildFilesTests(SessionFixture):
         files, _ = usage_accounting.session_child_files([str(self.root / "root")])
         self.assertEqual([Path(f).name for f in files], ["dangling.jsonl", "real.jsonl"])
 
-    @needs_non_root
     def test_an_unreadable_directory_raises_instead_of_undercounting(self):
         self.tree("root/real.jsonl", "root/locked/hidden.jsonl")
         unreadable(self, self.root / "root" / "locked")
@@ -1720,6 +1768,61 @@ class TrendPartialPeriodTests(SessionFixture):
         for word in ("partial", "not rescanned", "on record", "nothing read", "before", "!",
                      "requests_not_rescanned", "transcripts_left", "requests_read", RATE_CARD_VERSION):
             self.assertNotIn(word, text)
+        self.assertNotIn(self.trend.READ_NOTE, text)    # the note itself, not a keyword list
+
+    def test_the_printer_says_nothing_unless_there_is_a_footer_or_something_to_list(self):
+        def printed(footer, lists):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.trend.print_shortfall_lines(footer, lists)
+            return out.getvalue()
+        self.assertEqual(printed(None, []), "")
+        self.assertEqual(printed(None, [("h", [], None)]), "")
+        self.assertEqual(printed(None, [("h", [], (0, "2026-01-01", ""))]), "")
+        self.assertEqual(printed("footer", []), self.trend.READ_NOTE + "\nfooter\n")
+
+    def test_a_list_with_no_items_but_an_earlier_count_still_prints_that_count(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.trend.print_shortfall_lines(None, [("heading:", [], (3, "2026-01-01", " (--all lists them)"))])
+        self.assertEqual(out.getvalue().splitlines(),
+                         [self.trend.READ_NOTE, "heading:", "  3 more before 2026-01-01 (--all lists them)"])
+
+    def test_a_list_is_cut_at_exactly_ten_and_only_then_says_more(self):
+        def lines(count):
+            out = io.StringIO()
+            items = [("p%02d" % i, "t", (i, "p")) for i in range(count)]
+            with redirect_stdout(out):
+                self.trend.print_shortfall_lines("f", [("h:", items, None)])
+            return out.getvalue().splitlines()[3:]
+        self.assertEqual(len(lines(10)), 10)
+        self.assertFalse(any("more" in line for line in lines(10)))
+        self.assertEqual(lines(11)[-1], "  ... and 1 more")
+        self.assertEqual(len(lines(11)), 11)
+
+    def test_the_default_daily_view_counts_unread_days_before_the_shown_span(self):
+        stamps = ["2026-07-%02dT12:00:00Z" % d for d in range(1, 32)]     # 31 days, 30 shown
+        for i, ts in enumerate(stamps):
+            self.transcript("d%d" % i, 3, ts)
+        self.earlier("daily", {"2026-06-01": 50})                          # no transcripts left
+        out = self.daily()
+        self.assertIn("  1 more before %s (--all lists them)" % self.local_day(stamps[1]), out)
+        self.assertEqual(self.block(out, "recorded days with nothing read (no row: no dollars on this card):"),
+                         ["  1 more before %s (--all lists them)" % self.local_day(stamps[1])])
+        self.assertIn("  2026-06-01: 50 requests on record, nothing read",
+                      self.daily("--all"))
+
+    def test_a_period_with_exactly_one_response_read_is_partial_with_a_row_and_not_unread(self):
+        self.transcript("s1", 1)
+        self.earlier("weekly", {self.WEEK: 100})
+        out = self.week("--write")
+        self.assertTrue(self.row(out, self.WEEK).startswith(self.WEEK + " !"))
+        self.assertIn(self.WEEK + " 1.0% (1 of 100)", self.footer(out))
+        self.assertNotIn("weeks with nothing read", out)
+        self.assertEqual(self.persisted("weekly")[self.WEEK]["requests_not_rescanned"], 99)
+        self.assertFalse(self.trend.is_unread({"requests": 1, "requests_not_rescanned": 99}))
+        self.assertTrue(self.trend.period_coverage({"requests": 1, "requests_not_rescanned": 99})["partial"])
+        self.assertFalse(self.trend.period_coverage({"requests": 1})["partial"])
 
     # ---- the threshold
 
@@ -2008,6 +2111,19 @@ class TrendPartialPeriodTests(SessionFixture):
         self.assertIn("- 2026-08-05: not rescanned: 100 requests on record", self.vault())
         self.assertNoOldDollars(out + self.vault() + json.dumps(saved[self.WEEK]))
 
+    def test_a_v2_record_under_another_card_with_no_mark_still_hands_its_count_on(self):
+        # the shape written before #394: no `requests_not_rescanned` at all, or a zero one
+        for label, extra in (("absent", {}), ("zero", {"requests_not_rescanned": 0})):
+            with self.subTest(label):
+                self.v2_file("weekly", "test", {self.WEEK: {"rate_card": "older-card", "requests": 100,
+                                                            **extra}})
+                shutil.rmtree(self.trend.ROOT, ignore_errors=True)
+                self.transcript("s1", 40)
+                self.week("--write")
+                saved = self.persisted("weekly")[self.WEEK]
+                self.assertEqual((saved["rate_card"], saved["requests"]), (RATE_CARD_VERSION, 40))
+                self.assertEqual(saved["requests_not_rescanned"], 60)
+
     def test_machines_sum_their_shortfalls_and_never_a_high_water_mark(self):
         self.transcript("s1", 100)
         self.earlier("weekly", {self.WEEK: 150})            # this machine: read 100 of 150
@@ -2102,6 +2218,18 @@ class TrendPartialPeriodTests(SessionFixture):
         line = next(l for l in self.vault().splitlines() if l.startswith("Priced under rate card"))
         self.assertIn("remain in weekly-test.json and are not comparable", line)
 
+    def test_the_rate_card_line_does_not_name_a_weekly_file_that_is_empty(self):
+        self.transcript("s1", 40)
+        self.v2_file("weekly", "test", {self.WEEK: {"rate_card": "older-card", "requests": 40}})
+        for label, content in (("empty object", "{}"), ("zero bytes", ""), ("corrupt", "not json")):
+            with self.subTest(label):
+                (self.hist / "weekly-test.json").write_text(content)
+                self.v2_file("weekly", "test", {self.WEEK: {"rate_card": "older-card", "requests": 40}})
+                self.week("--write")
+                line = next(l for l in self.vault().splitlines() if l.startswith("Priced under rate card"))
+                self.assertNotIn("weekly-test.json", line)
+                self.assertIn("no longer on disk", line)
+
     def test_the_open_week_says_partial_in_its_oneline_only_when_it_is(self):
         now = datetime.now().astimezone()
         week = self.trend.meter_week_close(now)
@@ -2113,7 +2241,7 @@ class TrendPartialPeriodTests(SessionFixture):
         self.assertEqual(self.week("--oneline"), plain)
         self.earlier("weekly", {week: 100})
         self.assertEqual(self.week("--oneline"), plain.rstrip("\n") +
-                         "; partial: the scan read 40.0% of the 100 requests on record\n")
+                         "; partial: the scan read 40.0% (40 of 100) of the requests on record\n")
         # open AND partial: both markers, no space between them, and the label still leaves
         # a space before the amount in its 14-character column
         row = self.row(self.week(), week)
@@ -2157,7 +2285,10 @@ class TrendPartialPeriodTests(SessionFixture):
         path.write_text(json.dumps({"a": {"requests": 1}, "b": 3, "c": [1]}))
         self.assertEqual(trend.read_records(path), {"a": {"requests": 1}})
 
-    def test_a_corrupt_snapshot_file_is_ignored_in_every_mode(self):
+    def test_a_corrupt_snapshot_file_other_than_this_machines_own_daily_v2_is_ignored_in_every_mode(self):
+        """Covers daily-test (pre-v2), weekly-test (pre-v2), daily-v2-other, weekly-v2-other and
+        this machine's own weekly-v2-test. NOT this machine's own daily-v2-test: that read is
+        fail-closed on purpose (next test), because treating it as empty would overwrite it."""
         self.transcript("s1", 40)
         script = str(HERE / "usage-trend.py")
         corrupt = ("daily-test.json", "weekly-test.json", "daily-v2-other.json",
@@ -2175,6 +2306,73 @@ class TrendPartialPeriodTests(SessionFixture):
         for name in corrupt:
             (self.hist / name).unlink()
         self.assertEqual(run_all(), with_corrupt)       # the corrupt files were ignored, not half-read
+
+
+    def test_a_corrupt_own_daily_v2_file_stays_fail_closed_and_is_left_untouched(self):
+        self.transcript("s1", 40)
+        own = self.hist / "daily-v2-test.json"
+        own.write_bytes(b'{"2026-09-01": {"requests": 4')          # a truncated write
+        with self.assertRaises(ValueError):
+            self.daily()
+        self.assertEqual(own.read_bytes(), b'{"2026-09-01": {"requests": 4')
+        self.assertEqual([p.name for p in self.hist.iterdir() if p.name.endswith(".tmp")], [])
+
+    def snapshot_names(self):
+        return sorted(p.name for p in self.hist.iterdir())
+
+    def test_own_snapshot_files_are_written_through_a_temp_file_and_a_replace(self):
+        self.transcript("s1", 40)
+        calls = []
+        real_replace = os.replace
+        def spy(src, dst):
+            calls.append((Path(src), Path(dst), Path(src).read_text()))
+            return real_replace(src, dst)
+        with mock.patch.object(self.trend.os, "replace", spy):
+            self.daily()
+            self.week("--write")
+        self.assertEqual([dst.name for _, dst, _ in calls], ["daily-v2-test.json", "weekly-v2-test.json"])
+        for src, dst, body in calls:
+            self.assertNotEqual(src, dst)
+            self.assertEqual(src.parent, dst.parent)               # same filesystem: the replace is atomic
+            self.assertFalse(src.exists())
+            self.assertEqual(json.loads(body), json.loads(dst.read_text()))   # the whole file went in first
+        self.assertEqual([n for n in self.snapshot_names() if n.endswith(".tmp")], [])
+
+    def test_an_atomic_snapshot_write_keeps_the_file_mode_a_plain_write_gives(self):
+        # mkstemp creates 0600; the snapshot files must keep the mode they had (or the
+        # umask default for a new file), as the plain write_text before them did.
+        self.transcript("s1", 40)
+        umask = os.umask(0o022)
+        try:
+            self.daily()
+            self.week("--write")
+            for name in ("daily-v2-test.json", "weekly-v2-test.json"):
+                self.assertEqual((self.hist / name).stat().st_mode & 0o777, 0o644, name)
+                (self.hist / name).chmod(0o640)
+            self.transcript("s2", 10, "2026-09-02T12:00:00Z")
+            self.daily()
+            self.week("--write")
+            for name in ("daily-v2-test.json", "weekly-v2-test.json"):
+                self.assertEqual((self.hist / name).stat().st_mode & 0o777, 0o640, name)
+        finally:
+            os.umask(umask)
+
+    def test_a_failed_snapshot_write_leaves_the_old_file_and_no_partial_file(self):
+        self.transcript("s1", 40)
+        self.daily()
+        self.week("--write")
+        before = {n: (self.hist / n).read_bytes() for n in self.snapshot_names()}
+        self.transcript("s2", 10, "2026-09-02T12:00:00Z")             # new data, so a merge would change them
+        names = self.snapshot_names()
+        for label, failure in (("replace fails", ("replace", OSError("disk full"))),
+                               ("write fails", ("fdopen", OSError("disk full")))):
+            with self.subTest(label), mock.patch.object(self.trend.os, failure[0], side_effect=failure[1]):
+                with self.assertRaises(OSError):
+                    self.daily()
+                with self.assertRaises(OSError):
+                    self.week("--write")
+            self.assertEqual({n: (self.hist / n).read_bytes() for n in before}, before)
+            self.assertEqual(self.snapshot_names(), names)             # no temp file left behind
 
 
 class MalformedRecordTests(unittest.TestCase):
@@ -2396,7 +2594,6 @@ class SessionDiscoveryEdgeTests(ScanFixture):
                                "--session", str(session), "--run-id", run_id, *self.STAMP,
                                "--out-dir", str(out)], capture_output=True, text=True, cwd=cwd)
 
-    @needs_non_root
     def test_an_unsearchable_dir_that_could_hold_children_is_a_refuse_in_both_scripts(self):
         new, old = self.recycled_session()
         main = new / (SPLIT + ".jsonl")
@@ -2411,6 +2608,8 @@ class SessionDiscoveryEdgeTests(ScanFixture):
                 before = target.stat().st_mode & 0o777
                 target.chmod(mode)
                 try:
+                    if not chmod_restricts(target):
+                        self.skipTest("chmod does not restrict reading here (root, or a filesystem that ignores modes)")
                     captured = self.checkpoint_into(main, out)
                     row = self.run_row(main)
                 finally:
@@ -2423,7 +2622,6 @@ class SessionDiscoveryEdgeTests(ScanFixture):
                     self.assertEqual(result.stdout, "", name)
                 self.assertEqual(list(out.glob("*")) if out.exists() else [], [])
 
-    @needs_non_root
     def test_an_unsearchable_dir_off_every_root_path_is_not_refused(self):
         new, _ = self.recycled_session()
         main = new / (SPLIT + ".jsonl")

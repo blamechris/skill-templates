@@ -188,8 +188,9 @@ def session_child_files(roots):
     non-directory and ending in `.jsonl` counts, with no is-a-regular-file filter: a
     dangling symlink must still reach the caller's `open()` and refuse there. An unreadable
     directory raises OSError (a REFUSE for the callers), never a silent undercount.
-    Files come back as strings in ONE global order over all roots, by path components,
-    which is the order `sorted(Path)` gives.
+    Files come back as strings in ONE global order over all roots, sorted by path
+    components (`Path(f).parts`). That is not always the order `sorted(Path)` gives: on
+    Python 3.12 and later the two differ when a relative and an absolute root mix.
 
     One limit, shared by both scripts: a symlink to a directory is not followed. An
     unsearchable ANCESTOR of a root (a project dir, or the `<uuid>` dir) is refused by
