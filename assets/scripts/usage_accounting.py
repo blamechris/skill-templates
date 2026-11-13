@@ -258,8 +258,9 @@ def record_problem(record):
     - an assistant record whose `requestId` or `message.id` is truthy and not a string
       (`["a"]`, `{"a": 1}`, `5`, `true`): they key the deduplication, so `add` crashes on an
       unhashable one and usage-pace.py on any non-string one (#469);
-    - an assistant record whose `message.model` is truthy and not a string: it keys the
-      rate card and the per-model totals (#471). A falsy one is unpriced, like a missing one.
+    - an assistant record whose `message.model` is a non-empty list or object: it keys the
+      rate card and the per-model totals, which crash on an unhashable value (#471). Any
+      other non-string model (`[]`, `{}`, `1`, `true`) is unpriced, as a scalar always was.
     Deliberately NOT problems, because they were always tolerated: a falsy `message`
     (`null`, `""`, `[]`, `0`, `false` are read as empty, as `or {}` always did), a falsy
     `requestId` or `message.id` (read as absent, as `response_key` always did), a
@@ -280,7 +281,7 @@ def record_problem(record):
         if message_id and not isinstance(message_id, str):
             return f"valid JSON but its message.id is not a string ({type(message_id).__name__})"
         model = (message or {}).get("model")
-        if model and not isinstance(model, str):
+        if model and isinstance(model, (list, dict)):
             return f"valid JSON but its message.model is not a string ({type(model).__name__})"
     return None
 

@@ -720,14 +720,15 @@ class UsageAccountingTests(unittest.TestCase):
             with self.subTest(model=model), self.assertRaisesRegex(ValueError, "unpriced model"):
                 usage_accounting.price_usage(usage, model)
 
-    def test_record_problem_flags_a_truthy_non_string_model_and_only_that(self):
+    def test_record_problem_flags_a_list_or_object_model_and_only_that(self):
         problem = usage_accounting.record_problem
-        for model, name in ((["x"], "list"), ({"a": 1}, "dict"), (5, "int"), (True, "bool")):
+        for model, name in ((["x"], "list"), ({"a": 1}, "dict")):
             self.assertEqual(problem({"type": "assistant", "message": {"model": model}}),
                              "valid JSON but its message.model is not a string (%s)" % name)
             self.assertIsNone(problem({"type": "user", "message": {"model": model}}))
-        for falsy in (None, "", [], {}, 0, False):
-            self.assertIsNone(problem({"type": "assistant", "message": {"model": falsy}}), falsy)
+        # A scalar or empty one was always read, as unpriced, and still is.
+        for other in (None, "", [], {}, 0, False, 1, 1.5, True):
+            self.assertIsNone(problem({"type": "assistant", "message": {"model": other}}), other)
         for counters in ({"output_tokens": [1]}, {"cache_creation": "x"}):
             self.assertIsNone(problem({"type": "assistant", "message": {"usage": counters}}))
 
@@ -757,6 +758,17 @@ class UsageAccountingTests(unittest.TestCase):
                     result = self._run_checkpoint(main, out)
                     self._assert_refused(result, target, 2, out)
                     self.assertIn("message.model is not a string (%s)" % name, result.stderr)
+
+    def test_checkpoint_keeps_a_scalar_model_unpriced_as_before(self):
+        # A scalar model never crashed: it was an unpriced response, and still is (#471).
+        for model, key in ((1, "1"), (True, "true"), ([], "unknown"), ({}, "unknown")):
+            with self.subTest(model=model), tempfile.TemporaryDirectory() as tmp:
+                main, _ = self._nonobject_fixture(Path(tmp))
+                self._append_record(main, rec("2026-09-29T00:00:05Z", "rx", "mx", model, 10,
+                                              stop="end_turn"))
+                doc = self._checkpoint_json(main)
+                self.assertEqual(doc["parent"]["responses"], 2)
+                self.assertEqual(doc["unpriced_models"], {key: 1})
 
     def test_checkpoint_counts_unreadable_counters_like_any_invalid_counter(self):
         # A list counter, a non-object cache_creation and a bad ephemeral split are kept and

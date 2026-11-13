@@ -1714,6 +1714,24 @@ done
 for bad_ctr in '[1]' '{"a":1}' '"abc"'; do
   refuse_471 "output_tokens $bad_ctr" "$(printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":"claude-opus-5-5","usage":{"output_tokens":%s}}}' "$bad_ctr")"
 done
+# An infinite or NaN counter would weigh the whole row as inf: a REFUSE, never that row.
+for bad_ctr in '1e999' 'NaN'; do
+  refuse_471 "output_tokens $bad_ctr" "$(printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":"claude-opus-5-5","usage":{"output_tokens":%s}}}' "$bad_ctr")"
+done
+# A scalar model never crashed: it is an unpriced response, as it always was -- the row is
+# byte for byte the one an unknown model name gives.
+f="$EP/-p/$EU.jsonl"; cp "$f" "$TMP/c471.keep"
+printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":"no-such-model","usage":{"output_tokens":5}}}\n' >> "$f"
+unknown_row=$(edge_run "$EU" 2>/dev/null)
+cp "$TMP/c471.keep" "$f"
+for scalar_model in 1 true; do
+  printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":%s,"usage":{"output_tokens":5}}}\n' "$scalar_model" >> "$f"
+  got=$(edge_run "$EU" 2>"$TMP/edge.err"); rc=$?
+  cp "$TMP/c471.keep" "$f"
+  [ "$rc" -eq 0 ] && [ -n "$unknown_row" ] && [ "$got" = "$unknown_row" ] && ! grep -q 'REFUSE\|Traceback' "$TMP/edge.err" \
+    && ok "model $scalar_model is an unpriced response, not a REFUSE" \
+    || bad "model $scalar_model is an unpriced response, not a REFUSE" "rc=$rc $(flat "$got") $(flat "$(cat "$TMP/edge.err")")"
+done
 # ...while a counter the shared reader can read weighs as what it reads: "7" as 7, null and
 # [] as 0 -- the row is the one the numeric form gives, byte for byte (#471).
 for pair in '"7" 7' 'null 0' '[] 0'; do

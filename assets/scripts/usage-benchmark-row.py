@@ -110,7 +110,7 @@ WARNING on stderr fires when children sit in a project dir other than the transc
 own, and lists every dir: the figure is right, but the session was split.
 skill-templates#254, #377.
 """
-import json, glob, os, re, subprocess, sys
+import json, glob, math, os, re, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from usage_accounting import (RATE_CARD_VERSION, Responses, record_problem, price_usage, session_child_files,
@@ -423,11 +423,12 @@ unpriced = 0
 
 
 def weight_counter(u, field, item):
-    """One counter for the weighting. An int or float is used as it always was; anything
-    else is read the way usage_accounting.usage_counter reads it (null is 0, "7" is 7),
-    and one that cannot be read is a REFUSE naming the file and line (#471)."""
+    """One counter for the weighting. A finite int or float is used as it always was;
+    anything else is read the way usage_accounting.usage_counter reads it (null is 0, "7"
+    is 7), and one that cannot be read -- including an infinite or NaN float, which would
+    weigh the whole row as inf -- is a REFUSE naming the file and line (#471)."""
     value = u.get(field, 0)
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and math.isfinite(value):
         return value
     try:
         return usage_counter(value)
