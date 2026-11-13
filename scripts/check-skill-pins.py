@@ -80,6 +80,10 @@ def main():
             print(f"::error::{name}: .claude/commands/{name}.md is missing; run /skill update {name}")
             bad += 1
             continue
+        except UnicodeDecodeError:
+            print(f"::error::{name}: .claude/commands/{name}.md is not valid UTF-8; run /skill update {name}")
+            bad += 1
+            continue
         markers = [ln for ln in lines if MARKER.match(ln)]
         stamps = [m.groups() for m in map(STAMP.match, markers) if m]
         if len(markers) != 1:

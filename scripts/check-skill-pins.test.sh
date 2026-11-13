@@ -12,7 +12,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHECK="${CHECK_SKILL_PINS:-$ROOT/scripts/check-skill-pins.py}"
-EXPECTED=21
+EXPECTED=23
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -91,6 +91,15 @@ fixture; install foo "${H2:0:7}" foo "${H2:0:7}"; printf '{"registry":"x/y","ski
 run
 if [ "$RC" -eq 1 ] && grep -q "lock entry is malformed" <<<"$OUT"; then ok "17 a path-shaped lock name is refused as malformed (exit $RC)"; else bad "17 a path-shaped lock name is refused as malformed" "wanted exit 1 + 'lock entry is malformed', got $RC: $OUT"; fi
 fixture; install foo "${H2:3:7}" foo "${H2:3:7}"; run; expect "18 a hash found only mid-way through a commit id fails" 1
+# Delta review of #480: a command file that is not UTF-8 is a legible gate failure, not a
+# traceback; and a template commit reached only through a merge that kept the other side
+# still vouches for a pin (default history simplification hides it; --full-history does not).
+fixture; install foo "${H2:0:7}" foo "${H2:0:7}"; printf '\xff\xfe<!-- skill-templates: foo %s 2026-01-01 -->\n' "${H2:0:7}" > "$FX/.claude/commands/foo.md"
+run
+if [ "$RC" -eq 1 ] && grep -q "is not valid UTF-8" <<<"$OUT" && ! grep -q Traceback <<<"$OUT"; then ok "19 a non-UTF-8 command file is a legible failure (exit $RC)"; else bad "19 a non-UTF-8 command file is a legible failure" "wanted exit 1 + 'is not valid UTF-8' and no traceback, got $RC: $OUT"; fi
+fixture; git -C "$FX" checkout -q -b side; echo side > "$FX/generic/foo.md"; git -C "$FX" commit -qam side; HS=$(git -C "$FX" rev-parse HEAD)
+git -C "$FX" checkout -q main; git -C "$FX" merge -q -s ours --no-edit side
+install foo "${HS:0:7}" foo "${HS:0:7}"; run; expect "20 a template commit reached only through a merge still vouches (full history)" 0
 echo "passed=$PASS failed=$FAIL expected_cases=$EXPECTED"
 if [ $((PASS+FAIL)) -lt "$EXPECTED" ]; then
   echo "FAIL: only $((PASS+FAIL)) cases ran, expected at least $EXPECTED"; exit 1
