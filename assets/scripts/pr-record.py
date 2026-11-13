@@ -22,7 +22,11 @@ THE RECORD (schema_version 1) -- one line per (repo, pr):
   pr_meta          {title, author, merged_by, head_ref, created_at,
                     merged_at, merge_commit, additions, deletions,
                     changed_files, closes[]} from one `gh pr view --json`
-                   call. The PR not existing, gh being unable to answer, or
+                   call. closes[] is the union of
+                   closingIssuesReferences and same-repo issues named by closing
+                   keywords in the merge commit's message whose
+                   ClosedEvent.closer IS that commit (one graphql confirm each;
+                   a failed confirm is not counted and lands in unknown[]) -- #347. The PR not existing, gh being unable to answer, or
                    the PR not being merged is a REFUSE -- no PR, no record.
   commits[]        {oid, headline, authored_at}, from the same call.
   session          {id, source ("flag"|"env"), transcript,
@@ -408,11 +412,114 @@ def fetch_pr(repo, pr):
     return gh_json(["pr", "view", str(pr), "--repo", repo, "--json", PR_VIEW_FIELDS])
 
 
-def build_pr_meta(pr_data):
-    closes = sorted(
+# GitHub's closing keywords. A squash commit whose own message carries one
+# closes the issue BY THE COMMIT, and the PR's closingIssuesReferences is then
+# empty (#347). Candidates only: each is confirmed against the issue's
+# ClosedEvent before it counts.
+_CLOSE_KW_RE = re.compile(
+    r"(?<![\w-])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+"
+    r"((?:[\w.-]+/[\w.-]+)?#\d+"
+    r"|https?://github\.com/[\w.-]+/[\w.-]+/issues/\d+)",
+    re.IGNORECASE,
+)
+# More distinct candidates than this are not confirmed one by one; the
+# overflow is named in unknown[] rather than silently dropped.
+MAX_COMMIT_CLOSE_CANDIDATES = 20
+
+_CLOSER_QUERY = (
+    "query($owner:String!,$name:String!,$issue:Int!){repository(owner:$owner,name:$name)"
+    "{issue(number:$issue){state timelineItems(itemTypes:[CLOSED_EVENT],last:1)"
+    "{nodes{... on ClosedEvent{closer{__typename ... on Commit{oid}}}}}}}}"
+)
+
+
+def commit_closing_candidates(message, repo):
+    """Same-repo issue numbers named by closing keywords in `message`.
+    `other/repo#7` is ignored."""
+    out = set()
+    for ref in _CLOSE_KW_RE.findall(message or ""):
+        if ref.lower().startswith("http"):
+            prefix, num = ref.split("github.com/", 1)[1].rsplit("/issues/", 1)
+        else:
+            prefix, _, num = ref.rpartition("#")
+        if prefix and prefix.lower() != repo.lower():
+            continue
+        out.add(int(num))
+    return out
+
+
+def fetch_commit_message(repo, oid, unknown):
+    """The merge commit's full message, or None. `gh pr view --json
+    mergeCommit` returns ONLY {oid}, so the message comes from the commits
+    REST API. Failure -> None + an unknown[] entry (no commit-derived closes)."""
+    data, err = gh_json(["api", f"repos/{repo}/commits/{oid}"])
+    if data is None:
+        unknown.append(f"pr_meta.closes (could not read merge commit {oid[:12]} message: {err})")
+        return None
+    msg = (data.get("commit") or {}).get("message") if isinstance(data, dict) else None
+    if not isinstance(msg, str):
+        unknown.append(f"pr_meta.closes (unexpected commits API shape for merge commit {oid[:12]})")
+        return None
+    return msg
+
+
+def issue_closed_by_commit(repo, number, oid, unknown):
+    """True iff the issue is CLOSED and its latest ClosedEvent.closer is the
+    commit `oid`. Fail-safe: a failed or malformed query returns False (the
+    issue is NOT counted -- never invent a close) and notes it in unknown[]."""
+    owner, name = repo.split("/", 1)
+    data, err = gh_json([
+        "api", "graphql",
+        "-f", "query=" + _CLOSER_QUERY,
+        "-f", "owner=" + owner,
+        "-f", "name=" + name,
+        "-F", "issue=" + str(number),
+    ])
+    if data is None:
+        unknown.append(
+            f"pr_meta.closes (could not confirm #{number} against the merge commit: {err})"
+        )
+        return False
+    try:
+        issue = data["data"]["repository"]["issue"]
+        if issue is None:
+            return False
+        if (issue.get("state") or "").upper() != "CLOSED":
+            return False
+        nodes = issue["timelineItems"]["nodes"] or []
+    except (KeyError, TypeError, AttributeError):
+        unknown.append(
+            f"pr_meta.closes (unexpected graphql shape confirming #{number})"
+        )
+        return False
+    for n in nodes:
+        closer = (n or {}).get("closer") or {}
+        if closer.get("oid") == oid:
+            return True
+    return False
+
+
+def build_pr_meta(pr_data, repo, unknown):
+    refs = {
         r["number"] for r in (pr_data.get("closingIssuesReferences") or [])
         if isinstance(r, dict) and r.get("number") is not None
-    )
+    }
+    mc = pr_data.get("mergeCommit") or {}
+    oid = mc.get("oid")
+    if oid and "/" in repo:
+        message = fetch_commit_message(repo, oid, unknown)
+        cands = sorted(commit_closing_candidates(message, repo) - refs) if message else []
+        if len(cands) > MAX_COMMIT_CLOSE_CANDIDATES:
+            unknown.append(
+                f"pr_meta.closes (merge commit names {len(cands)} candidate issues; "
+                f"only the first {MAX_COMMIT_CLOSE_CANDIDATES} confirmed, "
+                f"unchecked: {cands[MAX_COMMIT_CLOSE_CANDIDATES:]})"
+            )
+            cands = cands[:MAX_COMMIT_CLOSE_CANDIDATES]
+        for n in cands:
+            if issue_closed_by_commit(repo, n, oid, unknown):
+                refs.add(n)
+    closes = sorted(refs)
     return {
         "title": pr_data.get("title") or "",
         "author": (pr_data.get("author") or {}).get("login"),
@@ -1300,7 +1407,7 @@ def main(argv=None):
     merged_dt = parse_iso(merged_at)
 
     head_ref = pr_data.get("headRefName")
-    pr_meta = build_pr_meta(pr_data)
+    pr_meta = build_pr_meta(pr_data, repo, unknown)
     commits = build_commits(pr_data)
     commit_oids = {c["oid"] for c in commits}
     ci_final = build_ci_final(pr_data)
