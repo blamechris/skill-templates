@@ -193,10 +193,14 @@ def newest_unambiguous(pattern_id, hits, how):
     recycled worktree): the newest mtime wins, as it always did. Hits spanning more
     than one stem are different sessions sharing a prefix; picking the newest would print
     one session's row under an id that names several, so that is a REFUSE listing every
-    candidate. One helper for the argv and $CLAUDE_CODE_SESSION_ID branches."""
+    candidate. A stem EQUAL to `pattern_id` is the session the caller named in full, so it
+    wins outright: a full id is never refused because a longer name also matches its glob.
+    One helper for the argv and $CLAUDE_CODE_SESSION_ID branches."""
     stems = {}
     for h in hits:
         stems.setdefault(os.path.basename(h)[:-len(".jsonl")], []).append(h)
+    if pattern_id in stems:
+        return max(stems[pattern_id], key=os.path.getmtime), how
     if len(stems) > 1:
         lines = [f"  {stem}: " + ", ".join(sorted(paths)) for stem, paths in sorted(stems.items())]
         die(f"{pattern_id!r} matches {len(stems)} different sessions — pass a longer id or a "

@@ -30,7 +30,7 @@ export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/usage-benchmark-row-test.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+trap 'chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 # HERMETIC HOME. The script now looks for a session's subagents under
 # ~/.claude/projects/*/<full uuid>/subagents (#254), so any case that does not
@@ -1647,6 +1647,13 @@ printf '%s' "$(edge_run abcd1234 2>&1 >/dev/null)" | grep -qF "$AM2" && printf '
 got=$(edge_run abcd1234-0000-4000-8000-000000000001 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && [ "$(field "$got" 3)" = abcd1234 ] \
   && ok "a unique longer prefix still resolves" || bad "a unique longer prefix still resolves" "rc=$rc"
+# a full id is never refused because a longer-named transcript also matches its glob
+gen "$EP/-q/$AM1-extra.jsonl" 10 1 msgid; touch "$EP/-q/$AM1-extra.jsonl"
+got=$(edge_run "$AM1" 2>"$TMP/edge.err"); rc=$?
+[ "$rc" -eq 0 ] && grep -qF "$EP/-p/$AM1.jsonl" "$TMP/edge.err" \
+  && ok "an exact full id wins over a longer name sharing its prefix" \
+  || bad "an exact full id wins over a longer name sharing its prefix" "rc=$rc $(flat "$(cat "$TMP/edge.err")")"
+rm -f "$EP/-q/$AM1-extra.jsonl"
 got=$(HOME="$EH" CLAUDE_CODE_SESSION_ID=abcd1234 "$PY" "${EDGE_SUT:-$SUT}" 2>"$TMP/edge.err"); rc=$?
 [ "$rc" -ne 0 ] && [ -z "$got" ] && grep -q '^REFUSE: ' "$TMP/edge.err" && grep -qF "$AM2" "$TMP/edge.err" \
   && ok "\$CLAUDE_CODE_SESSION_ID takes the same distinct-id refusal" \
