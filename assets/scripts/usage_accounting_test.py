@@ -2014,5 +2014,122 @@ class TrendPartialPeriodTests(SessionFixture):
         self.assertEqual(run_all(), with_corrupt)       # the corrupt files were ignored, not half-read
 
 
+class MalformedRecordTests(unittest.TestCase):
+    """#467: trend skips unreadable records; checkpoint --aggregate-dir refuses bad items."""
+    MALFORMED = ["null", "[1]", "3", '"s"',
+                 json.dumps({"type": "assistant", "message": "x", "timestamp":
+                             "2026-09-30T12:00:00Z", "requestId": "bad"}),
+                 json.dumps({"type": "assistant", "message": [1]})]
+
+    def _valid_lines(self):
+        return [json.dumps(rec("2026-09-30T12:00:%02dZ" % i, "r%d" % i, "m%d" % i,
+                               "claude-opus-5-5", 100 + i, stop="end_turn"))
+                for i in range(3)]
+
+    def _trend_run(self, lines):
+        trend = load("usage_trend_malformed", HERE / "usage-trend.py")
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s.jsonl").write_text("\n".join(lines) + "\n")
+            trend.ROOT = root
+            with redirect_stderr(err):
+                selected = trend.selected_responses()
+                days = trend.scan()
+            keys = sorted((item["record"]["timestamp"], item["record"]["message"]["id"])
+                          for item in selected.rows())
+            return keys, json.loads(json.dumps(days)), err.getvalue()
+
+    def test_trend_skips_malformed_records_and_reports_count(self):
+        valid = self._valid_lines()
+        clean_keys, clean_days, clean_err = self._trend_run(valid)
+        self.assertEqual(len(clean_keys), 3)
+        self.assertNotIn("skipped", clean_err)
+        dirty = [self.MALFORMED[0], valid[0], self.MALFORMED[1], valid[1],
+                 *self.MALFORMED[2:], valid[2]]
+        keys, days, err = self._trend_run(dirty)
+        self.assertEqual(keys, clean_keys)
+        self.assertEqual(days, clean_days)
+        self.assertIn("%d malformed transcript records skipped" % len(self.MALFORMED), err)
+
+    def _aggregate_dir(self, root, mutate=None):
+        checkpoint = load("usage_checkpoint_malformed", HERE / "usage-checkpoint.py")
+        source = root / "projects" / "s.jsonl"
+        source.parent.mkdir(exist_ok=True)
+        source.write_text("\n".join(self._valid_lines()) + "\n")
+        doc = checkpoint.capture(source, "run", "2026-09-30T13:00:00Z", "final")
+        if mutate:
+            mutate(doc)
+        out = root / "checkpoints"
+        out.mkdir(exist_ok=True)
+        (out / "bad.json").write_text(doc if isinstance(doc, str) else json.dumps(doc))
+        return out
+
+    def _aggregate(self, out):
+        return subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                               "--aggregate-dir", str(out)], capture_output=True, text=True)
+
+    def test_aggregate_refuses_bad_items_naming_the_file(self):
+        def item(change):
+            def mutate(doc):
+                change(doc["selected_responses"])
+            return mutate
+        def drop(name):
+            return item(lambda items: items[0].pop(name))
+        cases = {
+            "not valid json": lambda doc: "{not json",
+            "selected_responses not a list": lambda doc: doc.update(selected_responses=5),
+            "selected_responses a dict": lambda doc: doc.update(selected_responses={"a": 1}),
+            "item not an object": item(lambda items: items.append(7)),
+            "item null": item(lambda items: items.append(None)),
+            "item message string": item(lambda items: items[0].update(message="x")),
+            "item missing source": drop("source"),
+            "item missing line": drop("line"),
+            "item missing role": drop("role"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                def apply(doc, mutate=mutate):
+                    replaced = mutate(doc)
+                    if isinstance(replaced, str):
+                        raise _Raw(replaced)
+                try:
+                    out = self._aggregate_dir(Path(tmp), apply)
+                except _Raw as raw:
+                    out = Path(tmp) / "checkpoints"
+                    out.mkdir(exist_ok=True)
+                    (out / "bad.json").write_text(raw.text)
+                result = self._aggregate(out)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertTrue(result.stderr.startswith("REFUSE: "), result.stderr)
+                self.assertIn(str(out / "bad.json"), result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+
+    def test_aggregate_validates_every_document_before_printing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self._aggregate_dir(Path(tmp))
+            good = json.loads((out / "bad.json").read_text())
+            (out / "bad.json").unlink()
+            (out / "a-good.json").write_text(json.dumps(good))
+            second = json.loads(json.dumps(good))
+            second["run_id"] = "run2"
+            second["selected_responses"][0]["message"] = "x"
+            (out / "z-bad.json").write_text(json.dumps(second))
+            result = self._aggregate(out)
+            self.assertEqual((result.returncode, result.stdout), (1, ""))
+            self.assertIn("z-bad.json", result.stderr)
+            (out / "z-bad.json").unlink()
+            ok = self._aggregate(out)
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            self.assertEqual(json.loads(ok.stdout)["all_in_responses"], 3)
+
+
+class _Raw(Exception):
+    def __init__(self, text):
+        super().__init__(text)
+        self.text = text
+
+
 if __name__ == "__main__":
     unittest.main()

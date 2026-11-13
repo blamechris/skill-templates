@@ -48,7 +48,7 @@ from datetime import datetime, timedelta
 from fractions import Fraction
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from usage_accounting import RATES, RATE_CARD_VERSION, Responses, price_usage, token_split
+from usage_accounting import RATES, RATE_CARD_VERSION, Responses, price_usage, record_problem, token_split
 
 ROOT = Path.home() / ".claude" / "projects"
 HIST_DIR = Path.home() / ".claude" / "usage-history"
@@ -101,6 +101,7 @@ def cost_usd(u, model):
 def selected_responses():
     """One global pass over parent, child, streamed and copied assistant records."""
     selected = Responses()
+    malformed = 0
     for path in ROOT.rglob("*.jsonl"):
         parts = path.parts
         if "memory" in parts or "tool-results" in parts:
@@ -112,10 +113,14 @@ def selected_responses():
         with fh:
             for line_no, line in enumerate(fh, 1):
                 try:
-                    selected.add(json.loads(line), str(path), line_no,
-                                 "child" if "subagents" in parts else "main")
+                    record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if record_problem(record):
+                    malformed += 1      # skipped like invalid JSON, but counted (#467)
+                    continue
+                selected.add(record, str(path), line_no,
+                             "child" if "subagents" in parts else "main")
     selected.selected  # finalize one-ID aliases after every pair has been observed
     if (selected.conflicts or selected.unidentified or selected.cross_role_pairs or
             selected.ambiguous_identities or selected.without_terminal_metadata()):
@@ -124,6 +129,9 @@ def selected_responses():
               "terminal metadata" % (selected.conflicts, selected.unidentified,
               selected.cross_role_pairs, selected.ambiguous_identities,
               selected.without_terminal_metadata()), file=sys.stderr)
+    if malformed:
+        print("usage coverage: %d malformed transcript records skipped" % malformed,
+              file=sys.stderr)
     return selected
 
 

@@ -181,7 +181,10 @@ def capture_session(path, run_id, captured_at, status):
 def latest_totals(directory):
     latest = {}
     for path in directory.glob("*.json"):
-        doc = json.loads(path.read_text())
+        try:
+            doc = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}: checkpoint is not valid JSON ({exc})") from exc
         if not isinstance(doc, dict):
             raise ValueError(f"{path}: checkpoint is not a JSON object ({type(doc).__name__})")
         if doc.get("rate_card") != RATE_CARD_VERSION:
@@ -189,6 +192,26 @@ def latest_totals(directory):
         key = (doc["run_id"], doc["session_id"])
         if key not in latest or (doc["captured_at"], doc["status"] == "final") > (latest[key]["captured_at"], latest[key]["status"] == "final"):
             latest[key] = doc
+            latest[key]["_path"] = path
+    # Validate every document's response items before accumulating anything (#467).
+    for doc in latest.values():
+        path = doc.pop("_path")
+        items = doc.get("selected_responses")
+        if items is None:
+            continue                    # the "lacks response identities" refusal below
+        if not isinstance(items, list):
+            raise ValueError(f"{path}: selected_responses is not a list ({type(items).__name__})")
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ValueError(f"{path}: selected_responses[{index}] is not an object "
+                                 f"({type(item).__name__})")
+            problem = record_problem(item)
+            if problem:
+                raise ValueError(f"{path}: selected_responses[{index}] is {problem}")
+            missing = [name for name in ("source", "line", "role") if name not in item]
+            if missing:
+                raise ValueError(f"{path}: selected_responses[{index}] lacks "
+                                 f"{', '.join(missing)}")
     result = {"sessions": len(latest), "partial_sessions": 0,
               "rate_card": RATE_CARD_VERSION, "cumulative": True,
               "source_checkpoints": [],
