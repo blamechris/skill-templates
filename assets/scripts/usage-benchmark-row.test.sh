@@ -30,7 +30,7 @@ export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/usage-benchmark-row-test.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+trap 'chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 # HERMETIC HOME. The script now looks for a session's subagents under
 # ~/.claude/projects/*/<full uuid>/subagents (#254), so any case that does not
@@ -1570,6 +1570,142 @@ else
   bad "the fixture DISTINGUISHES the two implementations (script factor changed: the sync check sees the rule disagree)" "could not build the mutant: the factor line is not where this expects it"
 fi
 
+
+# ======================= J — edges after #378 (#386): children, non-objects, ambiguity
+echo; echo "J. unreadable children, non-.jsonl children, non-object lines, ambiguous ids"
+
+EH="$TMP/edgehome"; EP="$EH/.claude/projects"
+EU=7e1d0000-1111-4222-8333-444444444444          # session id -> prints `7e1d0000`
+mkdir -p "$EP/-p/$EU/subagents"
+gen "$EP/-p/$EU.jsonl" 10 1 msgid
+gen "$EP/-p/$EU/subagents/agent-ok.jsonl" 10 1 msgid
+edge_run() { HOME="$EH" env -u CLAUDE_CODE_SESSION_ID "$PY" "${EDGE_SUT:-$SUT}" "$@"; }
+# refused <label> <must-match-on-stderr> — runs edge_run "${ARGS[@]}" and checks the
+# REFUSE contract: nonzero, REFUSE: line, no traceback, nothing on stdout.
+refused() {
+  local eo ee erc
+  eo=$(edge_run "${ARGS[@]}" 2>"$TMP/edge.err"); erc=$?; ee=$(cat "$TMP/edge.err")
+  if [ "$erc" -ne 0 ] && [ -z "$eo" ] && printf '%s' "$ee" | grep -q '^REFUSE: ' \
+     && ! printf '%s' "$ee" | grep -q Traceback && printf '%s' "$ee" | grep -qF -- "$2"; then
+    ok "$1"
+  else
+    bad "$1" "rc=$erc stdout='$(flat "$eo")' stderr='$(flat "$ee")'"
+  fi
+}
+baseline=$(edge_run "$EU" 2>/dev/null)
+[ "$(wl "$baseline")" = "<workload note> · subagents: 0.3M/1 · work: 0pr/0iss" ] \
+  && ok "edge fixture: one child file counts as 0.3M/1" \
+  || bad "edge fixture: one child file counts as 0.3M/1" "$(flat "$baseline")"
+
+# --- unreadable children are a REFUSE, never a skip (pins existing behaviour)
+if [ "$(id -u)" -eq 0 ]; then
+  echo "  skip unreadable-child cases: running as root, chmod 000 does not stop reads"
+else
+  mkdir "$EP/-p/$EU/subagents/locked-dir"; gen "$EP/-p/$EU/subagents/locked-dir/agent-d.jsonl" 10 1 msgid
+  chmod 000 "$EP/-p/$EU/subagents/locked-dir"
+  ARGS=("$EU"); refused "an unreadable directory under subagents/ is a REFUSE" "cannot measure subagents"
+  chmod 755 "$EP/-p/$EU/subagents/locked-dir"; rm -rf "$EP/-p/$EU/subagents/locked-dir"
+  gen "$EP/-p/$EU/subagents/agent-locked.jsonl" 10 1 msgid; chmod 000 "$EP/-p/$EU/subagents/agent-locked.jsonl"
+  ARGS=("$EU"); refused "an unreadable child file under subagents/ is a REFUSE" "cannot measure subagents"
+  chmod 644 "$EP/-p/$EU/subagents/agent-locked.jsonl"; rm -f "$EP/-p/$EU/subagents/agent-locked.jsonl"
+fi
+
+# --- only .jsonl files are children
+gen "$EP/-p/$EU/subagents/agent-x.json" 10 1 msgid
+gen "$EP/-p/$EU/subagents/agent-x.jsonl.bak" 10 1 msgid
+got=$(edge_run "$EU" 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(wl "$got")" = "<workload note> · subagents: 0.3M/1 · work: 0pr/0iss" ] \
+  && ok "agent-x.json and agent-x.jsonl.bak under subagents/ are not counted (still 0.3M/1)" \
+  || bad "agent-x.json and agent-x.jsonl.bak under subagents/ are not counted (still 0.3M/1)" "rc=$rc $(flat "$got")"
+rm -f "$EP/-p/$EU/subagents/agent-x.json" "$EP/-p/$EU/subagents/agent-x.jsonl.bak"
+
+# --- a valid-JSON line that is not an object: main transcript and child file
+for bad_line in 'null' '[1]' '3' '"s"'; do
+  cp "$EP/-p/$EU.jsonl" "$TMP/main.keep"
+  printf '%s\n' "$bad_line" >> "$EP/-p/$EU.jsonl"
+  ARGS=("$EU"); refused "main transcript line $bad_line is a REFUSE naming file and line 11" "$EU.jsonl:11:"
+  cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
+  printf '%s\n' "$bad_line" >> "$EP/-p/$EU/subagents/agent-ok.jsonl"
+  ARGS=("$EU"); refused "child file line $bad_line is a REFUSE naming file and line 11" "agent-ok.jsonl:11:"
+  gen "$EP/-p/$EU/subagents/agent-ok.jsonl" 10 1 msgid
+done
+printf 'not json at all\n{"half":\n' >> "$EP/-p/$EU.jsonl"
+got=$(edge_run "$EU" 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(wl "$got")" = "<workload note> · subagents: 0.3M/1 · work: 0pr/0iss" ] \
+  && ok "lines that are not JSON at all are still skipped" \
+  || bad "lines that are not JSON at all are still skipped" "rc=$rc $(flat "$got")"
+cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
+
+# --- ambiguous short ids
+AM1=abcd1234-0000-4000-8000-000000000001; AM2=abcd1234-0000-4000-8000-000000000002
+mkdir -p "$EP/-p" "$EP/-q"
+gen "$EP/-p/$AM1.jsonl" 10 1 msgid; gen "$EP/-q/$AM2.jsonl" 10 1 msgid
+ARGS=(abcd1234); refused "a short id matching two different sessions is a REFUSE" "$AM1"
+printf '%s' "$(edge_run abcd1234 2>&1 >/dev/null)" | grep -qF "$AM2" && printf '%s' "$(edge_run abcd1234 2>&1 >/dev/null)" | grep -qF "$EP/-q/$AM2.jsonl" \
+  && ok "the refusal lists both candidate ids and their paths" \
+  || bad "the refusal lists both candidate ids and their paths" "$(flat "$(edge_run abcd1234 2>&1 >/dev/null)")"
+got=$(edge_run abcd1234-0000-4000-8000-000000000001 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && [ "$(field "$got" 3)" = abcd1234 ] \
+  && ok "a unique longer prefix still resolves" || bad "a unique longer prefix still resolves" "rc=$rc"
+# a full id is never refused because a longer-named transcript also matches its glob
+gen "$EP/-q/$AM1-extra.jsonl" 10 1 msgid; touch "$EP/-q/$AM1-extra.jsonl"
+got=$(edge_run "$AM1" 2>"$TMP/edge.err"); rc=$?
+[ "$rc" -eq 0 ] && grep -qF "$EP/-p/$AM1.jsonl" "$TMP/edge.err" \
+  && ok "an exact full id wins over a longer name sharing its prefix" \
+  || bad "an exact full id wins over a longer name sharing its prefix" "rc=$rc $(flat "$(cat "$TMP/edge.err")")"
+rm -f "$EP/-q/$AM1-extra.jsonl"
+got=$(HOME="$EH" CLAUDE_CODE_SESSION_ID=abcd1234 "$PY" "${EDGE_SUT:-$SUT}" 2>"$TMP/edge.err"); rc=$?
+[ "$rc" -ne 0 ] && [ -z "$got" ] && grep -q '^REFUSE: ' "$TMP/edge.err" && grep -qF "$AM2" "$TMP/edge.err" \
+  && ok "\$CLAUDE_CODE_SESSION_ID takes the same distinct-id refusal" \
+  || bad "\$CLAUDE_CODE_SESSION_ID takes the same distinct-id refusal" "rc=$rc $(flat "$(cat "$TMP/edge.err")")"
+# the same session id in two project dirs is ONE session: newest wins, as before
+mkdir -p "$EP/-r"; cp "$EP/-p/$EU.jsonl" "$EP/-r/$EU.jsonl"; touch "$EP/-r/$EU.jsonl"
+got=$(edge_run 7e1d 2>"$TMP/edge.err"); rc=$?
+[ "$rc" -eq 0 ] && grep -qF "$EP/-r/$EU.jsonl" "$TMP/edge.err" \
+  && ok "one session id in two project dirs is not ambiguous: newest mtime wins" \
+  || bad "one session id in two project dirs is not ambiguous: newest mtime wins" "rc=$rc $(flat "$(cat "$TMP/edge.err")")"
+
+# --- mutants: each must turn its case red
+if MUT=$(mutant nonobject usage-benchmark-row.py 's/^        if not isinstance(rec, dict):$/        if False:/'); then
+  cp "$EP/-p/$EU.jsonl" "$TMP/main.keep"; printf 'null\n' >> "$EP/-p/$EU.jsonl"
+  eo=$(HOME="$EH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" "$EU" 2>"$TMP/edge.err"); erc=$?
+  cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
+  grep -q Traceback "$TMP/edge.err" \
+    && ok "the fixture DISTINGUISHES the two implementations (non-object check removed: traceback)" \
+    || bad "the fixture DISTINGUISHES the two implementations (non-object check removed: traceback)" "rc=$erc"
+else bad "the fixture DISTINGUISHES the two implementations (non-object check removed: traceback)" "could not build the mutant"; fi
+if MUT=$(mutant ambiguous usage-benchmark-row.py 's/^    if len(stems) > 1:$/    if False:/'); then
+  eo=$(HOME="$EH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" abcd1234 2>/dev/null); erc=$?
+  [ "$erc" -eq 0 ] \
+    && ok "the fixture DISTINGUISHES the two implementations (distinct-id refusal removed: newest taken)" \
+    || bad "the fixture DISTINGUISHES the two implementations (distinct-id refusal removed: newest taken)" "rc=$erc"
+else bad "the fixture DISTINGUISHES the two implementations (distinct-id refusal removed: newest taken)" "could not build the mutant"; fi
+if [ "$(id -u)" -ne 0 ]; then
+  if MUT=$(mutant skipdir usage_accounting.py 's/^        raise error$/        return/'); then
+    mkdir "$EP/-p/$EU/subagents/locked-dir"; chmod 000 "$EP/-p/$EU/subagents/locked-dir"
+    eo=$(EDGE_SUT="$MUT" edge_run "$EU" 2>/dev/null); erc=$?
+    chmod 755 "$EP/-p/$EU/subagents/locked-dir"; rmdir "$EP/-p/$EU/subagents/locked-dir"
+    [ "$erc" -eq 0 ] \
+      && ok "the fixture DISTINGUISHES the two implementations (unreadable dir skipped: row emitted)" \
+      || bad "the fixture DISTINGUISHES the two implementations (unreadable dir skipped: row emitted)" "rc=$erc"
+  else bad "the fixture DISTINGUISHES the two implementations (unreadable dir skipped: row emitted)" "could not build the mutant"; fi
+  if MUT=$(mutant skipfile usage-benchmark-row.py '/fh = open(source, errors="replace")/,/die(f"cannot measure subagents: {e}")/{s/die(f"cannot measure subagents: {e}")/continue/;}'); then
+    gen "$EP/-p/$EU/subagents/agent-locked.jsonl" 10 1 msgid; chmod 000 "$EP/-p/$EU/subagents/agent-locked.jsonl"
+    eo=$(EDGE_SUT="$MUT" edge_run "$EU" 2>/dev/null); erc=$?
+    chmod 644 "$EP/-p/$EU/subagents/agent-locked.jsonl"; rm -f "$EP/-p/$EU/subagents/agent-locked.jsonl"
+    [ "$erc" -eq 0 ] \
+      && ok "the fixture DISTINGUISHES the two implementations (unreadable file skipped: row emitted)" \
+      || bad "the fixture DISTINGUISHES the two implementations (unreadable file skipped: row emitted)" "rc=$erc"
+  else bad "the fixture DISTINGUISHES the two implementations (unreadable file skipped: row emitted)" "could not build the mutant"; fi
+fi
+if MUT=$(mutant nofilter usage_accounting.py 's/ if name.endswith(".jsonl")\]/]/'); then
+  gen "$EP/-p/$EU/subagents/agent-x.json" 10 1 msgid
+  eo=$(EDGE_SUT="$MUT" edge_run "$EU" 2>/dev/null)
+  rm -f "$EP/-p/$EU/subagents/agent-x.json"
+  [ "$(wl "$eo")" != "<workload note> · subagents: 0.3M/1 · work: 0pr/0iss" ] \
+    && ok "the fixture DISTINGUISHES the two implementations (.jsonl filter dropped: totals change)" \
+    || bad "the fixture DISTINGUISHES the two implementations (.jsonl filter dropped: totals change)" "$(flat "$eo")"
+else bad "the fixture DISTINGUISHES the two implementations (.jsonl filter dropped: totals change)" "could not build the mutant"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

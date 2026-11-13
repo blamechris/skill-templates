@@ -27,6 +27,11 @@ nothing is emitted, so nothing wrong can be appended):
   - $CLAUDE_CODE_SESSION_ID set but matching no transcript — set-but-stale is
     not a licence to fall through to the same heuristic.
   - an explicit argument matching no transcript.
+  - a short id (or $CLAUDE_CODE_SESSION_ID) whose glob matches transcripts of more than
+    one distinct session id: the candidates are listed. The same id in several project
+    dirs is one session and keeps resolving to the newest. skill-templates#386.
+  - a transcript or child line that is valid JSON but not an object (`null`, `[1]`, `3`,
+    `"s"`): named by file and line. Lines that are not JSON at all are still skipped.
   - an argument shape that cannot be read one way: an unknown tier, `--tier` with
     no value or given twice, an unknown option, more than one session argument,
     `--figures` given twice or beside anything else.
@@ -181,6 +186,27 @@ def parse_args(args):
         sys.exit(0)
     return target, tier
 
+def newest_unambiguous(pattern_id, hits, how):
+    """The one transcript `hits` (the glob matches for `pattern_id`) resolve to.
+
+    Hits sharing ONE file stem are the same session id in several project dirs (a
+    recycled worktree): the newest mtime wins, as it always did. Hits spanning more
+    than one stem are different sessions sharing a prefix; picking the newest would print
+    one session's row under an id that names several, so that is a REFUSE listing every
+    candidate. A stem EQUAL to `pattern_id` is the session the caller named in full, so it
+    wins outright: a full id is never refused because a longer name also matches its glob.
+    One helper for the argv and $CLAUDE_CODE_SESSION_ID branches."""
+    stems = {}
+    for h in hits:
+        stems.setdefault(os.path.basename(h)[:-len(".jsonl")], []).append(h)
+    if pattern_id in stems:
+        return max(stems[pattern_id], key=os.path.getmtime), how
+    if len(stems) > 1:
+        lines = [f"  {stem}: " + ", ".join(sorted(paths)) for stem, paths in sorted(stems.items())]
+        die(f"{pattern_id!r} matches {len(stems)} different sessions — pass a longer id or a "
+            ".jsonl path. Candidates:\n" + "\n".join(lines))
+    return max(hits, key=os.path.getmtime), how
+
 def pick_transcript(a):
     if a is not None:
         # An empty or glob-metachar argument would wildcard the id glob below into
@@ -191,13 +217,13 @@ def pick_transcript(a):
             return a, "argv path"
         hits = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{a}*.jsonl"))
         if hits:
-            return max(hits, key=os.path.getmtime), f"argv {a!r}"
+            return newest_unambiguous(a, hits, f"argv {a!r}")
         die(f"no transcript matching {a!r}. Pass a session id or a .jsonl path.")
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
     if sid:
         hits = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid}*.jsonl"))
         if hits:
-            return max(hits, key=os.path.getmtime), f"$CLAUDE_CODE_SESSION_ID={sid[:8]}"
+            return newest_unambiguous(sid, hits, f"$CLAUDE_CODE_SESSION_ID={sid[:8]}")
         # Set but unresolvable is NOT a licence to guess: falling through to a
         # mtime heuristic here is exactly how a row gets another session's id.
         die(f"CLAUDE_CODE_SESSION_ID={sid!r} is set but no transcript matches it. "
@@ -206,6 +232,23 @@ def pick_transcript(a):
     # here resolved the WRONG session three times in one week (see docstring).
     die("no session id: pass one explicitly, or run from inside a Claude session "
         "(where $CLAUDE_CODE_SESSION_ID is set).")
+
+def json_records(fh, source):
+    """Yield (line number, record) for each line of `fh` that is a JSON object.
+
+    A line that is not valid JSON is skipped, as it always was. A line that IS valid JSON
+    but not an object (`null`, `[1]`, `3`, `"s"`) is a REFUSE naming the file and line: the
+    readers below call `.get` on every record, and a traceback there would be a crash, not
+    an answer. The one loop both the main transcript and every child file read through."""
+    for line_no, line in enumerate(fh, 1):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            die(f"{source}:{line_no}: transcript line is valid JSON but not an object "
+                f"({type(rec).__name__}) — cannot be read as a record.")
+        yield line_no, rec
 
 def scan_subagents(roots, selected):
     """Add child records to the same global selection as the parent.
@@ -227,11 +270,7 @@ def scan_subagents(roots, selected):
             die(f"cannot measure subagents: {e}")
         count += 1
         with fh:
-            for line_no, line in enumerate(fh, 1):
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
+            for line_no, rec in json_records(fh, source):
                 selected.add(rec, source, line_no, "child")
     return count, held
 
@@ -359,11 +398,7 @@ path, how = pick_transcript(target)
 n = 0; eff = 0.0; out = 0; t0 = t1 = None
 selected = Responses()
 with open(path, errors="replace") as f:
-    for line_no, line in enumerate(f, 1):
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
+    for line_no, rec in json_records(f, path):
         ts = rec.get("timestamp")
         if ts:
             t0 = t0 or ts
