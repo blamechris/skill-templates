@@ -12,6 +12,8 @@ Usage:
   python3 ~/.claude/scripts/usage-trend.py --all      # print full recorded history
   python3 ~/.claude/scripts/usage-trend.py --json     # dump merged history as JSON
   python3 ~/.claude/scripts/usage-trend.py --no-sync  # skip git pull/push
+  python3 ~/.claude/scripts/usage-trend.py --help     # this text; touches nothing
+Any other argument is refused (status 2) before anything is read, written or synced.
 
 Meter-week mode (buckets by the Wed 15:59 PT weekly-reset boundary, splits
 main-thread vs subagent spend; never git-syncs and never touches the daily files):
@@ -817,7 +819,38 @@ def main():
     print(f"this machine: {machine} -> {own_file.name}; history dir: {HIST_DIR}")
 
 
+# Every flag the code below reads. Anything else is refused BEFORE any side effect: the
+# flag tests are plain `"--x" in sys.argv`, so an unknown flag used to fall through to the
+# git-syncing daily run -- `usage-trend.py --help`, meant as a harmless check, scanned,
+# committed and pushed the usage history (2026-11-13).
+ARG_FLAGS = {"--no-sync", "--json", "--all", "--week", "--write", "--oneline", "--close-label"}
+
+
+def check_args(argv):
+    """Exit on `-h`/`--help` (usage, status 0) or on any argument that is not a documented
+    flag (status 2), before the machine file, the history dir, a scan or git is touched.
+    `--weeks` must be followed by a number, as week_main has always required."""
+    if "-h" in argv or "--help" in argv:
+        print(__doc__.strip())
+        sys.exit(0)
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--weeks":
+            try:
+                int(argv[i + 1])
+            except (IndexError, ValueError):
+                sys.exit("--weeks needs a number")   # status 1, as week_main always exited
+            i += 2
+            continue
+        if arg not in ARG_FLAGS:
+            print(f"usage-trend: unknown argument {arg!r}; see --help", file=sys.stderr)
+            sys.exit(2)
+        i += 1
+
+
 if __name__ == "__main__":
+    check_args(sys.argv[1:])
     if "--week" in sys.argv:
         week_main()
     else:
