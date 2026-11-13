@@ -485,6 +485,60 @@ def strip_comment(s):
     return s.rstrip()
 
 
+def parse_quoted(s, start):
+    """(value, end) of the YAML quoted scalar whose opening quote is `s[start]`; `end` is the index
+    after the closing quote. Single-quoted: only `''` is an escape, backslashes stay literal.
+    Double-quoted: the character and `x`/`u`/`U` hexadecimal escapes decode to the character they
+    denote (docs\\u002f** is docs/**). Raises ValueError for anything it cannot read -- unknown,
+    malformed, incomplete or surrogate escapes, an unterminated quote -- so a caller never builds
+    a fabricated path filter from text it did not understand. Shared by the flow parser and the
+    block-form path filters, so both read one quoted value the same way (#373)."""
+    q = s[start]
+    pos = start + 1
+    out = []
+    while pos < len(s):
+        c = s[pos]
+        if c == q:
+            if q == "'" and s[pos:pos + 2] == "''":
+                out.append("'")
+                pos += 2
+                continue
+            return "".join(out), pos + 1
+        if c == "\\" and q == '"':
+            pos += 1
+            if pos >= len(s):
+                raise ValueError("incomplete quoted escape")
+            escape = s[pos]
+            # YAML double-quoted escapes denote characters, not the text
+            # after the slash: docs\u002f** must remain docs/**. Unknown
+            # syntax must fail closed rather than invent a path filter.
+            escapes = {
+                "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t",
+                "n": "\n", "v": "\v", "f": "\f", "r": "\r", "e": "\x1b",
+                " ": " ", '"': '"', "/": "/", "\\": "\\",
+                "N": "\x85", "_": "\xa0", "L": "\u2028", "P": "\u2029",
+            }
+            if escape in escapes:
+                out.append(escapes[escape])
+            elif escape in ("x", "u", "U"):
+                width = {"x": 2, "u": 4, "U": 8}[escape]
+                digits = s[pos + 1:pos + 1 + width]
+                if len(digits) != width or not re.fullmatch(r"[0-9A-Fa-f]+", digits):
+                    raise ValueError("bad hexadecimal quoted escape")
+                codepoint = int(digits, 16)
+                if codepoint > 0x10ffff or 0xd800 <= codepoint <= 0xdfff:
+                    raise ValueError("quoted escape is not a Unicode scalar")
+                out.append(chr(codepoint))
+                pos += width
+            else:
+                raise ValueError("unsupported quoted escape")
+            pos += 1
+            continue
+        out.append(c)
+        pos += 1
+    raise ValueError("unterminated quote")
+
+
 def parse_flow(s):
     """A YAML flow node -- `{k: v, ...}`, `[a, b]` or a scalar -- as dict / list / str, quotes
     removed. A flow-mapping key with no value (`{pull_request, push}`) maps to None. Raises
@@ -498,51 +552,8 @@ def parse_flow(s):
     def scalar(stops):
         skip()
         if pos[0] < len(s) and s[pos[0]] in "'\"":
-            q = s[pos[0]]
-            pos[0] += 1
-            out = []
-            while pos[0] < len(s):
-                c = s[pos[0]]
-                if c == q:
-                    if q == "'" and s[pos[0]:pos[0] + 2] == "''":
-                        out.append("'")
-                        pos[0] += 2
-                        continue
-                    pos[0] += 1
-                    return "".join(out)
-                if c == "\\" and q == '"':
-                    pos[0] += 1
-                    if pos[0] >= len(s):
-                        raise ValueError("incomplete quoted escape")
-                    escape = s[pos[0]]
-                    # YAML double-quoted escapes denote characters, not the text
-                    # after the slash: docs\u002f** must remain docs/**. Unknown
-                    # syntax must fail closed rather than invent a path filter.
-                    escapes = {
-                        "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t",
-                        "n": "\n", "v": "\v", "f": "\f", "r": "\r", "e": "\x1b",
-                        " ": " ", '"': '"', "/": "/", "\\": "\\",
-                        "N": "\x85", "_": "\xa0", "L": "\u2028", "P": "\u2029",
-                    }
-                    if escape in escapes:
-                        out.append(escapes[escape])
-                    elif escape in ("x", "u", "U"):
-                        width = {"x": 2, "u": 4, "U": 8}[escape]
-                        digits = s[pos[0] + 1:pos[0] + 1 + width]
-                        if len(digits) != width or not re.fullmatch(r"[0-9A-Fa-f]+", digits):
-                            raise ValueError("bad hexadecimal quoted escape")
-                        codepoint = int(digits, 16)
-                        if codepoint > 0x10ffff or 0xd800 <= codepoint <= 0xdfff:
-                            raise ValueError("quoted escape is not a Unicode scalar")
-                        out.append(chr(codepoint))
-                        pos[0] += width
-                    else:
-                        raise ValueError("unsupported quoted escape")
-                    pos[0] += 1
-                    continue
-                out.append(c)
-                pos[0] += 1
-            raise ValueError("unterminated quote")
+            value, pos[0] = parse_quoted(s, pos[0])
+            return value
         start = pos[0]
         while pos[0] < len(s) and s[pos[0]] not in stops:
             if s[pos[0]] == ":" and (pos[0] + 1 >= len(s) or s[pos[0] + 1] in " \t\n,]}"):
@@ -2395,9 +2406,27 @@ def event_block(block, event):
     return body
 
 
+def block_item(text):
+    """The value of one block-form path item (`- <text>`), or None when unreadable. A quoted item
+    is read by the flow parser's own `parse_quoted` -- double-quoted escapes decode, single-quoted
+    backslashes stay literal -- and must end where its closing quote does (a trailing comment
+    aside). An item whose escapes or quoting cannot be read (#373) yields NO filter evidence,
+    exactly as the flow parser treats the same text. An unquoted item is kept as written."""
+    text = text.strip()
+    if text[:1] in ("'", '"'):
+        try:
+            value, end = parse_quoted(text, 0)
+        except ValueError:
+            return None
+        rest = text[end:].strip()
+        return value if not rest or rest.startswith("#") else None
+    return text.strip("'\"")
+
+
 def path_filters(event_lines):
     """{"paths": [...], "paths-ignore": [...]} for whichever of the two keys an event block sets:
-    block or inline flow lists, quotes and trailing comments stripped."""
+    block or inline flow lists, quoted items decoded like the flow parser's (an unreadable item is
+    dropped, an unreadable inline list yields no entry), trailing comments stripped."""
     out = {}
     for i, ln in enumerate(event_lines):
         m = re.match(r"^(\s*)['\"]?(paths|paths-ignore)['\"]?:\s*(.*?)\s*(?:\s#.*)?$", ln)
@@ -2405,7 +2434,11 @@ def path_filters(event_lines):
             continue
         indent, key, val = len(m.group(1)), m.group(2), m.group(3)
         if val.startswith("["):
-            out[key] = [x.strip().strip("'\"") for x in val.strip("[]").split(",") if x.strip()]
+            try:
+                node = parse_flow(val)
+            except ValueError:
+                continue
+            out[key] = [x for x in node if isinstance(x, str)] if isinstance(node, list) else []
             continue
         items = []
         for nxt in event_lines[i + 1:]:
@@ -2415,7 +2448,9 @@ def path_filters(event_lines):
             # An item may sit at the key's own indent (YAML's indentless sequence); a key does not.
             if not item or len(item.group(1)) < indent:
                 break
-            items.append(item.group(2).strip("'\""))
+            value = block_item(item.group(2))
+            if value is not None:
+                items.append(value)
         out[key] = items
     return out
 

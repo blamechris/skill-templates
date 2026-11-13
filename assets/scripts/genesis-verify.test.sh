@@ -2083,6 +2083,77 @@ set_on mirror-a.yml 'on: {pull_request: {paths-ignore: ["docs\u002f**"]}}'
 set_on mirror-b.yml 'on: {pull_request: {paths: ["docsu002f**"]}}'
 expect "unequal decoded paths cannot become a complementary mirror: core.ci-gate stays FAIL" core.ci-gate FAIL 1
 
+# #373: block and block-inline double-quoted path items decode exactly as the flow parser's do.
+# A double-quoted "docs\x2f**" is docs/**; the single-quoted 'docs\x2f**' keeps its backslash, so
+# the two are DIFFERENT paths and cannot form a complementary mirror: core.ci-gate stays FAIL.
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+set_on mirror-a.yml 'on:
+  pull_request:
+    paths-ignore:
+      - "docs\x2f**"'
+set_on mirror-b.yml "on:
+  pull_request:
+    paths:
+      - 'docs\\x2f**'"
+expect "#373 block \"docs\\x2f**\" vs block 'docs\\x2f**' are different paths: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+set_on mirror-a.yml 'on:
+  pull_request:
+    paths-ignore:
+      - "docs\x2f**"'
+set_on mirror-b.yml "on: {pull_request: {paths: ['docs\\x2f**']}}"
+expect "#373 block \"docs\\x2f**\" vs a FLOW-mapping 'docs\\x2f**' are different paths: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+set_on mirror-a.yml 'on:
+  pull_request:
+    paths-ignore: ["docs\x2f**"]'
+set_on mirror-b.yml "on:
+  pull_request:
+    paths: ['docs\\x2f**']"
+expect "#373 block-inline \"docs\\x2f**\" vs block 'docs\\x2f**' are different paths: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+# ...and the safe direction: a double-quoted escape that DOES decode to the same path pairs.
+mirror_form "#373 a block double-quoted escaped slash pairs with a plain literal path" 'on:
+  pull_request:
+    paths-ignore:
+      - "docs\x2f**"' 'on:
+  pull_request:
+    paths:
+      - docs/**'
+mirror_form "#373 a block-inline double-quoted escaped slash pairs with a plain literal path" 'on:
+  pull_request:
+    paths-ignore: ["docs\u002f**"]' 'on:
+  pull_request:
+    paths: [docs/**]'
+
+cat > "$TMP/block-filters-unit.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gv", sys.argv[1])
+gv = importlib.util.module_from_spec(spec); spec.loader.exec_module(gv)
+def pf(text):
+    return gv.path_filters(text.splitlines())
+cases = [
+    ("block dq escape decodes", 'paths:\n  - "docs\\x2f**"', {"paths": ["docs/**"]}),
+    ("block dq without escape = plain", 'paths:\n  - "docs/**"', pf("paths:\n  - docs/**")),
+    ("block dq without escape", 'paths:\n  - "docs/**"', {"paths": ["docs/**"]}),
+    ("block sq keeps the backslash", "paths:\n  - 'docs\\x2f**'", {"paths": ["docs\\x2f**"]}),
+    ("block sq doubled quote", "paths:\n  - 'it''s/**'", {"paths": ["it's/**"]}),
+    ("block dq with a comment", 'paths:\n  - "a\\u002fb"  # c', {"paths": ["a/b"]}),
+    ("block-inline dq decodes", 'paths-ignore: ["docs\\u002f**", \'b\\x2f\', c]',
+     {"paths-ignore": ["docs/**", "b\\x2f", "c"]}),
+    ("block-inline dq comma inside the quotes", 'paths: ["a,b", c]', {"paths": ["a,b", "c"]}),
+    ("block dq bad escape: item dropped", 'paths:\n  - "a\\qb"\n  - ok', {"paths": ["ok"]}),
+    ("block dq surrogate: item dropped", 'paths:\n  - "\\uD800"', {"paths": []}),
+    ("block dq unterminated: item dropped", 'paths:\n  - "abc', {"paths": []}),
+    ("block dq trailing junk: item dropped", 'paths:\n  - "abc" def', {"paths": []}),
+    ("block-inline bad escape: no evidence", 'paths: ["a\\qb", c]', {}),
+]
+bad = [f"{n}: got {pf(t)}, want {w}" for n, t, w in cases if pf(t) != w]
+print("\n".join(bad) if bad else "OK")
+PY
+UNIT=$(python3 "$TMP/block-filters-unit.py" "$SUT")
+[ "$UNIT" = OK ] && ok "#373 block and block-inline path items decode like the flow parser's; single quotes stay literal; unreadable items give no evidence" \
+  || bad "#373 block path-filter escape semantics" "$(flat "$UNIT")"
+
 # A sequence or a list cannot carry a filter, so a pair using one is NOT complementary: it must
 # stay FAIL. The detection itself is asserted at the unit level, below.
 fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
