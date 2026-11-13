@@ -1431,15 +1431,18 @@ closer(900, moid(546))
 pr(547, [], "Fixes https://github.com/acme/widgets/issues/801\nFixes https://github.com/other/x/issues/802")
 closer(801, moid(547)); closer(802, moid(547))
 # 548-551: commits API answers 200 with an unexpected shape (#456). refs [12]
-# is the fallback; "Fixes #950" would be a confirmable candidate if the
-# message were (wrongly) read from the odd body, so it must NOT appear.
-for n, shape in ((548, {"commit": {}}),
-                 (549, {"commit": {"message": None}}),
-                 (550, {"commit": {"message": 42}}),
-                 (551, [])):
-    pr(n, [12], "Fixes #950", commit_fixture=False)
-    jfile(f"commit_{moid(n)}.json", shape)
-    closer(950, moid(n))
+# is the fallback. Each PR has its OWN candidate issue (950-953) whose closer
+# fixture confirms that PR's merge oid, and the candidate text ("Fixes #N") is
+# embedded in the odd body, so a mutant that harvests candidates from an
+# unexpected shape would count N and turn that PR's closes == [12] red.
+for n, mk in ((548, lambda c: {"commit": {}, "note": c}),
+              (549, lambda c: {"commit": {"message": None}, "note": c}),
+              (550, lambda c: {"commit": {"message": 42}, "note": c}),
+              (551, lambda c: [{"message": c}])):
+    cand = 950 + n - 548
+    pr(n, [12], "unused", commit_fixture=False)
+    jfile(f"commit_{moid(n)}.json", mk(f"Fixes #{cand}"))
+    closer(cand, moid(n))
 PYEOF
 touch "$FAKE_GH_DIR/fail_closer_700"
 touch "$FAKE_GH_DIR/fail_commit_$(printf '546%.0s' $(seq 14) | cut -c1-40)"
