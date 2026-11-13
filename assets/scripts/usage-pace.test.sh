@@ -3300,5 +3300,20 @@ got=$(pymod "print(up.last_model(sys.argv[3]))" "$t" 2>&1)
 [ "$got" = "claude-fable-5" ] && ok "last_model skips a newest record whose message is not an object" \
   || bad "last_model skips a newest record whose message is not an object" "got=$(flat "$got")"
 
+# The skipped-records note is stderr-only and NEVER comes from the hook (#467): a hook
+# whose scan meets malformed records stays silent on both streams unless it speaks.
+H467=$TMP/hook467home
+# A bare HOME (no meter fixture): the hook still fires, pace() scans the projects tree,
+# and the scan meets the malformed records -- so a note leaking past the hook guard shows.
+mkdir -p "$H467/.claude/projects/-p"
+{
+  printf '%s\n' 'null' '[{"type":"assistant"}]' '{"type":"assistant","message":"x"}'
+} >> "$H467/.claude/projects/-p/dirty.jsonl"
+err467=$(printf '{"session_id":"s467","transcript_path":"%s"}' "$TMP/fable.jsonl" \
+  | HOME="$H467" "$PY" "$SUT" --hook --every 1 2>&1 >/dev/null); rc=$?
+[ "$rc" -eq 0 ] && ! printf '%s' "$err467" | grep -q 'malformed' && ! printf '%s' "$err467" | grep -q Traceback \
+  && ok "the hook stays silent on stderr when its scan skips malformed records" \
+  || bad "the hook stays silent on stderr when its scan skips malformed records" "rc=$rc err=$(flat "$err467")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
