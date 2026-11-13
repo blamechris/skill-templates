@@ -471,6 +471,70 @@ class UsageAccountingTests(unittest.TestCase):
             self.assertEqual(deduped["all_in_responses"], 3)
             self.assertEqual(Decimal(deduped["all_in_usd"]), Decimal("2.505"))
 
+    def _nonobject_fixture(self, root):
+        main = root / "session-1.jsonl"
+        child = root / "session-1" / "subagents" / "agent-1.jsonl"
+        child.parent.mkdir(parents=True)
+        main.write_text(json.dumps(rec("2026-09-29T00:00:00Z", "r1", "m1",
+                                       "claude-opus-5-5", 10, stop="end_turn")) + "\n")
+        child.write_text(json.dumps(rec("2026-09-29T00:00:03Z", "r2", "m2",
+                                        "claude-sonnet-5", 10, stop="end_turn")) + "\n")
+        return main, child
+
+    def _run_checkpoint(self, main, out):
+        return subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                               "--session", str(main), "--run-id", "run-1",
+                               "--capture-at", "2026-09-29T00:01:00Z", "--status", "final",
+                               "--out-dir", str(out)], capture_output=True, text=True)
+
+    def _assert_refused(self, result, target, line_no, out):
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertTrue(result.stderr.startswith("REFUSE: "), result.stderr)
+        self.assertIn("%s:%d:" % (target, line_no), result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(list(out.glob("*")) if out.exists() else [], [])
+
+    def test_checkpoint_refuses_non_object_lines_in_main_and_child(self):
+        for junk in (b"null", b"[1]", b"3", b'"s"'):
+            for where in ("main", "child"):
+                with self.subTest(junk=junk, where=where), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    main, child = self._nonobject_fixture(root)
+                    target = main if where == "main" else child
+                    with target.open("ab") as fh:
+                        fh.write(junk + b"\n")
+                    out = root / "out"
+                    self._assert_refused(self._run_checkpoint(main, out), target, 2, out)
+
+    def test_checkpoint_refuses_non_object_line_decoded_by_replacement_fallback(self):
+        for where in ("main", "child"):
+            with self.subTest(where=where), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                main, child = self._nonobject_fixture(root)
+                target = main if where == "main" else child
+                with target.open("ab") as fh:
+                    fh.write(b'"\xff"\n')
+                out = root / "out"
+                self._assert_refused(self._run_checkpoint(main, out), target, 2, out)
+
+    def test_checkpoint_still_skips_lines_that_are_not_json(self):
+        checkpoint = load("usage_checkpoint_skip_junk", HERE / "usage-checkpoint.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            main, child = self._nonobject_fixture(root)
+            clean = checkpoint.capture(main, "run-1", "2026-09-29T00:01:00Z", "final")
+            for target in (main, child):
+                with target.open("ab") as fh:
+                    fh.write(b"not json\n{\"half\":\n")
+            noisy = checkpoint.capture(main, "run-1", "2026-09-29T00:01:00Z", "final")
+            self.assertNotEqual(noisy["source_coverage"], clean["source_coverage"])
+            for doc in (clean, noisy):
+                for part in doc["source_coverage"]:
+                    part.pop("bytes")
+                    part.pop("sha256")
+            self.assertEqual(noisy, clean)
+
     def test_aggregate_keeps_unknown_ttl_bounds_and_unpriced_coverage(self):
         checkpoint = load("usage_checkpoint_bounds", HERE / "usage-checkpoint.py")
         with tempfile.TemporaryDirectory() as tmp:

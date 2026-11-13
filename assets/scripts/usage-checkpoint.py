@@ -94,10 +94,14 @@ def capture_session(path, run_id, captured_at, status):
                         # a bad byte, or a line a live writer cut inside a multi-byte
                         # character: the digest above still covers the raw bytes
                         record = json.loads(raw.decode("utf-8", errors="replace"))
-                    selected.add(record, str(source), line_no,
-                                 "child" if source != path else "main")
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(record, dict):
+                    raise ValueError(
+                        f"{source}:{line_no}: transcript line is valid JSON but not an "
+                        f"object ({type(record).__name__})")
+                selected.add(record, str(source), line_no,
+                             "child" if source != path else "main")
         coverage.append({"path": str(source), "bytes": byte_count,
                          "sha256": digest.hexdigest()})
     resolved = selected.selected
