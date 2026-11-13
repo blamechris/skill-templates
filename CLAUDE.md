@@ -110,10 +110,10 @@ When authoring or customizing a skill whose output is shown to the user, include
 - `main` is protected — "Require a pull request before merging" is on, so **every**
   change lands through a PR. That includes one-line template refinements and
   generated-index updates; there is no "too small for a PR" tier.
-- Admin bypass is not permission. `enforce_admins` is off, so a direct push by the
-  owner will succeed silently and skip `validate-registry` entirely. The one time
-  that happened (`49ccfc5`, no associated PR) it was reverted in #132 and redone
-  properly as #133. Branch, push the branch, open a PR.
+- Admin bypass is not permission. Whatever the branch-protection settings allow at the
+  moment, never push to `main` directly: a direct push skips `validate-registry`
+  entirely. The one time that happened (`49ccfc5`, no associated PR) it was reverted
+  in #132 and redone properly as #133. Branch, push the branch, open a PR.
 - Commit format: `type(scope): description`
 - Types: feat, fix, refactor, docs, chore
 - **Assert the branch before you write** (#163) — record the branch you create or check out
