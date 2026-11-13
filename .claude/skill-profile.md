@@ -28,7 +28,7 @@
   - `./assets/scripts/session-seed.test.sh`
   - `./assets/scripts/usage-benchmark-row.test.sh`
   - `./assets/scripts/fleet-check.test.sh`
-- Lint/typecheck: no typechecker and no linter config (plain ESM, no `package.json`). The mechanical gate is `./scripts/skill-lint.sh <name> .claude/commands/<name>.md ./registry.json` per installed skill — exit 0 clean, 1 findings, 2 not verifiable. Native artifacts are checked with `node assets/compile-skill-targets.mjs --dry-run`.
+- Lint/typecheck: no typechecker and no linter config (plain ESM, no `package.json`). The mechanical gate is `./scripts/skill-lint.sh <name> .claude/commands/<name>.md ./registry.json` per installed skill — exit 0 clean, 1 findings, 2 not verifiable. Native artifacts are checked the way CI does: run `node assets/compile-skill-targets.mjs`, then `git status --porcelain -- .claude/skills .gemini .codex` must print nothing (the "compiled skill targets are in sync with their sources" step in `validate-registry.yml`).
 
 ## Conventions
 - Branch prefix / naming: `<type>/<slug>`, or `<type>/<issue>-<slug>` when it closes an issue — `feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `revert/`. The post-merge reindex bot uses `chore/reindex-registry`.
