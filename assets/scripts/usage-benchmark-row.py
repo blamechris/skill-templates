@@ -207,6 +207,10 @@ def newest_unambiguous(pattern_id, hits, how):
             ".jsonl path. Candidates:\n" + "\n".join(lines))
     return max(hits, key=os.path.getmtime), how
 
+# The projects dir, escaped: a `[` or `*` in HOME must not turn into a pattern (#397).
+PROJECTS_GLOB = glob.escape(os.path.expanduser("~/.claude/projects"))
+
+
 def pick_transcript(a):
     if a is not None:
         # An empty or glob-metachar argument would wildcard the id glob below into
@@ -215,13 +219,13 @@ def pick_transcript(a):
             die(f"invalid session-id argument {a!r} — pass a real id or a .jsonl path.")
         if a.endswith(".jsonl") and os.path.exists(a):
             return a, "argv path"
-        hits = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{a}*.jsonl"))
+        hits = glob.glob(os.path.join(PROJECTS_GLOB, "*", f"{a}*.jsonl"))
         if hits:
             return newest_unambiguous(a, hits, f"argv {a!r}")
         die(f"no transcript matching {a!r}. Pass a session id or a .jsonl path.")
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
     if sid:
-        hits = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid}*.jsonl"))
+        hits = glob.glob(os.path.join(PROJECTS_GLOB, "*", f"{sid}*.jsonl"))
         if hits:
             return newest_unambiguous(sid, hits, f"$CLAUDE_CODE_SESSION_ID={sid[:8]}")
         # Set but unresolvable is NOT a licence to guess: falling through to a
@@ -412,7 +416,10 @@ with open(path, errors="replace") as f:
         if key is None:
             rec = dict(rec, requestId=None, message=dict(msg, id=None))
         selected.add(rec, path, line_no, "main")
-roots, main_dir = session_subagent_roots(path)
+try:
+    roots, main_dir = session_subagent_roots(path)
+except OSError as e:
+    die(f"cannot measure subagents: {e}")
 sub_count, held = scan_subagents(roots, selected)
 split = split_project_dirs(held, main_dir)
 sub_eff = 0.0

@@ -58,11 +58,14 @@ def resolve_session(value):
         raise ValueError("session ID or main .jsonl path required")
     path = Path(value).expanduser()
     if path.suffix == ".jsonl" and path.is_file():
-        return path
+        # Absolute without resolving symlinks, so every path stored in the checkpoint is
+        # the same whatever the working directory (#397).
+        return Path(os.path.abspath(path))
     if any(c in value for c in "*?["):
         raise ValueError("wildcard session ID refused")
-    hits = [Path(p) for p in glob.glob(str(Path.home() / ".claude" / "projects" /
-                                        "*" / (value + ".jsonl")))]
+    # The projects dir is escaped: a `[` or `*` in HOME must not turn into a pattern (#397).
+    projects = glob.escape(str(Path.home() / ".claude" / "projects"))
+    hits = [Path(p) for p in glob.glob(os.path.join(projects, "*", value + ".jsonl"))]
     if len(hits) != 1:
         raise ValueError("session ID resolves to %d main transcripts; pass an exact path" % len(hits))
     return hits[0]
@@ -301,7 +304,10 @@ def latest_totals(directory):
                          "ambiguous_identities": global_rows.ambiguous_identities,
                          "selected_without_terminal_metadata": global_rows.without_terminal_metadata(),
                          "unidentified_records": global_rows.unidentified,
-                         "invalid_token_responses": invalid_token_responses}
+                         "invalid_token_responses": invalid_token_responses,
+                         # Captured before #394 may have undercounted a split session (#397).
+                         "checkpoints_without_session_project_dirs": sum(
+                             "session_project_dirs" not in doc for doc in latest.values())}
     for field, name in (("speed", "speed_unknown_responses"),
                         ("inference_geo", "geography_unknown_responses"),
                         ("service_tier", "service_tier_unknown_responses")):

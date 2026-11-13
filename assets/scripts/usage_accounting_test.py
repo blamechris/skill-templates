@@ -2385,6 +2385,112 @@ class _Raw(Exception):
         self.text = text
 
 
+class SessionDiscoveryEdgeTests(ScanFixture):
+    """#397: what decides which transcripts a session owns cannot be narrowed silently, by an
+    unsearchable directory, by the shape of HOME, or by the working directory."""
+
+    STAMP = ("--capture-at", "2026-09-29T00:01:00Z", "--status", "final")
+
+    def checkpoint_into(self, session, out, run_id="r", cwd=None):
+        return subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                               "--session", str(session), "--run-id", run_id, *self.STAMP,
+                               "--out-dir", str(out)], capture_output=True, text=True, cwd=cwd)
+
+    @needs_non_root
+    def test_an_unsearchable_dir_that_could_hold_children_is_a_refuse_in_both_scripts(self):
+        new, old = self.recycled_session()
+        main = new / (SPLIT + ".jsonl")
+        write_records(self.projects / "-demo-mmm-other" / "x.jsonl", [priced_parent("ox")])
+        for label, target, mode in (
+                ("the old project dir", old, 0),
+                ("the session's uuid dir in the old project dir", old / SPLIT, 0),
+                ("another project dir, which could hold one", self.projects / "-demo-mmm-other", 0),
+                ("the projects dir itself, unlistable", self.projects, 0o300)):
+            with self.subTest(label):
+                out = self.root / ("out-" + str(abs(hash(label))))
+                before = target.stat().st_mode & 0o777
+                target.chmod(mode)
+                try:
+                    captured = self.checkpoint_into(main, out)
+                    row = self.run_row(main)
+                finally:
+                    target.chmod(before)
+                for name, result in (("checkpoint", captured), ("row", row)):
+                    self.assertEqual(result.returncode, 1, (name, result.stderr))
+                    self.assertTrue(result.stderr.startswith("REFUSE: "), (name, result.stderr))
+                    self.assertIn(str(target), result.stderr, name)
+                    self.assertNotIn("Traceback", result.stderr, name)
+                    self.assertEqual(result.stdout, "", name)
+                self.assertEqual(list(out.glob("*")) if out.exists() else [], [])
+
+    @needs_non_root
+    def test_an_unsearchable_dir_off_every_root_path_is_not_refused(self):
+        new, _ = self.recycled_session()
+        main = new / (SPLIT + ".jsonl")
+        def captured():
+            done = subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                                   "--session", str(main), *self.STAMP],
+                                  capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return done.stdout
+        clean = captured()
+        notes = new / "notes"                 # a project dir's own subdir, on no root's path
+        notes.mkdir()
+        unreadable(self, notes)
+        self.assertEqual(captured(), clean)
+        self.assertEqual(self.run_row(main).returncode, 0)
+
+    def test_session_id_lookup_survives_glob_characters_in_home(self):
+        home = self.root / "home[x]*"
+        project = home / ".claude" / "projects" / "-p"
+        write_records(project / (SPLIT + ".jsonl"), [priced_parent("gp")])
+        write_records(project / SPLIT / "subagents" / "agent-g.jsonl", [priced_child("gc")])
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            captured = subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                                       "--session", SPLIT, *self.STAMP],
+                                      capture_output=True, text=True)
+            row = self.run_row(SPLIT)
+        self.assertEqual(captured.returncode, 0, captured.stderr)
+        doc = json.loads(captured.stdout)
+        self.assertEqual(doc["session_id"], SPLIT)
+        self.assertEqual(len(doc["source_coverage"]), 2)
+        self.assertEqual(row.returncode, 0, row.stderr)
+        self.assertIn(SPLIT[:8], row.stdout)
+
+    def test_a_relative_session_path_stores_the_same_absolute_paths(self):
+        new, _ = self.recycled_session()
+        # The working directory comes back symlink-resolved (macOS /var is /private/var), so
+        # the absolute run names the same directory the same way.
+        absolute = subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                                   "--session", str(new.resolve() / (SPLIT + ".jsonl")),
+                                   *self.STAMP],
+                                  capture_output=True, text=True)
+        relative = subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                                   "--session", SPLIT + ".jsonl", *self.STAMP],
+                                  capture_output=True, text=True, cwd=new)
+        self.assertEqual((absolute.returncode, relative.returncode), (0, 0), relative.stderr)
+        doc = json.loads(relative.stdout)
+        self.assertTrue(all(os.path.isabs(part["path"]) for part in doc["source_coverage"]))
+        self.assertTrue(all(os.path.isabs(item["source"]) for item in doc["selected_responses"]))
+        self.assertEqual(doc, json.loads(absolute.stdout))
+
+    def test_aggregate_counts_checkpoints_without_session_project_dirs(self):
+        new, old = self.recycled_session()
+        out = self.root / "checkpoints"
+        for session, run_id in ((new / (SPLIT + ".jsonl"), "r1"), (old / (FOREIGN + ".jsonl"), "r2")):
+            self.assertEqual(self.checkpoint_into(session, out, run_id).returncode, 0)
+        def aggregate():
+            done = self.run_checkpoint("--aggregate-dir", str(out))
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return json.loads(done.stdout)
+        self.assertEqual(aggregate()["quality"]["checkpoints_without_session_project_dirs"], 0)
+        first = sorted(out.glob("*.json"))[0]
+        doc = json.loads(first.read_text())
+        del doc["session_project_dirs"]                 # as a checkpoint from before #394
+        first.write_text(json.dumps(doc))
+        self.assertEqual(aggregate()["quality"]["checkpoints_without_session_project_dirs"], 1)
+
+
 class TrendArgumentTests(unittest.TestCase):
     """usage-trend.py refuses any undocumented argument, and answers -h/--help, before any
     side effect. On 2026-11-13 `usage-trend.py --help` fell through to the daily run, which

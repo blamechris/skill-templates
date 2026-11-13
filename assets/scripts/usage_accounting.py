@@ -1,4 +1,5 @@
 """Shared, versioned Claude transcript accounting. No transcript text is retained."""
+import errno
 import glob
 import os
 from decimal import Decimal
@@ -129,6 +130,9 @@ def session_subagent_roots(transcript):
     main_dir: the realpath of the directory holding the main transcript.
     A transcript with no id in its name (a file literally called `.jsonl`) has no roots:
     an empty id would widen the glob to every `projects/*/subagents`.
+    Raises PermissionError when a directory that could hold this session's children cannot
+    be searched -- the projects dir, a project dir in it, or a `<full uuid>` dir -- because
+    the glob skips it silently and the root would vanish from the count (#397).
     Used by usage-benchmark-row.py and usage-checkpoint.py; skill-templates#254, #377."""
     base = os.fspath(transcript)
     if base.endswith(".jsonl"):
@@ -138,6 +142,7 @@ def session_subagent_roots(transcript):
     if not sid:
         return [], main_dir
     projects = os.path.expanduser("~/.claude/projects")
+    _refuse_hidden_roots(projects, base, sid)
     roots = [os.path.join(base, "subagents")]
     roots += sorted(glob.glob(os.path.join(glob.escape(projects), "*", glob.escape(sid), "subagents")))
     seen, found = set(), []
@@ -147,6 +152,29 @@ def session_subagent_roots(transcript):
             seen.add(real)
             found.append(root)
     return found, main_dir
+
+
+def _refuse_hidden_roots(projects, base, sid):
+    """Raise PermissionError for any directory a root could sit under that cannot be
+    searched: the glob in session_subagent_roots and `os.path.isdir` both read such a
+    directory as empty, which would drop a root without a word (#397). Only a directory
+    on a root's own path is checked, never an unrelated subdirectory."""
+    def refuse(path):
+        raise PermissionError(errno.EACCES, "cannot search a directory that could hold "
+                              "this session's subagent transcripts", path)
+    if os.path.isdir(base) and not os.access(base, os.X_OK):
+        refuse(base)
+    if not os.path.isdir(projects):
+        return
+    # An unlistable projects dir needs no check of its own: scandir raises PermissionError.
+    for entry in sorted(os.scandir(projects), key=lambda e: e.name):
+        if not entry.is_dir():
+            continue
+        if not os.access(entry.path, os.X_OK):
+            refuse(entry.path)
+        holder = os.path.join(entry.path, sid)
+        if os.path.isdir(holder) and not os.access(holder, os.X_OK):
+            refuse(holder)
 
 
 def session_child_files(roots):
@@ -161,9 +189,9 @@ def session_child_files(roots):
     Files come back as strings in ONE global order over all roots, by path components,
     which is the order `sorted(Path)` gives.
 
-    Two limits, shared by both scripts: a symlink to a directory is not followed, and an
-    unreadable ANCESTOR of a root (the old project dir, or the `<uuid>` dir) makes
-    `session_subagent_roots` drop that root, which no walker can see."""
+    One limit, shared by both scripts: a symlink to a directory is not followed. An
+    unsearchable ANCESTOR of a root (a project dir, or the `<uuid>` dir) is refused by
+    `session_subagent_roots` before any root is chosen (#397)."""
     def refuse(error):
         raise error
     files, holding = [], []
