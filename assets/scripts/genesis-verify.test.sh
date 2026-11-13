@@ -2125,6 +2125,47 @@ mirror_form "#373 a block-inline double-quoted escaped slash pairs with a plain 
   pull_request:
     paths: [docs/**]'
 
+# #459: a quoted path containing ` #` is read whole (the comment is looked for after the closing
+# quote), so block `- "docs #x/**"` under paths-ignore and block `- 'docs #x/**'` under paths are the
+# same path on complementary sides: a true mirror, LEGACY. Before the fix both items were cut inside
+# their quotes and dropped, so the pair read FAIL.
+mirror_form "#459 block \"docs #x/**\" vs block 'docs #x/**' (quoted ' #' kept)" 'on:
+  pull_request:
+    paths-ignore:
+      - "docs #x/**"' "on:
+  pull_request:
+    paths:
+      - 'docs #x/**'"
+mirror_form "#459 block-inline [\"docs #x/**\"] vs [ 'docs #x/**' ]" 'on:
+  pull_request:
+    paths-ignore: ["docs #x/**"]' "on:
+  pull_request:
+    paths: ['docs #x/**']"
+# The comment after the closing quote is still a comment: `"docs/**" # c` pairs with plain docs/**.
+mirror_form "#459 a block \"docs/**\" # c still pairs with plain docs/**" 'on:
+  pull_request:
+    paths-ignore:
+      - "docs/**" # c' 'on:
+  pull_request:
+    paths:
+      - docs/**'
+mirror_form "#459 a block-inline [\"docs/**\"] # c still pairs with plain docs/**" 'on:
+  pull_request:
+    paths-ignore: ["docs/**"] # c' 'on:
+  pull_request:
+    paths: [docs/**]'
+# ...and a quoted ' #' path is a DIFFERENT path from its comment-cut prefix: not a mirror, FAIL.
+fresh; drop_intent; rm "$M/.github/workflows/ci.yml"; add_mirror_pair
+set_on mirror-a.yml 'on:
+  pull_request:
+    paths-ignore:
+      - "docs #x/**"'
+set_on mirror-b.yml 'on:
+  pull_request:
+    paths:
+      - docs/**'
+expect "#459 block \"docs #x/**\" is not plain docs/**: core.ci-gate stays FAIL" core.ci-gate FAIL 1
+
 cat > "$TMP/block-filters-unit.py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("gv", sys.argv[1])
@@ -2147,6 +2188,34 @@ cases = [
     ("block dq trailing junk: item dropped", 'paths:\n  - "abc" def', {"paths": []}),
     ("block dq # without whitespace: item dropped", 'paths:\n  - "abc"#c', {"paths": []}),
     ("block-inline bad escape: no evidence", 'paths: ["a\\qb", c]', {}),
+    # #459: a quoted value is read to its closing quote BEFORE any comment is looked for.
+    ("459 block dq ' #' inside quotes", 'paths:\n  - "a #b"', {"paths": ["a #b"]}),
+    ("459 block sq ' #' inside quotes", "paths:\n  - 'a #b'", {"paths": ["a #b"]}),
+    ("459 block-inline dq ' #' inside quotes", 'paths: ["a #b"]', {"paths": ["a #b"]}),
+    ("459 block-inline sq ' #' inside quotes", "paths: ['a #b']", {"paths": ["a #b"]}),
+    ("459 block-inline dq ' #' then a comment", 'paths: ["a #b"] # c', {"paths": ["a #b"]}),
+    ("459 block dq ' #' then a comment", 'paths:\n  - "a #b" # c', {"paths": ["a #b"]}),
+    ("459 block dq then comment", 'paths:\n  - "a" # c', {"paths": ["a"]}),
+    ("459 block dq then tab comment", 'paths:\n  - "a"\t# c', {"paths": ["a"]}),
+    ("459 block sq then comment", "paths:\n  - 'a' # c", {"paths": ["a"]}),
+    ("459 block-inline then comment", 'paths: ["a"] # c', {"paths": ["a"]}),
+    ("459 block-inline then tab comment", 'paths: ["a"]\t# c', {"paths": ["a"]}),
+    ("459 block-inline plain list then comment", "paths: [a, b] # c", {"paths": ["a", "b"]}),
+    ("459 block-inline # without whitespace: no evidence", 'paths: ["a"]#c', {}),
+    ("459 block-inline trailing junk: no evidence", 'paths: ["a"] x', {}),
+    ("459 block-inline sq trailing junk: no evidence", "paths: ['a'] x", {}),
+    ("459 block-inline unterminated quote: no evidence", 'paths: ["a #b]', {}),
+    ("459 block-inline comment inside a plain item: no evidence (never another path)", "paths: [a #b]", {}),
+    ("459 block sq trailing junk: item dropped", "paths:\n  - 'a' x", {"paths": []}),
+    ("459 block sq unterminated: item dropped", "paths:\n  - 'a #b", {"paths": []}),
+    ("459 block plain ' #' is a comment", "paths:\n  - a #b", {"paths": ["a"]}),
+    ("459 block plain without whitespace keeps #", "paths:\n  - a#b", {"paths": ["a#b"]}),
+    ("459 block-inline plain without whitespace keeps #", "paths: [a#b]", {"paths": ["a#b"]}),
+    ("459 key line with only a comment still reads the block", "paths: # note\n  - a\n  - \"b #c\"", {"paths": ["a", "b #c"]}),
+    ("459 key line with only a tab comment", "paths:\t# note\n  - a", {"paths": ["a"]}),
+    ("459 paths-ignore block dq ' #'", 'paths-ignore:\n  - "a #b"\n  - c', {"paths-ignore": ["a #b", "c"]}),
+    ("459 escapes still decode beside ' #'", 'paths:\n  - "a\\x2f #b"', {"paths": ["a/ #b"]}),
+    ("459 sq '' fold beside ' #'", "paths:\n  - 'it''s #b'", {"paths": ["it's #b"]}),
 ]
 bad = [f"{n}: got {pf(t)}, want {w}" for n, t, w in cases if pf(t) != w]
 print("\n".join(bad) if bad else "OK")
