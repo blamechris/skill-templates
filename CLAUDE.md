@@ -111,8 +111,9 @@ When authoring or customizing a skill whose output is shown to the user, include
   change lands through a PR. That includes one-line template refinements and
   generated-index updates; there is no "too small for a PR" tier.
 - Admin bypass is not permission. Whatever the branch-protection settings allow at the
-  moment, never push to `main` directly: a direct push skips `validate-registry`
-  entirely. The one time that happened (`49ccfc5`, no associated PR) it was reverted
+  moment, never push to `main` directly: a direct push skips the pre-merge
+  `validate-registry` gate, so the workflow only runs after the change has already
+  landed. The one time that happened (`49ccfc5`, no associated PR) it was reverted
   in #132 and redone properly as #133. Branch, push the branch, open a PR.
 - Commit format: `type(scope): description`
 - Types: feat, fix, refactor, docs, chore
