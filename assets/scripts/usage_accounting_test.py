@@ -496,7 +496,7 @@ class UsageAccountingTests(unittest.TestCase):
         self.assertEqual(list(out.glob("*")) if out.exists() else [], [])
 
     def test_checkpoint_refuses_non_object_lines_in_main_and_child(self):
-        for junk in (b"null", b"[1]", b"3", b'"s"'):
+        for junk in (b"null", b"[1]", b"3", b'"s"', b"1.5", b"true", b"NaN"):
             for where in ("main", "child"):
                 with self.subTest(junk=junk, where=where), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
