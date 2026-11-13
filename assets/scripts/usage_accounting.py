@@ -226,6 +226,26 @@ def prefer_response(previous, candidate):
     return candidate if (candidate["time"], candidate["source"], candidate["line"]) >= (previous["time"], previous["source"], previous["line"]) else previous
 
 
+def record_problem(record):
+    """Why `record` cannot be read as a transcript record, or None when it can.
+
+    The one validation both scripts run on every JSON line BEFORE `Responses.add`:
+    - a line that is valid JSON but not an object (`null`, `[1]`, `3`, `"s"`);
+    - an assistant record whose `message` is truthy and not an object (`"x"`, `[1]`, `3`,
+      `true`), which `add` would otherwise crash on.
+    Deliberately NOT problems, because they were always tolerated: a falsy `message`
+    (`null`, `""`, `[]`, `0`, `false` are read as empty, as `or {}` always did), a
+    non-object `usage` (`add` skips the record), and any `message` on a record that is not
+    an assistant one (never read)."""
+    if not isinstance(record, dict):
+        return f"valid JSON but not an object ({type(record).__name__})"
+    if record.get("type") == "assistant":
+        message = record.get("message")
+        if message and not isinstance(message, dict):
+            return f"valid JSON but its message is not an object ({type(message).__name__})"
+    return None
+
+
 class Responses:
     """One globally deduplicated selection over main, child and copied records."""
     def __init__(self):
