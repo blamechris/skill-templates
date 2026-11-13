@@ -36,6 +36,13 @@ cat > "$FX/generic/fx.md" <<'MD'
 
 Real prose rule: PROSEANCHOR must hold.
 
+## MIXED heading
+
+Rule: MIXED is stated here in prose, between a heading and a table row.
+
+| MIXED | x |
+|-------|---|
+
 ## HEADONLY heading
 
 | col | TABLEONLY |
@@ -61,6 +68,18 @@ UNTAGGEDRULE stated inside an untagged fence.
 TEXTRULE stated inside a text fence.
 ```
 
+```Markdown
+CAPMDRULE stated inside a capitalised Markdown fence.
+```
+
+```md
+MDTAGRULE stated inside an md fence.
+```
+
+```txt
+TXTTAGRULE stated inside a txt fence.
+```
+
 ## Customization Points
 
 - CUSTOMONLY bullet
@@ -78,6 +97,11 @@ cat > "$FX/skill-guards.json" <<'JSON'
     {"label": "ok-untagged", "anyOf": ["UNTAGGEDRULE"]},
     {"label": "ok-text",     "anyOf": ["TEXTRULE"]},
     {"label": "ok-prose-alt","anyOf": ["HEADONLY", "TABLEONLY", "PROSEANCHOR"]},
+    {"label": "ok-mixed",    "anyOf": ["MIXED"]},
+    {"label": "nomatch-only","anyOf": ["NOSUCHTEXT"]},
+    {"label": "ok-capmarkdown", "anyOf": ["CAPMDRULE"]},
+    {"label": "ok-md",       "anyOf": ["MDTAGRULE"]},
+    {"label": "ok-txt",      "anyOf": ["TXTTAGRULE"]},
     {"label": "badrx-only",  "anyOf": ["(unclosed"]},
     {"label": "badrx-then-vacuous", "anyOf": ["(unclosed", "HEADONLY"]}
   ]
@@ -96,20 +120,25 @@ done
 
 if reported v-bashline; then ok "shell line in a bash fence is reported"; else bad "shell line in a bash fence is reported" "$OUT"; fi
 
-for l in ok-markdown ok-untagged ok-text; do
+for l in ok-markdown ok-untagged ok-text ok-capmarkdown ok-md ok-txt; do
   if reported "$l"; then bad "rule in prose fence NOT reported: $l" "$OUT"; else ok "rule in prose fence NOT reported: $l"; fi
 done
 
 if reported ok-prose-alt; then bad "guard with a prose-anchored alternate never reported" "$OUT"; else ok "guard with a prose-anchored alternate never reported"; fi
+# One alternate hitting a heading, then prose, then a table row: the prose hit anchors it,
+# whichever hit comes first or last (review of #479).
+if reported ok-mixed; then bad "an alternate with a prose hit among non-rule hits is anchored" "$OUT"; else ok "an alternate with a prose hit among non-rule hits is anchored"; fi
+# An alternate that matches nothing is no evidence of vacuity: the guard is not reported.
+if reported nomatch-only; then bad "a guard whose alternates match nothing is not reported" "$OUT"; else ok "a guard whose alternates match nothing is not reported"; fi
 
 if reported badrx-only; then bad "uncompilable regex alone is skipped, not reported" "$OUT"; else ok "uncompilable regex alone is skipped, not reported"; fi
 if reported badrx-then-vacuous; then ok "uncompilable regex does not stop later alternates being audited"; else bad "uncompilable regex does not stop later alternates being audited" "$OUT"; fi
 
-if grep -qE '^guards audited: 11$' <<<"$OUT"; then ok "audit counted all 11 fixture guards"; else bad "audit counted all 11 fixture guards" "$OUT"; fi
+if grep -qE '^guards audited: 16$' <<<"$OUT"; then ok "audit counted all 16 fixture guards"; else bad "audit counted all 16 fixture guards" "$OUT"; fi
 
 # Zero-case guard: a harness that ran nothing must not report success.
-if [ $((PASS+FAIL)) -lt 13 ]; then
-  echo "guard-audit.test: only $((PASS+FAIL)) cases ran (expected >= 13) — refusing to report success"
+if [ $((PASS+FAIL)) -lt 18 ]; then
+  echo "guard-audit.test: only $((PASS+FAIL)) cases ran (expected >= 18) — refusing to report success"
   exit 1
 fi
 
