@@ -539,10 +539,14 @@ def parse_quoted(s, start):
     raise ValueError("unterminated quote")
 
 
-def parse_flow(s):
+def parse_flow(s, prefix=False):
     """A YAML flow node -- `{k: v, ...}`, `[a, b]` or a scalar -- as dict / list / str, quotes
     removed. A flow-mapping key with no value (`{pull_request, push}`) maps to None. Raises
-    ValueError on anything it cannot read, so a caller can fall back to "unknown"."""
+    ValueError on anything it cannot read, so a caller can fall back to "unknown".
+    `prefix=True` reads one node off the front of `s` and returns `(node, end)`, leaving the text
+    after it to the caller (the path filters' trailing-comment rule, #459); there a plain scalar
+    containing whitespace + `#`, or starting with `#`, is unreadable, since YAML ends a flow plain scalar at the comment
+    and the node would then be unterminated -- never read as a different path."""
     pos = [0]
 
     def skip():
@@ -559,7 +563,12 @@ def parse_flow(s):
             if s[pos[0]] == ":" and (pos[0] + 1 >= len(s) or s[pos[0] + 1] in " \t\n,]}"):
                 break
             pos[0] += 1
-        return s[start:pos[0]].strip()
+        token = s[start:pos[0]].strip()
+        # A plain scalar cannot start with `#` (YAML reads a leading `#` after the separator as a
+        # comment), so `[ #a]` / `[a, #b]` are unterminated lists, never the path `#a`.
+        if prefix and (token.startswith("#") or re.search(r"[ \t]#", token)):
+            raise ValueError("comment inside a flow scalar")
+        return token
 
     def node():
         skip()
@@ -605,6 +614,8 @@ def parse_flow(s):
         return scalar(",]}")
 
     value = node()
+    if prefix:
+        return value, pos[0]
     skip()
     if pos[0] != len(s):
         raise ValueError("trailing text")
@@ -2408,10 +2419,12 @@ def event_block(block, event):
 
 def block_item(text):
     """The value of one block-form path item (`- <text>`), or None when unreadable. A quoted item
-    is read by the flow parser's own `parse_quoted` -- double-quoted escapes decode, single-quoted
-    backslashes stay literal -- and must end where its closing quote does (a trailing comment
+    is read by the flow parser's own `parse_quoted` BEFORE any comment is looked for (#459), so a
+    ` #` inside the quotes is part of the value -- double-quoted escapes decode, single-quoted
+    backslashes stay literal -- and it must end where its closing quote does (a trailing comment
     aside). An item whose escapes or quoting cannot be read (#373) yields NO filter evidence,
-    exactly as the flow parser treats the same text. An unquoted item is kept as written."""
+    exactly as the flow parser treats the same text. An unquoted item is a YAML plain scalar: a
+    comment starts at whitespace + `#` and is dropped (`a #b` is `a`, `a#b` stays `a#b`)."""
     text = text.strip()
     if text[:1] in ("'", '"'):
         try:
@@ -2421,31 +2434,36 @@ def block_item(text):
         rest = text[end:]
         # YAML reads `#` as a comment only after whitespace: `"a"#c` is not a comment, so unreadable.
         return value if not rest.strip() or re.match(r"[ \t]+#", rest) else None
-    return text.strip("'\"")
+    return re.sub(r"[ \t]+#.*$", "", text).strip().strip("'\"")
 
 
 def path_filters(event_lines):
     """{"paths": [...], "paths-ignore": [...]} for whichever of the two keys an event block sets:
     block or inline flow lists, quoted items decoded like the flow parser's (an unreadable item is
-    dropped, an unreadable inline list yields no entry), trailing comments stripped."""
+    dropped, an unreadable inline list yields no entry), trailing comments stripped. Comments are
+    looked for only AFTER the value is parsed (#459): a quoted item or flow list is read to its
+    own end first, and what follows must be blank or whitespace + `#`; the line regexes capture
+    the whole remainder rather than cutting at ` #` inside quotes."""
     out = {}
     for i, ln in enumerate(event_lines):
-        m = re.match(r"^(\s*)['\"]?(paths|paths-ignore)['\"]?:\s*(.*?)\s*(?:\s#.*)?$", ln)
+        m = re.match(r"^(\s*)['\"]?(paths|paths-ignore)['\"]?:\s*(.*?)\s*$", ln)
         if not m:
             continue
         indent, key, val = len(m.group(1)), m.group(2), m.group(3)
         if val.startswith("["):
             try:
-                node = parse_flow(val)
+                node, end = parse_flow(val, prefix=True)
             except ValueError:
                 continue
+            if val[end:].strip() and not re.match(r"[ \t]+#", val[end:]):
+                continue  # `["a"]#c`, `["a"] x`: not a comment, so the list is unreadable
             out[key] = [x for x in node if isinstance(x, str)] if isinstance(node, list) else []
             continue
         items = []
         for nxt in event_lines[i + 1:]:
             if not nxt.strip() or nxt.strip().startswith("#"):
                 continue
-            item = re.match(r"^(\s*)-\s*(.+?)\s*(?:\s#.*)?$", nxt)
+            item = re.match(r"^(\s*)-\s*(.+?)\s*$", nxt)
             # An item may sit at the key's own indent (YAML's indentless sequence); a key does not.
             if not item or len(item.group(1)) < indent:
                 break
