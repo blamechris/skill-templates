@@ -655,6 +655,14 @@ jobs:
         # way `skill add` strips it.
         run: ./scripts/skill-lint.test.sh
 
+      - name: guard-audit regression tests
+        # #225: pins guard-audit.py's classify() on both edges — the four
+        # vacuity classes stay reported, and the prose-fence carve-out stays
+        # bounded (markdown/untagged fences are prose, bash fences are code).
+        # Runs the test file only; it does not assert the audit's count over
+        # the real registry, which reports permanently and correctly.
+        run: ./scripts/guard-audit.test.sh
+
       - name: filed-from regression tests
         # #268: session 13cee7be filed ~8 follow-on issues in one session; 3 cited
         # their source PR. Without a machine-readable `Filed from:` line on EVERY
