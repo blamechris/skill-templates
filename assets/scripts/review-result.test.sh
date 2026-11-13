@@ -142,6 +142,32 @@ jsonl(os.path.join(sdir, "subagents", "workflows", "wf-nestH", "agent-ffff.jsonl
     assistant("Nested report.\n\n" + fenced(dict(GOOD, skill="agent-review"))),
 ])
 
+# Hand-back shapes (#359): the subagent returned its report through a
+# SubagentHandback tool call, whose `input.message` carries the report.
+def tool_use(name, inp):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "toolu_x", "name": name, "input": inp}]}}
+# 1. last assistant message is ONLY the hand-back, fence inside input.message
+jsonl(os.path.join(sdir, "subagents", "agent-hb01.jsonl"), [
+    assistant("working"),
+    tool_use("SubagentHandback", {"message": "Final report.\n\n" + fenced(GOOD) + "\n"}),
+])
+# 3. hand-back without a fence -> no-block
+jsonl(os.path.join(sdir, "subagents", "agent-hb02.jsonl"), [
+    tool_use("SubagentHandback", {"message": "prose only, no block"}),
+])
+# 4. text block (no fence) + hand-back (fence) in one message -> recorded
+jsonl(os.path.join(sdir, "subagents", "agent-hb03.jsonl"), [
+    {"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "Handing back now."},
+        {"type": "tool_use", "id": "toolu_y", "name": "SubagentHandback",
+         "input": {"message": "Report.\n\n" + fenced(GOOD)}}]}},
+])
+# 5. a tool_use of a DIFFERENT name carrying a fence -> not harvested
+jsonl(os.path.join(sdir, "subagents", "agent-hb04.jsonl"), [
+    tool_use("Write", {"file_path": "/x/draft.md", "content": fenced(GOOD)}),
+])
+
 # ---- sess-list: list's own-result.json (top-level + nested) + workflow
 # recursive-walk + a near-miss (verdict/findings present, no `kind`) ----
 sdir = os.path.join(proj, "sess-list")
@@ -479,11 +505,25 @@ echo; echo "D. harvest"
 run sess-harvest harvest
 [ "$rc" -eq 0 ] && ok "harvest exits 0" || bad "harvest exits 0" "rc=$rc $(flat "$out")"
 # recorded: aaaa, eeee (block precedes trailing user/attachment lines),
-# 1111 (CRLF), ffff (nested) = 4. skipped-existing: cccc = 1. no-block:
-# bbbb = 1. invalid: dddd = 1.
-printf '%s' "$out" | grep -Eq 'recorded 4, skipped-existing 1, no-block 1, invalid 1' \
-  && ok "harvest's summary line: recorded 4, skipped-existing 1, no-block 1, invalid 1" \
-  || bad "harvest's summary line: recorded 4, skipped-existing 1, no-block 1, invalid 1" "$(flat "$out")"
+# 1111 (CRLF), ffff (nested), hb01 (hand-back only), hb03 (text + hand-back)
+# = 6. skipped-existing: cccc = 1. no-block: bbbb, hb02 (hand-back, no
+# fence), hb04 (fence in a non-hand-back tool_use) = 3. invalid: dddd = 1.
+printf '%s' "$out" | grep -Eq 'recorded 6, skipped-existing 1, no-block 3, invalid 1' \
+  && ok "harvest's summary line: recorded 6, skipped-existing 1, no-block 3, invalid 1" \
+  || bad "harvest's summary line: recorded 6, skipped-existing 1, no-block 3, invalid 1" "$(flat "$out")"
+SD="$PROJ/sess-harvest/subagents"
+[ -f "$SD/agent-hb01.result.json" ] \
+  && ok "harvest records a review returned only through a SubagentHandback tool_use" \
+  || bad "harvest records a review returned only through a SubagentHandback tool_use" "missing"
+[ ! -f "$SD/agent-hb02.result.json" ] \
+  && ok "a hand-back without a fence is no-block (not recorded, not invalid)" \
+  || bad "a hand-back without a fence is no-block (not recorded, not invalid)" "wrote one"
+[ -f "$SD/agent-hb03.result.json" ] \
+  && ok "harvest records a fence that is only in the hand-back beside a text block" \
+  || bad "harvest records a fence that is only in the hand-back beside a text block" "missing"
+[ ! -f "$SD/agent-hb04.result.json" ] \
+  && ok "a fence in a tool_use NOT named SubagentHandback is not harvested" \
+  || bad "a fence in a tool_use NOT named SubagentHandback is not harvested" "wrote one"
 [ -f "$PROJ/sess-harvest/subagents/agent-aaaa.result.json" ] \
   && ok "harvest recorded the block from the last assistant message" \
   || bad "harvest recorded the block from the last assistant message" "missing"

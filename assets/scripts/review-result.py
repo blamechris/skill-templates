@@ -598,9 +598,30 @@ def cmd_record(a):
     return 0
 
 
+# A subagent can return its final report through a tool call instead of a
+# text block; the report (fence included) is then the call's `message` input
+# (#359). Matched by NAME, not by "any tool_use carrying a fence": the inputs
+# of Write/Edit/Bash calls routinely quote drafts or files that contain a
+# review-result fence, and harvesting one of those would record a review the
+# subagent never returned.
+HANDBACK_TOOL = "SubagentHandback"
+
+
+def handback_strings(inp):
+    """The report text(s) in a SubagentHandback `input`: its `message` string,
+    or, if the input has another shape, every string value in it."""
+    if not isinstance(inp, dict):
+        return []
+    msg = inp.get("message")
+    if isinstance(msg, str):
+        return [msg]
+    return [v for v in inp.values() if isinstance(v, str)]
+
+
 def last_assistant_text(jsonl_path):
-    """The concatenated text blocks of the LAST `type == "assistant"` line in
-    a subagent transcript, or None. Streamed line by line — only the most
+    """The concatenated text blocks, plus the report carried by any
+    SubagentHandback tool_use block, of the LAST `type == "assistant"` line in
+    a subagent transcript, in order of appearance, or None. Streamed line by line — only the most
     recent matching object is ever held in memory, never the whole file."""
     last = None
     try:
@@ -622,8 +643,14 @@ def last_assistant_text(jsonl_path):
     content = (last.get("message") or {}).get("content") or []
     if not isinstance(content, list):
         return None
-    parts = [b.get("text", "") for b in content
-             if isinstance(b, dict) and b.get("type") == "text"]
+    parts = []
+    for b in content:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "text":
+            parts.append(b.get("text", ""))
+        elif b.get("type") == "tool_use" and b.get("name") == HANDBACK_TOOL:
+            parts.extend(handback_strings(b.get("input")))
     text = "\n".join(p for p in parts if p)
     return text or None
 
