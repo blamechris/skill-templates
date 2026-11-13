@@ -3258,10 +3258,18 @@ def rec(i, model="claude-opus-5-5"):
                    "usage":{"output_tokens":1000+i,"inference_geo":"global"}}},
         separators=(",",":"))
 valid=[rec(i) for i in range(3)]
+def ident(i, request, message):
+    # #469: well-formed but for a non-string identity, with real usage, so a record that
+    # is not skipped changes the totals (a pair key makes scan() concatenate the ids).
+    return json.dumps({"type":"assistant","timestamp":"2026-09-29T12:00:%02dZ"%i,
+        "requestId":request,"message":{"id":message,"model":"claude-opus-5-5",
+        "stop_reason":"end_turn","usage":{"output_tokens":1000+i,"inference_geo":"global"}}},
+        separators=(",",":"))
 malformed=['[{"type":"assistant"}]',
            '{"type":"assistant","message":"x"}',
            '{"type":"assistant","message":[1]}',
-           'null', '3']
+           'null', '3',
+           ident(7, ["a"], "m7"), ident(8, "r8", {"a": 1}), ident(9, 5, "m9")]
 def garbage(line):
     return "{" + "x"*(len(line)-1)          # invalid JSON, same byte length
 def layout(_):
@@ -3271,24 +3279,37 @@ def run(label, lines):
     (root/"t.jsonl").write_text("\n".join(lines)+"\n")
     up.ROOT=root; up.HIST=base; up.CACHE=base/(label+".json")
     wk=up.week_close(up.datetime(2026,9,29,12,tzinfo=up.timezone.utc))
-    before=up.SKIPPED_RECORDS
+    up.SKIPPED_RECORDS=0; up.SKIPPED_ALL_RECORDS=None
     tot,bk=up.scan_detail(wk, force=True)
+    after_scan=up.skipped_note()
     cache=json.loads(up.CACHE.read_text())
     t,c,cf=up._cum_events("$")
-    return (tot, bk, cache["files"][str(root/"t.jsonl")][0], (t,c,cf)), up.SKIPPED_RECORDS-before
-clean,n0=run("clean", valid)
-# scan() counts the 3 that pass its substring filter; _cum_events counts all 5: 3+5
-dirty,n1=run("dirty", layout(None))
-junk,n2=run("junk", [garbage(l) if l in malformed else l for l in layout(None)])
+    t,c,cf=up._cum_events("$")      # a second full pass restates its count, never adds (#469)
+    counts="%d/%d" % (up.SKIPPED_RECORDS, up.SKIPPED_ALL_RECORDS)
+    return (tot, bk, cache["files"][str(root/"t.jsonl")][0], (t,c,cf)), counts, (after_scan, up.skipped_note())
+clean,n0,notes0=run("clean", valid)
+# The two passes are counted apart, never summed (#469): scan() counts the 6 that pass its
+# substring filter, among the lines it newly read; _cum_events all 8, across every transcript.
+dirty,n1,notes1=run("dirty", layout(None))
+junk,n2,notes2=run("junk", [garbage(l) if l in malformed else l for l in layout(None)])
+# A non-string timestamp is undated, like an unparseable one: no total, and not counted.
+odd=json.loads(rec(30)); odd["timestamp"]=5
+undated,n3,notes3=run("undated", valid+[json.dumps(odd, separators=(",",":"))])
 print("NO-EXC",
       "SAME-TOTALS" if (dirty[0],dirty[1],dirty[3])==(clean[0],clean[1],clean[3]) else "DIFF-TOTALS",
       "OFFSET-AS-JSONERR" if dirty[2]==junk[2] and junk[2]>clean[2] else "OFFSET-DIVERGED",
-      "COUNTS=%d,%d,%d" % (n0,n1,n2))
+      "UNDATED" if (undated[0],undated[1],undated[3])==(clean[0],clean[1],clean[3]) else "DATED",
+      "COUNTS=%s,%s,%s,%s" % (n0,n1,n2,n3))
+print("NOTES", notes0, notes1, notes2, notes3)
 PY_467
 )
-printf '%s' "$got" | grep -q '^NO-EXC SAME-TOTALS OFFSET-AS-JSONERR COUNTS=0,8,0$' \
+printf '%s' "$got" | grep -q '^NO-EXC SAME-TOTALS OFFSET-AS-JSONERR UNDATED COUNTS=0/0,6/8,0/0,0/0$' \
   && ok "scan/_cum_events skip unreadable records: same results, offsets as invalid JSON, counted" \
   || bad "scan/_cum_events skip unreadable records" "$(flat "$got")"
+want="NOTES (None, None) ('usage coverage: 6 malformed transcript records skipped in the transcript lines newly read this run', 'usage coverage: 8 malformed transcript records skipped across all transcripts') (None, None) (None, None)"
+printf '%s\n' "$got" | grep -qxF "$want" \
+  && ok "the skipped note names what it counts: newly read lines, or every transcript (#469)" \
+  || bad "the skipped note names what it counts" "$(flat "$got")"
 
 t="$TMP/m467-last.jsonl"
 {

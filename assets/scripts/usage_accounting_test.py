@@ -581,6 +581,9 @@ class UsageAccountingTests(unittest.TestCase):
             {"type": "assistant", "requestId": "rx", "message": False},
             {"type": "assistant", "requestId": "rx", "message": {"id": "mx", "usage": "x"}},
             {"type": "assistant", "requestId": "rx", "message": {"id": "mx", "usage": [1]}},
+            {"type": "assistant", "requestId": [], "message": {"id": 0, "usage": "x"}},
+            {"type": "assistant", "requestId": False, "message": {"id": {}, "usage": "x"}},
+            {"type": "user", "requestId": ["a"], "message": {"id": {"a": 1}}},
             {"type": "user", "message": "plain text, never read"},
             {"type": "user", "message": [1]},
             {"type": "system", "message": "x"},
@@ -637,6 +640,51 @@ class UsageAccountingTests(unittest.TestCase):
         for message, name in (("x", "str"), ([1], "list"), (3, "int"), (True, "bool")):
             self.assertEqual(problem({"type": "assistant", "message": message}),
                              "valid JSON but its message is not an object (%s)" % name)
+
+    # ---- #469: a truthy non-string requestId or message.id
+
+    BAD_IDS = ((["a"], "list"), ({"a": 1}, "dict"), (5, "int"), (True, "bool"))
+
+    def test_record_problem_flags_non_string_ids_and_only_those(self):
+        problem = usage_accounting.record_problem
+        for value, name in self.BAD_IDS:
+            self.assertEqual(problem({"type": "assistant", "requestId": value,
+                                      "message": {"id": "m"}}),
+                             "valid JSON but its requestId is not a string (%s)" % name)
+            self.assertEqual(problem({"type": "assistant", "requestId": "r",
+                                      "message": {"id": value}}),
+                             "valid JSON but its message.id is not a string (%s)" % name)
+            # Only an assistant record's identity is ever read.
+            self.assertIsNone(problem({"type": "user", "requestId": value,
+                                       "message": {"id": value}}), value)
+        for falsy in (None, "", [], {}, 0, False):       # read as absent, as always
+            self.assertIsNone(problem({"type": "assistant", "requestId": falsy,
+                                       "message": {"id": falsy}}), falsy)
+        self.assertIsNone(problem({"type": "assistant", "requestId": "r", "message": None}))
+        for ts in (5, 1.5, [1], {"a": 1}, True, None):   # an unreadable timestamp is undated
+            self.assertIsNone(problem({"type": "assistant", "timestamp": ts,
+                                       "requestId": "r", "message": {"id": "m"}}), ts)
+
+    def test_checkpoint_refuses_non_string_ids_in_main_and_child(self):
+        for field in ("requestId", "message.id"):
+            for value, name in self.BAD_IDS:
+                for where in ("main", "child"):
+                    with self.subTest(field=field, value=value, where=where), \
+                            tempfile.TemporaryDirectory() as tmp:
+                        root = Path(tmp)
+                        main, child = self._nonobject_fixture(root)
+                        target = main if where == "main" else child
+                        record = rec("2026-09-29T00:00:05Z", "rx", "mx", "claude-opus-5-5",
+                                     10, stop="end_turn")
+                        if field == "requestId":
+                            record["requestId"] = value
+                        else:
+                            record["message"]["id"] = value
+                        self._append_record(target, record)
+                        out = root / "out"
+                        result = self._run_checkpoint(main, out)
+                        self._assert_refused(result, target, 2, out)
+                        self.assertIn("%s is not a string (%s)" % (field, name), result.stderr)
 
     def test_aggregate_keeps_unknown_ttl_bounds_and_unpriced_coverage(self):
         checkpoint = load("usage_checkpoint_bounds", HERE / "usage-checkpoint.py")
@@ -2019,7 +2067,15 @@ class MalformedRecordTests(unittest.TestCase):
     MALFORMED = ["null", "[1]", "3", '"s"',
                  json.dumps({"type": "assistant", "message": "x", "timestamp":
                              "2026-09-30T12:00:00Z", "requestId": "bad"}),
-                 json.dumps({"type": "assistant", "message": [1]})]
+                 json.dumps({"type": "assistant", "message": [1]}),
+                 # #469: well-formed but for a non-string identity. Each carries real usage,
+                 # so a record that is not skipped changes the result (5 is even hashable).
+                 json.dumps(rec("2026-09-30T12:00:07Z", ["a"], "m7", "claude-opus-5-5", 107,
+                                stop="end_turn")),
+                 json.dumps(rec("2026-09-30T12:00:08Z", "r8", {"a": 1}, "claude-opus-5-5", 108,
+                                stop="end_turn")),
+                 json.dumps(rec("2026-09-30T12:00:09Z", 5, "m9", "claude-opus-5-5", 109,
+                                stop="end_turn"))]
 
     def _valid_lines(self):
         return [json.dumps(rec("2026-09-30T12:00:%02dZ" % i, "r%d" % i, "m%d" % i,
@@ -2051,6 +2107,32 @@ class MalformedRecordTests(unittest.TestCase):
         self.assertEqual(keys, clean_keys)
         self.assertEqual(days, clean_days)
         self.assertIn("%d malformed transcript records skipped" % len(self.MALFORMED), err)
+
+    def _trend_days_and_weeks(self, lines):
+        trend = load("usage_trend_timestamps", HERE / "usage-trend.py")
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s.jsonl").write_text("\n".join(lines) + "\n")
+            trend.ROOT = root
+            with redirect_stderr(err):
+                days, weeks = trend.scan(), trend.scan_weeks()
+            return json.loads(json.dumps(days)), json.loads(json.dumps(weeks)), err.getvalue()
+
+    def test_trend_leaves_a_non_string_timestamp_undated(self):
+        # #469: undated, exactly like an unparseable timestamp string -- not skipped as
+        # malformed, not counted, and not attributed to any day or week.
+        valid = self._valid_lines()
+        clean_days, clean_weeks, _ = self._trend_days_and_weeks(valid)
+        self.assertTrue(clean_days and clean_weeks)
+        for ts in (5, 1.5, [1], {"a": 1}, True, "not a time"):
+            with self.subTest(ts=ts):
+                odd = rec("2026-09-30T12:00:30Z", "rt", "mt", "claude-opus-5-5", 500,
+                          stop="end_turn")
+                odd["timestamp"] = ts
+                days, weeks, err = self._trend_days_and_weeks(valid + [json.dumps(odd)])
+                self.assertEqual((days, weeks), (clean_days, clean_weeks))
+                self.assertNotIn("skipped", err)
 
     def _aggregate_dir(self, root, mutate=None):
         checkpoint = load("usage_checkpoint_malformed", HERE / "usage-checkpoint.py")
@@ -2086,6 +2168,13 @@ class MalformedRecordTests(unittest.TestCase):
             "item missing source": drop("source"),
             "item missing line": drop("line"),
             "item missing role": drop("role"),
+            # #469: the latest-checkpoint comparison keys and orders on these
+            **{"missing " + name: (lambda name: lambda doc: doc.pop(name) and None)(name)
+               for name in ("run_id", "session_id", "captured_at", "status")},
+            "run_id a list": lambda doc: doc.update(run_id=["run"]),
+            "session_id null": lambda doc: doc.update(session_id=None),
+            "captured_at an int": lambda doc: doc.update(captured_at=5),
+            "status a list": lambda doc: doc.update(status=["final"]),
         }
         for name, mutate in cases.items():
             with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
@@ -2105,6 +2194,23 @@ class MalformedRecordTests(unittest.TestCase):
                 self.assertIn(str(out / "bad.json"), result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
                 self.assertEqual(result.stdout, "")
+
+    def test_aggregate_refuses_mixed_captured_at_types_naming_the_file(self):
+        # #469: two checkpoints of one run and session, one captured_at an int, used to
+        # die comparing them; the odd one is refused whichever the glob reads first.
+        for int_name, str_name in (("a-int.json", "z-str.json"), ("z-int.json", "a-str.json")):
+            with self.subTest(int_name=int_name), tempfile.TemporaryDirectory() as tmp:
+                out = self._aggregate_dir(Path(tmp))
+                good = json.loads((out / "bad.json").read_text())
+                (out / "bad.json").unlink()
+                (out / str_name).write_text(json.dumps(good))
+                (out / int_name).write_text(json.dumps(dict(good, captured_at=1)))
+                result = self._aggregate(out)
+                self.assertEqual((result.returncode, result.stdout), (1, ""), result.stderr)
+                self.assertTrue(result.stderr.startswith("REFUSE: "), result.stderr)
+                self.assertIn(str(out / int_name), result.stderr)
+                self.assertIn("captured_at is not a string (int)", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
 
     def test_aggregate_validates_every_document_before_printing(self):
         with tempfile.TemporaryDirectory() as tmp:
