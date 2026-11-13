@@ -540,7 +540,7 @@ jobs:
         # template, so nothing else runs it, and this workflow has no *.test.sh glob; the
         # test extracts it fresh and runs it under bash and zsh against a fake gh.
         run: |
-          command -v zsh >/dev/null || sudo apt-get install -y -qq zsh
+          command -v zsh >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq zsh; }
           ./scripts/genesis-audit-label-block.test.sh
 
       - name: registry.json is freshly generated

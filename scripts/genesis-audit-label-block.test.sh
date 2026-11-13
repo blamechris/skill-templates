@@ -22,7 +22,7 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TEMPLATE="${GENESIS_TEMPLATE:-$HERE/../generic/project-genesis.md}"
 LABELS_SRC="$HERE/../assets/genesis/labels.json"
-EXPECTED_TOTAL=58       # 2 extraction asserts + 4 assertions x 7 cases x 2 shells (exact, not a floor)
+EXPECTED_TOTAL=74       # 2 extraction asserts + 4 assertions x 9 cases x 2 shells (exact, not a floor)
 PER_CASE=4
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/genesis-audit-label-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
@@ -76,7 +76,10 @@ fi
 if [ "${1:-}" = label ] && [ "${2:-}" = create ] && [ "$#" -eq 9 ] && [ "$4" = --color ] \
    && [ "$6" = --description ] && [ "owner/repo" = "$9" ] && [ "$8" = -R ]; then
   printf '%s %s\n' "$3" "$5" >> "$FAKE_DIR/create.log"
-  [ -n "${GH_CREATE_FAIL:-}" ] && { echo "fake gh: create failed" >&2; exit 1; }
+  # GH_CREATE_FAIL=1 fails every create; any other value fails only that label name.
+  if [ -n "${GH_CREATE_FAIL:-}" ] && { [ "$GH_CREATE_FAIL" = 1 ] || [ "$GH_CREATE_FAIL" = "$3" ]; }; then
+    echo "fake gh: create failed" >&2; exit 1
+  fi
   printf '%s\n' "$3" >> "$FAKE_DIR/labels"; exit 0
 fi
 printf 'UNEXPECTED\n' >> "$FAKE_DIR/unexpected.log"
@@ -104,7 +107,7 @@ elif [ -n "${CI:-}" ]; then
   bad "zsh present (CI is set; zsh is required there)" "install zsh (apt-get install zsh)"
 else
   ZSH_OK=0; echo "  SKIP zsh not installed -- zsh assertions are counted as skipped (local only; fails under CI)"
-  skipped=$((skipped + PER_CASE * 7))
+  skipped=$((skipped + PER_CASE * 9))
 fi
 
 # run_case <shell> <name> <registry> <list-fail> <create-fail> <expected-creates> <expected-rc> <msg|-> <labels...>
@@ -142,6 +145,10 @@ for sh in "${SHELLS[@]}"; do
   run_case "$sh" 4-create-fails "$TMP/reg-good" "" 1 "$BOTH" 2 "STOP: tech-debt or from-audit is still missing" bug
   run_case "$sh" 5-tech-debt-at-48-of-61 "$TMP/reg-good" "" "" "from-audit d4c5f9" 0 "created label from-audit in owner/repo" "${many[@]}"
   run_case "$sh" 6-list-fails "$TMP/reg-good" 1 "" "" 2 "STOP: could not list labels" bug
+  # 8a/8b pin BOTH halves of the final re-check (`has tech-debt && has from-audit`): with
+  # only one create failing, dropping either operand of the && leaves exit 0 instead of 2.
+  run_case "$sh" 8a-only-from-audit-create-fails "$TMP/reg-good" "" from-audit "$BOTH" 2 "STOP: tech-debt or from-audit is still missing" bug
+  run_case "$sh" 8b-only-tech-debt-create-fails "$TMP/reg-good" "" tech-debt "$BOTH" 2 "STOP: tech-debt or from-audit is still missing" bug
   run_case "$sh" 7-registry-unreadable "$TMP/reg-bad" "" "" "" 2 "STOP: tech-debt or from-audit is still missing" bug
 done
 
