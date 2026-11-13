@@ -1657,7 +1657,10 @@ for tol in '{"type":"assistant","requestId":"rx","message":null}' \
            '{"type":"assistant","requestId":"rx","message":false}' \
            '{"type":"assistant","requestId":"rx","message":{"id":"mx","usage":"x"}}' \
            '{"type":"assistant","requestId":"rx","message":{"id":"mx","usage":[1]}}' \
-           '{"type":"user","message":"plain text"}'; do
+           '{"type":"user","message":"plain text"}' \
+           '{"type":"system","message":"x"}' \
+           '{"type":"summary","message":[1]}' \
+           '{"message":"untyped"}'; do
   for where in main child; do
     f="$EP/-p/$EU.jsonl"; [ "$where" = child ] && f="$EP/-p/$EU/subagents/agent-ok.jsonl"
     cp "$f" "$TMP/tol.keep"; printf '%s\n' "$tol" >> "$f"

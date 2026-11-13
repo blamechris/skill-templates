@@ -242,7 +242,7 @@ def record_problem(record):
     if record.get("type") == "assistant":
         message = record.get("message")
         if message and not isinstance(message, dict):
-            return f"message is not an object ({type(message).__name__})"
+            return f"valid JSON but its message is not an object ({type(message).__name__})"
     return None
 
 

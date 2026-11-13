@@ -583,6 +583,9 @@ class UsageAccountingTests(unittest.TestCase):
             {"type": "assistant", "requestId": "rx", "message": {"id": "mx", "usage": [1]}},
             {"type": "user", "message": "plain text, never read"},
             {"type": "user", "message": [1]},
+            {"type": "system", "message": "x"},
+            {"type": "summary", "message": [1]},
+            {"message": "untyped, never read"},
         )
         # One fixed path rebuilt per case, so the documents differ in nothing but the record.
         with tempfile.TemporaryDirectory() as tmp:
@@ -623,7 +626,8 @@ class UsageAccountingTests(unittest.TestCase):
                        {"type": "assistant"},
                        {"type": "assistant", "message": {"usage": "x"}},    # add() skips it
                        {"type": "user", "message": "x"}, {"type": "user", "message": [1]},
-                       {}):
+                       {"type": "system", "message": "x"}, {"type": "summary", "message": [1]},
+                       {"message": "x"}, {}):
             self.assertIsNone(problem(record), record)
         for falsy in (None, "", [], {}, 0, False):
             self.assertIsNone(problem({"type": "assistant", "message": falsy}), falsy)
@@ -632,7 +636,7 @@ class UsageAccountingTests(unittest.TestCase):
             self.assertEqual(problem(record), "valid JSON but not an object (%s)" % name)
         for message, name in (("x", "str"), ([1], "list"), (3, "int"), (True, "bool")):
             self.assertEqual(problem({"type": "assistant", "message": message}),
-                             "message is not an object (%s)" % name)
+                             "valid JSON but its message is not an object (%s)" % name)
 
     def test_aggregate_keeps_unknown_ttl_bounds_and_unpriced_coverage(self):
         checkpoint = load("usage_checkpoint_bounds", HERE / "usage-checkpoint.py")
