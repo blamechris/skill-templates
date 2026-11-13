@@ -99,14 +99,21 @@ if [ "${1:-}" = "issue" ] && [ "${2:-}" = "list" ]; then
 fi
 
 if [ "${1:-}" = "api" ] && [ "${2:-}" = "graphql" ]; then
-  n=""
+  n=""; iss=""
   shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
-      -F) case "${2:-}" in number=*) n="${2#number=}";; esac ;;
+      -F) case "${2:-}" in number=*) n="${2#number=}";; issue=*) iss="${2#issue=}";; esac ;;
     esac
     shift
   done
+  if [ -n "$iss" ]; then
+    # issue-closer confirmation query (#347): closer_<issue>.json
+    fail_flag "fail_closer_$iss" && { echo "fake gh: closer query $iss forced failure" >&2; exit 1; }
+    f="$FAKE_GH_DIR/closer_$iss.json"
+    if [ -f "$f" ]; then cat "$f"; else echo "fake gh: no closer fixture for issue $iss" >&2; exit 1; fi
+    exit 0
+  fi
   fail_flag "fail_graphql_$n" && { echo "fake gh: graphql forced failure" >&2; exit 1; }
   f="$FAKE_GH_DIR/graphql_$n.json"
   if [ -f "$f" ]; then cat "$f"; else echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]}}}}}'; fi
@@ -1363,6 +1370,63 @@ sys.exit(0 if prs == {522, 523} else 1)
 "
 [ $? -eq 0 ] && ok "C4: both records are valid JSON with the expected PR numbers (522 and 523)" \
   || bad "C4: concurrent write content"
+
+# =========================================================================
+# GROUP I -- closes[] includes issues closed by the merge commit's own
+# keywords (#347). Merge oid is COMMIT_OID; closer fixtures name who closed.
+# =========================================================================
+echo; echo "I. closes via merge commit (#347)"
+COMMIT_OID=dddd4444dddd4444dddd4444dddd4444dddd4444
+"$PY" - "$FAKE_GH_DIR" "$COMMIT_OID" <<'PYEOF'
+import json, os, sys
+ghdir, oid = sys.argv[1], sys.argv[2]
+def jfile(name, obj):
+    with open(os.path.join(ghdir, name), "w") as f: json.dump(obj, f)
+def pr(n, refs, body):
+    jfile(f"pr_view_{n}.json", {
+        "number": n, "state": "MERGED", "title": "t", "author": {"login": "a"},
+        "mergedBy": {"login": "a"}, "headRefName": f"feat-{n}",
+        "createdAt": "2027-11-01T00:00:00Z", "mergedAt": "2027-11-01T00:00:00Z",
+        "mergeCommit": {"oid": oid, "messageHeadline": f"feat: x (#{n})", "messageBody": body},
+        "additions": 1, "deletions": 1, "changedFiles": 1,
+        "closingIssuesReferences": [{"number": r} for r in refs],
+        "commits": [], "reviews": [], "statusCheckRollup": []})
+    jfile(f"run_list_feat-{n}.json", [])
+    jfile(f"graphql_{n}.json", {"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]}}}}})
+    jfile(f"issue_list_{n}.json", [])
+def closer(issue, by, state="CLOSED"):
+    jfile(f"closer_{issue}.json", {"data":{"repository":{"issue":{"state": state,
+        "timelineItems":{"nodes":[{"closer":{"__typename":"Commit","oid":by}}]}}}}})
+other = "eeee5555eeee5555eeee5555eeee5555eeee5555"
+pr(540, [], "Fixes #341\nFixes #342")
+closer(341, oid); closer(342, oid)
+pr(541, [339], "closes #314\nResolves #339")
+closer(314, oid); closer(339, oid)
+pr(542, [], "Fixes #500")
+closer(500, other)
+pr(543, [], "Fixes other/repo#7\nfixes acme/widgets#601")
+closer(601, oid); closer(7, oid)
+pr(544, [], "Fixes #700")
+PYEOF
+touch "$FAKE_GH_DIR/fail_closer_700"
+
+run_split --repo "$REPO" --stdout 540
+py_check "I1 empty refs + message Fixes #341/#342 confirmed -> [341, 342]" "d['pr_meta']['closes'] == [341, 342]"
+py_check "I1 no unknown[]" "d['unknown'] == []"
+run_split --repo "$REPO" --stdout 541
+py_check "I2 overlap refs [339] + message 314,339 -> [314, 339] (dedup, sorted)" "d['pr_meta']['closes'] == [314, 339]"
+run_split --repo "$REPO" --stdout 542
+py_check "I3 message names #500 but closer is a different commit -> not counted" "d['pr_meta']['closes'] == []"
+run_split --repo "$REPO" --stdout 543
+py_check "I4 cross-repo other/repo#7 ignored, same-repo qualified ref counted" "d['pr_meta']['closes'] == [601]"
+grep -q "issue=7" "$GH_LOG" && bad "I4 cross-repo ref was queried" || ok "I4 cross-repo ref never queried"
+run_split --repo "$REPO" --stdout 544
+py_check "I5 confirm query fails -> not counted (fail-safe)" "d['pr_meta']['closes'] == []"
+py_check "I5 failure is named in unknown[]" "any('pr_meta.closes' in u and '#700' in u for u in d['unknown'])"
+rm -f "$FAKE_GH_DIR/fail_closer_700"
+# I6: a ref already in closingIssuesReferences is never re-queried (PR 541's #339)
+n339=$(grep -c "issue=339" "$GH_LOG" | tr -d ' ')
+[ "$n339" = "0" ] && ok "I6 refs-covered issue #339 not re-confirmed" || bad "I6 re-queried a covered ref" "count=$n339"
 
 # =========================================================================
 # GROUP H -- no __pycache__ left behind anywhere in the checkout
