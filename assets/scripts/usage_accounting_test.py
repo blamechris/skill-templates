@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -27,6 +27,32 @@ def load(name, path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@contextmanager
+def pinned_timezone(name):
+    """Run with the process-local zone set to `name`, restoring zone and tzset afterwards."""
+    had = "TZ" in os.environ
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = name
+    time.tzset()
+    try:
+        yield
+    finally:
+        if had:
+            os.environ["TZ"] = old
+        else:
+            os.environ.pop("TZ", None)
+        time.tzset()
+
+
+def local_day(ts):
+    """Local calendar day of a fixture timestamp.
+
+    Mirrors usage-trend.py's day bucketing (`fromisoformat(...).astimezone().strftime`),
+    which has no importable helper, so expected keys follow the zone in force.
+    """
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
 
 
 def rec(ts, request, message, model, output, cache_read=0, cache_5m=0,
@@ -532,6 +558,14 @@ class UsageAccountingTests(unittest.TestCase):
             self.assertFalse(aggregate["pricing_complete"])
 
     def test_trend_uses_final_record_day_and_global_parent_child_selection(self):
+        # The early/late timestamps straddle local midnight only in Pacific time (UTC-7),
+        # which is what makes "final record's day" distinguishable from "first record's
+        # day". Deriving the keys would let UTC and Pago_Pago pass vacuously (both records
+        # on one day), so pin the zone this test assumes.
+        with pinned_timezone("America/Los_Angeles"):
+            self._trend_final_record_day_body()
+
+    def _trend_final_record_day_body(self):
         spec = importlib.util.spec_from_file_location("usage_trend", HERE / "usage-trend.py")
         trend = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(trend)
@@ -626,6 +660,8 @@ class UsageAccountingTests(unittest.TestCase):
                           cache_read=300000, stop="end_turn")
             priced = rec("2026-10-01T17:09:00Z", "rp", "mp", "claude-sonnet-5-5", 9,
                          cache_read=100000, stop="end_turn")
+            day = local_day(unknown["timestamp"])
+            self.assertEqual(day, local_day(priced["timestamp"]))
             original_argv = sys.argv
             try:
                 sys.argv = ["usage-trend.py", "--no-sync"]
@@ -635,11 +671,11 @@ class UsageAccountingTests(unittest.TestCase):
                     output = io.StringIO()
                     with redirect_stdout(output):
                         trend.main()
-                    row = trend.merged_history()["2026-10-01"]
+                    row = trend.merged_history()[day]
                     self.assertEqual(row["token_observed_responses"], observed)
                     self.assertEqual(row["cache_read_tokens"], average * observed * 1000)
                     self.assertRegex(output.getvalue(),
-                                     rf"2026-10-01[^\n]*\s{average}K")
+                                     rf"{day}[^\n]*\s{average}K")
             finally:
                 sys.argv = original_argv
 
