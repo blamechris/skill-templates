@@ -533,6 +533,16 @@ jobs:
         # refuses write flags, so read-only is asserted rather than claimed.
         run: ./assets/scripts/genesis-verify.test.sh
 
+      - name: genesis --audit label block regression tests (bash + zsh)
+        # Pins the label block in generic/project-genesis.md's `--audit` section (#360):
+        # it never passes --force, matches label names case-insensitively, sees label 48
+        # of 61, and turns a failed list or create into a STOP. The block is prose in a
+        # template, so nothing else runs it, and this workflow has no *.test.sh glob; the
+        # test extracts it fresh and runs it under bash and zsh against a fake gh.
+        run: |
+          command -v zsh >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq zsh; }
+          ./scripts/genesis-audit-label-block.test.sh
+
       - name: registry.json is freshly generated
         run: |
           # Subsumes the old "build-index runs cleanly" smoke step: it still runs
