@@ -113,7 +113,7 @@ skill-templates#254, #377.
 import json, glob, os, re, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from usage_accounting import (RATE_CARD_VERSION, Responses, price_usage, session_child_files,
+from usage_accounting import (RATE_CARD_VERSION, Responses, record_problem, price_usage, session_child_files,
                               session_subagent_roots, split_project_dirs)
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -237,7 +237,8 @@ def json_records(fh, source):
     """Yield (line number, record) for each line of `fh` that is a JSON object.
 
     A line that is not valid JSON is skipped, as it always was. A line that IS valid JSON
-    but not an object (`null`, `[1]`, `3`, `"s"`) is a REFUSE naming the file and line: the
+    but not an object (`null`, `[1]`, `3`, `"s"`), or an assistant record whose `message` is
+    truthy and not an object, is a REFUSE (usage_accounting.record_problem) naming the file and line: the
     readers below call `.get` on every record, and a traceback there would be a crash, not
     an answer. The one loop both the main transcript and every child file read through."""
     for line_no, line in enumerate(fh, 1):
@@ -245,9 +246,9 @@ def json_records(fh, source):
             rec = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(rec, dict):
-            die(f"{source}:{line_no}: transcript line is valid JSON but not an object "
-                f"({type(rec).__name__}) — cannot be read as a record.")
+        problem = record_problem(rec)
+        if problem:
+            die(f"{source}:{line_no}: transcript line is {problem} — cannot be read as a record.")
         yield line_no, rec
 
 def scan_subagents(roots, selected):

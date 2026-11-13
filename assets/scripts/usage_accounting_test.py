@@ -5,6 +5,7 @@ import importlib.util
 import io
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -534,6 +535,104 @@ class UsageAccountingTests(unittest.TestCase):
                     part.pop("bytes")
                     part.pop("sha256")
             self.assertEqual(noisy, clean)
+
+    # ---- #465: a truthy non-object `message`, and a checkpoint document that is not an object
+
+    @staticmethod
+    def _append_record(target, record):
+        with target.open("ab") as fh:
+            fh.write((json.dumps(record) + "\n").encode())
+
+    def _checkpoint_json(self, main):
+        done = subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                               "--session", str(main), "--run-id", "run-1",
+                               "--capture-at", "2026-09-29T00:01:00Z", "--status", "final"],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+        doc = json.loads(done.stdout)
+        for part in doc["source_coverage"]:      # the appended line changes bytes and sha256 only
+            part.pop("bytes")
+            part.pop("sha256")
+        return doc
+
+    def test_checkpoint_refuses_a_truthy_non_object_message_in_main_and_child(self):
+        for message in ("x", [1], 3, True):
+            for where in ("main", "child"):
+                with self.subTest(message=message, where=where), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    main, child = self._nonobject_fixture(root)
+                    target = main if where == "main" else child
+                    self._append_record(target, {"type": "assistant", "requestId": "rx",
+                                                 "message": message})
+                    out = root / "out"
+                    result = self._run_checkpoint(main, out)
+                    self._assert_refused(result, target, 2, out)
+                    self.assertIn("message is not an object", result.stderr)
+
+    def test_checkpoint_still_tolerates_falsy_messages_and_non_object_usage(self):
+        # Each tolerated record leaves the document identical to the run without it, apart
+        # from source_coverage's bytes/sha256 (the appended line is covered by the digest).
+        tolerated = (
+            {"type": "assistant", "requestId": "rx", "message": None},
+            {"type": "assistant", "requestId": "rx", "message": ""},
+            {"type": "assistant", "requestId": "rx", "message": []},
+            {"type": "assistant", "requestId": "rx", "message": 0},
+            {"type": "assistant", "requestId": "rx", "message": False},
+            {"type": "assistant", "requestId": "rx", "message": {"id": "mx", "usage": "x"}},
+            {"type": "assistant", "requestId": "rx", "message": {"id": "mx", "usage": [1]}},
+            {"type": "user", "message": "plain text, never read"},
+            {"type": "user", "message": [1]},
+        )
+        # One fixed path rebuilt per case, so the documents differ in nothing but the record.
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "w"
+
+            def fresh():
+                shutil.rmtree(work, ignore_errors=True)
+                work.mkdir()
+                return self._nonobject_fixture(work)
+
+            main, child = fresh()
+            clean = self._checkpoint_json(main)
+            for record in tolerated:
+                for where in ("main", "child"):
+                    with self.subTest(record=record, where=where):
+                        main, child = fresh()
+                        self._append_record(main if where == "main" else child, record)
+                        self.assertEqual(self._checkpoint_json(main), clean)
+
+    def test_aggregate_refuses_a_checkpoint_document_that_is_not_an_object(self):
+        for content in ("null", "[1]", "3", '"s"', "true"):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as tmp:
+                agg = Path(tmp)
+                (agg / "x.json").write_text(content)
+                result = subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                                         "--aggregate-dir", str(agg)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertTrue(result.stderr.startswith("REFUSE: "), result.stderr)
+                self.assertIn(str(agg / "x.json"), result.stderr)
+                self.assertIn("not a JSON object", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+
+    def test_record_problem_names_what_cannot_be_read_and_only_that(self):
+        problem = usage_accounting.record_problem
+        for record in ({"type": "assistant", "message": {"id": "m"}},
+                       {"type": "assistant"},
+                       {"type": "assistant", "message": {"usage": "x"}},    # add() skips it
+                       {"type": "user", "message": "x"}, {"type": "user", "message": [1]},
+                       {}):
+            self.assertIsNone(problem(record), record)
+        for falsy in (None, "", [], {}, 0, False):
+            self.assertIsNone(problem({"type": "assistant", "message": falsy}), falsy)
+        for record, name in ((None, "NoneType"), ([1], "list"), (3, "int"), ("s", "str"),
+                             (True, "bool")):
+            self.assertEqual(problem(record), "valid JSON but not an object (%s)" % name)
+        for message, name in (("x", "str"), ([1], "list"), (3, "int"), (True, "bool")):
+            self.assertEqual(problem({"type": "assistant", "message": message}),
+                             "message is not an object (%s)" % name)
 
     def test_aggregate_keeps_unknown_ttl_bounds_and_unpriced_coverage(self):
         checkpoint = load("usage_checkpoint_bounds", HERE / "usage-checkpoint.py")

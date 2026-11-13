@@ -26,7 +26,7 @@ from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from usage_accounting import (RATE_CARD_VERSION, Responses, price_usage, session_child_files,
+from usage_accounting import (RATE_CARD_VERSION, Responses, record_problem, price_usage, session_child_files,
                               session_subagent_roots, split_project_dirs, token_split)
 
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_5m_tokens",
@@ -96,10 +96,9 @@ def capture_session(path, run_id, captured_at, status):
                         record = json.loads(raw.decode("utf-8", errors="replace"))
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(record, dict):
-                    raise ValueError(
-                        f"{source}:{line_no}: transcript line is valid JSON but not an "
-                        f"object ({type(record).__name__})")
+                problem = record_problem(record)
+                if problem:
+                    raise ValueError(f"{source}:{line_no}: transcript line is {problem}")
                 selected.add(record, str(source), line_no,
                              "child" if source != path else "main")
         coverage.append({"path": str(source), "bytes": byte_count,
@@ -183,6 +182,8 @@ def latest_totals(directory):
     latest = {}
     for path in directory.glob("*.json"):
         doc = json.loads(path.read_text())
+        if not isinstance(doc, dict):
+            raise ValueError(f"{path}: checkpoint is not a JSON object ({type(doc).__name__})")
         if doc.get("rate_card") != RATE_CARD_VERSION:
             raise ValueError("mixed rate-card versions; reprice or segregate checkpoints")
         key = (doc["run_id"], doc["session_id"])

@@ -1636,6 +1636,39 @@ got=$(edge_run "$EU" 2>/dev/null); rc=$?
   || bad "lines that are not JSON at all are still skipped" "rc=$rc $(flat "$got")"
 cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
 
+# --- #465: an assistant record whose `message` is truthy and not an object: main and child
+for bad_msg in '"x"' '[1]' '3' 'true'; do
+  cp "$EP/-p/$EU.jsonl" "$TMP/main.keep"
+  printf '{"type":"assistant","requestId":"rx","message":%s}\n' "$bad_msg" >> "$EP/-p/$EU.jsonl"
+  ARGS=("$EU"); refused "main transcript message $bad_msg is a REFUSE naming file and line 11" "$EU.jsonl:11:"
+  cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
+  printf '{"type":"assistant","requestId":"rx","message":%s}\n' "$bad_msg" >> "$EP/-p/$EU/subagents/agent-ok.jsonl"
+  ARGS=("$EU"); refused "child file message $bad_msg is a REFUSE naming file and line 11" "agent-ok.jsonl:11:"
+  gen "$EP/-p/$EU/subagents/agent-ok.jsonl" 10 1 msgid
+done
+# ...while what was always tolerated still is, with the row unchanged byte for byte:
+# a falsy message (read as empty), a non-object usage (the record is skipped), and any
+# message on a record that is not an assistant one (never read).
+baseline_full=$(edge_run "$EU" 2>/dev/null)
+for tol in '{"type":"assistant","requestId":"rx","message":null}' \
+           '{"type":"assistant","requestId":"rx","message":""}' \
+           '{"type":"assistant","requestId":"rx","message":[]}' \
+           '{"type":"assistant","requestId":"rx","message":0}' \
+           '{"type":"assistant","requestId":"rx","message":false}' \
+           '{"type":"assistant","requestId":"rx","message":{"id":"mx","usage":"x"}}' \
+           '{"type":"assistant","requestId":"rx","message":{"id":"mx","usage":[1]}}' \
+           '{"type":"user","message":"plain text"}'; do
+  for where in main child; do
+    f="$EP/-p/$EU.jsonl"; [ "$where" = child ] && f="$EP/-p/$EU/subagents/agent-ok.jsonl"
+    cp "$f" "$TMP/tol.keep"; printf '%s\n' "$tol" >> "$f"
+    got=$(edge_run "$EU" 2>"$TMP/edge.err"); rc=$?
+    cp "$TMP/tol.keep" "$f"
+    [ "$rc" -eq 0 ] && [ "$got" = "$baseline_full" ] && ! grep -q Traceback "$TMP/edge.err" \
+      && ok "tolerated in $where, row unchanged: $tol" \
+      || bad "tolerated in $where, row unchanged: $tol" "rc=$rc $(flat "$got") $(flat "$(cat "$TMP/edge.err")")"
+  done
+done
+
 # --- ambiguous short ids
 AM1=abcd1234-0000-4000-8000-000000000001; AM2=abcd1234-0000-4000-8000-000000000002
 mkdir -p "$EP/-p" "$EP/-q"
@@ -1666,7 +1699,7 @@ got=$(edge_run 7e1d 2>"$TMP/edge.err"); rc=$?
   || bad "one session id in two project dirs is not ambiguous: newest mtime wins" "rc=$rc $(flat "$(cat "$TMP/edge.err")")"
 
 # --- mutants: each must turn its case red
-if MUT=$(mutant nonobject usage-benchmark-row.py 's/^        if not isinstance(rec, dict):$/        if False:/'); then
+if MUT=$(mutant nonobject usage-benchmark-row.py 's/^        if problem:$/        if False:/'); then
   cp "$EP/-p/$EU.jsonl" "$TMP/main.keep"; printf 'null\n' >> "$EP/-p/$EU.jsonl"
   eo=$(HOME="$EH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" "$EU" 2>"$TMP/edge.err"); erc=$?
   cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
@@ -1674,6 +1707,30 @@ if MUT=$(mutant nonobject usage-benchmark-row.py 's/^        if not isinstance(r
     && ok "the fixture DISTINGUISHES the two implementations (non-object check removed: traceback)" \
     || bad "the fixture DISTINGUISHES the two implementations (non-object check removed: traceback)" "rc=$erc"
 else bad "the fixture DISTINGUISHES the two implementations (non-object check removed: traceback)" "could not build the mutant"; fi
+msg_refused_by() {   # <mutant script> — 0 when the mutant still REFUSES a truthy non-object message
+  cp "$EP/-p/$EU.jsonl" "$TMP/main.keep"; printf '{"type":"assistant","requestId":"rx","message":"x"}\n' >> "$EP/-p/$EU.jsonl"
+  HOME="$EH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$1" "$EU" >/dev/null 2>"$TMP/edge.err"; local r=$?
+  cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
+  [ "$r" -ne 0 ] && grep -q '^REFUSE: ' "$TMP/edge.err" && ! grep -q Traceback "$TMP/edge.err"
+}
+if MUT=$(mutant msgtype usage_accounting.py 's/^        if message and not isinstance(message, dict):$/        if False:/'); then
+  msg_refused_by "$MUT" \
+    && bad "the fixture DISTINGUISHES the two implementations (helper ignores message type: still refused)" "refused" \
+    || ok "the fixture DISTINGUISHES the two implementations (helper ignores message type: crash/accept, not a REFUSE)"
+else bad "the fixture DISTINGUISHES the two implementations (helper ignores message type)" "could not build the mutant"; fi
+if MUT=$(mutant msgfalsy usage_accounting.py 's/^        if message and not isinstance(message, dict):$/        if not isinstance(message, dict):/'); then
+  cp "$EP/-p/$EU.jsonl" "$TMP/main.keep"; printf '{"type":"assistant","requestId":"rx","message":null}\n' >> "$EP/-p/$EU.jsonl"
+  eo=$(HOME="$EH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" "$EU" 2>/dev/null); erc=$?
+  cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
+  [ "$erc" -ne 0 ] \
+    && ok "the fixture DISTINGUISHES the two implementations (falsy message treated as a problem: tolerance case goes red)" \
+    || bad "the fixture DISTINGUISHES the two implementations (falsy message treated as a problem: tolerance case goes red)" "rc=$erc"
+else bad "the fixture DISTINGUISHES the two implementations (falsy message treated as a problem)" "could not build the mutant"; fi
+if MUT=$(mutant skiphelper usage-benchmark-row.py 's/^        if problem:$/        if False:/'); then
+  msg_refused_by "$MUT" \
+    && bad "the fixture DISTINGUISHES the two implementations (json_records skips the helper: still refused)" "refused" \
+    || ok "the fixture DISTINGUISHES the two implementations (json_records skips the helper: not a REFUSE)"
+else bad "the fixture DISTINGUISHES the two implementations (json_records skips the helper)" "could not build the mutant"; fi
 if MUT=$(mutant ambiguous usage-benchmark-row.py 's/^    if len(stems) > 1:$/    if False:/'); then
   eo=$(HOME="$EH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$MUT" abcd1234 2>/dev/null); erc=$?
   [ "$erc" -eq 0 ] \
