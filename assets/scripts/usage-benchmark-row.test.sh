@@ -1696,6 +1696,58 @@ for bad_id in '["a"]' '{"a":1}' '5' 'true'; do
   done
 done
 
+# --- #471: a truthy non-string model is a REFUSE (record_problem); so is a usage counter the
+# weighting cannot read as a number, naming the file and line of the selected response.
+refuse_471() {  # <label> <record>
+  local where f want
+  for where in main child; do
+    f="$EP/-p/$EU.jsonl"; want="$EU.jsonl:11:"
+    [ "$where" = child ] && { f="$EP/-p/$EU/subagents/agent-ok.jsonl"; want="agent-ok.jsonl:11:"; }
+    cp "$f" "$TMP/c471.keep"; printf '%s\n' "$2" >> "$f"
+    ARGS=("$EU"); refused "$where $1 is a REFUSE naming file and line 11" "$want"
+    cp "$TMP/c471.keep" "$f"
+  done
+}
+for bad_model in '["x"]' '{"a":1}'; do
+  refuse_471 "model $bad_model" "$(printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":%s,"usage":{"output_tokens":1}}}' "$bad_model")"
+done
+for bad_ctr in '[1]' '{"a":1}' '"abc"'; do
+  refuse_471 "output_tokens $bad_ctr" "$(printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":"claude-opus-5-5","usage":{"output_tokens":%s}}}' "$bad_ctr")"
+done
+# An infinite or NaN counter would weigh the whole row as inf: a REFUSE, never that row.
+for bad_ctr in '1e999' 'NaN'; do
+  refuse_471 "output_tokens $bad_ctr" "$(printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":"claude-opus-5-5","usage":{"output_tokens":%s}}}' "$bad_ctr")"
+done
+# A scalar model never crashed: it is an unpriced response, as it always was -- the row is
+# byte for byte the one an unknown model name gives.
+f="$EP/-p/$EU.jsonl"; cp "$f" "$TMP/c471.keep"
+printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":"no-such-model","usage":{"output_tokens":5}}}\n' >> "$f"
+unknown_row=$(edge_run "$EU" 2>/dev/null)
+cp "$TMP/c471.keep" "$f"
+for scalar_model in 1 true; do
+  printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":%s,"usage":{"output_tokens":5}}}\n' "$scalar_model" >> "$f"
+  got=$(edge_run "$EU" 2>"$TMP/edge.err"); rc=$?
+  cp "$TMP/c471.keep" "$f"
+  [ "$rc" -eq 0 ] && [ -n "$unknown_row" ] && [ "$got" = "$unknown_row" ] && ! grep -q 'REFUSE\|Traceback' "$TMP/edge.err" \
+    && ok "model $scalar_model is an unpriced response, not a REFUSE" \
+    || bad "model $scalar_model is an unpriced response, not a REFUSE" "rc=$rc $(flat "$got") $(flat "$(cat "$TMP/edge.err")")"
+done
+# ...while a counter the shared reader can read weighs as what it reads: "7" as 7, null and
+# [] as 0 -- the row is the one the numeric form gives, byte for byte (#471).
+for pair in '"7" 7' 'null 0' '[] 0'; do
+  read -r odd_v num_v <<<"$pair"
+  f="$EP/-p/$EU.jsonl"; cp "$f" "$TMP/c471.keep"
+  printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":"claude-opus-5-5","usage":{"input_tokens":3,"output_tokens":%s}}}\n' "$odd_v" >> "$f"
+  odd=$(edge_run "$EU" 2>"$TMP/edge.err"); orc=$?
+  cp "$TMP/c471.keep" "$f"
+  printf '{"type":"assistant","requestId":"rx","message":{"id":"mx","model":"claude-opus-5-5","usage":{"input_tokens":3,"output_tokens":%s}}}\n' "$num_v" >> "$f"
+  num=$(edge_run "$EU" 2>/dev/null)
+  cp "$TMP/c471.keep" "$f"
+  [ "$orc" -eq 0 ] && [ -n "$odd" ] && [ "$odd" = "$num" ] && ! grep -q Traceback "$TMP/edge.err" \
+    && ok "output_tokens $odd_v weighs as $num_v: same row" \
+    || bad "output_tokens $odd_v weighs as $num_v: same row" "rc=$orc odd=$(flat "$odd") num=$(flat "$num") $(flat "$(cat "$TMP/edge.err")")"
+done
+
 # --- ambiguous short ids
 AM1=abcd1234-0000-4000-8000-000000000001; AM2=abcd1234-0000-4000-8000-000000000002
 mkdir -p "$EP/-p" "$EP/-q"
