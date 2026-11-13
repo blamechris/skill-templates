@@ -189,6 +189,14 @@ def latest_totals(directory):
             raise ValueError(f"{path}: checkpoint is not a JSON object ({type(doc).__name__})")
         if doc.get("rate_card") != RATE_CARD_VERSION:
             raise ValueError("mixed rate-card versions; reprice or segregate checkpoints")
+        # The latest-checkpoint comparison below keys and orders on these, so each must be
+        # a string capture() would have written; checked before any two are compared (#469).
+        for name in ("run_id", "session_id", "captured_at", "status"):
+            if name not in doc:
+                raise ValueError(f"{path}: checkpoint lacks {name}")
+            if not isinstance(doc[name], str):
+                raise ValueError(f"{path}: checkpoint {name} is not a string "
+                                 f"({type(doc[name]).__name__})")
         key = (doc["run_id"], doc["session_id"])
         if key not in latest or (doc["captured_at"], doc["status"] == "final") > (latest[key]["captured_at"], latest[key]["status"] == "final"):
             latest[key] = doc

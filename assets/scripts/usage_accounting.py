@@ -232,17 +232,28 @@ def record_problem(record):
     The one validation both scripts run on every JSON line BEFORE `Responses.add`:
     - a line that is valid JSON but not an object (`null`, `[1]`, `3`, `"s"`);
     - an assistant record whose `message` is truthy and not an object (`"x"`, `[1]`, `3`,
-      `true`), which `add` would otherwise crash on.
+      `true`), which `add` would otherwise crash on;
+    - an assistant record whose `requestId` or `message.id` is truthy and not a string
+      (`["a"]`, `{"a": 1}`, `5`, `true`): they key the deduplication, so `add` crashes on an
+      unhashable one and usage-pace.py on any non-string one (#469).
     Deliberately NOT problems, because they were always tolerated: a falsy `message`
-    (`null`, `""`, `[]`, `0`, `false` are read as empty, as `or {}` always did), a
-    non-object `usage` (`add` skips the record), and any `message` on a record that is not
-    an assistant one (never read)."""
+    (`null`, `""`, `[]`, `0`, `false` are read as empty, as `or {}` always did), a falsy
+    `requestId` or `message.id` (read as absent, as `response_key` always did), a
+    non-object `usage` (`add` skips the record), a `timestamp` of any shape (an
+    unreadable one is undated), and any `message` on a record that is not an assistant
+    one (never read)."""
     if not isinstance(record, dict):
         return f"valid JSON but not an object ({type(record).__name__})"
     if record.get("type") == "assistant":
         message = record.get("message")
         if message and not isinstance(message, dict):
             return f"valid JSON but its message is not an object ({type(message).__name__})"
+        request_id = record.get("requestId")
+        if request_id and not isinstance(request_id, str):
+            return f"valid JSON but its requestId is not a string ({type(request_id).__name__})"
+        message_id = (message or {}).get("id")
+        if message_id and not isinstance(message_id, str):
+            return f"valid JSON but its message.id is not a string ({type(message_id).__name__})"
     return None
 
 

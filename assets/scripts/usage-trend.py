@@ -151,7 +151,7 @@ def scan():
         e = item["record"]
         msg = e.get("message") or {}
         u, model, ts = msg["usage"], msg.get("model"), e.get("timestamp")
-        if not ts:
+        if not isinstance(ts, str) or not ts:     # undated, like an unparseable one (#469)
             continue
         try:
             day = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
@@ -498,7 +498,7 @@ def scan_weeks():
         e = item["record"]
         msg = e.get("message") or {}
         u, model, ts = msg["usage"], msg.get("model"), e.get("timestamp")
-        if not ts:
+        if not isinstance(ts, str) or not ts:     # undated, like an unparseable one (#469)
             continue
         try:
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))

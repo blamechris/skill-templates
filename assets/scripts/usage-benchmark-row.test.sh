@@ -1660,7 +1660,11 @@ for tol in '{"type":"assistant","requestId":"rx","message":null}' \
            '{"type":"user","message":"plain text"}' \
            '{"type":"system","message":"x"}' \
            '{"type":"summary","message":[1]}' \
-           '{"message":"untyped"}'; do
+           '{"message":"untyped"}' \
+           '{"type":"assistant","requestId":[],"message":{"id":0,"usage":"x"}}' \
+           '{"type":"user","requestId":["a"],"message":{"id":{"a":1}}}' \
+           '{"type":"user","timestamp":5}' \
+           '{"type":"assistant","timestamp":[1],"requestId":"rx","message":{"id":"mx","usage":"x"}}'; do
   for where in main child; do
     f="$EP/-p/$EU.jsonl"; [ "$where" = child ] && f="$EP/-p/$EU/subagents/agent-ok.jsonl"
     cp "$f" "$TMP/tol.keep"; printf '%s\n' "$tol" >> "$f"
@@ -1669,6 +1673,26 @@ for tol in '{"type":"assistant","requestId":"rx","message":null}' \
     [ "$rc" -eq 0 ] && [ "$got" = "$baseline_full" ] && ! grep -q Traceback "$TMP/edge.err" \
       && ok "tolerated in $where, row unchanged: $tol" \
       || bad "tolerated in $where, row unchanged: $tol" "rc=$rc $(flat "$got") $(flat "$(cat "$TMP/edge.err")")"
+  done
+done
+
+# --- #469: an assistant record whose requestId or message.id is truthy and not a string
+# (the falsy ones, a non-assistant record's ids and a non-string timestamp are among the
+# tolerated records above: undated, the row unchanged).
+for bad_id in '["a"]' '{"a":1}' '5' 'true'; do
+  for field in requestId message.id; do
+    if [ "$field" = requestId ]; then
+      rec469=$(printf '{"type":"assistant","requestId":%s,"message":{"id":"mx","usage":{"output_tokens":1}}}' "$bad_id")
+    else
+      rec469=$(printf '{"type":"assistant","requestId":"rx","message":{"id":%s,"usage":{"output_tokens":1}}}' "$bad_id")
+    fi
+    for where in main child; do
+      f="$EP/-p/$EU.jsonl"; want="$EU.jsonl:11:"
+      [ "$where" = child ] && { f="$EP/-p/$EU/subagents/agent-ok.jsonl"; want="agent-ok.jsonl:11:"; }
+      cp "$f" "$TMP/id.keep"; printf '%s\n' "$rec469" >> "$f"
+      ARGS=("$EU"); refused "$where $field $bad_id is a REFUSE naming file and line 11" "$want"
+      cp "$TMP/id.keep" "$f"
+    done
   done
 done
 

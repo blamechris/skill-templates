@@ -57,8 +57,13 @@ STATE = HIST / "pace-state.json"
 READINGS = HOME / "Obsidian" / "no-it-all" / "briefs" / "meter-readings.md"
 PT = ZoneInfo("America/Los_Angeles")
 # Transcript records skipped because they are valid JSON but unreadable (usage_accounting.
-# record_problem). Reported once on stderr at exit, never by the hook (#467).
+# record_problem). Reported once on stderr at exit, never by the hook (#467). The two passes
+# count different things, so they are kept apart rather than summed (#469): scan_detail
+# reads only the bytes appended since its cache's offsets, so SKIPPED_RECORDS counts the
+# newly read lines and adds up across calls; _cum_events rereads every transcript, so
+# SKIPPED_ALL_RECORDS is that pass's whole count, set rather than added (None = not run).
 SKIPPED_RECORDS = 0
+SKIPPED_ALL_RECORDS = None
 _HOOK_RUN = False
 WEEK_WD, WEEK_H, WEEK_MIN = 2, 15, 59          # Wednesday 15:59 PT
 # How far past the week close scan() still remembers a key it is not billing. See the
@@ -538,7 +543,7 @@ def scan_detail(week, force=False):
             if not isinstance(u, dict) or model == "<synthetic>" or e.get("isApiErrorMessage"):
                 continue
             ts = e.get("timestamp")
-            if not ts:
+            if not isinstance(ts, str) or not ts:     # undated, like an unparseable one (#469)
                 continue
             try:
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -1011,7 +1016,8 @@ def _cum_events(unit="$ "):
     if unit not in ("$", "raw", "ieq"):
         raise ValueError("unknown unit")
     selected = Responses()
-    global SKIPPED_RECORDS
+    global SKIPPED_ALL_RECORDS
+    skipped = 0
     for path in ROOT.rglob("*.jsonl"):
         if "memory" in path.parts or "tool-results" in path.parts:
             continue
@@ -1026,10 +1032,11 @@ def _cum_events(unit="$ "):
                 except json.JSONDecodeError:
                     continue
                 if record_problem(record):
-                    SKIPPED_RECORDS += 1
+                    skipped += 1
                     continue
                 selected.add(record, str(path), line_no,
                              "child" if "subagents" in path.parts else "main")
+    SKIPPED_ALL_RECORDS = skipped
     ev = []
     for item in selected.rows():
         e = item["record"]
@@ -2507,9 +2514,21 @@ def main():
     return 0
 
 
+def skipped_note():
+    """The stderr note for records skipped this run, or None. The full pass saw every line
+    the incremental scan read, so when it ran it is the count reported (#469)."""
+    if SKIPPED_ALL_RECORDS:
+        return ("usage coverage: %d malformed transcript records skipped across all "
+                "transcripts" % SKIPPED_ALL_RECORDS)
+    if SKIPPED_RECORDS:
+        return ("usage coverage: %d malformed transcript records skipped in the transcript "
+                "lines newly read this run" % SKIPPED_RECORDS)
+    return None
+
+
 if __name__ == "__main__":
     _rc = main()
-    if SKIPPED_RECORDS and not _HOOK_RUN:
-        print("usage coverage: %d malformed transcript records skipped" % SKIPPED_RECORDS,
-              file=sys.stderr)
+    _note = None if _HOOK_RUN else skipped_note()
+    if _note:
+        print(_note, file=sys.stderr)
     sys.exit(_rc)

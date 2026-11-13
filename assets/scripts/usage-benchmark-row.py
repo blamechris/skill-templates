@@ -401,7 +401,7 @@ selected = Responses()
 with open(path, errors="replace") as f:
     for line_no, rec in json_records(f, path):
         ts = rec.get("timestamp")
-        if ts:
+        if isinstance(ts, str) and ts:      # a non-string one is undated, as elsewhere (#469)
             t0 = t0 or ts
             t1 = ts
         if rec.get("type") != "assistant":
