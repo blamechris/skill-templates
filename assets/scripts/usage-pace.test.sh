@@ -3241,5 +3241,79 @@ printf '%s' "$got" | grep -q 'COMPLETE-MINUTE BK-SUMS-TO-TOT ORDER-FREE' \
   && ok "the per-minute index bills the complete record's minute and leaves the partial's empty" \
   || bad "the per-minute index bills the complete record's minute" "$(flat "$got")"
 
+# ------------------------------------------- 3x. unreadable records are skipped (#467)
+# A line that is valid JSON but not a record (non-object JSON, or an assistant record whose
+# message is truthy and not an object) used to crash scan() / _cum_events() / last_model()
+# with a traceback. It is now skipped the way an invalid-JSON line is: same results as the
+# clean transcript, and scan()'s stored offsets identical to a run where those lines are
+# invalid JSON of the same byte length (the partial-line hold / consumed offset unchanged).
+got=$("$PY" - "$SUT" "$TMP" <<'PY_467' 2>&1
+import importlib.util, json, pathlib, shutil, sys, io, contextlib
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+base=pathlib.Path(sys.argv[2])/"m467"; shutil.rmtree(base, ignore_errors=True); base.mkdir()
+def rec(i, model="claude-opus-5-5"):
+    return json.dumps({"type":"assistant","timestamp":"2026-09-29T12:00:%02dZ"%i,
+        "message":{"id":"m%d"%i,"model":model,"stop_reason":"end_turn",
+                   "usage":{"output_tokens":1000+i,"inference_geo":"global"}}},
+        separators=(",",":"))
+valid=[rec(i) for i in range(3)]
+malformed=['[{"type":"assistant"}]',
+           '{"type":"assistant","message":"x"}',
+           '{"type":"assistant","message":[1]}',
+           'null', '3']
+def garbage(line):
+    return "{" + "x"*(len(line)-1)          # invalid JSON, same byte length
+def layout(_):
+    return [malformed[0], valid[0], malformed[1], valid[1], *malformed[2:], valid[2]]
+def run(label, lines):
+    root=base/label; root.mkdir()
+    (root/"t.jsonl").write_text("\n".join(lines)+"\n")
+    up.ROOT=root; up.HIST=base; up.CACHE=base/(label+".json")
+    wk=up.week_close(up.datetime(2026,9,29,12,tzinfo=up.timezone.utc))
+    before=up.SKIPPED_RECORDS
+    tot,bk=up.scan_detail(wk, force=True)
+    cache=json.loads(up.CACHE.read_text())
+    t,c,cf=up._cum_events("$")
+    return (tot, bk, cache["files"][str(root/"t.jsonl")][0], (t,c,cf)), up.SKIPPED_RECORDS-before
+clean,n0=run("clean", valid)
+# scan() counts the 3 that pass its substring filter; _cum_events counts all 5: 3+5
+dirty,n1=run("dirty", layout(None))
+junk,n2=run("junk", [garbage(l) if l in malformed else l for l in layout(None)])
+print("NO-EXC",
+      "SAME-TOTALS" if (dirty[0],dirty[1],dirty[3])==(clean[0],clean[1],clean[3]) else "DIFF-TOTALS",
+      "OFFSET-AS-JSONERR" if dirty[2]==junk[2] and junk[2]>clean[2] else "OFFSET-DIVERGED",
+      "COUNTS=%d,%d,%d" % (n0,n1,n2))
+PY_467
+)
+printf '%s' "$got" | grep -q '^NO-EXC SAME-TOTALS OFFSET-AS-JSONERR COUNTS=0,8,0$' \
+  && ok "scan/_cum_events skip unreadable records: same results, offsets as invalid JSON, counted" \
+  || bad "scan/_cum_events skip unreadable records" "$(flat "$got")"
+
+t="$TMP/m467-last.jsonl"
+{
+  printf '%s\n' '{"type":"assistant","message":{"model":"claude-fable-5","usage":{}}}'
+  printf '%s\n' 'null' '[1]'
+  printf '%s\n' '{"type":"assistant","message":"a string"}'
+} > "$t"
+got=$(pymod "print(up.last_model(sys.argv[3]))" "$t" 2>&1)
+[ "$got" = "claude-fable-5" ] && ok "last_model skips a newest record whose message is not an object" \
+  || bad "last_model skips a newest record whose message is not an object" "got=$(flat "$got")"
+
+# The skipped-records note is stderr-only and NEVER comes from the hook (#467): a hook
+# whose scan meets malformed records stays silent on both streams unless it speaks.
+H467=$TMP/hook467home
+# A bare HOME (no meter fixture): the hook still fires, pace() scans the projects tree,
+# and the scan meets the malformed records -- so a note leaking past the hook guard shows.
+mkdir -p "$H467/.claude/projects/-p"
+{
+  printf '%s\n' 'null' '[{"type":"assistant"}]' '{"type":"assistant","message":"x"}'
+} >> "$H467/.claude/projects/-p/dirty.jsonl"
+err467=$(printf '{"session_id":"s467","transcript_path":"%s"}' "$TMP/fable.jsonl" \
+  | HOME="$H467" "$PY" "$SUT" --hook --every 1 2>&1 >/dev/null); rc=$?
+[ "$rc" -eq 0 ] && ! printf '%s' "$err467" | grep -q 'malformed' && ! printf '%s' "$err467" | grep -q Traceback \
+  && ok "the hook stays silent on stderr when its scan skips malformed records" \
+  || bad "the hook stays silent on stderr when its scan skips malformed records" "rc=$rc err=$(flat "$err467")"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

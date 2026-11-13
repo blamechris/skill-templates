@@ -47,7 +47,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from usage_accounting import (RATES, RATE_CARD_VERSION, Responses, price_usage,
-                              prefer_response, response_key, token_split)
+                              prefer_response, record_problem, response_key, token_split)
 
 HOME = Path.home()
 HIST = HOME / ".claude" / "usage-history"
@@ -56,6 +56,10 @@ CACHE = HIST / "pace-cache.json"
 STATE = HIST / "pace-state.json"
 READINGS = HOME / "Obsidian" / "no-it-all" / "briefs" / "meter-readings.md"
 PT = ZoneInfo("America/Los_Angeles")
+# Transcript records skipped because they are valid JSON but unreadable (usage_accounting.
+# record_problem). Reported once on stderr at exit, never by the hook (#467).
+SKIPPED_RECORDS = 0
+_HOOK_RUN = False
 WEEK_WD, WEEK_H, WEEK_MIN = 2, 15, 59          # Wednesday 15:59 PT
 # How far past the week close scan() still remembers a key it is not billing. See the
 # straddle comment in scan(): wide enough to cover the widest partial-to-complete pair
@@ -479,6 +483,7 @@ def scan_detail(week, force=False):
     one_id = c.setdefault("one_id", {})
     unidentified = c.setdefault("unidentified", {})
     close_ms = week_bounds(week)[1].timestamp() * 1000
+    global SKIPPED_RECORDS
     for path in ROOT.rglob("*.jsonl"):
         parts = path.parts
         if "memory" in parts or "tool-results" in parts:
@@ -522,6 +527,9 @@ def scan_detail(week, force=False):
             try:
                 e = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if record_problem(e):
+                SKIPPED_RECORDS += 1
                 continue
             if e.get("type") != "assistant":
                 continue
@@ -1003,6 +1011,7 @@ def _cum_events(unit="$ "):
     if unit not in ("$", "raw", "ieq"):
         raise ValueError("unknown unit")
     selected = Responses()
+    global SKIPPED_RECORDS
     for path in ROOT.rglob("*.jsonl"):
         if "memory" in path.parts or "tool-results" in path.parts:
             continue
@@ -1013,10 +1022,14 @@ def _cum_events(unit="$ "):
         with fh:
             for line_no, line in enumerate(fh, 1):
                 try:
-                    selected.add(json.loads(line), str(path), line_no,
-                                 "child" if "subagents" in path.parts else "main")
+                    record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if record_problem(record):
+                    SKIPPED_RECORDS += 1
+                    continue
+                selected.add(record, str(path), line_no,
+                             "child" if "subagents" in path.parts else "main")
     ev = []
     for item in selected.rows():
         e = item["record"]
@@ -2019,7 +2032,9 @@ def last_model(transcript):
             e = json.loads(line)
         except (json.JSONDecodeError, ValueError):
             continue
-        if isinstance(e, dict) and e.get("type") == "assistant":
+        if record_problem(e):
+            continue
+        if e.get("type") == "assistant":
             m = (e.get("message") or {}).get("model") or ""
             if m and m != "<synthetic>":
                 return m
@@ -2029,6 +2044,8 @@ def last_model(transcript):
 def hook(args):
     """Fires on UserPromptSubmit. Silence is the normal outcome; anything printed to
     stdout lands in the session's context."""
+    global _HOOK_RUN
+    _HOOK_RUN = True
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
@@ -2491,4 +2508,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _rc = main()
+    if SKIPPED_RECORDS and not _HOOK_RUN:
+        print("usage coverage: %d malformed transcript records skipped" % SKIPPED_RECORDS,
+              file=sys.stderr)
+    sys.exit(_rc)
