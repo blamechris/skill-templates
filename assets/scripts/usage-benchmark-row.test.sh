@@ -1843,5 +1843,69 @@ if MUT=$(mutant nofilter usage_accounting.py 's/ if name.endswith(".jsonl")\]/]/
     || bad "the fixture DISTINGUISHES the two implementations (.jsonl filter dropped: totals change)" "$(flat "$eo")"
 else bad "the fixture DISTINGUISHES the two implementations (.jsonl filter dropped: totals change)" "could not build the mutant"; fi
 
+# ======================= K — edges after #397 (#474)
+echo; echo "K. ambiguous-identity marker, non-UTF-8 stdout, leading-dash session argument"
+
+KH="$TMP/k-home"; mkdir -p "$KH/.claude/projects/-k"
+KU=9a9a0000-1111-4222-8333-444444444444
+KF="$KH/.claude/projects/-k/$KU.jsonl"
+k_run() { HOME="$KH" env -u CLAUDE_CODE_SESSION_ID "$PY" "${KSUT:-$SUT}" "$@"; }
+# One priced response, plus a response with only requestId R that pairs with two different
+# message ids (R,A) and (R,B): Responses cannot attribute it and excludes it (1 ambiguous).
+"$PY" - "$KF" <<'PY'
+import json, sys
+def rec(mid, rid, tok):
+    m = {"model": "claude-opus-5", "usage": {"input_tokens": tok}}
+    if mid: m["id"] = mid
+    r = {"type": "assistant", "timestamp": "2026-08-11T01:00:00.000Z", "message": m}
+    if rid: r["requestId"] = rid
+    return json.dumps(r) + "\n"
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    f.write(rec("mA", "R", 1000000)); f.write(rec("mB", "R", 1000000)); f.write(rec(None, "R", 1000000))
+PY
+ko=$(k_run "$KF" 2>"$TMP/k.err"); krc=$?; kerr=$(cat "$TMP/k.err")
+[ "$krc" -eq 0 ] && [ "$(cost_of "$ko")" = '$10.00–11.00 (1 ambiguous excluded)' ] \
+  && printf '%s' "$kerr" | grep -qF '1 ambiguous-identity responses excluded' \
+  && ok "an ambiguous-identity response is marked ' (1 ambiguous excluded)' in the row and counted on stderr" \
+  || bad "an ambiguous-identity response is marked ' (1 ambiguous excluded)' in the row and counted on stderr" "rc=$krc $(flat "$ko") err=$(flat "$kerr")"
+ko=$(k_run "$KF" --tier low 2>/dev/null)
+case "$(cost_of "$ko")" in
+  *"(1 ambiguous excluded) vs "*"(≥"*) ok "with a tier, the ambiguous marker precedes ' vs' and the ratio reads '≥' (a subtotal)" ;;
+  *) bad "with a tier, the ambiguous marker precedes ' vs' and the ratio reads '≥' (a subtotal)" "$(flat "$ko")" ;;
+esac
+# Zero ambiguity: no marker, no stderr mention (the row stays what it was).
+gen_priced "$KF" 1000000 0 0
+ko=$(k_run "$KF" 2>"$TMP/k.err"); kerr=$(cat "$TMP/k.err")
+[ "$(cost_of "$ko")" = '$5.00–5.50' ] && ! printf '%s' "$kerr" | grep -qi ambiguous \
+  && ok "no ambiguous responses: the row and stderr carry no marker" \
+  || bad "no ambiguous responses: the row and stderr carry no marker" "$(flat "$ko") err=$(flat "$kerr")"
+
+# Non-UTF-8 stdout: a legible REFUSE, nothing on stdout, no traceback.
+ko=$(PYTHONIOENCODING=latin-1 k_run "$KF" 2>"$TMP/k.err"); krc=$?; kerr=$(cat "$TMP/k.err")
+if [ "$krc" -eq 1 ] && [ -z "$ko" ] && printf '%s' "$kerr" | grep -q '^REFUSE: stdout encoding' \
+   && ! printf '%s' "$kerr" | grep -q Traceback; then
+  ok "a Latin-1 stdout is a REFUSE naming the encoding: exit 1, nothing on stdout, no traceback"
+else
+  bad "a Latin-1 stdout is a REFUSE naming the encoding: exit 1, nothing on stdout, no traceback" "rc=$krc out=$(flat "$ko") err=$(flat "$kerr")"
+fi
+ko=$(PYTHONIOENCODING=utf-8 k_run "$KF" 2>/dev/null)
+[ "$(cost_of "$ko")" = '$5.00–5.50' ] \
+  && ok "a UTF-8 stdout still prints the '–' unchanged" \
+  || bad "a UTF-8 stdout still prints the '–' unchanged" "$(flat "$ko")"
+
+# Leading-dash session argument: reachable after `--`, from a relative path.
+KD="$TMP/k-dash"; mkdir -p "$KD"; cp "$KF" "$KD/-x.jsonl"
+ko=$(cd "$KD" && k_run -- -x.jsonl 2>/dev/null); krc=$?
+[ "$krc" -eq 0 ] && [ "$(cost_of "$ko")" = '$5.00–5.50' ] \
+  && ok "'-- -x.jsonl' reads a relative path that starts with a dash" \
+  || bad "'-- -x.jsonl' reads a relative path that starts with a dash" "rc=$krc $(flat "$ko")"
+ko=$(cd "$KD" && k_run --tier low -- -x.jsonl 2>/dev/null); krc=$?
+[ "$krc" -eq 0 ] && cost_of "$ko" | grep -q ' vs \$.* low ' \
+  && ok "options before '--' still apply (--tier low -- -x.jsonl)" \
+  || bad "options before '--' still apply (--tier low -- -x.jsonl)" "rc=$krc $(flat "$ko")"
+ARGS=(-x.jsonl); EH="$KH"; refused "without '--', '-x.jsonl' is still an unknown option" "unknown option '-x.jsonl'"
+ARGS=(-- "$KU" extra); refused "a second argument after '--' is still more than one session argument" "more than one session argument"
+ARGS=(-- --figures); refused "after '--', '--figures' is a session argument, not the flag" "no transcript matching"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
