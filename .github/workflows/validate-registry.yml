@@ -605,6 +605,14 @@ jobs:
           done
           if [ "$rc" -ne 0 ]; then exit 1; fi
 
+      - name: skill pin check regression tests
+        run: ./scripts/check-skill-pins.test.sh
+
+      - name: installed skill pins match their templates (#375)
+        env:
+          PIN_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: python3 scripts/check-skill-pins.py --base "$PIN_BASE"
+
       - name: compiled skill targets are in sync with their sources
         run: |
           # #227: `.claude/skills/<name>/SKILL.md` is compiled from `.claude/commands/<name>.md`
