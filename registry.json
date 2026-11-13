@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "f051eaf",
+  "generatedFromCommit": "2ea3022",
   "skillCount": 45,
   "skills": [
     {
@@ -1278,7 +1278,7 @@
     },
     {
       "name": "merge",
-      "hash": "37866a5",
+      "hash": "2ea3022",
       "lines": 221,
       "description": "Merge authorized PRs through verified review/CI gates, record delivery, and run authorized post-merge actions. The same gated merge authority applies in ordinary and prime-directive runs.",
       "guards": [
