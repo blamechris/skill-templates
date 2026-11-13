@@ -12,7 +12,10 @@ Exit: 0 verified - 1 mismatch - 2 cannot verify (fail closed).
 """
 import argparse, json, re, subprocess, sys
 
-STAMP = re.compile(r'^<!-- skill-templates: (\S+) (\S+) (\S+) -->\s*$')
+# Same grammar as scripts/skill-lint.sh check 3: any line that opens a skill-templates marker
+# counts toward "exactly one" (indented or not), and the one stamp parses with lint's spacing.
+MARKER = re.compile(r'\s*<!--\s*skill-templates:')
+STAMP = re.compile(r'\s*<!--\s*skill-templates:\s+(\S+)\s+(\S+)\s+(\S+)\s*-->\s*$')
 HEX = re.compile(r'^[0-9a-f]{7,40}$')
 SAFE = re.compile(r'^[A-Za-z0-9._-]+$')
 
@@ -60,7 +63,8 @@ def main():
             print(f"::error::{name}: lock hash '{h}' is not 7+ lowercase hex; run /skill update {name}")
             bad += 1
         else:
-            p = git('log', '--format=%H', base, '--', f'generic/{name}.md')
+            # --full-history: a template commit reached only through a non-squash merge stays visible.
+            p = git('log', '--full-history', '--format=%H', base, '--', f'generic/{name}.md')
             if p.returncode != 0:
                 unverifiable(f"git log failed for generic/{name}.md: {p.stderr.strip()}")
             commits = p.stdout.split()
@@ -76,9 +80,13 @@ def main():
             print(f"::error::{name}: .claude/commands/{name}.md is missing; run /skill update {name}")
             bad += 1
             continue
-        stamps = [m.groups() for m in map(STAMP.match, lines) if m]
-        if len(stamps) != 1:
-            print(f"::error::{name}: expected exactly one skill-templates stamp, found {len(stamps)}; run /skill update {name}")
+        markers = [ln for ln in lines if MARKER.match(ln)]
+        stamps = [m.groups() for m in map(STAMP.match, markers) if m]
+        if len(markers) != 1:
+            print(f"::error::{name}: expected exactly one skill-templates stamp, found {len(markers)}; run /skill update {name}")
+            bad += 1
+        elif len(stamps) != 1:
+            print(f"::error::{name}: its skill-templates stamp is malformed; run /skill update {name}")
             bad += 1
         elif stamps[0][0] != name or stamps[0][1] != h:
             print(f"::error::{name}: stamp says '{stamps[0][0]} {stamps[0][1]}' but lock pins {name} {h}; run /skill update {name}")

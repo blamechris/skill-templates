@@ -12,7 +12,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHECK="${CHECK_SKILL_PINS:-$ROOT/scripts/check-skill-pins.py}"
-EXPECTED=17
+EXPECTED=21
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -81,6 +81,16 @@ fixture; install foo "zzzzzzz" foo "zzzzzzz"; run; expect "12 non-hex hash fails
 fixture; install foo "${H2:0:6}" foo "${H2:0:6}"; run; expect "13 hash shorter than 7 fails" 1
 fixture; install foo "${H2:0:7}" foo "${H2:0:7}"; rm "$FX/.claude/commands/foo.md"; run; expect "14 missing command file fails" 1
 
+# Review of #480: an indented second stamp still counts toward "exactly one"; lint's compact
+# spacing parses; a path-shaped lock name is refused; a hash only INSIDE a commit id is no pin.
+fixture; install foo "${H2:0:7}" foo "${H2:0:7}"; echo "  <!-- skill-templates: foo deadbee 2026-01-01 -->" >> "$FX/.claude/commands/foo.md"
+run; expect "15 an indented second stamp fails" 1
+fixture; install foo "${H2:0:7}" foo "${H2:0:7}"; printf '# /foo\n\nbody\n\n<!--skill-templates: foo %s 2026-01-01-->\n' "${H2:0:7}" > "$FX/.claude/commands/foo.md"
+run; expect "16 a lint-style compact stamp passes" 0
+fixture; install foo "${H2:0:7}" foo "${H2:0:7}"; printf '{"registry":"x/y","skills":{"../x":{"hash":"%s"}}}\n' "${H2:0:7}" > "$FX/.claude/skills.lock"
+run
+if [ "$RC" -eq 1 ] && grep -q "lock entry is malformed" <<<"$OUT"; then ok "17 a path-shaped lock name is refused as malformed (exit $RC)"; else bad "17 a path-shaped lock name is refused as malformed" "wanted exit 1 + 'lock entry is malformed', got $RC: $OUT"; fi
+fixture; install foo "${H2:3:7}" foo "${H2:3:7}"; run; expect "18 a hash found only mid-way through a commit id fails" 1
 echo "passed=$PASS failed=$FAIL expected_cases=$EXPECTED"
 if [ $((PASS+FAIL)) -lt "$EXPECTED" ]; then
   echo "FAIL: only $((PASS+FAIL)) cases ran, expected at least $EXPECTED"; exit 1
