@@ -1659,10 +1659,13 @@ GEO_UPPER = 1.1     # the US-route multiplier usage_accounting prices the upper 
 def apply_geo_bracket(p):
     """Carry the 1.0x-1.1x geography bracket on every dollar figure that has an upper end.
 
-    Figures are computed on the lower bound (standard rate). Hours to the wall, the landing
-    and pct_now are ratios of dollars to dollars, so they do not move under a uniform
-    multiplier; only the dollar-valued figures do. The 1.1x end is a bound, reached only
-    if every geography-unknown response was in fact routed at the US rate.
+    Figures are computed on the lower bound (standard rate). Only the dollar-valued figures
+    get an upper end here. Hours to the wall, the landing and pct_now are ratios of dollars
+    to dollars: when every response is geography-unknown the 1.1x multiplier is uniform and
+    they do not move, but in a week where only some responses are, they can shift by up to
+    about 10% across the range, and they are reported on the lower bound. The 1.1x end is a
+    bound, reached only if every geography-unknown response was in fact routed at the US
+    rate.
     """
     p["geo_bracket"] = None
     if not p.get("geo_unknown_responses") or p.get("cost_guidance_unavailable"):
@@ -1896,8 +1899,9 @@ def warnings_for(p):
     hour of a week anyway", which is a different proposition, true of neither gate, and
     would have made the absent gate look accidental rather than decided.
     """
-    # Geography-unknown responses do not gate (#393): the figures are the lower bound of
-    # a 1.0x-1.1x bracket, and the wall and landing are ratios the bracket does not move.
+    # Geography-unknown responses do not gate (#393): the figures are evaluated on the lower
+    # bound of a 1.0x-1.1x bracket, as the docstring above says of every range; a partly
+    # unknown week can move the wall and landing by up to ~10% across it.
     if (p.get("cost_guidance_unavailable") or p.get("unpriced_responses") or
             p.get("unidentified_responses") or p.get("cache_ttl_unknown_tokens")):
         return []
