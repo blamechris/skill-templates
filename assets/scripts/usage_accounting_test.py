@@ -2385,5 +2385,89 @@ class _Raw(Exception):
         self.text = text
 
 
+class TrendArgumentTests(unittest.TestCase):
+    """usage-trend.py refuses any undocumented argument, and answers -h/--help, before any
+    side effect. On 2026-11-13 `usage-trend.py --help` fell through to the daily run, which
+    scanned, committed and pushed the usage history. Every case runs the real __main__ in a
+    subprocess against a temp HOME whose history repo pushes to a local bare repo, with
+    global and system git config disabled; the bare run is the control that proves the
+    fixture sees a sync when one happens."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.home, self.remote = root / "home", root / "remote.git"
+        self.hist = self.home / ".claude" / "usage-history"
+        (self.home / ".claude" / "projects").mkdir(parents=True)
+        self.env = dict(os.environ, HOME=str(self.home), GIT_CONFIG_GLOBAL=os.devnull,
+                        GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0",
+                        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+        self.env.pop("CLAUDE_CODE_SESSION_ID", None)
+        self.git("init", "-q", "--bare", "-b", "main", str(self.remote))
+        self.git("init", "-q", "-b", "main", str(self.hist))
+        (self.hist / "README").write_text("fixture\n")
+        self.git("-C", str(self.hist), "add", "README")
+        self.git("-C", str(self.hist), "commit", "-q", "-m", "seed")
+        self.git("-C", str(self.hist), "remote", "add", "origin", str(self.remote))
+        self.git("-C", str(self.hist), "push", "-q", "-u", "origin", "main")
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], env=self.env, check=True, capture_output=True,
+                              text=True).stdout
+
+    def state(self):
+        files = {str(p.relative_to(self.home)): p.read_bytes()
+                 for p in sorted(self.home.rglob("*")) if p.is_file()}
+        return files, self.git("--git-dir", str(self.remote), "for-each-ref")
+
+    def trend(self, *argv):
+        return subprocess.run([sys.executable, str(HERE / "usage-trend.py"), *argv],
+                              cwd=self.home, env=self.env, capture_output=True, text=True,
+                              timeout=120)
+
+    def test_help_prints_usage_and_touches_nothing(self):
+        before = self.state()
+        for argv in (["--help"], ["-h"], ["--no-sync", "--help"], ["--week", "--write", "-h"]):
+            with self.subTest(argv=argv):
+                result = self.trend(*argv)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Usage:", result.stdout)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(self.state(), before)
+
+    def test_undocumented_arguments_are_refused_before_anything_runs(self):
+        before = self.state()
+        cases = ((["--hlep"], 2, "unknown argument '--hlep'"),
+                 (["--json", "--bogus"], 2, "unknown argument '--bogus'"),
+                 (["positional"], 2, "unknown argument 'positional'"),
+                 (["--no-sync=1"], 2, "unknown argument '--no-sync=1'"),
+                 (["--week", "--weeks"], 1, "--weeks needs a number"),
+                 (["--week", "--weeks", "x"], 1, "--weeks needs a number"))
+        for argv, code, message in cases:
+            with self.subTest(argv=argv):
+                result = self.trend(*argv)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(self.state(), before)
+
+    def test_documented_flags_still_run_and_the_bare_run_still_syncs(self):
+        before_refs = self.state()[1]
+        for argv in (["--week", "--close-label"], ["--week", "--weeks", "3", "--oneline"],
+                     ["--no-sync", "--json"], ["--no-sync", "--all"]):
+            with self.subTest(argv=argv):
+                result = self.trend(*argv)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.state()[1], before_refs)      # none of these pushes
+        synced = self.trend()                  # the control: the daily run commits and pushes
+        self.assertEqual(synced.returncode, 0, synced.stderr)
+        self.assertNotEqual(self.state()[1], before_refs)
+        self.assertIn("usage: ", self.git("--git-dir", str(self.remote), "log", "-1",
+                                          "--format=%s", "main"))
+
+
 if __name__ == "__main__":
     unittest.main()
