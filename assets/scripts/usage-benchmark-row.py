@@ -114,7 +114,7 @@ import json, glob, os, re, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from usage_accounting import (RATE_CARD_VERSION, Responses, record_problem, price_usage, session_child_files,
-                              session_subagent_roots, split_project_dirs)
+                              session_subagent_roots, split_project_dirs, usage_counter)
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -420,11 +420,27 @@ child_responses = 0
 parent_cost = child_cost = Decimal(0)
 parent_upper = child_upper = Decimal(0)
 unpriced = 0
+
+
+def weight_counter(u, field, item):
+    """One counter for the weighting. An int or float is used as it always was; anything
+    else is read the way usage_accounting.usage_counter reads it (null is 0, "7" is 7),
+    and one that cannot be read is a REFUSE naming the file and line (#471)."""
+    value = u.get(field, 0)
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return usage_counter(value)
+    except ValueError as exc:
+        die(f"{item['source']}:{item['line']}: usage {field}: {exc}")
+
+
 for item in selected.rows():
     msg = item["record"].get("message") or {}
     u = msg.get("usage") or {}
-    i, cr, cw, o = (u.get("input_tokens", 0), u.get("cache_read_input_tokens", 0),
-                    u.get("cache_creation_input_tokens", 0), u.get("output_tokens", 0))
+    i, cr, cw, o = (weight_counter(u, field, item) for field in
+                    ("input_tokens", "cache_read_input_tokens",
+                     "cache_creation_input_tokens", "output_tokens"))
     if i + cr + cw + o == 0:
         continue
     weighted = i * W_IN + cr * W_CR + cw * W_CW + o * W_OUT

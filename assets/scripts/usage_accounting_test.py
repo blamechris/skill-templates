@@ -686,6 +686,109 @@ class UsageAccountingTests(unittest.TestCase):
                         self._assert_refused(result, target, 2, out)
                         self.assertIn("%s is not a string (%s)" % (field, name), result.stderr)
 
+    # ---- #471: a non-string model, and usage counters int() cannot read
+
+    def test_usage_counter_reads_as_token_split_always_did_and_raises_value_error(self):
+        counter = usage_accounting.usage_counter
+        for value, want in ((None, 0), ("", 0), (0, 0), ([], 0), ({}, 0), (False, 0),
+                            (5, 5), ("7", 7), (True, 1), (1.9, 1)):
+            self.assertEqual(counter(value), want, value)
+        for value in ([1], {"a": 1}, "abc", float("inf"), float("nan")):
+            with self.assertRaises(ValueError, msg=value):
+                counter(value)
+
+    def test_token_split_reports_unreadable_counters_as_invalid_not_a_crash(self):
+        split = usage_accounting.token_split
+        base = {"input_tokens": 1, "output_tokens": 2, "cache_creation_input_tokens": 4}
+        for field in usage_accounting.FIELDS:
+            for value in ([1], {"a": 1}):
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    split(dict(base, **{field: value}))
+        for cache in ([1], 5, "x", True):
+            with self.subTest(cache=cache), self.assertRaises(ValueError):
+                split(dict(base, cache_creation=cache))
+        for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                split(dict(base, cache_creation={key: [1]}))
+        empty = split(base)
+        for cache in (None, [], {}, 0, ""):             # falsy: read as empty, as always
+            self.assertEqual(split(dict(base, cache_creation=cache)), empty, cache)
+
+    def test_price_usage_treats_a_non_string_model_as_unpriced(self):
+        usage = {"output_tokens": 1}
+        for model in ([], {}, 0, None, ["claude-opus-5-5"]):
+            with self.subTest(model=model), self.assertRaisesRegex(ValueError, "unpriced model"):
+                usage_accounting.price_usage(usage, model)
+
+    def test_record_problem_flags_a_truthy_non_string_model_and_only_that(self):
+        problem = usage_accounting.record_problem
+        for model, name in ((["x"], "list"), ({"a": 1}, "dict"), (5, "int"), (True, "bool")):
+            self.assertEqual(problem({"type": "assistant", "message": {"model": model}}),
+                             "valid JSON but its message.model is not a string (%s)" % name)
+            self.assertIsNone(problem({"type": "user", "message": {"model": model}}))
+        for falsy in (None, "", [], {}, 0, False):
+            self.assertIsNone(problem({"type": "assistant", "message": {"model": falsy}}), falsy)
+        for counters in ({"output_tokens": [1]}, {"cache_creation": "x"}):
+            self.assertIsNone(problem({"type": "assistant", "message": {"usage": counters}}))
+
+    def test_dedup_compares_an_unreadable_counter_as_zero(self):
+        good = rec("2026-09-29T00:00:00Z", "r", "m", "claude-opus-5-5", 10, stop="end_turn")
+        odd = json.loads(json.dumps(good))
+        odd["message"]["usage"]["output_tokens"] = [1]
+        odd["message"]["stop_reason"] = None
+        for order in ((good, odd), (odd, good)):
+            rows = usage_accounting.Responses()
+            for line, record in enumerate(order, 1):
+                rows.add(record, "s", line)
+            selected = list(rows.rows())
+            self.assertEqual(len(selected), 1)
+            self.assertEqual(selected[0]["record"]["message"]["usage"]["output_tokens"], 10)
+
+    def test_checkpoint_refuses_a_non_string_model_in_main_and_child(self):
+        for model, name in ((["x"], "list"), ({"a": 1}, "dict")):
+            for where in ("main", "child"):
+                with self.subTest(model=model, where=where), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    main, child = self._nonobject_fixture(root)
+                    target = main if where == "main" else child
+                    self._append_record(target, rec("2026-09-29T00:00:05Z", "rx", "mx", model,
+                                                    10, stop="end_turn"))
+                    out = root / "out"
+                    result = self._run_checkpoint(main, out)
+                    self._assert_refused(result, target, 2, out)
+                    self.assertIn("message.model is not a string (%s)" % name, result.stderr)
+
+    def test_checkpoint_counts_unreadable_counters_like_any_invalid_counter(self):
+        # A list counter, a non-object cache_creation and a bad ephemeral split are kept and
+        # reported exactly as an unparseable "abc" counter always was: one invalid-token,
+        # unpriced response -- never dropped, never read as zero (#471).
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        work = Path(tmp.name) / "w"           # one fixed path, so documents differ only in data
+
+        def capture(change):
+            shutil.rmtree(work, ignore_errors=True)
+            work.mkdir()
+            main, _ = self._nonobject_fixture(work)
+            record = rec("2026-09-29T00:00:05Z", "rx", "mx", "claude-opus-5-5", 10,
+                         stop="end_turn")
+            change(record["message"]["usage"])
+            self._append_record(main, record)
+            doc = self._checkpoint_json(main)
+            doc.pop("selected_responses")      # carries the raw counter itself
+            return doc
+        reference = capture(lambda u: u.update(output_tokens="abc"))
+        self.assertEqual(reference["quality"]["invalid_token_responses"], 1)
+        self.assertEqual(reference["unpriced_models"], {"claude-opus-5-5": 1})
+        for name, change in (("output list", lambda u: u.update(output_tokens=[1])),
+                             ("input dict", lambda u: u.update(input_tokens={"a": 1})),
+                             ("cache_creation str", lambda u: u.update(cache_creation="x")),
+                             ("cache_creation list", lambda u: u.update(cache_creation=[1])),
+                             ("ephemeral list", lambda u: u["cache_creation"].update(
+                                 ephemeral_1h_input_tokens=[1]))):
+            with self.subTest(name):
+                self.assertEqual(capture(change), reference)
+
     def test_aggregate_keeps_unknown_ttl_bounds_and_unpriced_coverage(self):
         checkpoint = load("usage_checkpoint_bounds", HERE / "usage-checkpoint.py")
         with tempfile.TemporaryDirectory() as tmp:
@@ -2075,6 +2178,9 @@ class MalformedRecordTests(unittest.TestCase):
                  json.dumps(rec("2026-09-30T12:00:08Z", "r8", {"a": 1}, "claude-opus-5-5", 108,
                                 stop="end_turn")),
                  json.dumps(rec("2026-09-30T12:00:09Z", 5, "m9", "claude-opus-5-5", 109,
+                                stop="end_turn")),
+                 # #471: a truthy non-string model keys the rate card and the tiers.
+                 json.dumps(rec("2026-09-30T12:00:10Z", "r10", "m10", ["claude-opus-5-5"], 110,
                                 stop="end_turn"))]
 
     def _valid_lines(self):
@@ -2134,6 +2240,35 @@ class MalformedRecordTests(unittest.TestCase):
                 self.assertEqual((days, weeks), (clean_days, clean_weeks))
                 self.assertNotIn("skipped", err)
 
+    def test_trend_reads_counters_as_the_shared_reader_does(self):
+        # #471: an unreadable counter is the existing invalid counter (unpriced, no tokens),
+        # identical to "abc"; a numeric string is its number, in the cache-read cost too.
+        valid = self._valid_lines()
+        def with_usage(**fields):
+            odd = rec("2026-09-30T12:00:30Z", "rt", "mt", "claude-opus-5-5", 500,
+                      cache_read=40, stop="end_turn")
+            odd["message"]["usage"].update(fields)
+            return self._trend_days_and_weeks(valid + [json.dumps(odd)])[:2]
+        invalid = with_usage(output_tokens="abc")
+        self.assertEqual(sum(d["unpriced_responses"] for d in invalid[0].values()), 1)
+        for name, fields in (("output list", dict(output_tokens=[1])),
+                             ("input dict", dict(input_tokens={"a": 1})),
+                             ("cache_creation str", dict(cache_creation="x")),
+                             ("cache_creation int", dict(cache_creation=5))):
+            with self.subTest(name):
+                self.assertEqual(with_usage(**fields), invalid)
+        self.assertEqual(with_usage(cache_read_input_tokens="40"), with_usage())
+        self.assertEqual(with_usage(cache_read_input_tokens=None),
+                         with_usage(cache_read_input_tokens=0))
+
+    def test_aggregate_refuses_mixed_rate_cards_naming_the_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self._aggregate_dir(Path(tmp), lambda doc: doc.update(rate_card="old"))
+            result = self._aggregate(out)
+            self.assertEqual((result.returncode, result.stdout), (1, ""), result.stderr)
+            self.assertTrue(result.stderr.startswith("REFUSE: "), result.stderr)
+            self.assertIn(str(out / "bad.json") + ": mixed rate-card versions", result.stderr)
+
     def _aggregate_dir(self, root, mutate=None):
         checkpoint = load("usage_checkpoint_malformed", HERE / "usage-checkpoint.py")
         source = root / "projects" / "s.jsonl"
@@ -2165,6 +2300,7 @@ class MalformedRecordTests(unittest.TestCase):
             "item not an object": item(lambda items: items.append(7)),
             "item null": item(lambda items: items.append(None)),
             "item message string": item(lambda items: items[0].update(message="x")),
+            "item model a list": item(lambda items: items[0]["message"].update(model=["x"])),
             "item missing source": drop("source"),
             "item missing line": drop("line"),
             "item missing role": drop("role"),

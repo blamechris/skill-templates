@@ -178,7 +178,7 @@ def scan():
         d["geo_unknown_responses"] += int(priced["geography_uncertain"])
         d["cache_ttl_unknown_tokens"] += priced["tokens"]["cache_ttl_unknown_tokens"]
         d["requests"] += 1
-        d["cache_read_cost"] += u.get("cache_read_input_tokens", 0) * float(RATES[model][4]) / 1e6
+        d["cache_read_cost"] += priced["tokens"]["cache_read_input_tokens"] * float(RATES[model][4]) / 1e6
         tiers[day][tier(model)] += c
     result = {}
     for day, d in days.items():
@@ -531,7 +531,7 @@ def scan_weeks():
         w["cost_sub" if is_sub else "cost_main"] += c
         w["cost_sub_upper" if is_sub else "cost_main_upper"] += float(priced["upper_usd"])
         w[f"tier_{tier(model)}"] += c
-        w["cache_read_cost"] += u.get("cache_read_input_tokens", 0) * float(RATES[model][4]) / 1e6
+        w["cache_read_cost"] += priced["tokens"]["cache_read_input_tokens"] * float(RATES[model][4]) / 1e6
     return {k: {**{f: round(v, 4) for f, v in rec.items()},
                 "rate_card": RATE_CARD_VERSION} for k, rec in weeks.items()}
 

@@ -35,15 +35,28 @@ US_PREMIUM_MODELS = {
 FIELDS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 
 
+def usage_counter(value):
+    """One usage counter, read as token_split always read it: `int(value or 0)`, so a
+    falsy value is 0 and a numeric string is its number. A value `int()` cannot take
+    (`[1]`, `{}`, `"abc"`, an overflowing number) raises ValueError, the invalid-counter
+    error a negative counter already gets, rather than TypeError (#471)."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("usage counter is not a number (%s)" % type(value).__name__) from None
+
+
 def token_split(usage):
     """Return disjoint token classes and expose unknown cache duration."""
     u = usage or {}
     c = u.get("cache_creation") or {}
-    vals = [int(u.get(k) or 0) for k in FIELDS]
+    if not isinstance(c, dict):
+        raise ValueError("cache_creation is not an object (%s)" % type(c).__name__)
+    vals = [usage_counter(u.get(k)) for k in FIELDS]
     if any(v < 0 for v in vals):
         raise ValueError("negative usage counter")
-    c5 = int(c.get("ephemeral_5m_input_tokens") or 0)
-    c1 = int(c.get("ephemeral_1h_input_tokens") or 0)
+    c5 = usage_counter(c.get("ephemeral_5m_input_tokens"))
+    c1 = usage_counter(c.get("ephemeral_1h_input_tokens"))
     if c5 < 0 or c1 < 0 or c5 + c1 > vals[2]:
         raise ValueError("inconsistent cache creation split")
     return dict(input_tokens=vals[0], output_tokens=vals[1],
@@ -54,7 +67,7 @@ def token_split(usage):
 
 def price_usage(usage, model):
     """Return Decimal lower/upper USD; unknown TTL is bracketed at 5m/1h rates."""
-    if model not in RATES:
+    if not isinstance(model, str) or model not in RATES:   # [] or {} is unpriced, not a crash
         raise ValueError("unpriced model: %s" % model)
     t = token_split(usage)
     ri, ro, r5, r1, rr = RATES[model]
@@ -197,7 +210,16 @@ def _clock(record):
 
 def _counters(record):
     u = (record.get("message") or {}).get("usage") or {}
-    return tuple(int(u.get(field) or 0) for field in FIELDS)
+    return tuple(_comparable(u.get(field)) for field in FIELDS)
+
+
+def _comparable(value):
+    # Comparison only: an unreadable counter carries no observation, so it compares as 0
+    # instead of crashing the dedup; pricing still reports it as invalid (#471).
+    try:
+        return usage_counter(value)
+    except ValueError:
+        return 0
 
 
 def prefer_response(previous, candidate):
@@ -235,13 +257,16 @@ def record_problem(record):
       `true`), which `add` would otherwise crash on;
     - an assistant record whose `requestId` or `message.id` is truthy and not a string
       (`["a"]`, `{"a": 1}`, `5`, `true`): they key the deduplication, so `add` crashes on an
-      unhashable one and usage-pace.py on any non-string one (#469).
+      unhashable one and usage-pace.py on any non-string one (#469);
+    - an assistant record whose `message.model` is truthy and not a string: it keys the
+      rate card and the per-model totals (#471). A falsy one is unpriced, like a missing one.
     Deliberately NOT problems, because they were always tolerated: a falsy `message`
     (`null`, `""`, `[]`, `0`, `false` are read as empty, as `or {}` always did), a falsy
     `requestId` or `message.id` (read as absent, as `response_key` always did), a
     non-object `usage` (`add` skips the record), a `timestamp` of any shape (an
-    unreadable one is undated), and any `message` on a record that is not an assistant
-    one (never read)."""
+    unreadable one is undated), a usage counter of any shape (an unreadable one is an
+    invalid counter: the response is kept and reported unpriced, see `usage_counter`),
+    and any `message` on a record that is not an assistant one (never read)."""
     if not isinstance(record, dict):
         return f"valid JSON but not an object ({type(record).__name__})"
     if record.get("type") == "assistant":
@@ -254,6 +279,9 @@ def record_problem(record):
         message_id = (message or {}).get("id")
         if message_id and not isinstance(message_id, str):
             return f"valid JSON but its message.id is not a string ({type(message_id).__name__})"
+        model = (message or {}).get("model")
+        if model and not isinstance(model, str):
+            return f"valid JSON but its message.model is not a string ({type(model).__name__})"
     return None
 
 

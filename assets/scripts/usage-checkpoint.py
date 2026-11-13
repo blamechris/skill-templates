@@ -188,7 +188,7 @@ def latest_totals(directory):
         if not isinstance(doc, dict):
             raise ValueError(f"{path}: checkpoint is not a JSON object ({type(doc).__name__})")
         if doc.get("rate_card") != RATE_CARD_VERSION:
-            raise ValueError("mixed rate-card versions; reprice or segregate checkpoints")
+            raise ValueError(f"{path}: mixed rate-card versions; reprice or segregate checkpoints")
         # The latest-checkpoint comparison below keys and orders on these, so each must be
         # a string capture() would have written; checked before any two are compared (#469).
         for name in ("run_id", "session_id", "captured_at", "status"):
