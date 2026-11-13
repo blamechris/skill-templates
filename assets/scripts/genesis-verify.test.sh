@@ -2145,6 +2145,7 @@ cases = [
     ("block dq surrogate: item dropped", 'paths:\n  - "\\uD800"', {"paths": []}),
     ("block dq unterminated: item dropped", 'paths:\n  - "abc', {"paths": []}),
     ("block dq trailing junk: item dropped", 'paths:\n  - "abc" def', {"paths": []}),
+    ("block dq # without whitespace: item dropped", 'paths:\n  - "abc"#c', {"paths": []}),
     ("block-inline bad escape: no evidence", 'paths: ["a\\qb", c]', {}),
 ]
 bad = [f"{n}: got {pf(t)}, want {w}" for n, t, w in cases if pf(t) != w]

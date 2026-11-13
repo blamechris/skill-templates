@@ -2418,8 +2418,9 @@ def block_item(text):
             value, end = parse_quoted(text, 0)
         except ValueError:
             return None
-        rest = text[end:].strip()
-        return value if not rest or rest.startswith("#") else None
+        rest = text[end:]
+        # YAML reads `#` as a comment only after whitespace: `"a"#c` is not a comment, so unreadable.
+        return value if not rest.strip() or re.match(r"[ \t]+#", rest) else None
     return text.strip("'\"")
 
 
