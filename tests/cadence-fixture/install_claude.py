@@ -20,6 +20,51 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+CADENCE_RULES = ("delivery-cadence", "gated-delivery-authority", "default-roles",
+                 "in-effect-line", "restart-triggers")
+REPORT_START, REPORT_END = "next-line", "exec-brief"
+
+
+def rule_block(source, rule_id):
+    """Body of one `<!--default:ID-->` rule: up to the next floor/default marker or EOF."""
+    match = re.search(r"<!--default:" + re.escape(rule_id) + r"-->\n(.*?)(?=^<!--(?:floor|default):|\Z)",
+                      source, re.M | re.S)
+    if not match:
+        raise ValueError(f"Missing cadence rule: {rule_id}")
+    return match.group(1).strip()
+
+
+def marker_bounds(source, rule_id):
+    """(start, end) offsets of the single `<!--default:ID-->` marker.
+
+    A missing marker would otherwise yield an unbounded (rest-of-file) or crashing
+    extract, and a duplicated one makes "first occurrence" an arbitrary choice, so both
+    are refused (#388).
+    """
+    marker = f"<!--default:{rule_id}-->"
+    count = source.count(marker)
+    if count != 1:
+        raise ValueError(f"Expected exactly one {marker} marker, found {count}")
+    start = source.index(marker)
+    return start, start + len(marker)
+
+
+def marker_span(source, start_id, end_id):
+    """Text strictly between two single markers, which must appear in that order."""
+    _, begin = marker_bounds(source, start_id)
+    end, _ = marker_bounds(source, end_id)
+    if end < begin:
+        raise ValueError(f"Marker <!--default:{end_id}--> precedes <!--default:{start_id}-->")
+    return source[begin:end]
+
+
+def instruction_extracts(source):
+    """(cadence, report) instruction text taken from assets/AGENTS.md source."""
+    cadence = "\n\n".join(rule_block(source, name) for name in CADENCE_RULES)
+    report = marker_span(source, REPORT_START, REPORT_END).strip()
+    return cadence, report
+
+
 def install(root, registry):
     workspace, control = root / "workspace", root / "control"
     state = json.loads((control / "state.json").read_text())
@@ -31,16 +76,7 @@ def install(root, registry):
     if dirty:
         raise ValueError("Commit the source instructions before pinning a trial.")
     source = (registry / "assets/AGENTS.md").read_text()
-    def block(rule_id):
-        match = re.search(r"<!--default:" + re.escape(rule_id) + r"-->\n(.*?)(?=^<!--(?:floor|default):|\Z)", source, re.M | re.S)
-        if not match:
-            raise ValueError(f"Missing cadence rule: {rule_id}")
-        return match.group(1).strip()
-    cadence = "\n\n".join(block(name) for name in (
-        "delivery-cadence", "gated-delivery-authority", "default-roles",
-        "in-effect-line", "restart-triggers"))
-    report = source.split("<!--default:next-line-->", 1)[1].split(
-        "<!--default:exec-brief-->", 1)[0].strip()
+    cadence, report = instruction_extracts(source)
     project = """# StockNote local Claude workflow trial
 
 Read TASK.md and README.md, then invoke /session-lifecycle to start; invoke
