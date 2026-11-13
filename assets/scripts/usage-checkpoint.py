@@ -58,9 +58,10 @@ def resolve_session(value):
         raise ValueError("session ID or main .jsonl path required")
     path = Path(value).expanduser()
     if path.suffix == ".jsonl" and path.is_file():
-        # Absolute without resolving symlinks, so every path stored in the checkpoint is
-        # the same whatever the working directory (#397).
-        return Path(os.path.abspath(path))
+        # A relative path is joined to the working directory, so every path stored in the
+        # checkpoint is absolute whatever the cwd (#397). Never normalised: `lnk/..` through
+        # a symlink names a different file once `..` is collapsed lexically.
+        return path if path.is_absolute() else Path(os.getcwd()) / path
     if any(c in value for c in "*?["):
         raise ValueError("wildcard session ID refused")
     # The projects dir is escaped: a `[` or `*` in HOME must not turn into a pattern (#397).

@@ -167,7 +167,9 @@ def _refuse_hidden_roots(projects, base, sid):
     if not os.path.isdir(projects):
         return
     # An unlistable projects dir needs no check of its own: scandir raises PermissionError.
-    for entry in sorted(os.scandir(projects), key=lambda e: e.name):
+    with os.scandir(projects) as listing:
+        entries = sorted(listing, key=lambda e: e.name)
+    for entry in entries:
         if not entry.is_dir():
             continue
         if not os.access(entry.path, os.X_OK):

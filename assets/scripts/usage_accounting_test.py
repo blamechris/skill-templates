@@ -2401,13 +2401,13 @@ class SessionDiscoveryEdgeTests(ScanFixture):
         new, old = self.recycled_session()
         main = new / (SPLIT + ".jsonl")
         write_records(self.projects / "-demo-mmm-other" / "x.jsonl", [priced_parent("ox")])
-        for label, target, mode in (
+        for index, (label, target, mode) in enumerate((
                 ("the old project dir", old, 0),
                 ("the session's uuid dir in the old project dir", old / SPLIT, 0),
                 ("another project dir, which could hold one", self.projects / "-demo-mmm-other", 0),
-                ("the projects dir itself, unlistable", self.projects, 0o300)):
+                ("the projects dir itself, unlistable", self.projects, 0o300))):
             with self.subTest(label):
-                out = self.root / ("out-" + str(abs(hash(label))))
+                out = self.root / ("out-%d" % index)
                 before = target.stat().st_mode & 0o777
                 target.chmod(mode)
                 try:
@@ -2473,6 +2473,19 @@ class SessionDiscoveryEdgeTests(ScanFixture):
         self.assertTrue(all(os.path.isabs(part["path"]) for part in doc["source_coverage"]))
         self.assertTrue(all(os.path.isabs(item["source"]) for item in doc["selected_responses"]))
         self.assertEqual(doc, json.loads(absolute.stdout))
+
+    def test_an_absolute_path_through_a_symlink_and_dotdot_is_kept_as_given(self):
+        # `lnk/..` names the directory above lnk's TARGET; collapsing `..` lexically would
+        # name a different (here missing) file. An absolute path is stored exactly as given.
+        new, _ = self.recycled_session()
+        (new / "deep").mkdir()
+        link = self.root / "lnk"
+        link.symlink_to(new / "deep")
+        given = str(link) + "/../" + SPLIT + ".jsonl"
+        done = subprocess.run([sys.executable, str(HERE / "usage-checkpoint.py"),
+                               "--session", given, *self.STAMP], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)["source_coverage"][0]["path"], given)
 
     def test_aggregate_counts_checkpoints_without_session_project_dirs(self):
         new, old = self.recycled_session()
