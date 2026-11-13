@@ -98,6 +98,16 @@ if [ "${1:-}" = "issue" ] && [ "${2:-}" = "list" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "api" ] && [ "${2:-}" != "graphql" ]; then
+  # REST: api repos/<owner>/<name>/commits/<oid> -> commit_<oid>.json (#347)
+  oid="${2##*/}"
+  fail_flag "fail_commit_$oid" && { echo "fake gh: commits API $oid forced failure" >&2; exit 1; }
+  f="$FAKE_GH_DIR/commit_$oid.json"
+  # unmocked commit: a plain merge commit with no closing keywords
+  if [ -f "$f" ]; then cat "$f"; else echo '{"commit":{"message":"merge (no closing keywords)"}}'; fi
+  exit 0
+fi
+
 if [ "${1:-}" = "api" ] && [ "${2:-}" = "graphql" ]; then
   n=""; iss=""
   shift 2
@@ -1376,21 +1386,25 @@ sys.exit(0 if prs == {522, 523} else 1)
 # keywords (#347). Merge oid is COMMIT_OID; closer fixtures name who closed.
 # =========================================================================
 echo; echo "I. closes via merge commit (#347)"
-COMMIT_OID=dddd4444dddd4444dddd4444dddd4444dddd4444
-"$PY" - "$FAKE_GH_DIR" "$COMMIT_OID" <<'PYEOF'
+"$PY" - "$FAKE_GH_DIR" <<'PYEOF'
 import json, os, sys
-ghdir, oid = sys.argv[1], sys.argv[2]
+ghdir = sys.argv[1]
 def jfile(name, obj):
     with open(os.path.join(ghdir, name), "w") as f: json.dump(obj, f)
-def pr(n, refs, body):
+def moid(n): return (str(n) * 40)[:40]
+def pr(n, refs, body, commit_fixture=True):
+    # REAL gh shape: `pr view --json mergeCommit` carries ONLY the oid. The
+    # message lives behind the commits REST API (commit_<oid>.json).
     jfile(f"pr_view_{n}.json", {
         "number": n, "state": "MERGED", "title": "t", "author": {"login": "a"},
         "mergedBy": {"login": "a"}, "headRefName": f"feat-{n}",
         "createdAt": "2027-11-01T00:00:00Z", "mergedAt": "2027-11-01T00:00:00Z",
-        "mergeCommit": {"oid": oid, "messageHeadline": f"feat: x (#{n})", "messageBody": body},
+        "mergeCommit": {"oid": moid(n)},
         "additions": 1, "deletions": 1, "changedFiles": 1,
         "closingIssuesReferences": [{"number": r} for r in refs],
         "commits": [], "reviews": [], "statusCheckRollup": []})
+    if commit_fixture:
+        jfile(f"commit_{moid(n)}.json", {"sha": moid(n), "commit": {"message": f"feat: x (#{n})\n\n{body}"}})
     jfile(f"run_list_feat-{n}.json", [])
     jfile(f"graphql_{n}.json", {"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]}}}}})
     jfile(f"issue_list_{n}.json", [])
@@ -1399,16 +1413,26 @@ def closer(issue, by, state="CLOSED"):
         "timelineItems":{"nodes":[{"closer":{"__typename":"Commit","oid":by}}]}}}}})
 other = "eeee5555eeee5555eeee5555eeee5555eeee5555"
 pr(540, [], "Fixes #341\nFixes #342")
-closer(341, oid); closer(342, oid)
+closer(341, moid(540)); closer(342, moid(540))
 pr(541, [339], "closes #314\nResolves #339")
-closer(314, oid); closer(339, oid)
+closer(314, moid(541)); closer(339, moid(541))
 pr(542, [], "Fixes #500")
 closer(500, other)
 pr(543, [], "Fixes other/repo#7\nfixes acme/widgets#601")
-closer(601, oid); closer(7, oid)
+closer(601, moid(543)); closer(7, moid(543))
 pr(544, [], "Fixes #700")
+# 545: 22 distinct candidates -> only the first 20 confirmed, overflow named
+pr(545, [], "\n".join(f"Fixes #{8000+i}" for i in range(22)))
+for i in range(22): closer(8000+i, moid(545))
+# 546: commits API fails; closingIssuesReferences [12] is the fallback
+pr(546, [12], "Fixes #900")
+closer(900, moid(546))
+# 547: URL-form keyword, same repo counted, other repo ignored
+pr(547, [], "Fixes https://github.com/acme/widgets/issues/801\nFixes https://github.com/other/x/issues/802")
+closer(801, moid(547)); closer(802, moid(547))
 PYEOF
 touch "$FAKE_GH_DIR/fail_closer_700"
+touch "$FAKE_GH_DIR/fail_commit_$(printf '546%.0s' $(seq 14) | cut -c1-40)"
 
 run_split --repo "$REPO" --stdout 540
 py_check "I1 empty refs + message Fixes #341/#342 confirmed -> [341, 342]" "d['pr_meta']['closes'] == [341, 342]"
@@ -1424,6 +1448,18 @@ run_split --repo "$REPO" --stdout 544
 py_check "I5 confirm query fails -> not counted (fail-safe)" "d['pr_meta']['closes'] == []"
 py_check "I5 failure is named in unknown[]" "any('pr_meta.closes' in u and '#700' in u for u in d['unknown'])"
 rm -f "$FAKE_GH_DIR/fail_closer_700"
+run_split --repo "$REPO" --stdout 545
+py_check "I7 cap: first 20 of 22 candidates confirmed" "d['pr_meta']['closes'] == list(range(8000, 8020))"
+py_check "I7 cap: overflow named in unknown[]" "any('pr_meta.closes' in u and '8020' in u and '8021' in u for u in d['unknown'])"
+run_split --repo "$REPO" --stdout 546
+py_check "I8 commits API fails -> closes falls back to closingIssuesReferences" "d['pr_meta']['closes'] == [12]"
+py_check "I8 commits API failure named in unknown[]" "any('pr_meta.closes' in u and 'merge commit' in u for u in d['unknown'])"
+run_split --repo "$REPO" --stdout 547
+py_check "I9 URL-form keyword: same repo counted, other repo ignored" "d['pr_meta']['closes'] == [801]"
+# I10: the fake pr-view mergeCommit is REAL-shaped (oid only); I1 passing
+# therefore proves the message is read from the commits API.
+ONLY_OID=$("$PY" -c "import json,sys;print(sorted(json.load(open(sys.argv[1]))['mergeCommit'])==['oid'])" "$FAKE_GH_DIR/pr_view_540.json")
+[ "$ONLY_OID" = "True" ] && ok "I10 pr-view fixture mergeCommit carries only oid (real gh shape)" || bad "I10 fixture mergeCommit has extra fields"
 # I6: a ref already in closingIssuesReferences is never re-queried (PR 541's #339)
 n339=$(grep -c "issue=339" "$GH_LOG" | tr -d ' ')
 [ "$n339" = "0" ] && ok "I6 refs-covered issue #339 not re-confirmed" || bad "I6 re-queried a covered ref" "count=$n339"
