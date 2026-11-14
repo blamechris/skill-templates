@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "e937d79",
+  "generatedFromCommit": "5bbff38",
   "skillCount": 45,
   "skills": [
     {
@@ -1654,10 +1654,10 @@
           "label": "state-header",
           "anyOf": [
             "maintain a rolling \\*{0,2}STATE header",
-            "only mandatory post-compaction read",
+            "[Tt]he \\*{0,2}STATE header\\*{0,2} is the only mandatory (?:post-compaction )?read",
             "only mandatory read"
           ],
-          "note": "Vacuity fix (#224, batch 3): was [\"STATE header\", \"only mandatory post-compaction read\", \"only mandatory read\"]. Deleting the rule sentence(s) left the guard green on `STATE header` on eight lines (reload rule 2, checkpoint bullets, State section). Now binds the rule sentences: maintain a rolling STATE header, and 'the only mandatory post-compaction read'. The bare `STATE header` is not an alternate."
+          "note": "Vacuity fix (#224, batch 3): was [\"STATE header\", \"only mandatory post-compaction read\", \"only mandatory read\"]. Deleting the rule sentence(s) left the guard green on `STATE header` on eight lines (reload rule 2, checkpoint bullets, State section). Now binds the rule sentences: maintain a rolling STATE header, and 'the only mandatory post-compaction read'. The bare `STATE header` is not an alternate. Panel fix (#494): the second alternate was 'only mandatory post-compaction read', which also matched the line-111 Session-log bullet's cross-reference '(Reliability rule 2)', so deleting the rule sentence left the guard green. It now requires the rule sentence's own 'The STATE header is the only mandatory ... read'."
         },
         {
           "label": "session-boundaries",
@@ -2737,10 +2737,9 @@
           "label": "multi-target-compile",
           "anyOf": [
             "[Ee]nsure the compiler exists in (?:this|the) repo",
-            "treat that as a hard gate",
-            "Compile to native targets"
+            "treat that as a hard gate"
           ],
-          "note": "Vacuity fix (#224, batch 3): was [\"compile-skill-targets\\\\.mjs\", \"Compile to native targets\", \"custom-command format\"]. Deleting the rule sentence(s) left the guard green on `compile-skill-targets.mjs` on ten lines (Targets definition, Notes, Customization Points) and the Targets definition's `custom-command format`. Now binds the step 7 sentences: ensure the compiler exists in this repo, treat an emit failure as a hard gate, and the step lead `Compile to native targets`. The script's file name and `custom-command format` are not alternates."
+          "note": "Vacuity fix (#224, batch 3): was [\"compile-skill-targets\\\\.mjs\", \"Compile to native targets\", \"custom-command format\"]. Deleting the rule sentence(s) left the guard green on `compile-skill-targets.mjs` on ten lines (Targets definition, Notes, Customization Points) and the Targets definition's `custom-command format`. Now binds the step 7 sentences: ensure the compiler exists in this repo, treat an emit failure as a hard gate, and the step lead `Compile to native targets`. The script's file name and `custom-command format` are not alternates. Panel fix (#494): dropped the 'Compile to native targets' alternate, which matched only step 7's bold label and survived deleting the rule sentences."
         },
         {
           "label": "targets-concept",
@@ -3086,12 +3085,11 @@
         {
           "label": "cost-circuit-breaker",
           "anyOf": [
-            "[Pp]er-wave cost circuit breaker",
             "[Oo]ver budget",
             "stop and notify",
             "[Cc]ompare measured cost with the configured limit"
           ],
-          "note": "Vacuity fix (#224, batch 3): was [\"circuit breaker\", \"[Oo]ver budget\", \"stop and notify\"]. Deleting the rule sentence(s) left the guard green on the Customization Points bullet `Cost source + per-session budget ... circuit breaker enforces`. Now binds the Session Boundaries sentence (Per-wave cost circuit breaker, compare measured cost with the configured limit, over budget, stop and notify). The bare `circuit breaker` is not an alternate."
+          "note": "Vacuity fix (#224, batch 3): was [\"circuit breaker\", \"[Oo]ver budget\", \"stop and notify\"]. Deleting the rule sentence(s) left the guard green on the Customization Points bullet `Cost source + per-session budget ... circuit breaker enforces`. Now binds the Session Boundaries sentence (Per-wave cost circuit breaker, compare measured cost with the configured limit, over budget, stop and notify). The bare `circuit breaker` is not an alternate. Panel fix (#494): dropped the '[Pp]er-wave cost circuit breaker' alternate, which matched the bullet's bold label and survived deleting the rule sentences."
         },
         {
           "label": "explicit-path-staging",
@@ -3383,11 +3381,11 @@
         {
           "label": "no-overrides",
           "anyOf": [
-            "\\b(?:never|not|NEVER)\\b[^\\n]{0,30}`--admin`",
-            "never bypass",
+            "never `--admin`, never bypass",
+            "never bypass rules",
             "without overrides"
           ],
-          "note": "Vacuity fix (#224, batch 3): was [\"--admin\", \"never bypass\", \"without overrides\"]. Deleting the rule sentence(s) left the guard green on the CLAUDE.md snippet in the markdown fence (`--admin or protection overrides`). Now binds gate condition 4 and the Merge command sentence (never `--admin`, never bypass, without overrides). The bare `--admin` and the snippet are not alternates."
+          "note": "Vacuity fix (#224, batch 3): was [\"--admin\", \"never bypass\", \"without overrides\"]. Deleting the rule sentence(s) left the guard green on the CLAUDE.md snippet in the markdown fence (`--admin or protection overrides`). Now binds gate condition 4 and the Merge command sentence (never `--admin`, never bypass, without overrides). The bare `--admin` and the snippet are not alternates. Panel fix (#494): the first alternate also matched the Merge command's narrower merge-queue instruction ('do not silently enqueue or use `--admin`'), a different rule, so deleting gate 4 left the guard green. It now binds gate 4's 'never `--admin`, never bypass' and 'never bypass rules'."
         },
         {
           "label": "report-entry",
