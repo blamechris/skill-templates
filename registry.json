@@ -1330,7 +1330,7 @@
             "[Aa]sk the owner only for an action reserved to them",
             "(?:[Aa]sk|[Ee]scalate to) the owner (?:only|solely) (?:for|about) (?:an? )?(?:action|step|decision)s? (?:reserved|that is reserved) to (?:them|the owner)"
           ],
-          "note": "Vacuity fix (#495, strong-signal batch C): routine delegated merge stays with the agent in both modes; only actual owner prerequisites are handed off. The old alternate matched the bold step label `Escalate only the genuine prerequisite.`; deleting the two operative sentences left the guard green. Now binds them (report that exact requirement; ask the owner only for an action reserved to them). Two-statement rule: it goes red only when both are deleted. Panel fix (#502): dropped the 'Report that exact requirement' alternate. It matched the step's escalation half, so deleting the limiting sentence 'Ask the owner only for an action reserved to them' left the guard green. It now binds that sentence and a rewording of it."
+          "note": "Vacuity fix (#495, strong-signal batch C): routine delegated merge stays with the agent in both modes; only actual owner prerequisites are handed off. The old alternate matched the bold step label `Escalate only the genuine prerequisite.`; deleting the two operative sentences left the guard green. Now binds them (report that exact requirement; ask the owner only for an action reserved to them). Panel fix (#502): dropped the 'Report that exact requirement' alternate. It matched the step's escalation half, so deleting the limiting sentence 'Ask the owner only for an action reserved to them' left the guard green. It now binds that sentence and a rewording of it."
         }
       ]
     },
@@ -2108,11 +2108,10 @@
         {
           "label": "clean-tree-preflight",
           "anyOf": [
-            "[Cc]lean working tree",
-            "git status --porcelain",
-            "build from committed state",
-            "[Nn]o uncommitted"
-          ]
+            "[Nn](?:o|othing) uncommitted(?: or staged)?(?: changes)?",
+            "buil(?:d|t) from (?:a )?committed state"
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"[Cc]lean working tree\", \"git status --porcelain\", \"build from committed state\", \"[Nn]o uncommitted\"]. Deleting the two rule sentences `no uncommitted or staged changes (...). A release must build from committed state.` left the guard green on the bold bullet label `**Clean working tree**`, which `[Cc]lean working tree` matched. The label alternate is dropped, and so is the `git status --porcelain` command (enacting code, not the rule). The guard now binds the two rule statements (`no uncommitted or staged changes`, `build from committed state`); they are two statements of one rule in the same bullet, so it goes red only when both are deleted. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "all-gates-must-pass",
@@ -2168,10 +2167,9 @@
         {
           "label": "deprecate-never-delete",
           "anyOf": [
-            "do not delete/unpublish",
-            "[Dd]eprecate, don't delete",
-            "[Pp]refer deprecate over unpublish"
-          ]
+            "(?:[Dd]o not|[Nn]ever) (?:delete|unpublish)|[Dd]on't (?:delete|unpublish) (?:it|the)"
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"do not delete/unpublish\", \"[Dd]eprecate, don't delete\", \"[Pp]refer deprecate over unpublish\"]. With step 3's rule sentences deleted the guard stayed green on the Notes bullet label `**Deprecate, don't delete.**` (alternate 1) and on the CUSTOMIZE marker text `prefer deprecate over unpublish` (alternate 2), which a customizing agent replaces anyway. Both are dropped. The guard now binds step 3's rule (`do not delete/unpublish it`, with rewordings `never unpublish` / `don't delete the ...`). The Notes bullet is deliberately not an alternate: it is a restatement, so it would keep the guard green after step 3 was gutted. An inverted sentence that keeps the anchor still matches: the known inversion class (#226). Panel fix (#504): dropped the 'Unpublishing breaks everyone who pinned' alternate. That is the rationale sentence, so deleting the rule sentence ('do not delete/unpublish it') left the guard green."
         },
         {
           "label": "revert-not-force-reset",
@@ -2592,9 +2590,9 @@
           "label": "rederive-not-trust",
           "anyOf": [
             "re-derived, not trusted",
-            "re-derives state rather than trusting",
-            "[Vv]erify the last claimed merge"
-          ]
+            "(?:[Cc]onfirm|[Vv]erify) (?:it|the (?:claimed )?merge)[^\\n]{0,80}before building on it"
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"re-derived, not trusted\", \"re-derives state rather than trusting\", \"[Vv]erify the last claimed merge\"]. Deleting step 7's rule sentences left the guard green on the bold step label `**Verify the last claimed merge**` (alternate 2) and on the intro line `each step re-derives state rather than trusting memory` (alternate 1), which describes the whole checklist, not this rule. Both are dropped. The guard now binds `State is re-derived, not trusted` and the instruction `confirm it (...) before building on it`. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "reference-global-not-fork",
@@ -2644,11 +2642,10 @@
         {
           "label": "assert-branch-before-write",
           "anyOf": [
-            "[Aa]ssert the branch before (?:you )?writ",
             "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
             "before (?:your |the )?first edit[^\\n]{0,120}before staging"
           ],
-          "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. Alternate 2 requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure."
+          "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. The first alternate requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure. Vacuity fix (#495, batch D): the original alternate 0 `[Aa]ssert the branch before (?:you )?writ` matched the bold bullet label `**Assert the branch before you write.**`, so deleting the rule sentences left the guard green. It is dropped; the two alternates above (both inside the rule sentence) are unchanged. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "archive-on-collide",
@@ -2723,18 +2720,18 @@
         {
           "label": "no-secrets-in-profile",
           "anyOf": [
-            "[Nn]o secrets",
-            "never go here",
-            "[Nn]ever (commit|record) (secrets|credentials)"
-          ]
+            "(?:[Kk]eys|[Tt]okens|[Ss]ecrets)[^\\n.]{0,50}never go (?:here|in the profile)",
+            "[Nn]ever (?:commit|record|store|put|write) (?:any |real )?(?:secrets|credentials|tokens|keys)"
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"[Nn]o secrets\", \"never go here\", \"[Nn]ever (commit|record) (secrets|credentials)\"]. Deleting the rule sentences `The profile is committed. Keys, tokens, OTP secrets never go here (...)` left the guard green on the bold bullet label `**No secrets.**`, which `[Nn]o secrets` matched. The label alternate is dropped. The guard now binds the prohibition sentence (`Keys, tokens, OTP secrets never go here`) and a rewording (`never commit/record/store/put/write secrets/credentials/tokens/keys`). An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "customizations-section-schema",
           "anyOf": [
-            "One section per skill that needs it",
-            "exact skill name \\+ literal",
-            "headed `## <skill-name> Customizations`"
-          ]
+            "(?:headed|heading|titled)[^\\n.]{0,20}`## <[^>]+> Customizations`",
+            "exact skill name \\+ literal"
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"One section per skill that needs it\", \"exact skill name \\\\+ literal\", \"headed `## <skill-name> Customizations`\"]. Deleting the heading-format clause left the guard green on the bold bullet label `**One section per skill that needs it**`, which names the cardinality, not the schema. The label alternate is dropped; the guard binds the heading format only (`headed `## <skill-name> Customizations``, with `heading`/`titled` rewordings, and `exact skill name + literal`). An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "idempotent-profile",
@@ -3221,11 +3218,11 @@
         {
           "label": "never-fabricate-omit-instead",
           "anyOf": [
-            "[Nn]ever fabricate",
-            "OMIT the case",
-            "an invented command is worse than a missing one",
-            "[Oo]mit the case rather than invent"
-          ]
+            "(?:OMIT|[Oo]mit) the case",
+            "[Aa]n invented command is worse than a missing one",
+            "[Nn]ever (?:fabricate|invent)[^\\n]{0,80}\\b(?:omit|OMIT|drop|skip)\\b"
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"[Nn]ever fabricate\", \"OMIT the case\", \"an invented command is worse than a missing one\", \"[Oo]mit the case rather than invent\"]. Deleting the rule sentences `If you cannot point at the code ..., OMIT the case: an invented command is worse than a missing one ...` left the guard green on the bold bullet label `**Never fabricate.**`. The label alternate is dropped. The guard binds the two rule clauses (`OMIT the case`, `an invented command is worse than a missing one`) and a same-line rewording `Never fabricate/invent ... omit/drop/skip`, which the multi-line template label cannot satisfy. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "file-line-grounding-per-case",
@@ -3324,10 +3321,10 @@
         {
           "label": "down-tier-claims-need-verification",
           "anyOf": [
-            "don't drive actions unverified",
-            "independent adversarial verification",
-            "verifier strength to blast radius"
-          ]
+            "(?:load-bearing|down-tier) (?:claims?|findings?|conclusions?|reports?)[^\\n]{0,250}(?:independent|adversarial)[^\\n]{0,40}verif",
+            "(?:load-bearing|down-tier) (?:claims?|findings?|conclusions?|reports?)[^\\n]{0,250}verif[^\\n]{0,40}(?:independent|adversarial)"
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"don't drive actions unverified\", \"independent adversarial verification\", \"verifier strength to blast radius\"]. Deleting the rule sentences left the guard green on the bold bullet label `**Down-tier claims don't drive actions unverified.**`. Both the label and `verifier strength to blast radius` are dropped: the latter is the step's second half (how strong the verifier is), not the requirement that down-tier claims be verified. The guard now requires a down-tier / load-bearing claim and an independent or adversarial verification on one line, in either order. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "orchestrator-checks-before-relaying",
@@ -3349,17 +3346,17 @@
         {
           "label": "parallel-writers-get-worktrees",
           "anyOf": [
-            "[Pp]arallel writers get isolation",
-            "write-capable workers each get a worktree",
-            "forbidden to `checkout`"
-          ]
+            "(?:[Cc]oncurrent|[Pp]arallel) (?:write-capable )?(?:workers|writers|agents|subagents)[^\\n.;]{0,30} (?:get|gets|use|run in) (?:a |an |their own |its own )?(?:own |isolated |separate )?worktree"
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"[Pp]arallel writers get isolation\", \"write-capable workers each get a worktree\", \"forbidden to `checkout`\"]. Deleting the rule sentence `Concurrent write-capable workers each get a worktree; read-only reviewers are explicitly forbidden to ...` left the guard green on the bold bullet label `**Parallel writers get isolation.**`. The label is dropped. `forbidden to `checkout`` is dropped too: it binds the reviewers' half of the step, not the writers' half this guard is named for. The guard binds the writers' sentence, with `Concurrent`/`Parallel` and `workers`/`writers`/`agents` rewordings. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "effort-dial-before-tier",
           "anyOf": [
-            "Effort is a dial",
-            "Raising effort is cheaper than raising tier"
-          ]
+            "[Rr]aising effort is cheaper than raising tier",
+            "[Rr]aise effort before (?:you )?rais\\w+ (?:the )?tier"
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"Effort is a dial\", \"Raising effort is cheaper than raising tier\"]. Deleting the rule sentences left the guard green on the bold bullet label `**Effort is a dial, not a default.**`. The label alternate is dropped. An inverted sentence that keeps the anchor still matches: the known inversion class (#226). Panel fix (#504): dropped the 'Mechanical stages run at low effort' alternate. It binds the dial half, not this guard's order rule, so deleting 'Raising effort is cheaper than raising tier' left the guard green. It now binds only the order rule."
         },
         {
           "label": "routine-orchestration-below-top-tier",
@@ -3459,12 +3456,10 @@
         {
           "label": "self-contained-no-external-deps",
           "anyOf": [
-            "no external dependencies",
-            "no CDN links",
-            "Inline `<style>` only",
-            "One file, self-contained",
+            "[Nn]o CDN",
             "opened directly via `file://`"
-          ]
+          ],
+          "note": "Vacuity fix (#495, batch D): was [\"no external dependencies\", \"no CDN links\", \"Inline `<style>` only\", \"One file, self-contained\", \"opened directly via `file://`\"]. Deleting the Rules bullet's sentences left the guard green on three holders: the intro description (`inline CSS (no external dependencies)`, line 8), the bold bullet label `**Inline `<style>` only**`, and the Notes restatement `One file, self-contained` (line 210). All three are dropped. The guard now binds the two statements of the render rule itself, `no CDN links` and `the file must work opened directly via `file://``. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "never-overwrite-output",
@@ -3564,10 +3559,10 @@
         },
         {
           "label": "final-message-is-not-a-prose-wall",
-          "note": "The week is written up twice already (note + HTML). A third telling in chat is the failure mode the skill exists to prevent.",
+          "note": "The week is written up twice already (note + HTML). A third telling in chat is the failure mode the skill exists to prevent. Vacuity fix (#495, batch D): was [\"[Aa] prose recap in chat is the failure mode this skill exists to prevent\", \"[Tt]he report is the note; the message is the ask\", \"[Nn]ever restate the note.s contents in chat\"]. Deleting the rule sentences `Then one line pointing at the note, and stop.` and `A prose recap in chat is the failure mode ...` left the guard green on the bold slogan `**The report is the note; the message is the ask.**` (alternate 1). The slogan alternate is dropped and the instruction sentence `Then one line pointing at the note, and stop` is bound instead. An inverted sentence that keeps the anchor still matches: the known inversion class (#226).",
           "anyOf": [
             "[Aa] prose recap in chat is the failure mode this skill exists to prevent",
-            "[Tt]he report is the note; the message is the ask",
+            "[Tt]hen one line pointing at the note, and stop",
             "[Nn]ever restate the note.s contents in chat"
           ]
         },
