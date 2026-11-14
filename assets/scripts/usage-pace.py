@@ -751,7 +751,7 @@ UNITS = [("$", "all_at", "fable_at", "${:,.0f}"),
          ("input-eq tokens", "all_ieq", "fable_ieq", "{:,.0f}")]
 
 
-def implied_caps(rows, unit="$", policies=None):
+def implied_caps(rows, unit="$", policies=None, instants=None):
     """cap = measure_at_reading / (meter% / 100), per meter, in one candidate unit.
 
     A reading below MIN_PCT is dropped: dividing a small measure by a small percentage
@@ -764,6 +764,11 @@ def implied_caps(rows, unit="$", policies=None):
     because every caller unpacks these two functions positionally, and rather than a
     recomputed predicate in `resolve_cap` because a second copy of "which rows count" is
     the drift this file keeps paying for.
+
+    `instants` is the same kind of out-param, filled in lockstep with the caps: the epoch
+    second (via `_reading_instant`) of each contributing row, or None when the row is
+    undated. It lets `resolve_cap` say whether the readings its median came from straddle
+    a cap change (#250), which only the contributing rows can answer.
     """
     ak, fk = next((a, f) for u, a, f, _ in UNITS if u == unit)
     out = {"all": [], "fable": []}
@@ -774,6 +779,9 @@ def implied_caps(rows, unit="$", policies=None):
                 out[meter].append(100.0 * at / pct)
                 if policies is not None:
                     policies.setdefault(meter, []).append(r.get("policy") or None)
+                if instants is not None:
+                    rank, ts = _reading_instant(r)
+                    instants.setdefault(meter, []).append(ts if rank == 0 else None)
     return out
 
 
@@ -1062,13 +1070,18 @@ def _cum_events(unit="$ "):
     return times, cum, cumf
 
 
-def sampled_caps(unit="$"):
+def sampled_caps(unit="$", spans=None):
     """Implied all-models cap per meter period, by regressing spend on the meter %.
 
     The slope is dollars per percentage point, so slope x 100 is the cap. Fitting a LINE
     rather than dividing means the intercept absorbs the zero point -- which is the same
     property that makes a two-reading difference immune to a reset, generalised over
     every sample in the period. Returns [(label, cap, r2, n), ...], newest last.
+
+    `spans` is an optional caller-supplied list this appends `(t0, t1)` to, in epoch
+    SECONDS, for each returned period in the same order. An out-param for the reason
+    `implied_caps(policies=...)` is one: callers unpack the return value positionally.
+    It lets --calibrate say how many periods sit on each side of a cap change (#250).
     """
     samples = plan_samples()
     if not samples:
@@ -1090,6 +1103,8 @@ def sampled_caps(unit="$"):
         lo = datetime.fromtimestamp(seg[0][0] / 1000, PT)
         hi = datetime.fromtimestamp(seg[-1][0] / 1000, PT)
         out.append((f"{lo:%m-%d %H:%M}->{hi:%m-%d %H:%M}", b * 100, r2, len(seg)))
+        if spans is not None:
+            spans.append((seg[0][0] / 1000.0, seg[-1][0] / 1000.0))
     return out
 
 
@@ -1436,6 +1451,30 @@ def spread(vals):
     return max(vals) / min(vals)
 
 
+def _regime_note(instants, windows=MULTIPLIER_WINDOWS):
+    """Disclosure for an absolute median whose readings straddle a cap change (#250).
+
+    `instants` are the epoch seconds of the readings that CONTRIBUTED to the median (None
+    for undated). Same edge semantics as `multiplier_change_between`: a reading inside a
+    window (closed near edge, half-open far edge) is ambiguous; readings strictly before
+    and at/after the window sit under different caps, so one median mixes two. Returns ""
+    when no window is spanned, which keeps the basis text byte-identical to before.
+    """
+    parts = []
+    for w0, w1, why in windows:
+        ts = [t for t in instants if t]
+        before = sum(1 for t in ts if t < w0)
+        after = sum(1 for t in ts if t >= w1)
+        inside = sum(1 for t in ts if w0 <= t < w1)
+        if before and after:
+            parts.append(f"{before} reading(s) precede and {after} follow a cap change "
+                         f"({why}), so this median mixes two caps (#250)")
+        elif inside:
+            parts.append(f"{inside} reading(s) fall inside a cap-change window ({why}) and "
+                         f"cannot be assigned to either cap (#250)")
+    return "; " + "; ".join(parts) if parts else ""
+
+
 def resolve_cap(kind, rows, use_cached=True):
     """Best available cap, and how much to trust it. For --caps and the derived path only.
 
@@ -1498,14 +1537,15 @@ def resolve_cap(kind, rows, use_cached=True):
         med = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
         return med, (f"differential of {len(v)} reading pair(s) -- zero-point "
                      f"independent{stale(dpol.get(kind, []))}"), True
-    ipol = {}
-    caps = implied_caps(rows, policies=ipol)[kind]
+    ipol, iat = {}, {}
+    caps = implied_caps(rows, policies=ipol, instants=iat)[kind]
     if caps:
+        regime = _regime_note(iat.get(kind, []))
         caps = sorted(caps)
         med = caps[len(caps) // 2] if len(caps) % 2 else (caps[len(caps) // 2 - 1] + caps[len(caps) // 2]) / 2
         return med, (f"median of {len(caps)} single reading(s) -- ABSOLUTE, assumes the "
                      f"meter zeroed at the week open; wrong after an out-of-band "
-                     f"reset{stale(ipol.get(kind, []))}"), True
+                     f"reset{regime}{stale(ipol.get(kind, []))}"), True
     # FALLBACK is the most common path of all -- it is what a freshly bootstrapped machine
     # uses -- and both of its figures were measured under the pre-#256 dedup, so it gets
     # the disclosure too rather than being the one branch with none.
@@ -2403,7 +2443,8 @@ def main():
         return hook(a)
 
     if a.calibrate:
-        rowsc = sampled_caps()
+        spans = []
+        rowsc = sampled_caps(spans=spans)
         if not rowsc:
             print("no plan-usage samples available "
                   f"({PLAN_SAMPLES}) — this is macOS desktop-app state; fall back to "
@@ -2425,11 +2466,24 @@ def main():
             print(f"\nall-models cap ${med:,.0f} (median of {len(good)} well-fit period(s), "
                   f"mean R2 {r2m:.3f})  — cached for the pace check")
             if lo and hi / lo > 1.15:
-                print(f"  CAUTION: the six periods span ${lo:,.0f}-${hi:,.0f} ({hi/lo:.2f}x). That "
-                      f"spread is NOT explained by the\n  +50% boost (the two post-2026-09-01 "
-                      f"periods are at the LOW end, not 1.5x high), nor by fit\n  quality (R2 is "
-                      f"0.98+ throughout), nor by model mix. Treat ${med:,.0f} as a central "
-                      f"estimate\n  with roughly +/-20% around it, not a measured constant.")
+                # Every fact below is computed from THIS run. The old text asserted
+                # one historical dataset (six periods, R2 0.98+, "not the boost", model
+                # mix) as present fact, which went false the day the data changed (#250).
+                r2min = min(r for _, r in good)
+                half = (hi - lo) / (hi + lo)   # half-spread relative to the midrange
+                print(f"  CAUTION: the {len(good)} well-fit period(s) span ${lo:,.0f}-${hi:,.0f} "
+                      f"({hi/lo:.2f}x; min R2 {r2min:.3f}), +/-{half*100:.0f}% about the "
+                      f"middle of that range.\n  Treat ${med:,.0f} as a central estimate, "
+                      f"not a measured constant.")
+            # Independent of the spread: a mixed-cap median is wrong even when it is tight.
+            for w0, w1, why in MULTIPLIER_WINDOWS:
+                gp = [sp for (_, _, r, _), sp in zip(rowsc, spans)
+                      if r is not None and r >= 0.95]
+                nb = sum(1 for _, t1 in gp if t1 < w0)
+                na = sum(1 for t0, _ in gp if t0 >= w1)
+                if nb and na:
+                    print(f"  REGIME: {nb} period(s) precede and {na} follow a cap change "
+                          f"({why}), so the median mixes two caps (#250).")
             print("NOTE: these samples carry no Fable meter, so the Fable cap still needs "
                   "a hand-recorded reading.")
         return 0
