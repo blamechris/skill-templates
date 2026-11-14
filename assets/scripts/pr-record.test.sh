@@ -867,8 +867,37 @@ sdir514 = os.path.join(proj, "sess-514")
 os.makedirs(os.path.join(sdir514, "subagents"), exist_ok=True)
 jsonl(sdir514 + ".jsonl", [user("work on #514", ts="2027-02-01T00:00:00Z")])
 
+# ---- split sessions (#384): <sid>/ under two project slugs. sess-560: main
+# transcript beside the SECOND folder, one linked agent in each. sess-561:
+# the extra folder is empty.
+def split_agent(folder, name, pr):
+    jfile(os.path.join(folder, "subagents", name + ".meta.json"),
+          {"agentType": "general-purpose", "description": "w", "model": "sonnet"})
+    jsonl(os.path.join(folder, "subagents", name + ".jsonl"),
+          [user("Please handle #%d today" % pr, ts="2027-03-01T00:00:00Z")])
+pa, pb = proj + "-s1", proj + "-s2"
+jsonl(pb + "/sess-560.jsonl", [user("work on #560", ts="2027-03-01T00:00:00Z")])
+split_agent(pa + "/sess-560", "agent-5600001", 560)
+split_agent(pb + "/sess-560", "agent-5600002", 560)
+jsonl(pa + "/sess-561.jsonl", [user("work on #561", ts="2027-03-01T00:00:00Z")])
+split_agent(pa + "/sess-561", "agent-5610001", 561)
+os.makedirs(pb + "/sess-561", exist_ok=True)
+
 print("fixtures built OK")
 PYEOF
+
+for n in 560 561; do
+  cat > "$FAKE_GH_DIR/pr_view_$n.json" <<JSON
+{"number": $n, "state": "MERGED", "title": "t", "author": {"login": "a"},
+ "mergedBy": {"login": "a"}, "headRefName": "feat-$n",
+ "createdAt": "2027-03-01T00:00:00Z", "mergedAt": "2027-03-01T00:00:00Z",
+ "mergeCommit": {"oid": "z"}, "additions": 1, "deletions": 1, "changedFiles": 1,
+ "closingIssuesReferences": [], "commits": [], "reviews": [], "statusCheckRollup": []}
+JSON
+  echo '[]' > "$FAKE_GH_DIR/run_list_feat-$n.json"
+  echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]}}}}}' > "$FAKE_GH_DIR/graphql_$n.json"
+  echo '[]' > "$FAKE_GH_DIR/issue_list_$n.json"
+done
 
 # ---------------------------------------------------------------- PR 514
 # ledger idempotency fixture (reuses PR 502's minimal gh fixtures via a
@@ -1488,6 +1517,15 @@ ONLY_OID=$("$PY" -c "import json,sys;print(sorted(json.load(open(sys.argv[1]))['
 # I6: a ref already in closingIssuesReferences is never re-queried (PR 541's #339)
 n339=$(grep -c "issue=339" "$GH_LOG" | tr -d ' ')
 [ "$n339" = "0" ] && ok "I6 refs-covered issue #339 not re-confirmed" || bad "I6 re-queried a covered ref" "count=$n339"
+
+# =========================================================================
+# GROUP S -- split session (#384): agents counted from every folder
+# =========================================================================
+echo; echo "S. split session"
+run_split --repo "$REPO" --session sess-560 --stdout 560
+py_check "S1 split session: agents from BOTH folders" "sorted(a['id'] for a in d['agents']) == ['agent-5600001','agent-5600002']"
+run_split --repo "$REPO" --session sess-561 --stdout 561
+py_check "S2 split session with an empty extra folder: agent counted, no refusal" "[a['id'] for a in d['agents']] == ['agent-5610001']"
 
 # =========================================================================
 # GROUP H -- no __pycache__ left behind anywhere in the checkout
