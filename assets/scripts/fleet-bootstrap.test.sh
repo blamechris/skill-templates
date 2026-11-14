@@ -377,6 +377,27 @@ run inactive_gemini --apply
   ok 'inactive Gemini filename refuses before installation' ||
   bad 'inactive Gemini filename refuses before installation' "rc=$rc $out"
 
+# #409: bootstrap reads Gemini settings through the same verifier, so commented settings
+# that select GEMINI.md install, and a GEMINI.md that only a comment names still refuses.
+new_case commented_gemini
+mkdir -p "$TMP/commented_gemini/home/.gemini"
+printf '// user settings\n{"context": {/* adapter */ "fileName": "GEMINI.md"}}\n' > "$TMP/commented_gemini/home/.gemini/settings.json"
+cp "$TMP/commented_gemini/home/.gemini/settings.json" "$TMP/commented_gemini/settings.before"
+run commented_gemini --apply
+[ "$rc" -eq 0 ] && [ -e "$TMP/commented_gemini/home/.fleet/AGENTS.md" ] &&
+  [ -e "$TMP/commented_gemini/home/.gemini/GEMINI.md" ] &&
+  cmp -s "$TMP/commented_gemini/settings.before" "$TMP/commented_gemini/home/.gemini/settings.json" &&
+  ok 'commented Gemini settings selecting GEMINI.md install, settings untouched' ||
+  bad 'commented Gemini settings selecting GEMINI.md install' "rc=$rc $out"
+
+new_case commented_inactive_gemini
+mkdir -p "$TMP/commented_inactive_gemini/home/.gemini"
+printf '{"context": {"fileName": "AGENTS.md"}} // GEMINI.md\n' > "$TMP/commented_inactive_gemini/home/.gemini/settings.json"
+run commented_inactive_gemini --apply
+[ "$rc" -eq 2 ] && no_install commented_inactive_gemini &&
+  ok 'a GEMINI.md named only in a comment still refuses before installation' ||
+  bad 'a GEMINI.md named only in a comment still refuses before installation' "rc=$rc $out"
+
 for prefix in instruction heading comment; do
   new_case "preamble_$prefix"
   case "$prefix" in
