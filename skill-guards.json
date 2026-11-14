@@ -122,12 +122,12 @@
     {
       "label": "merge-report-entry",
       "anyOf": [
-        "[Oo]ne entry per (?:verified )?self-merged PR",
+        "record[^\\n]{0,160}merge SHA[^\\n]{0,120}(?:ledger and )?final session report",
         "entry in the final session report",
         "flag each finished PR in the session report",
         "accumulates for `/batch-merge` or user review"
       ],
-      "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs. Vacuity fix (#224, batch 1): the first alternate was the `### Merged by this session` heading, which survives deleting the 'One entry per verified self-merged PR — MANDATORY' sentence. It is replaced by that sentence. MarchBorne's customized copy has no sentence stating the obligation at all (Rule 5 delegates to the profile and the report section is bare template), so it now correctly fails here; the heading was the only thing holding it green. An inverted sentence still matches the alternates (inversion class, #226)."
+      "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs. Vacuity fix (#224, batch 1): the first alternate was the `### Merged by this session` heading, which survives deleting every sentence that states the obligation. It now binds the step sentence 'immediately record the delivered outcome, PR, base, review/check evidence, merge SHA ... in the ledger and final session report', not the report block's 'One entry per verified self-merged PR — MANDATORY' line, which sits inside the output-template fence (the _comment's no-template rule, #490 review). Customized copies that delegate Rule 5 to their profile, such as MarchBorne's, keep that step sentence and stay green. An inverted sentence still matches the alternates (inversion class, #226)."
     },
     {
       "label": "no-auto-merge",
@@ -471,7 +471,7 @@
       "label": "commit-links",
       "anyOf": [
         "(?:post|send|make) a fix reply without the commit (?:SHA|hash)",
-        "(?<!the )[Rr]eply with (?:the )?commit (?:hash|SHA)",
+        "(?<![Tt]he )[Rr]eply with (?:the )?commit (?:hash|SHA)",
         "commit (?:hash|SHA) AND (?:the )?(?:before/after )?code diff",
         "FIX requires commit (?:hash|SHA)",
         "[Ff]ix reply (?:MUST|must) include[^\\n]{0,20}commit (?:hash|SHA)"
