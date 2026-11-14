@@ -38,7 +38,10 @@ nothing is emitted, so nothing wrong can be appended):
 
 The row's workload-note cell is emitted with THREE measured suffixes already
 filled in — `· subagents: <eff>M/<count>` (from the session's subagents/
-transcripts, same dedup and weights), `· work: <n>pr/<n>iss` (merged PRs and
+transcripts, same dedup and weights; `<count>` is the number of DISTINCT agent
+transcripts — ids from `agent-<hex>.jsonl` names — so workflow `journal.jsonl` and
+other non-agent files, and a copy of a transcript beside an explicit path, do not
+add to it, while every child file still feeds `<eff>`; this changed in #379), `· work: <n>pr/<n>iss` (merged PRs and
 closed issues this session is credited with, see scan_work) and
 `· cost: $<lower>–<upper>` (the session's all-in priced range in USD, parent and
 children, the same range the `model-priced USD` line on stderr gives). Replace
@@ -262,10 +265,15 @@ def json_records(fh, source):
             die(f"{source}:{line_no}: transcript line is {problem} — cannot be read as a record.")
         yield line_no, rec
 
+# skill-templates#379: `/N` counts agent TRANSCRIPTS — distinct agent ids, not files.
+AGENT_FILE = re.compile(r"^agent-[0-9a-f]+\.jsonl$")
+
 def scan_subagents(roots, selected):
     """Add child records to the same global selection as the parent.
 
-    Returns (files counted, the roots that held any). `roots` come from
+    Returns (distinct agent ids, child files read, the roots that held any child file).
+    EVERY child
+    .jsonl is still read into `selected`; only the count is by id (#379). `roots` come from
     usage_accounting.session_subagent_roots — scoped by the FULL uuid, never a
     directory sweep; see the SCOPE paragraph in the module docstring. The files come
     from usage_accounting.session_child_files; an unreadable directory or file is a
@@ -274,17 +282,19 @@ def scan_subagents(roots, selected):
         files, held = session_child_files(roots)
     except OSError as e:
         die(f"cannot measure subagents: {e}")
-    count = 0
+    ids = set()
     for source in files:
         try:
             fh = open(source, errors="replace")
         except OSError as e:
             die(f"cannot measure subagents: {e}")
-        count += 1
+        name = os.path.basename(source)
+        if AGENT_FILE.match(name):
+            ids.add(name[:-len(".jsonl")])
         with fh:
             for line_no, rec in json_records(fh, source):
                 selected.add(rec, source, line_no, "child")
-    return count, held
+    return len(ids), len(files), held
 
 # --- work numerator -------------------------------------------------------
 # The ledger could state spend to four significant figures and could not state
@@ -427,7 +437,7 @@ try:
     roots, main_dir = session_subagent_roots(path)
 except OSError as e:
     die(f"cannot measure subagents: {e}")
-sub_count, held = scan_subagents(roots, selected)
+sub_count, sub_files, held = scan_subagents(roots, selected)
 split = split_project_dirs(held, main_dir)
 sub_eff = 0.0
 child_responses = 0
@@ -531,7 +541,7 @@ if split:
         print(f"  {d}" + ("  (main transcript)" if d == main_dir else ""), file=sys.stderr)
 print(f"  transcript: {path}", file=sys.stderr)
 print(f"  selected responses: parent {n}, children {child_responses}; "
-      f"child transcript files {sub_count}", file=sys.stderr)
+      f"child transcript files {sub_files}; agent transcripts {sub_count}", file=sys.stderr)
 print(f"  model-priced USD ({RATE_CARD_VERSION}): parent {parent_cost}–{parent_upper}; "
       f"children {child_cost}–{child_upper}; all-in {parent_cost + child_cost}–"
       f"{parent_upper + child_upper}; {unpriced} unpriced responses"
