@@ -1322,8 +1322,11 @@
         {
           "label": "resolve-threads",
           "anyOf": [
-            "resolveReviewThread"
-          ]
+            "[Rr]esolve only (?:supported|eligible|triaged|addressed) (?:review )?(?:dispositions|threads)",
+            "[Dd]o not resolve (?:every|all) (?:unresolved )?(?:review )?threads? wholesale",
+            "[Rr]esolve review threads\\*{0,2} if blocking merge"
+          ],
+          "note": "Vacuity fix (#224, batch 2): was [\"resolveReviewThread\"], the GraphQL mutation name. Deleting step 3 (the sentence that states which threads get resolved) left the guard green on Critical Rule 4, which is the graphql-python rule, not this one. Now binds the step 3 sentence: resolve only supported review dispositions, never every unresolved thread wholesale, plus the older installed wording `**Resolve review threads** if blocking merge` (25 installed copies state the rule only that way). The bare mutation name is not an alternate: it also sits in the Python snippet of older copies. An inverted rule that keeps the anchor (\"Do not resolve only supported review dispositions\") still matches: the known inversion class (#226), not fixed here."
         },
         {
           "label": "graphql-python",
@@ -1426,17 +1429,20 @@
         {
           "label": "queue-hard-cap",
           "anyOf": [
-            "[Hh]ard cap 10",
-            "[Rr]efuse larger queues"
-          ]
+            "[Hh]ard cap 10[^\\n]{0,20}[Pp]arallel sessions should be focused",
+            "[Rr]efuse larger queues",
+            "queue exceeds 10, truncate to 10"
+          ],
+          "note": "Vacuity fix (#224, batch 2): was [\"[Hh]ard cap 10\", \"[Rr]efuse larger queues\"]. The first alternate matched the Arguments bullet `max:N (default 8, hard cap 10)`, a usage declaration, so deleting Phase 0's cap sentence and Critical Rule 8 left it green. Now binds the Phase 0 sentence ('hard cap 10 — parallel sessions should be focused'), Critical Rule 8's 'Refuse larger queues', and Phase 0.5's 'if total queue exceeds 10, truncate to 10'. The Arguments bullet and the Phase 0 intro line are not alternates. An inverted rule that keeps the anchor (\"Never refuse larger queues\") still matches: the known inversion class (#226)."
         },
         {
           "label": "max-concurrent-agents",
           "anyOf": [
-            "[Mm]ax(?:imum)? (?:of )?5",
             "More than 5 degrades quality",
-            "[Cc]ap at 5"
-          ]
+            "[Cc]ap at 5",
+            "[Mm]ax(?:imum)? (?:of )?5 concurrent"
+          ],
+          "note": "Vacuity fix (#224, batch 2): was [\"[Mm]ax(?:imum)? (?:of )?5\", \"More than 5 degrades quality\", \"[Cc]ap at 5\"]. The first alternate matched the Arguments bullet `parallel:N (default 3, max 5)`, a usage declaration, so deleting the 'Cap at 5.' step sentence and Critical Rule 9 left it green. The max-5 alternate now requires `concurrent` after the number, which only Critical Rule 9 carries. The Arguments bullet is not an alternate. An inverted rule that keeps the anchor (\"More than 5 degrades quality is a myth\") still matches: the known inversion class (#226)."
         },
         {
           "label": "tiered-subagents",
@@ -2816,13 +2822,14 @@
         {
           "label": "read-only-never-writes",
           "anyOf": [
-            "[Nn]ever writes files",
+            "[Nn]ever writes files, creates issues, creates PRs",
             "NEVER writes files",
             "[Nn]o file writes",
             "does NOT write report files",
             "purely informational",
             "writes nothing"
-          ]
+          ],
+          "note": "Vacuity fix (#224, batch 2): the first alternate `[Nn]ever writes files` matched the intro line ('This skill is read-only — it never writes files, creates issues, or commits'), which is the skill's description, not the rule. Deleting Critical Rules 1 and 8 left it green. It is now `[Nn]ever writes files, creates issues, creates PRs`, the Critical Rule 1 enumeration, which the intro line lacks (`creates PRs`). The other alternates already matched only Critical Rules 1 and 8. An inverted rule that keeps the anchor (\"It NEVER writes files — unless asked to\") still matches: the known inversion class (#226)."
         },
         {
           "label": "deduplicate-across-sources",
@@ -2956,18 +2963,21 @@
         {
           "label": "morning-summary",
           "anyOf": [
-            "Morning Summary",
-            "marathon.*complete",
-            "Session Complete"
-          ]
+            "[Mm]orning [Ss]ummary is mandatory",
+            "[Oo]utput the best summary possible",
+            "[Ee]ven if interrupted, output"
+          ],
+          "note": "Vacuity fix (#224, batch 2): was [\"Morning Summary\", \"marathon.*complete\", \"Session Complete\"]. `Morning Summary` matches the wave diagram, the Phase 6 heading, three step cross-references and the report template; `Session Complete` is the output template's own heading. Deleting Critical Rule 17 left all three green. Now binds Critical Rule 17: the summary is mandatory, and even if interrupted output the best summary possible. An inverted rule that keeps the anchor (\"The morning summary is mandatory only when no PRs merged is false\") still matches: the known inversion class (#226)."
         },
         {
           "label": "strategy-escalation",
           "anyOf": [
-            "Escalat",
-            "alternative.*approach",
-            "Alt.*Strategy"
-          ]
+            "[Ee]scalate strategy across waves",
+            "uses an escalating strategy for issues that failed",
+            "[Dd]on['’]t repeat the same failing approach",
+            "[Ee]scalat(?:e|ing) (?:the )?(?:retry )?strateg(?:y|ies) (?:across|between|on each|with each) waves?"
+          ],
+          "note": "Vacuity fix (#224, batch 2): was [\"Escalat\", \"alternative.*approach\", \"Alt.*Strategy\"]. `Escalat` matches the Phase 3 heading, `alternative.*approach` the Wave 3 body, and `Alt.*Strategy` the wave diagram, so deleting Critical Rule 7 and Phase 3's opening sentence left all three green. Now binds those two sentences: escalate strategy across waves, 'each wave uses an escalating strategy for issues that failed in prior waves', and don't repeat the same failing approach. The intro line's 'escalating strategies' is not an alternate (the fourth alternate requires 'across/between/each wave'). An inverted rule that keeps the anchor (\"Never escalate strategy across waves\") still matches: the known inversion class (#226)."
         },
         {
           "label": "queue-replenishment",
@@ -2987,19 +2997,22 @@
         {
           "label": "unattended-merge-gate",
           "anyOf": [
-            "Unattended Merge Gate",
-            "unattended-merge"
-          ]
+            "[Mm]erges? (?:only |go |goes |happens? )?(?:through|via|by way of) the Unattended Merge Gate",
+            "[Mm]erging happens[^\\n]{0,60}(?:via|through) the Unattended Merge Gate",
+            "Unattended Merge Gate does not apply",
+            "does not grant unattended merge authority"
+          ],
+          "note": "Vacuity fix (#224, batch 2): was [\"Unattended Merge Gate\", \"unattended-merge\"], which match the `merge:off` flag text, the queue-table cross-reference, the Phase 2a status row, the report template ('Unattended Merge Gate rule 6'), and Critical Rule 12's `(`unattended-merge`)` pointer. Deleting Critical Rule 5 and Phase 5's merge directive left both green. Now binds the sentence that states the rule's relation to the gate, in both postures of the ONE rule: GATED 'Merge only through the Unattended Merge Gate' (Rule 5) and Phase 5's 'merging happens ... via the Unattended Merge Gate'; WITHHELD 'does not grant unattended merge authority' (the same sentence self-merge-posture binds, deliberately) or 'Unattended Merge Gate does not apply'. The Phase 2a row 'verified merged through the Unattended Merge Gate' is a table row and is excluded: the verb alternate requires `merge`/`merges`, not `merged`. An inverted rule that keeps the anchor (\"Never merge through the Unattended Merge Gate\") still matches: the known inversion class (#226)."
         },
         {
           "label": "merge-report-entry",
           "anyOf": [
-            "Merged by this session",
+            "(?:[Ee]very|[Ee]ach)[^\\n]{0,30}PR MUST appear as (?:its own |an? )?entry in the Morning Summary",
             "entry in the Morning Summary",
             "flag each finished PR in the session report",
             "accumulates for `/batch-merge` or user review"
           ],
-          "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs."
+          "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs. Vacuity fix (#224, batch 2): the first alternate was the `### Merged by this session` heading (and its Next Steps echo), both inside the report template's ```markdown fence, so deleting Phase 5 step 1 and Critical Rule 5 left it green. It is replaced by the sentence 'each/every ... PR MUST appear as an entry in the Morning Summary'. `entry in the Morning Summary` already matched only those two rule sentences and stays."
         },
         {
           "label": "zero-attribution-rule",
@@ -3021,10 +3034,12 @@
         {
           "label": "state-header",
           "anyOf": [
-            "STATE header",
+            "[Rr]ead only the (?:ledger['’]s )?STATE header",
+            "STATE header over full re-reads",
             "only mandatory read",
             "top-to-bottom re-read"
-          ]
+          ],
+          "note": "Vacuity fix (#224, batch 2): the first alternate was the bare `STATE header`, which appears in thirteen lines (the wave-boundary bullets, Phase 0 and Resume cross-references, Critical Rule 18 and the Customization Points list), so deleting Critical Rule 19 and the Session Boundaries bullet left it green. Now binds Critical Rule 19's sentence: read only the ledger's STATE header after compaction, 'STATE header over full re-reads'. `only mandatory read` and `top-to-bottom re-read` already matched only the Session Boundaries bullet and stay. An inverted rule that keeps the anchor (\"Never read only the STATE header\") still matches: the known inversion class (#226)."
         },
         {
           "label": "session-boundaries",
