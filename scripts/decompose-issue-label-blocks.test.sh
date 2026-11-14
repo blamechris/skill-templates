@@ -20,9 +20,9 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 TEMPLATE="${DECOMPOSE_TEMPLATE:-$HERE/../generic/decompose-issue.md}"
-EXPECTED_TOTAL=66       # 2 extraction asserts + 4 assertions x 8 cases x 2 shells (exact, not a floor)
+EXPECTED_TOTAL=82       # 2 extraction asserts + 4 assertions x 10 cases x 2 shells (exact, not a floor)
 PER_CASE=4
-NCASES=8
+NCASES=10
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/decompose-label-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
@@ -131,6 +131,13 @@ for sh in "${SHELLS[@]}"; do
   run_case "$sh" 5b-case-differs 5 "" "enhancement,bug" "enhancement,bug" 0 - Enhancement BUG
   run_case "$sh" 5c-missing-dropped 5 "" "enhancement,nope" "enhancement" 0 "'nope' label not found" enhancement bug
   run_case "$sh" 5d-list-fails 5 1 "enhancement,bug" "" 1 "REFUSE: could not list labels" enhancement bug
+  # 5e: a regex metacharacter must match literally (-F: 'v1.0' is not 'v1x0'), a label
+  # beginning with '-' must not be read as a grep option (--), and a trailing comma
+  # must not leave a stray comma in the result.
+  run_case "$sh" 5e-literal-dash-empty 5 "" "v1.0,-weird,enhancement," "-weird,enhancement" 0 "'v1.0' label not found" v1x0 -weird enhancement
+  # 5f: an empty element is skipped silently, not warned about as a missing label ''.
+  # It sits in the middle: command substitution strips a trailing empty element first.
+  run_case "$sh" 5f-empty-element-silent 5 "" "enhancement,,bug" "enhancement,bug" 0 - enhancement bug
   mk61 decomposed ""
   run_case "$sh" 6a-marker-past-position-30 6 "" "" "issue edit 42 --add-label decomposed" 0 - "${many[@]}"
   mk61 Decomposed ""

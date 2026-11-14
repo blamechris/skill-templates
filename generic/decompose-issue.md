@@ -145,7 +145,7 @@ EOF
 done
 ```
 
-Label set for each sub-issue:
+Build each sub-issue's label set and verify it (the next two blocks) **before** running the creation loop above, so `--label` only ever carries labels that exist:
 
 ```bash
 # {{CUSTOMIZE: default sub-issue labels — most repos use "enhancement" + a complexity:* label}}
