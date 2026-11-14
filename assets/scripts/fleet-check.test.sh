@@ -571,6 +571,20 @@ assert "settings that are nothing but a comment still refuse as malformed" 2 "ma
 # in the file the reader opens (column 13 here, past the 10-character comment).
 printf '/* note */ {broken\n' > "$G"
 assert "a parse error after a comment reports its real column" 2 "line 1 column 13" "$M/identical.md"
+printf '// note\n{broken\n' > "$G"
+# A line comment ends at its newline, so only the character offset tells blanking from
+# deletion: 8 blanked characters put the error at char 9, deleted ones at char 2.
+assert "a parse error after a line comment reports its real offset" 2 "line 2 column 2 (char 9)" "$M/identical.md"
+printf '{"context": {"fileName": "GEMINI.md"}} /*/ the slash does not close it\n' > "$G"
+assert "/*/ opens a block comment without closing it" 0 "OK:" "$M/identical.md"
+printf "{'context': {'fileName': 'GEMINI.md'}}\n" > "$G"
+assert "single-quoted settings still refuse as malformed" 2 "malformed JSON" "$M/identical.md"
+# Comments are blanked against JavaScript's whitespace class, not Python's: U+FEFF is JS
+# whitespace, so it stays and JSON.parse rejects it; U+0085 is not, so it is blanked.
+printf '{"context": {"fileName": "GEMINI.md"}} /* \357\273\277 */\n' > "$G"
+assert "a U+FEFF inside a comment refuses, as in Gemini" 2 "malformed JSON" "$M/identical.md"
+printf '{"context": {"fileName": "GEMINI.md"}} /* \302\205 */\n' > "$G"
+assert "a U+0085 inside a comment is blanked and passes, as in Gemini" 0 "OK:" "$M/identical.md"
 rm "$G"
 printf '// system override\n{"context": {"fileName": "AGENTS.md"}}\n' > "$M/system-gemini-commented.json"
 GEMINI_CLI_SYSTEM_SETTINGS_PATH="$M/system-gemini-commented.json" assert "commented Gemini system override still refuses" 2 "context.fileName" "$M/identical.md"

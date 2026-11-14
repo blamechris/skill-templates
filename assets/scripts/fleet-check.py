@@ -176,6 +176,13 @@ def codex_config(path):
         die(f"Codex config {path!r} is malformed TOML ({exc})")
 
 
+# JavaScript's `\s`, which strip-json-comments' `/\S/g` blanks against. Python's `\s` is
+# not the same class: it adds U+0085 and U+001C-U+001F and lacks U+FEFF, and a comment
+# holding one of those would then parse differently here than in Gemini (#409 review).
+_JS_NON_WHITESPACE = re.compile("[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029"
+                                "\u202f\u205f\u3000\ufeff]")
+
+
 def strip_json_comments(text):
     """The text Gemini CLI hands to JSON.parse: comments blanked, strings untouched (#409).
 
@@ -208,12 +215,12 @@ def strip_json_comments(text):
         elif text.startswith("//", i):
             end = text.find("\n", i)
             end = n if end < 0 else end
-            out.append(re.sub(r"\S", " ", text[i:end]))
+            out.append(_JS_NON_WHITESPACE.sub(" ", text[i:end]))
             i = end
         elif text.startswith("/*", i):
             close = text.find("*/", i + 2)
             end = n if close < 0 else close + 2
-            out.append(re.sub(r"\S", " ", text[i:end]))
+            out.append(_JS_NON_WHITESPACE.sub(" ", text[i:end]))
             i = end
         else:
             out.append(c)
