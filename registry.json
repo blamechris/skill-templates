@@ -747,7 +747,7 @@
     {
       "name": "decompose-issue",
       "hash": "699a5ca",
-      "lines": 241,
+      "lines": 256,
       "description": "Break a single GitHub issue that is too large into 2-5 independently implementable sub-issues. This is the **manual triage** counterpart to the auto-decomposition baked into `/autonomous-dev-flow` and `/parallel-dev` — use it when a human reads an issue and decides it needs splitting before any implementation runs.",
       "guards": [
         {

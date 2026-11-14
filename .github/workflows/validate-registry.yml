@@ -543,6 +543,16 @@ jobs:
           command -v zsh >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq zsh; }
           ./scripts/genesis-audit-label-block.test.sh
 
+      - name: decompose-issue label block regression tests (bash + zsh)
+        # Pins the label blocks in generic/decompose-issue.md (#365): section 5 and the
+        # section 6 parent marker list with `--limit 500` (gh returns 30 by default), match
+        # case-insensitively, and a failed listing never reads as "no labels". The blocks
+        # are prose in a template, so nothing else runs them; the test extracts both fresh
+        # and runs them under bash and zsh against a fake gh.
+        run: |
+          command -v zsh >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq zsh; }
+          ./scripts/decompose-issue-label-blocks.test.sh
+
       - name: registry.json is freshly generated
         run: |
           # Subsumes the old "build-index runs cleanly" smoke step: it still runs
