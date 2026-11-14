@@ -2565,6 +2565,45 @@ print('%s %s reads=%d' % (p['source'], p['sd'], len(calls)))" "$TMP")
   && ok "the live path reads the sample file once, so the sample and the anchor agree" \
   || bad "the live path reads the sample file once" "got=$(flat "$got")"
 
+# ------- the DERIVED path reads the file once too (#257) -------
+# The derived path divides a zero-anchored week total (meter_offset) by a cap
+# (resolve_cap -> differential_caps, twice: all and fable). Each used to read the file
+# itself -- four reads per pace() -- so a write between them could give a zero from one
+# version and caps from another. Here the FIRST read is a quiet snapshot and every later
+# read sees a mid-week reset. The readout must equal the one made from the first version
+# alone, and the later version must be shown to change it, or the equality proves nothing.
+got=$(pymod "
+import json
+tmp = pathlib.Path(sys.argv[3])
+up.ROOT = tmp / 'drvroot'; up.ROOT.mkdir(parents=True, exist_ok=True)
+up.HIST = tmp; up.CACHE = tmp / 'drvcache.json'; up.STATE = tmp / 'drvstate.json'
+up.READINGS = tmp / 'no-readings.md'
+open_ms = up.week_bounds(up.week_close(up.datetime.now(up.timezone.utc)))[0] \
+             .astimezone(up.timezone.utc).timestamp() * 1000
+A = []                                                        # what the first read saw
+B = [(open_ms + 3_600_000, 50.0, 10.0), (open_ms + 7_200_000, 2.0, 1.0)]   # a reset, written after
+def run(snaps):
+    calls = []
+    def fake():
+        calls.append(1)
+        return list(snaps.pop(0)) if snaps else list(B)
+    up._plan_raw = fake
+    p = up.pace(prefer='derived')
+    return p, len(calls)
+p1, n1 = run([A])                 # the file then changes under every later reader
+up._plan_raw = lambda: list(A)    # and a run where it never changes at all
+p2 = up.pace(prefer='derived')
+up._plan_raw = lambda: list(B)    # and one that saw the later version throughout
+p3 = up.pace(prefer='derived')
+keys = sorted(set(p2) | set(p3))
+same = all(p1.get(k) == p2.get(k) for k in keys)
+# B must actually move the readout, or 'same' would hold however many reads there were
+moved = any(p2.get(k) != p3.get(k) for k in keys)
+print('%s reads=%d same_as_first=%s later_version_differs=%s' % (p1['source'], n1, same, moved))" "$TMP")
+[ "$got" = "derived reads=1 same_as_first=True later_version_differs=True" ] \
+  && ok "the derived path reads the sample file once, so its zero and its caps come from one version" \
+  || bad "the derived path reads the sample file once" "got=$(flat "$got")"
+
 # ...and the OTHER side of that guard, which nothing pinned: a sample taken shortly AFTER
 # the anchor is a reading OF this meter period and must be accepted, however old it is. The
 # refusal above was the only tested side, so an over-strict guard -- `samp["t"] < anchor_ms

@@ -1112,7 +1112,7 @@ ANCHOR_MIN_SAMPLES = 6   # below this the intercept is noise, not a measurement
 ANCHOR_MIN_SPAN = 10     # percentage points the period must cover, as for MIN_DELTA_PCT
 
 
-def meter_offset(week, force=False):
+def meter_offset(week, force=False, samples=None):
     """Week-anchored spend the meter has ALREADY forgotten, in dollars.
 
     The pace numerator was week-anchored and the cap describes a METER PERIOD. Those are
@@ -1144,10 +1144,15 @@ def meter_offset(week, force=False):
     `zero_ms` is returned so the elapsed fraction is measured over that same window
     rather than against a 7-day denominator the meter is no longer using.
 
+    `samples` is an optional `plan_samples()` snapshot. `pace` passes the one it already
+    read, so the zero found here and the cap `resolve_cap` divides by come from the same
+    version of a file the app rewrites at every /usage poll (#257).
+
     Returns (offset_all, offset_fable, zero_ms, note, exact).
     """
     open_ms = week_bounds(week)[0].timestamp() * 1000
-    samples = [x for x in plan_samples() if x[0] >= open_ms]
+    src = plan_samples() if samples is None else samples
+    samples = [x for x in src if x[0] >= open_ms]
     if not samples:
         return 0.0, 0.0, None, "", True
     segs = _segments(samples)
@@ -1346,7 +1351,7 @@ def reset_between(t0, t1, samples=None):
     return False
 
 
-def differential_caps(rows, unit="$", policies=None):
+def differential_caps(rows, unit="$", policies=None, samples=None):
     """cap = delta-measure / (delta-pct/100), between two readings in one meter week.
 
     THIS IS THE ONLY METHOD THAT SURVIVES AN OUT-OF-BAND QUOTA RESET, and it is the
@@ -1380,7 +1385,9 @@ def differential_caps(rows, unit="$", policies=None):
     """
     ak, fk = next((a, f) for u, a, f, _ in UNITS if u == unit)
     out, notes = {"all": [], "fable": []}, []
-    samples = plan_samples()          # loaded once; [] when the app's history is absent
+    # Loaded once per call, or handed in by a caller that already holds a snapshot (#257);
+    # [] when the app's history is absent.
+    samples = plan_samples() if samples is None else samples
     if not samples and len(rows) > 1:
         notes.append("no meter samples on this machine, so a pair that STRADDLES a reset "
                      "cannot be detected -- only a pair whose percentage went down. Treat "
@@ -1507,7 +1514,7 @@ def _period_regimes(spans, windows=MULTIPLIER_WINDOWS):
     return out
 
 
-def resolve_cap(kind, rows, use_cached=True):
+def resolve_cap(kind, rows, use_cached=True, samples=None):
     """Best available cap, and how much to trust it. For --caps and the derived path only.
 
     Differential first: it is immune to where the meter's zero sits, and after the
@@ -1563,7 +1570,7 @@ def resolve_cap(kind, rows, use_cached=True):
     stale = lambda pols: (_stale_note(kind, "record a fresh reading")
                           if any(p != COST_POLICY for p in pols) else "")
     dpol = {}
-    dcaps, _ = differential_caps(rows, policies=dpol)
+    dcaps, _ = differential_caps(rows, policies=dpol, samples=samples)
     if dcaps[kind]:
         v = sorted(dcaps[kind])
         med = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
@@ -1875,7 +1882,11 @@ def pace(now=None, force=False, prefer="live"):
             p[k] = v
             p[k + "_hi"] = hi[k]
     else:
-        off_all, off_fbl, zero_ms, anchor, anchor_exact = meter_offset(wk, force=force)
+        # One snapshot for the whole derived path, the one `raw` already holds: the zero
+        # below and the caps divided into it must describe the same version of the file
+        # (#257), as the live path's sample and anchor already do (#255).
+        plan = [(t, sd) for t, sd, _ in raw]
+        off_all, off_fbl, zero_ms, anchor, anchor_exact = meter_offset(wk, force=force, samples=plan)
         elapsed = max(0.0, min(1.0, (now_ms / 1000 - _u(open_).timestamp()) / span))
         if zero_ms:
             zero_dt = datetime.fromtimestamp(zero_ms / 1000, PT)
@@ -1885,8 +1896,8 @@ def pace(now=None, force=False, prefer="live"):
                                        / max(1.0, _u(close).timestamp() - z)))
         all_ = max(0.0, tot.get("all", 0.0) - off_all)
         fable = max(0.0, tot.get("fable", 0.0) - off_fbl)
-        cap, basis, calibrated = resolve_cap("all", rows, use_cached=False)
-        fcap, fbasis, fcalibrated = resolve_cap("fable", rows, use_cached=False)
+        cap, basis, calibrated = resolve_cap("all", rows, use_cached=False, samples=plan)
+        fcap, fbasis, fcalibrated = resolve_cap("fable", rows, use_cached=False, samples=plan)
         pct = 100.0 * all_ / cap if cap else 0.0
         # No sample, so there is no sampling gap and no anchor reading: one instant, and
         # `pct_now` comes back equal to `pct`.
