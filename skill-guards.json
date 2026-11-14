@@ -113,19 +113,21 @@
     {
       "label": "unattended-merge-gate",
       "anyOf": [
-        "Unattended Merge Gate",
-        "unattended-merge"
-      ]
+        "[Mm]erg(?:e|es|ing)[^\\n]{0,20}(?:through|via|by way of) the Unattended Merge Gate",
+        "Unattended Merge Gate does not apply",
+        "does not grant unattended merge authority"
+      ],
+      "note": "Vacuity fix (#224, batch 1): was [\"Unattended Merge Gate\", \"unattended-merge\"]. Deleting Critical Rule 5 and Phase 5's merge directive left the guard green on the report template's own cross-reference (\"MANDATORY (Unattended Merge Gate rule 6)\"). Now binds the sentence that states the rule's relation to the gate, in both canonical postures of the ONE rule: GATED merges only through the gate, WITHHELD says the gate does not apply or that unattended merge authority is not granted (the third alternate is the same sentence self-merge-posture binds, deliberately: a withheld copy has no gate wording to anchor on). The `(see `unattended-merge`)` pointer is not an alternate: it is a cross-reference, and a tiered copy keeps it after rewriting the rule. An inverted rule (\"Never merge through the Unattended Merge Gate\") still matches: the known inversion class (#226), not fixed here."
     },
     {
       "label": "merge-report-entry",
       "anyOf": [
-        "Merged by this session",
+        "[Oo]ne entry per (?:verified )?self-merged PR",
         "entry in the final session report",
         "flag each finished PR in the session report",
         "accumulates for `/batch-merge` or user review"
       ],
-      "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs."
+      "note": "Merges must be accounted for in the report. Under the WITHHELD posture (see self-merge-posture) there are no merges and the 'Merged by this session' section is omitted by design, so the last two alternates carry the same obligation for flagged-not-merged PRs. Vacuity fix (#224, batch 1): the first alternate was the `### Merged by this session` heading, which survives deleting the 'One entry per verified self-merged PR — MANDATORY' sentence. It is replaced by that sentence. MarchBorne's customized copy has no sentence stating the obligation at all (Rule 5 delegates to the profile and the report section is bare template), so it now correctly fails here; the heading was the only thing holding it green. An inverted sentence still matches the alternates (inversion class, #226)."
     },
     {
       "label": "no-auto-merge",
@@ -229,15 +231,19 @@
     {
       "label": "sequential-loop",
       "anyOf": [
-        "Sequential Merge Loop",
-        "Sequential only"
-      ]
+        "[Pp]rocess one PR(?:['\u2019]s merge)? at a time",
+        "[Oo]ne (?:PR|merge) at a time",
+        "[Oo]ne at a time",
+        "[Vv]erify dependencies and current state before each merge"
+      ],
+      "note": "Vacuity fix (#224, batch 1): the first alternate was the `### Phase 2: Sequential Merge Loop` heading, which survives deleting both rule sentences (Phase 2's 'process one PR's merge at a time' and Critical Rule 1). The alternates are now the sentence in each generation of the template: 'process one PR's merge at a time', the older 'One at a time' under 'Sequential only', and 'verify dependencies and current state before each merge'. The bare bold label `**Sequential only**` is NOT an alternate: it is left behind when the sentence is deleted."
     },
     {
       "label": "merge-step",
       "anyOf": [
         "gh pr merge"
-      ]
+      ],
+      "note": "Vacuity recorded (#224, batch 1), NOT rebound. Deleting the merge step's prose (the repository-policy check, 'Require `MERGED`', capture the SHA) leaves the guard green on the `gh pr merge` command in the fence and on Critical Rule 3's mention of `gh pr merge --auto`. In 28 of 33 installed copies the merge step has NO prose rule at all (the pre-#305 Step 2d is a bare command plus 'If merge fails, apply the blocker decision tree'), so any prose alternate turns those 28 red on a step they still have. Rebinding waits until the fleet has taken the #305 wording."
     },
     {
       "label": "zero-attribution-rule",
@@ -357,10 +363,10 @@
     {
       "label": "graceful-degradation",
       "anyOf": [
-        "github-only",
-        "no local clone",
-        "[Gg]raceful degradation"
-      ]
+        "(?:[Ee]very|[Ee]ach|[Aa]ny) (?:data )?source is optional",
+        "[Nn]ever (?:fail|abort|error out)[^\\n]{0,40}(?:missing (?:clone|source)|one missing source|source is missing|clone is missing)"
+      ],
+      "note": "Vacuity fix (#224, batch 1): was [\"github-only\", \"no local clone\", \"[Gg]raceful degradation\"]. `github-only` is the MODE assignment in the step 0 code and `no local clone` is the skipped-section output text, so deleting Critical Rule 2 and the step 0 note left all three alternates matching. Now binds the sentence: every source is optional, never fail the run on a missing source/clone."
     },
     {
       "label": "pr-rollup",
@@ -372,10 +378,11 @@
     {
       "label": "read-only",
       "anyOf": [
-        "read-only",
-        "does not merge",
-        "never edit"
-      ]
+        "[Nn]ever (?:edits?|modif(?:y|ies)|changes?|writes? to)[^\\n]{0,15}files[^\\n]{0,80}(?:commits?|merges?)",
+        "[Ii]t does not merge or rebase anything",
+        "it only reports"
+      ],
+      "note": "Vacuity fix (#224, batch 1): was [\"read-only\", \"does not merge\", \"never edit\"]. `read-only` is in the skill's opening description line (which the index also lifts as the registry description) and `never edit` is in the intro's 'It never edits, commits, or merges', so deleting Critical Rule 1 left the guard green. Now binds Critical Rule 1's sentence (never edits files ... commits, or merges; does not merge or rebase anything; only reports). The intro description and the bare words are not alternates."
     },
     {
       "label": "next-step",
@@ -449,16 +456,27 @@
     {
       "label": "mandatory-issues",
       "anyOf": [
-        "FOLLOW-UP ISSUE"
-      ]
+        "[Cc]reate or link a matching (?:GitHub )?issue",
+        "FOLLOW-UP requires[^\\n]{0,40}issue URL",
+        "You MUST create a (?:GitHub )?issue",
+        "[Rr]eply with the (?:created )?issue URL",
+        "ALWAYS create the issue",
+        "[Nn]ever (?:write|say|reply)[^\\n]{0,50}without (?:the|an?) (?:full )?(?:GitHub )?(?:issue )?(?:URL|issue)",
+        "without creating an? (?:GitHub )?issue",
+        "(?:ALWAYS|[Aa]lways) create issues? for (?:deferred|out-of-scope)"
+      ],
+      "note": "Vacuity fix (#224, batch 1): was [\"FOLLOW-UP ISSUE\"], the label of the disposition, which appears in ten lines in seven sections (reply format, example heading, Outcome 3 heading, reply templates, workflow example); the whole 'a deferred finding requires a GitHub issue' rule could be deleted with the label still matching. Now binds the sentence in each generation: 'Create or link a matching GitHub issue', 'FOLLOW-UP requires ... issue URL', 'You MUST create a GitHub issue', 'reply with the issue URL', 'ALWAYS create issues for deferred items', never say 'good idea' without an issue. The `(GitHub issue creation MANDATORY)` heading and the `gh issue create` fence are not alternates. An inverted rule is not matched."
     },
     {
       "label": "commit-links",
       "anyOf": [
-        "commit.*SHA",
-        "COMMIT_SHA",
-        "commit hash"
-      ]
+        "(?:post|send|make) a fix reply without the commit (?:SHA|hash)",
+        "(?<!the )[Rr]eply with (?:the )?commit (?:hash|SHA)",
+        "commit (?:hash|SHA) AND (?:the )?(?:before/after )?code diff",
+        "FIX requires commit (?:hash|SHA)",
+        "[Ff]ix reply (?:MUST|must) include[^\\n]{0,20}commit (?:hash|SHA)"
+      ],
+      "note": "Vacuity fix (#224, batch 1): was [\"commit.*SHA\", \"COMMIT_SHA\", \"commit hash\"]. `COMMIT_SHA` is the reply template's variable, `commit hash` appears in the summary table and report bullets, and `commit.*SHA` matches the step 7 thread-resolution bullet, so deleting every sentence that REQUIRES the commit link left all three matching. Now binds the requirement: NEVER post a fix reply without the commit SHA, 'reply with commit hash + before/after code', 'commit hash AND ... code diff', 'FIX requires commit hash'. The thread-resolution bullet 'the reply with the commit SHA is posted' is excluded by a lookbehind."
     },
     {
       "label": "3-outcomes",
@@ -490,10 +508,12 @@
     {
       "label": "duplicate-check",
       "anyOf": [
-        "[Cc]heck for [Dd]uplicates",
-        "[Ss]earch[^\\n]*duplicat",
-        "duplicate issues"
-      ]
+        "[Aa]lways search before creating",
+        "(?:[Dd]on['\u2019]t|[Dd]o not|[Nn]ever) create duplicate issues",
+        "[Bb]efore creating, scan for existing issues",
+        "[Ss]earch for (?:an )?existing issues? before"
+      ],
+      "note": "Vacuity fix (#224, batch 1): was [\"[Cc]heck for [Dd]uplicates\", \"[Ss]earch[^\\n]*duplicat\", \"duplicate issues\"]. The first is the step 2 heading and the second the `# Search open issues for potential duplicates` comment inside the search fence, so deleting step 2's sentence and Critical Rule 2 left both green. Now binds the sentence: search before creating, scan for existing issues, never create duplicate issues."
     },
     {
       "label": "acceptance-criteria-required",
@@ -634,17 +654,21 @@
       "label": "confirmation-gate",
       "anyOf": [
         "[Cc]onfirmation gate is mandatory",
-        "[Nn]ever create sub-issues without explicit user approval",
-        "pauses for user confirmation"
-      ]
+        "[Nn]ever create sub-issues without (?:explicit )?(?:user )?(?:approval|confirmation)",
+        "[Tt]his is the only confirmation point",
+        "[Ww]ait for the user"
+      ],
+      "note": "Vacuity fix (#224, batch 1): the third alternate, 'pauses for user confirmation', matched only the opening overview line, so deleting Critical Rule 1 and step 4's 'This is the only confirmation point. Wait for the user.' left the guard green. It is replaced by those two sentences."
     },
     {
       "label": "prior-decomposition-guard",
       "anyOf": [
-        "re-decompose",
-        "existing \"Decomposed into\" comment",
-        "prior \"Decomposed into\" comment"
-      ]
+        "[Dd]on['\u2019]t re-decompose",
+        "do not create new sub-issues",
+        "[Rr]eport the existing (?:sub-issues|breakdown)",
+        "[Oo]nly re-decompose on explicit user request"
+      ],
+      "note": "Vacuity fix (#224, batch 1): the second alternate, 'existing \"Decomposed into\" comment', matched step 2's scan instruction ('Scan the parent's comments for an existing ...'), which is the detection, not the rule; deleting 'do not create new sub-issues' / 'exit unless the user says decompose again' and Critical Rule 3 left it green. Now binds the rule: do not re-decompose, report the existing breakdown, do not create new sub-issues."
     },
     {
       "label": "parent-decomposed-comment",
@@ -657,9 +681,12 @@
     {
       "label": "parent-stays-open",
       "anyOf": [
-        "[Dd]o (NOT|not) close the parent",
-        "[Pp]arent stays open"
-      ]
+        "[Dd]o (?:NOT|not) close the parent",
+        "[Nn]ever close the parent",
+        "[Kk]eep the parent (?:issue )?open",
+        "[Ll]eave the parent (?:issue )?open"
+      ],
+      "note": "Vacuity fix (#224, batch 1): the second alternate, '[Pp]arent stays open', matched 'Parent stays open until all sub-issues merge.' inside the comment heredoc posted on the parent, which is output text; deleting 'Do NOT close the parent' and Critical Rule 2 left it green. It is replaced by rewordings of the prohibition (do not / never close the parent, keep/leave the parent open)."
     },
     {
       "label": "zero-attribution-rule",
@@ -773,9 +800,10 @@
       "label": "one-retrigger-attempt",
       "anyOf": [
         "[Oo]ne retrigger attempt",
-        "retrigger a second time",
-        "[Ss]econd retrigger"
-      ]
+        "(?:[Dd]o NOT|[Dd]o not|[Nn]ever) retrigger[^\\n]{0,20}second time",
+        "(?:re-?run|new run|retriggered run) also fails[^\\n]{0,30}escalate"
+      ],
+      "note": "Vacuity fix (#224, batch 1): the third alternate, '[Ss]econd retrigger', matched the decision-tree line '└─ Fails again → ESCALATE (no second retrigger)', which is a diagram of the rule, so deleting step 3's rule sentences and Critical Rule 2 left it green. Now binds the sentences: 'One retrigger attempt', 'Do NOT retrigger a second time', 'if the re-run/new run also fails, escalate'."
     },
     {
       "label": "escalate-takes-no-action",
@@ -790,10 +818,11 @@
       "anyOf": [
         "SHA awareness",
         "run matches HEAD",
-        "[Ss]tale runs on old SHAs",
-        "(?:run|results?)[^\\n]{0,40}(?:current )?HEAD",
+        "[Ss]tale runs? (?:on|for|of) (?:old|previous|earlier|prior)",
+        "(?:[Vv]erify|[Cc]onfirm|[Cc]heck)[^\\n]{0,30}(?:run|results?)[^\\n]{0,30}(?:matches|is for|corresponds to|belongs to)[^\\n]{0,20}(?:HEAD|current)",
         "old(?:er)? (?:SHA|commit)"
-      ]
+      ],
+      "note": "Vacuity fix (#224, batch 1): the fourth alternate, '(?:run|results?)[^\\n]{0,40}(?:current )?HEAD', matched the step 1 'most recent run matching HEAD_SHA' enactment line, the ALL_PASS and STALE classification table rows and the decision-tree line, so the guard was held green by the very mechanism the rule describes. It is replaced by a verb-led rewording of the rule sentence (verify/confirm/check the run matches/is for HEAD)."
     },
     {
       "label": "classification-order",
