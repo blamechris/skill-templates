@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "8aedf69",
+  "generatedFromCommit": "ff2aa86",
   "skillCount": 45,
   "skills": [
     {
@@ -303,7 +303,7 @@
     },
     {
       "name": "bug-hunt",
-      "hash": "683e950",
+      "hash": "ff2aa86",
       "lines": 337,
       "description": "Launch a swarm of bug-hunting agents against a target file, module, or topic. Output is a **triaged candidate-issue list** ready to feed into `/create-issue` — not ratings, not architectural critique. The job is: find bugs that would make good GitHub issues.",
       "guards": [
@@ -746,7 +746,7 @@
     },
     {
       "name": "decompose-issue",
-      "hash": "683e950",
+      "hash": "ff2aa86",
       "lines": 256,
       "description": "Break a single GitHub issue that is too large into 2-5 independently implementable sub-issues. This is the **manual triage** counterpart to the auto-decomposition baked into `/autonomous-dev-flow` and `/parallel-dev` — use it when a human reads an issue and decides it needs splitting before any implementation runs.",
       "guards": [
@@ -2703,7 +2703,7 @@
     },
     {
       "name": "skill-profile",
-      "hash": "683e950",
+      "hash": "ff2aa86",
       "lines": 145,
       "description": "Generate or refresh this repo's `.claude/skill-profile.md` — the self-description the `/skill` client reads to tailor generic skill templates for *this* repo at install time. Run it once when a repo starts using skills (and again after conventions change) so every `skill add` / `skill update` customizes sharply and deterministically instead of re-inferring the repo from scratch each time.",
       "guards": [
