@@ -25,11 +25,10 @@
     {
       "label": "issue-reconciliation",
       "anyOf": [
-        "from-review.*issue",
-        "Reconcile",
-        "reconcile",
-        "cross-reference"
-      ]
+        "(?:check|verify|determine|see|look) (?:whether|if) any [^\\n]{0,100}issues?[^\\n]{0,100}(?:addressed|resolved|fixed)",
+        "issues? (?:that )?(?:were|was|are|is|have been|has been) (?:already )?(?:addressed|resolved|fixed)[^\\n]{0,40}(?:this|the) (?:PR|pull request|work)"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"from-review.*issue\", \"Reconcile\", \"reconcile\", \"cross-reference\"]. Deleting the rule sentence(s) left the guard green on the `gh issue list --label from-review` code comment, the step 6 heading and the report column guide. Now binds the step 6 sentence (check whether any issue was already addressed by this PR). The heading, the code block and the Issues column guide are not alternates."
     },
     {
       "label": "structured-review-result",
@@ -224,9 +223,11 @@
     {
       "label": "update-branch-strict",
       "anyOf": [
-        "update-branch",
-        "not up to date"
-      ]
+        "[Ii]f (?:main|the base(?: branch)?) has (?:advanced|moved|changed)[^\\n]{0,120}(?:update|up[- ]to[- ]date|require)",
+        "requires? (?:each|every) (?:PR|branch) to be up[- ]to[- ]date",
+        "[Bb]ranch protection[^\\n]{0,40}(?:strict|up[- ]to[- ]date)[^\\n]{0,60}(?:update|requires?|must)"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"update-branch\", \"not up to date\"]. Deleting the rule sentence(s) left the guard green on the `gh api .../update-branch` command in the Step 2a fence. Now binds the Step 2a sentence 'If main has advanced, determine whether protection or the PR's changes require an update', plus the older installed rule that branch protection requires each PR to be up-to-date. The command and the bare `update-branch` word are not alternates, and neither is the 'not up to date' status-table row. Fleet note: the older 'not up to date' row alternate is dropped; every installed copy that passed it also states the older rule or the template sentence."
     },
     {
       "label": "sequential-loop",
@@ -371,9 +372,10 @@
     {
       "label": "pr-rollup",
       "anyOf": [
-        "statusCheckRollup",
-        "mergeStateStatus"
-      ]
+        "[Pp]ull the merge(?:/| and )CI rollup",
+        "[Ff]lag each (?:open )?PR (?:using|by|from) `?mergeStateStatus`?"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"statusCheckRollup\", \"mergeStateStatus\"]. Deleting the rule sentence(s) left the guard green on the `gh pr view --json mergeStateStatus,statusCheckRollup` fence and the signal table. Now binds the two prose sentences: pull the merge/CI rollup for each open PR, and flag each PR using `mergeStateStatus`. The code fence, the jq filter and the signal table are not alternates. Code-bound alternates carried from #490's panel."
     },
     {
       "label": "read-only",
@@ -489,11 +491,10 @@
     {
       "label": "issue-reconciliation",
       "anyOf": [
-        "from-review.*issue",
-        "Cross-Reference",
-        "cross-reference",
-        "Reconcile"
-      ]
+        "(?:check|verify|determine|see|look) (?:whether|if) any [^\\n]{0,100}issues?[^\\n]{0,100}(?:addressed|resolved|fixed)",
+        "issues? (?:that )?(?:were|was|are|is|have been|has been) (?:already )?(?:addressed|resolved|fixed)[^\\n]{0,40}(?:this|the) (?:PR|pull request|work)"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"from-review.*issue\", \"Cross-Reference\", \"cross-reference\", \"Reconcile\"]. Deleting the rule sentence(s) left the guard green on the `gh issue list` code comment, the step 5 heading and the report column guide. Now binds the step 5 sentence (check whether any open from-review issue was resolved by this PR). The heading, the code block and the Issues column guide are not alternates."
     },
     {
       "label": "zero-attribution-rule",
@@ -588,9 +589,10 @@
       "label": "ladder-is-ordered",
       "anyOf": [
         "[Rr]un the rungs \\*\\*in order\\*\\*",
-        "rungs?\\b[^\\n]*\\bin order\\b[^\\n]*stop at the first",
-        "work the rungs in sequence"
-      ]
+        "rungs?\\b[^\\n]*\\bin order\\b[^\\n]*stop at the first one that resolves",
+        "[Ww]ork the rungs in sequence"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"[Rr]un the rungs \\\\*\\\\*in order\\\\*\\\\*\", \"rungs?\\\\b[^\\\\n]*\\\\bin order\\\\b[^\\\\n]*stop at the first\", \"work the rungs in sequence\"]. Deleting the rule sentence(s) left the guard green on the 'Is this actually blocked?' checklist intro (`Read them in order and stop at the first`), a different rule about a different list. Now binds the ladder sentence only: run the rungs in order and stop at the first one that resolves the question. The second alternate now requires `first one that resolves`, which the checklist intro does not carry."
     },
     {
       "label": "rung1-search-before-escalating",
@@ -673,10 +675,11 @@
     {
       "label": "parent-decomposed-comment",
       "anyOf": [
-        "gh issue comment \"\\$PARENT_NUM\"",
-        "Decomposed into \\$\\{SUB_LIST\\}",
-        "comment on the parent with the canonical"
-      ]
+        "comment on the parent with the canonical",
+        "[Tt]he parent gets a single \\\"Decomposed into",
+        "comment on the parent[^\\n]{0,60}\\\"Decomposed into\\\""
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"gh issue comment \\\"\\\\$PARENT_NUM\\\"\", \"Decomposed into \\\\$\\\\{SUB_LIST\\\\}\", \"comment on the parent with the canonical\"]. Deleting the rule sentence(s) left the guard green on the `gh issue comment` command and the `Decomposed into ${SUB_LIST}` body line in step 6's fence. Now binds the step 6 sentence (comment on the parent with the canonical 'Decomposed into' line) and Critical Rule 5. The command and the body line are not alternates. Code-bound alternates carried from #490's panel."
     },
     {
       "label": "parent-stays-open",
@@ -892,24 +895,26 @@
     {
       "label": "agent-review-phase",
       "anyOf": [
-        "Phase 1.*Agent Review",
-        "agent-review"
-      ]
+        "(?:[Rr]un|[Ii]nvoke|[Cc]all|[Ss]tart with) (?:the )?`?/agent-review`?",
+        "(?:[Rr]un|[Ii]nvoke|[Cc]all) (?:the )?agent-review (?:skill|pass|step)"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"Phase 1.*Agent Review\", \"agent-review\"]. Deleting the rule sentence(s) left the guard green on the Phase 1 heading and the intro line. Now binds the Phase 1 sentence that runs the agent-review skill. The heading, the intro and the bare name `agent-review` (12 other lines) are not alternates."
     },
     {
       "label": "check-pr-phase",
       "anyOf": [
-        "Phase 2.*Check-PR",
-        "check-pr"
-      ]
+        "(?:[Rr]un|[Ii]nvoke|[Cc]all|[Ss]tart) (?:the )?`?/check-pr`?",
+        "(?:[Rr]un|[Ii]nvoke|[Cc]all) (?:the )?check-pr (?:skill|pass|step)"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"Phase 2.*Check-PR\", \"check-pr\"]. Deleting the rule sentence(s) left the guard green on the Phase 2 heading and the intro line. Now binds the Phase 2 sentence that runs the check-pr skill. The heading, the intro and the bare name `check-pr` are not alternates."
     },
     {
       "label": "combined-summary",
       "anyOf": [
-        "Combined Summary",
         "combined.*table",
-        "summary table"
-      ]
+        "(?:single|one|unified|merged) (?:combined |merged |unified )?(?:summary )?table[^\\n]{0,40}(?:both|all) phases"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"Combined Summary\", \"combined.*table\", \"summary table\"]. Deleting the rule sentence(s) left the guard green on the Phase 3 heading and the Customization Points line `the summary table format`. Now binds the Phase 3 sentence that outputs a single combined table for both phases. The heading and the bare `summary table` (which also sits in Customization Points) are not alternates."
     },
     {
       "label": "sequential-execution",
@@ -957,10 +962,11 @@
     {
       "label": "gate-check",
       "anyOf": [
-        "Gate Check",
-        "gate check",
-        "Nothing to persist"
-      ]
+        "[Bb]efore (?:doing )?any extraction work, answer one question",
+        "Did this session produce knowledge that would",
+        "If the session was routine[^\\n]{0,200}(?:one line|stop)"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"Gate Check\", \"gate check\", \"Nothing to persist\"]. Deleting the rule sentence(s) left the guard green on the step 0 heading, `the gate check passes` in step 1, and the quoted/echoed `Nothing to persist` output lines. Now binds the gate sentences: answer one question before any extraction work, the behavioural-change question, and respond with one line if the session was routine. The heading and the output line are not alternates."
     },
     {
       "label": "behavioral-test",
@@ -980,9 +986,12 @@
     {
       "label": "approval-gate",
       "anyOf": [
-        "CLAUDE.md.*approval",
-        "do NOT write without approval"
-      ]
+        "CLAUDE\\.md[^\\n]{0,120}(?:never (?:applied|written|edited)|must not be (?:applied|written)|not (?:applied|written))[^\\n]{0,40}(?:approv|consent|sign-off)",
+        "[Nn]ever auto-apply to governance files",
+        "[Dd]o NOT write any files for CLAUDE\\.md",
+        "CLAUDE\\.md[^\\n]{0,60}(?:changes )?require explicit user approval"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"CLAUDE.md.*approval\", \"do NOT write without approval\"]. Deleting the rule sentence(s) left the guard green on the step 3 routing diagram (`do NOT write without approval`) and the report examples (`awaiting approval`), which are output templates. Now binds the three sentences that state the constraint: the Critical constraint paragraph, step 4's 'Do NOT write any files for CLAUDE.md or rules until the user approves', and Critical Rule 2. The routing diagram and report examples are not alternates."
     },
     {
       "label": "entry-cap",
@@ -1165,8 +1174,12 @@
     {
       "label": "mergestate-diagnosis",
       "anyOf": [
-        "mergeStateStatus"
-      ]
+        "[Cc]heck current-head gates\\*{0,2}[^\\n]{0,10}read",
+        "read `?headRefOid`?[^\\n]{0,80}mergeStateStatus",
+        "[Cc]heck (?:the )?merge[- ]state[^\\n]{0,30}\\bBLOCKED\\b",
+        "(?:[Rr]ead|[Cc]heck|[Rr]e-?check|[Rr]e-?read)[^\\n]{0,40}`?mergeStateStatus`?[^\\n]{0,60}(?:current|latest|final) head"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"mergeStateStatus\"]. Deleting the rule sentence(s) left the guard green on the `gh pr list` and `gh pr view --json` commands in Phase 1 (bare `mergeStateStatus` is a field name). Now binds the Phase 2 step 1 sentence (read the head and `mergeStateStatus`), and the older installed wording `Check merge state — if BLOCKED` (23 copies). The bare field name is not an alternate."
     },
     {
       "label": "zero-attribution-rule",
@@ -1355,18 +1368,20 @@
     {
       "label": "reload-contract",
       "anyOf": [
-        "[Rr]eload contract",
-        "after every compaction",
-        "Reload by invocation"
-      ]
+        "[Rr]eload by invocation",
+        "[Aa]fter (?:any|every|each) compaction[,:] (?:re-?invoke|re-?run|run) \\*{0,2}`?/prime-directive",
+        "[Rr]e-?read the north-star file[^\\n]{0,120}resume"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"[Rr]eload contract\", \"after every compaction\", \"Reload by invocation\"]. Deleting the rule sentence(s) left the guard green on the `## Reliability — the reload contract` heading and the intro/checkpoint lines that say 'after every compaction'. Now binds reload rule 1 (reload by invocation) and the sentence that re-invokes `/prime-directive` after a compaction, plus the older north-star wording `Re-read the north-star file ... resume` (twitch-status-updater's pre-registry copy). The heading and the bare phrase are not alternates."
     },
     {
       "label": "self-contained",
       "anyOf": [
-        "self-contained",
-        "this file alone",
+        "[Kk]eep (?:this|the) (?:file|directive|skill)[^\\n]{0,15}self-contained",
+        "(?:[Rr]e-?read(?:ing)?|[Rr]eload(?:ing)?) \\*{0,2}(?:this|the) (?:file|directive)\\*{0,2}[^\\n]{0,12} alone",
         "constitution stands alone"
-      ]
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"self-contained\", \"this file alone\", \"constitution stands alone\"]. Deleting the rule sentence(s) left the guard green on the intro `self-contained artifact` and the Per-issue loop heading `(self-contained — ...)`. Now binds reload rule 3 (keep this file self-contained / re-reading this file alone / the constitution stands alone). The bare word is not an alternate."
     },
     {
       "label": "idempotent-reentry",
@@ -1378,26 +1393,31 @@
     {
       "label": "mission-convergence",
       "anyOf": [
-        "[Cc]onvergence",
-        "no stop condition",
-        "converged backlog"
-      ]
+        "\\*\\*Converg(?:e|ence):?\\*\\*",
+        "[Zz]ero (?:new )?completions[^\\n]{0,60}reassess",
+        "convergence when everything is resolved"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"[Cc]onvergence\", \"no stop condition\", \"converged backlog\"]. Deleting the rule sentence(s) left the guard green on `convergence` in the STATE header paragraph and in rule 3's description of what must be re-established. Now binds the Waves `Converge:` rule (zero completions triggers reassessment) and the Mission clause 'convergence when everything is resolved'. The bare word is not an alternate."
     },
     {
       "label": "per-issue-loop",
       "anyOf": [
-        "[Pp]er-issue loop",
         "RED .* GREEN",
-        "TDD"
-      ]
+        "\\bTDD\\b",
+        "[Pp]lan and delegate implementation"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"[Pp]er-issue loop\", \"RED .* GREEN\", \"TDD\"]. Deleting the rule sentence(s) left the guard green on the intro line and rule 3, which mention the per-issue loop, and the loop heading. Now binds the step 4 TDD sentence (RED, GREEN, REFACTOR). The loop is a numbered list with no single rule sentence; the TDD step is the part a customization drops. The bare phrase is not an alternate. Judgement call: the guard now binds step 4 only."
     },
     {
       "label": "merge-gate",
       "anyOf": [
-        "/full-review",
-        "Merge gate",
-        "ALL .*threads resolved"
-      ]
+        "[Mm]erge \\*\\*only\\*\\* after",
+        "(?:ALL|[Aa]ll|[Ee]very) (?:CI|checks?)[^\\n]{0,30}(?:green|passing)[^\\n]{0,20}final (?:commit|head)",
+        "ALL .*threads resolved",
+        "does not grant unattended merge authority",
+        "no self-merge, ever"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"/full-review\", \"Merge gate\", \"ALL .*threads resolved\"]. Deleting the rule sentence(s) left the guard green on `/full-review` in reload rule 3 and per-issue step 6, a different rule (mandatory review). Now binds the step 8 and Hard guardrails sentences (merge only after, ALL CI green on the final commit, ALL threads resolved), plus the withheld-posture wording installed copies carry (`does not grant unattended merge authority`, `no self-merge, ever`). The bare `/full-review` is not an alternate."
     },
     {
       "label": "no-auto-merge",
@@ -1427,16 +1447,18 @@
         "fake-merge",
         "fake completion",
         "faked completion",
-        "documented-blocked"
-      ]
+        "(?:[Nn]ever|[Dd]o not|[Dd]on't) (?:mark|record|report|declare|call)[^\\n]{0,40}(?:blocked|unmerged)[^\\n]{0,30}(?:as )?(?:done|complete|merged)"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"fake-merge\", \"fake completion\", \"faked completion\", \"documented-blocked\"]. Deleting the rule sentence(s) left the guard green on `documented-blocked` in the Mission convergence clause and the Replenish escalation ladder. Now binds the Mission sentence 'Never fake-merge a blocked issue as done' and rewordings of it. `documented-blocked` is not an alternate."
     },
     {
       "label": "state-header",
       "anyOf": [
-        "STATE header",
-        "only mandatory post-compaction read",
+        "maintain a rolling \\*{0,2}STATE header",
+        "[Tt]he \\*{0,2}STATE header\\*{0,2} is the only mandatory (?:post-compaction )?read",
         "only mandatory read"
-      ]
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"STATE header\", \"only mandatory post-compaction read\", \"only mandatory read\"]. Deleting the rule sentence(s) left the guard green on `STATE header` on eight lines (reload rule 2, checkpoint bullets, State section). Now binds the rule sentences: maintain a rolling STATE header, and 'the only mandatory post-compaction read'. The bare `STATE header` is not an alternate. Panel fix (#494): the second alternate was 'only mandatory post-compaction read', which also matched the line-111 Session-log bullet's cross-reference '(Reliability rule 2)', so deleting the rule sentence left the guard green. It now requires the rule sentence's own 'The STATE header is the only mandatory ... read'."
     },
     {
       "label": "session-boundaries",
@@ -1449,10 +1471,12 @@
     {
       "label": "cost-circuit-breaker",
       "anyOf": [
-        "circuit breaker",
+        "[Pp]reserve cost and attempt circuit breakers?",
+        "[Aa]t (?:each|every) wave boundary, (?:compare|check)[^\\n]{0,40}cost",
         "[Oo]ver budget",
         "stop and notify"
-      ]
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"circuit breaker\", \"[Oo]ver budget\", \"stop and notify\"]. Deleting the rule sentence(s) left the guard green on the Customization Points bullet `Cost source + per-session budget ... the circuit breaker enforces`. Now binds session boundaries rule 3 (preserve cost and attempt circuit breakers, compare measured cost at each wave boundary, stop and notify), plus the older installed wording `At each wave boundary, check the session's cost`. The bare `circuit breaker` is not an alternate."
     },
     {
       "label": "explicit-path-staging",
@@ -1754,11 +1778,12 @@
       "label": "descriptive-not-evaluative",
       "anyOf": [
         "descriptive, not evaluative",
-        "not a critique",
         "[Dd]o NOT rate, grade",
         "[Nn]o ratings",
-        "recon, not audit"
-      ]
+        "recon, not audit",
+        "(?:[Dd]o not|[Dd]on't|[Nn]ever|DO NOT) (?:rate|grade|score|judge)\\b"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"descriptive, not evaluative\", \"not a critique\", \"[Dd]o NOT rate, grade\", \"[Nn]o ratings\", \"recon, not audit\"]. Deleting the rule sentence(s) left the guard green on the intro line (`not a critique`). Now binds the two rule lines (Rules and Scout Behavior Rules). The intro line is not an alternate."
     },
     {
       "label": "cite-file-line",
@@ -1929,17 +1954,20 @@
       "label": "end-checklist-order",
       "anyOf": [
         "[Ss]kip a step only by saying so",
-        "Run in order",
-        "checklist"
-      ]
+        "[Rr]un in order",
+        "[Ss]kip (?:a|any) step only (?:by|with|if)"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"[Ss]kip a step only by saying so\", \"Run in order\", \"checklist\"]. Deleting the rule sentence(s) left the guard green on the bare word `checklist` on six lines (heading, intro, step 2 prose). Now binds the sentence 'Run in order; skip a step only by saying so with a reason'. The bare word is not an alternate."
     },
     {
       "label": "careful-cleanup",
       "anyOf": [
         "leave other sessions' worktrees alone",
-        "prune branches only after verifying",
-        "MERGED"
-      ]
+        "(?:[Pp]rune|[Dd]elete|[Rr]emove) (?:local )?branches only after (?:verif|confirm|check)",
+        "(?:[Dd]o not|[Dd]on't|[Nn]ever) (?:touch|remove|delete) other sessions' worktrees",
+        "nothing until ownership and recovery are verified"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"leave other sessions' worktrees alone\", \"prune branches only after verifying\", \"MERGED\"]. Deleting the rule sentence(s) left the guard green on `MERGED` on the Resume verify step and the Record-delivery step. Now binds the step 6 sentences (leave other sessions' worktrees alone; prune branches only after verifying), plus the preservation wording an installed copy uses (`nothing until ownership and recovery are verified`). The bare `MERGED` is not an alternate."
     },
     {
       "label": "explicit-path-staging",
@@ -2024,36 +2052,40 @@
     {
       "label": "multi-target-compile",
       "anyOf": [
-        "compile-skill-targets\\.mjs",
-        "Compile to native targets",
-        "custom-command format"
-      ]
+        "[Ee]nsure the compiler exists in (?:this|the) repo",
+        "treat that as a hard gate"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"compile-skill-targets\\\\.mjs\", \"Compile to native targets\", \"custom-command format\"]. Deleting the rule sentence(s) left the guard green on `compile-skill-targets.mjs` on ten lines (Targets definition, Notes, Customization Points) and the Targets definition's `custom-command format`. Now binds the step 7 sentences: ensure the compiler exists in this repo, treat an emit failure as a hard gate, and the step lead `Compile to native targets`. The script's file name and `custom-command format` are not alternates. Panel fix (#494): dropped the 'Compile to native targets' alternate, which matched only step 7's bold label and survived deleting the rule sentences."
     },
     {
       "label": "targets-concept",
       "anyOf": [
-        "targets:.*line",
         "provider-NEUTRAL source",
-        "model-agnostic"
-      ]
+        "model-agnostic",
+        "[Pp]rovider-[Nn][Ee][Uu][Tt][Rr][Aa][Ll] source"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"targets:.*line\", \"provider-NEUTRAL source\", \"model-agnostic\"]. Deleting the rule sentence(s) left the guard green on `targets:` line mentions in step 7 and Customization Points. Now binds the Targets concept bullet (provider-NEUTRAL source, model-agnostic). The `targets:` line phrase is not an alternate."
     },
     {
       "label": "remove-cleanup",
       "anyOf": [
         "exactly the native artifacts",
-        "\\.gemini/commands/<name>\\.toml"
-      ]
+        "never probe `?~/\\.pi`?",
+        "(?:[Rr]emoves?|[Dd]eletes?) only the native artifacts for (?:those|the) targets"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"exactly the native artifacts\", \"\\\\.gemini/commands/<name>\\\\.toml\"]. Deleting the rule sentence(s) left the guard green on the Targets concept bullet, which lists `.gemini/commands/<name>.toml`. Now binds the `skill remove` sentences (exactly the native artifacts for the lock entry's targets; never probe `~/.pi` on a guess). The bare path is not an alternate."
     }
   ],
   "skill-profile": [
     {
       "label": "real-values-never-invent",
       "anyOf": [
-        "never invent",
+        "real values,? never invent",
         "[Dd]iscover, don't assume",
         "rather than fabricate",
         "[Uu]se real values"
-      ]
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"never invent\", \"[Dd]iscover, don't assume\", \"rather than fabricate\", \"[Uu]se real values\"]. Deleting the rule sentence(s) left the guard green on the Labels bullet in step 2 (`never invent`). Now binds rule 1 (use real values, never invent) and step 2's 'Discover, don't assume'. The bare `never invent`, which the Labels bullet also carries, is not an alternate."
     },
     {
       "label": "no-secrets-in-profile",
@@ -2220,8 +2252,9 @@
     {
       "label": "master-assessment",
       "anyOf": [
-        "master-assessment"
-      ]
+        "(?:[Cc]reate|[Ww]rite|[Pp]roduce)[^\\n]{0,40}master[- ]assessment[^\\n]{0,60}synthesi[sz]e"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"master-assessment\"]. Deleting the rule sentence(s) left the guard green on the output-directory tree (`00-master-assessment.md <- You write this`) and the `git add` example. Now binds step 6's sentence (create the master assessment that synthesizes all agent findings). The file name alone is not an alternate."
     },
     {
       "label": "file-line-refs",
@@ -2276,18 +2309,18 @@
     {
       "label": "wave-model",
       "anyOf": [
-        "Wave Model",
-        "multi-wave",
-        "wave.*retry"
-      ]
+        "(?:[Ee]ach|[Ee]very) wave (?:runs|executes|repeats|goes through) the (?:full|whole|complete) Phase 1[-–]6 cycle"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"Wave Model\", \"multi-wave\", \"wave.*retry\"]. Deleting the rule sentence(s) left the guard green on the `Wave Model Overview` heading, the intro's `multi-wave retry` and the Arguments bullet `maximum retry waves`. Now binds the sentence 'Each wave runs the full Phase 1-6 cycle'. The heading, the intro and the wave/retry mentions are not alternates."
     },
     {
       "label": "convergence-detection",
       "anyOf": [
-        "Convergence",
-        "convergence.*check",
-        "zero.*completions"
-      ]
+        "[Zz]ero (?:new )?completions[^\\n]{0,60}reassess",
+        "[Cc]onverge, don't loop forever",
+        "check for convergence BEFORE entering the next wave"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"Convergence\", \"convergence.*check\", \"zero.*completions\"]. Deleting the rule sentence(s) left the guard green on the intro line, the wave diagram, the Phase 4 heading, the report template and the checkpoint bullet. Now binds the Phase 4 sentences (check for convergence before entering the next wave; zero new completions means reassess) and Critical Rule 8. The old `zero.*completions` alternate matched only the report template, never the rule. The bare word, the diagram and the template are not alternates."
     },
     {
       "label": "morning-summary",
@@ -2311,10 +2344,10 @@
     {
       "label": "queue-replenishment",
       "anyOf": [
-        "Replenish",
-        "replenish.*queue",
-        "Queue Replenishment"
-      ]
+        "[Rr]efresh the queue before starting the next wave",
+        "(?:[Rr]efresh|[Rr]eplenish|[Rr]ebuild|[Uu]pdate) the (?:work |issue )?queue (?:between|after|before)[^\\n]{0,30}wave"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"Replenish\", \"replenish.*queue\", \"Queue Replenishment\"]. Deleting the rule sentence(s) left the guard green on the Phase 2 heading and the wave diagram (`replenish queue`). Now binds the Phase 2 sentence 'refresh the queue before starting the next wave'. The heading and the diagram are not alternates."
     },
     {
       "label": "merge-step-routing",
@@ -2381,10 +2414,11 @@
     {
       "label": "cost-circuit-breaker",
       "anyOf": [
-        "circuit breaker",
         "[Oo]ver budget",
-        "stop and notify"
-      ]
+        "stop and notify",
+        "[Cc]ompare measured cost with the configured limit"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"circuit breaker\", \"[Oo]ver budget\", \"stop and notify\"]. Deleting the rule sentence(s) left the guard green on the Customization Points bullet `Cost source + per-session budget ... circuit breaker enforces`. Now binds the Session Boundaries sentence (Per-wave cost circuit breaker, compare measured cost with the configured limit, over budget, stop and notify). The bare `circuit breaker` is not an alternate. Panel fix (#494): dropped the '[Pp]er-wave cost circuit breaker' alternate, which matched the bullet's bold label and survived deleting the rule sentences."
     },
     {
       "label": "explicit-path-staging",
@@ -2632,32 +2666,37 @@
     {
       "label": "full-review-gate",
       "anyOf": [
-        "full-review.*clean",
-        "/full-review"
-      ]
+        "/full-review`?[^\\n]{0,30}(?:clean|CLEAN) verdict",
+        "skipped or partial review fails the gate"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"full-review.*clean\", \"/full-review\"]. Deleting the rule sentence(s) left the guard green on the CLAUDE.md snippet inside the markdown fence (`Once /full-review is clean`), which is an output template. Now binds gate condition 1 (`/full-review` completed with a clean verdict, a skipped or partial review fails the gate). The snippet is not an alternate."
     },
     {
       "label": "no-auto-merge",
       "anyOf": [
-        "gh pr merge --auto",
-        "auto-merge"
-      ]
+        "\\b(?:NEVER|[Nn]ever|[Dd]o not|[Dd]on't)\\b[^\\n]{0,20}`gh pr merge --auto`",
+        "\\b[Nn]ever\\b[^\\n]{0,40}auto-merge",
+        "merge (?:is|must be|should be) synchronous"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"gh pr merge --auto\", \"auto-merge\"]. Deleting the rule sentence(s) left the guard green on the CLAUDE.md snippet in the markdown fence (`gh pr merge --auto`). Now binds gate condition 5 (NEVER `gh pr merge --auto`, never GitHub auto-merge, the merge is synchronous). The snippet is not an alternate."
     },
     {
       "label": "threads-resolved",
       "anyOf": [
-        "review threads.*resolved",
-        "ZERO unresolved",
+        "(?:ZERO|[Zz]ero|[Nn]o) unresolved (?:review )?threads",
+        "every thread has a supported fix",
         "threads are resolved"
-      ]
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"review threads.*resolved\", \"ZERO unresolved\", \"threads are resolved\"]. Deleting the rule sentence(s) left the guard green on the CLAUDE.md snippet in the markdown fence (`ALL review threads have supported resolved`). Now binds gate condition 3 (ZERO unresolved review threads, every thread has a supported fix). The snippet is not an alternate."
     },
     {
       "label": "no-overrides",
       "anyOf": [
-        "--admin",
-        "never bypass",
+        "never `--admin`, never bypass",
+        "never bypass rules",
         "without overrides"
-      ]
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"--admin\", \"never bypass\", \"without overrides\"]. Deleting the rule sentence(s) left the guard green on the CLAUDE.md snippet in the markdown fence (`--admin or protection overrides`). Now binds gate condition 4 and the Merge command sentence (never `--admin`, never bypass, without overrides). The bare `--admin` and the snippet are not alternates. Panel fix (#494): the first alternate also matched the Merge command's narrower merge-queue instruction ('do not silently enqueue or use `--admin`'), a different rule, so deleting gate 4 left the guard green. It now binds gate 4's 'never `--admin`, never bypass' and 'never bypass rules'."
     },
     {
       "label": "report-entry",
@@ -2672,8 +2711,10 @@
       "anyOf": [
         "do NOT merge",
         "flag.*don't merge",
-        "failed gate"
-      ]
+        "If ANY gate fails",
+        "[Ii]f (?:any|a) gate fails[^\\n]{0,20}(?:do not|don't|never) merge"
+      ],
+      "note": "Vacuity fix (#224, batch 3): was [\"do NOT merge\", \"flag.*don't merge\", \"failed gate\"]. Deleting the rule sentence(s) left the guard green on the Report entry sentence `retain their exact failed gate`, which is about the ledger, not about merging. Now binds the sentence 'If ANY gate fails: do NOT merge'. The bare `failed gate` is not an alternate."
     }
   ],
   "visual-brief": [
