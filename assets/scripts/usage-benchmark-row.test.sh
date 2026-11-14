@@ -534,7 +534,7 @@ gen "$GP/-demo-new/$UUID.jsonl" 100 3 msgid
 gen "$GP/-demo-new/$UUID/subagents/agent-1.jsonl" 100 3 msgid
 gen_distinct "$GP/-demo-old/$UUID/subagents/workflows/wf_x/agent-2.jsonl" wf_msg_
 # A foreign session's children AND main transcript, in the same OLD dir.
-gen "$GP/-demo-old/$OTHER/subagents/agent-x.jsonl" 100 3 msgid
+gen "$GP/-demo-old/$OTHER/subagents/agent-0f.jsonl" 100 3 msgid
 gen "$GP/-demo-old/$OTHER.jsonl" 100 1 msgid
 
 # mutant <name> <file> <sed-expr> — a scratch copy of the row script AND its helper
@@ -616,18 +616,18 @@ else
       "could not build the mutant: the project-glob line is not where this expects it in usage_accounting.py"
 fi
 
-# Messages dedup across dirs by KEY, while FILES are counted as found: the same
-# agent file present in both dirs is one set of messages (3.1M, not 6.2M) read
-# from two files (count 2). The main transcript lives in one dir only.
+# Messages dedup across dirs by KEY, and /N counts distinct agent ids (#379, was files
+# as found): the same agent file present in both dirs is one set of messages (3.1M,
+# not 6.2M) read from two files, counted once (1). The main transcript lives in one dir only.
 DUP=3c3c3c3c-5555-4666-8777-888899990000
 mkdir -p "$GP/-demo-new/$DUP/subagents" "$GP/-demo-old/$DUP/subagents"
 gen "$GP/-demo-new/$DUP.jsonl" 100 1 msgid
 gen "$GP/-demo-new/$DUP/subagents/agent-d.jsonl" 100 3 msgid
 cp "$GP/-demo-new/$DUP/subagents/agent-d.jsonl" "$GP/-demo-old/$DUP/subagents/agent-d.jsonl"
 out=$(rec_run 3c3c3c3c 2>/dev/null); rc=$?
-[ "$rc" -eq 0 ] && [ "$(wl "$out")" = "<workload note> · subagents: 3.1M/2 · work: 0pr/0iss" ] \
-  && ok "the same child messages in both dirs dedup by key across dirs (3.1M), files counted as found (2)" \
-  || bad "the same child messages in both dirs dedup by key across dirs (3.1M), files counted as found (2)" \
+[ "$rc" -eq 0 ] && [ "$(wl "$out")" = "<workload note> · subagents: 3.1M/1 · work: 0pr/0iss" ] \
+  && ok "the same child messages in both dirs dedup by key across dirs (3.1M), counted once by agent id (1, #379)" \
+  || bad "the same child messages in both dirs dedup by key across dirs (3.1M), counted once by agent id (1, #379)" \
          "rc=$rc $(flat "$out")"
 
 # Explicit-path mode for a transcript that lives OUTSIDE ~/.claude/projects: the
@@ -636,7 +636,7 @@ out=$(rec_run 3c3c3c3c 2>/dev/null); rc=$?
 OUTSIDE="$TMP/outside"; OUTID=a4a4a4a4-9999-4aaa-8bbb-ccccddddeeee
 mkdir -p "$OUTSIDE/$OUTID/subagents"
 gen "$OUTSIDE/$OUTID.jsonl" 100 3 msgid
-gen "$OUTSIDE/$OUTID/subagents/agent.jsonl" 100 3 msgid
+gen "$OUTSIDE/$OUTID/subagents/agent-aa.jsonl" 100 3 msgid
 out=$(rec_run "$OUTSIDE/$OUTID.jsonl" 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && [ "$(wl "$out")" = "<workload note> · subagents: 3.1M/1 · work: 0pr/0iss" ] \
   && ok "an explicit .jsonl path outside ~/.claude/projects still counts its sibling subagents (3.1M/1)" \
@@ -691,7 +691,7 @@ gen "$NP/-demo-new/$UUID.jsonl" 100 3 msgid
 gen "$NP/-demo-new/$UUID/subagents/agent-1.jsonl" 100 3 msgid
 gen_distinct "$NP/-demo-old/$UUID/subagents/workflows/wf_x/agent-2.jsonl" wf_msg_
 gen "$NP/-demo-old/$NEAR.jsonl" 100 1 msgid
-gen "$NP/-demo-old/$NEAR/subagents/agent.jsonl" 100 3 msgid
+gen "$NP/-demo-old/$NEAR/subagents/agent-aa.jsonl" 100 3 msgid
 out=$(HOME="$NEARH" env -u CLAUDE_CODE_SESSION_ID "$PY" "$SUT" "$UUID" 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && [ "$(wl "$out")" = "$WANT_SPLIT" ] \
   && ok "a foreign session sharing the first 8 uuid chars is NOT swept in (6.2M/2 by full uuid)" \
@@ -727,11 +727,17 @@ printf '%s\n' "$relerr" | grep -q '^WARNING: subagent transcripts for 5fc4a59c' 
   && ok "a relative explicit path warns with ABSOLUTE project dirs (no bare \`.\`)" \
   || bad "a relative explicit path warns with ABSOLUTE project dirs (no bare \`.\`)" "$(flat "$relerr")"
 if MUT=$(mutant spelling-dedupe usage_accounting.py 's|^        real = os.path.realpath(root)$|        real = root|'); then
-  mrow=$(rel_run "$MUT" 2>/dev/null)
-  [ "$(subcount "$mrow")" -gt "$(subcount "$rel")" ] 2>/dev/null \
-    && ok "the fixture DISTINGUISHES the two implementations (spelling dedupe: walks the same dir twice, count rises)" \
-    || bad "the fixture DISTINGUISHES the two implementations (spelling dedupe: walks the same dir twice, count rises)" \
-           "real='$(flat "$rel")' mutant='$(flat "$mrow")'"
+  mrow=$(rel_run "$MUT" 2>"$TMP/spell-mut.err"); merr=$(cat "$TMP/spell-mut.err")
+  # #379: /N counts distinct agent ids, so a dir walked twice no longer moves the row's
+  # count (nor eff: messages dedupe by key). The walker's dedupe is still observable on
+  # stderr, which reports the child FILES read beside the agent count: the mutant reads
+  # more files than the real run, while the row's /N stays the same.
+  files_of() { sed -n 's/.*child transcript files \([0-9][0-9]*\);.*/\1/p' <<<"$1" | head -1; }
+  rf=$(files_of "$relerr"); mf=$(files_of "$merr")
+  [ -n "$rf" ] && [ -n "$mf" ] && [ "$mf" -gt "$rf" ] && [ "$(subcount "$mrow")" = "$(subcount "$rel")" ] \
+    && ok "the fixture DISTINGUISHES the two implementations (spelling dedupe: the dir walked twice reads more files; /N unchanged, #379)" \
+    || bad "the fixture DISTINGUISHES the two implementations (spelling dedupe: the dir walked twice reads more files; /N unchanged, #379)" \
+           "real files='$rf' mutant files='$mf' real='$(flat "$rel")' mutant='$(flat "$mrow")'"
 else
   bad "the fixture DISTINGUISHES the two implementations (spelling dedupe: walks the same dir twice, count rises)" \
       "could not build the mutant: the realpath line is not where this expects it in usage_accounting.py"
@@ -1578,7 +1584,7 @@ EH="$TMP/edgehome"; EP="$EH/.claude/projects"
 EU=7e1d0000-1111-4222-8333-444444444444          # session id -> prints `7e1d0000`
 mkdir -p "$EP/-p/$EU/subagents"
 gen "$EP/-p/$EU.jsonl" 10 1 msgid
-gen "$EP/-p/$EU/subagents/agent-ok.jsonl" 10 1 msgid
+gen "$EP/-p/$EU/subagents/agent-0a.jsonl" 10 1 msgid
 edge_run() { HOME="$EH" env -u CLAUDE_CODE_SESSION_ID "$PY" "${EDGE_SUT:-$SUT}" "$@"; }
 # refused <label> <must-match-on-stderr> — runs edge_run "${ARGS[@]}" and checks the
 # REFUSE contract: nonzero, REFUSE: line, no traceback, nothing on stdout.
@@ -1625,9 +1631,9 @@ for bad_line in 'null' '[1]' '3' '"s"'; do
   printf '%s\n' "$bad_line" >> "$EP/-p/$EU.jsonl"
   ARGS=("$EU"); refused "main transcript line $bad_line is a REFUSE naming file and line 11" "$EU.jsonl:11:"
   cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
-  printf '%s\n' "$bad_line" >> "$EP/-p/$EU/subagents/agent-ok.jsonl"
-  ARGS=("$EU"); refused "child file line $bad_line is a REFUSE naming file and line 11" "agent-ok.jsonl:11:"
-  gen "$EP/-p/$EU/subagents/agent-ok.jsonl" 10 1 msgid
+  printf '%s\n' "$bad_line" >> "$EP/-p/$EU/subagents/agent-0a.jsonl"
+  ARGS=("$EU"); refused "child file line $bad_line is a REFUSE naming file and line 11" "agent-0a.jsonl:11:"
+  gen "$EP/-p/$EU/subagents/agent-0a.jsonl" 10 1 msgid
 done
 printf 'not json at all\n{"half":\n' >> "$EP/-p/$EU.jsonl"
 got=$(edge_run "$EU" 2>/dev/null); rc=$?
@@ -1642,9 +1648,9 @@ for bad_msg in '"x"' '[1]' '3' 'true'; do
   printf '{"type":"assistant","requestId":"rx","message":%s}\n' "$bad_msg" >> "$EP/-p/$EU.jsonl"
   ARGS=("$EU"); refused "main transcript message $bad_msg is a REFUSE naming file and line 11" "$EU.jsonl:11:"
   cp "$TMP/main.keep" "$EP/-p/$EU.jsonl"
-  printf '{"type":"assistant","requestId":"rx","message":%s}\n' "$bad_msg" >> "$EP/-p/$EU/subagents/agent-ok.jsonl"
-  ARGS=("$EU"); refused "child file message $bad_msg is a REFUSE naming file and line 11" "agent-ok.jsonl:11:"
-  gen "$EP/-p/$EU/subagents/agent-ok.jsonl" 10 1 msgid
+  printf '{"type":"assistant","requestId":"rx","message":%s}\n' "$bad_msg" >> "$EP/-p/$EU/subagents/agent-0a.jsonl"
+  ARGS=("$EU"); refused "child file message $bad_msg is a REFUSE naming file and line 11" "agent-0a.jsonl:11:"
+  gen "$EP/-p/$EU/subagents/agent-0a.jsonl" 10 1 msgid
 done
 # ...while what was always tolerated still is, with the row unchanged byte for byte:
 # a falsy message (read as empty), a non-object usage (the record is skipped), and any
@@ -1666,7 +1672,7 @@ for tol in '{"type":"assistant","requestId":"rx","message":null}' \
            '{"type":"user","timestamp":5}' \
            '{"type":"assistant","timestamp":[1],"requestId":"rx","message":{"id":"mx","usage":"x"}}'; do
   for where in main child; do
-    f="$EP/-p/$EU.jsonl"; [ "$where" = child ] && f="$EP/-p/$EU/subagents/agent-ok.jsonl"
+    f="$EP/-p/$EU.jsonl"; [ "$where" = child ] && f="$EP/-p/$EU/subagents/agent-0a.jsonl"
     cp "$f" "$TMP/tol.keep"; printf '%s\n' "$tol" >> "$f"
     got=$(edge_run "$EU" 2>"$TMP/edge.err"); rc=$?
     cp "$TMP/tol.keep" "$f"
@@ -1688,7 +1694,7 @@ for bad_id in '["a"]' '{"a":1}' '5' 'true'; do
     fi
     for where in main child; do
       f="$EP/-p/$EU.jsonl"; want="$EU.jsonl:11:"
-      [ "$where" = child ] && { f="$EP/-p/$EU/subagents/agent-ok.jsonl"; want="agent-ok.jsonl:11:"; }
+      [ "$where" = child ] && { f="$EP/-p/$EU/subagents/agent-0a.jsonl"; want="agent-0a.jsonl:11:"; }
       cp "$f" "$TMP/id.keep"; printf '%s\n' "$rec469" >> "$f"
       ARGS=("$EU"); refused "$where $field $bad_id is a REFUSE naming file and line 11" "$want"
       cp "$TMP/id.keep" "$f"
@@ -1702,7 +1708,7 @@ refuse_471() {  # <label> <record>
   local where f want
   for where in main child; do
     f="$EP/-p/$EU.jsonl"; want="$EU.jsonl:11:"
-    [ "$where" = child ] && { f="$EP/-p/$EU/subagents/agent-ok.jsonl"; want="agent-ok.jsonl:11:"; }
+    [ "$where" = child ] && { f="$EP/-p/$EU/subagents/agent-0a.jsonl"; want="agent-0a.jsonl:11:"; }
     cp "$f" "$TMP/c471.keep"; printf '%s\n' "$2" >> "$f"
     ARGS=("$EU"); refused "$where $1 is a REFUSE naming file and line 11" "$want"
     cp "$TMP/c471.keep" "$f"
@@ -1906,6 +1912,71 @@ ko=$(cd "$KD" && k_run --tier low -- -x.jsonl 2>/dev/null); krc=$?
 ARGS=(-x.jsonl); EH="$KH"; refused "without '--', '-x.jsonl' is still an unknown option" "unknown option '-x.jsonl'"
 ARGS=(-- "$KU" extra); refused "a second argument after '--' is still more than one session argument" "more than one session argument"
 ARGS=(-- --figures); refused "after '--', '--figures' is a session argument, not the flag" "no transcript matching"
+
+# ======================= L — /N counts distinct agent transcripts (#379)
+echo; echo "L. the count is distinct agent ids (agent-<hex>.jsonl), not files (#379)"
+
+# subeff <row> — the effective-units half of the subagents suffix
+subeff() { printf '%s' "$1" | sed -n 's/.*subagents: \([0-9.]*M\)\/[0-9]* .*/\1/p'; }
+LU=1a2b3c4d-1111-4222-8333-555555555555
+# build_l <home> <journals:0|1> — a session split over two project dirs: agents 01-0a
+# in -a, 0b-13 in -b (19 in all), and, when journals=1, three workflow journal.jsonl
+# files in -b (22 files). Journal lines carry no usage, as a real workflow journal does.
+build_l() {
+  local h="$1" j="$2" i id d
+  mkdir -p "$h/.claude/projects/-a/$LU/subagents" "$h/.claude/projects/-b/$LU/subagents"
+  gen "$h/.claude/projects/-a/$LU.jsonl" 10 1 msgid
+  for i in $(seq 1 19); do
+    id=$(printf 'agent-%02x' "$i"); d=-a; [ "$i" -gt 10 ] && d=-b
+    gen_distinct "$h/.claude/projects/$d/$LU/subagents/$id.jsonl" "$id-"
+  done
+  if [ "$j" = 1 ]; then
+    for i in 1 2 3; do
+      mkdir -p "$h/.claude/projects/-b/$LU/subagents/workflows/wf_$i"
+      printf '{"type":"workflow","step":%d}\n{"type":"note","text":"x"}\n' "$i" \
+        > "$h/.claude/projects/-b/$LU/subagents/workflows/wf_$i/journal.jsonl"
+    done
+  fi
+}
+LH0="$TMP/l-nojournal"; LH1="$TMP/l-journal"
+build_l "$LH0" 0; build_l "$LH1" 1
+l_run() { HOME="$1" env -u CLAUDE_CODE_SESSION_ID "$PY" "${L_SUT:-$SUT}" "${@:2}"; }
+r0=$(l_run "$LH0" 1a2b3c4d 2>/dev/null); r1=$(l_run "$LH1" 1a2b3c4d 2>/dev/null)
+[ "$(subcount "$r0")" = 19 ] && [ -n "$(subeff "$r0")" ] \
+  && ok "baseline: 19 agent transcripts across two project dirs read /19" \
+  || bad "baseline: 19 agent transcripts across two project dirs read /19" "$(flat "$r0")"
+[ "$(subcount "$r1")" = 19 ] \
+  && ok "22 child files (19 agent-*.jsonl + 3 workflow journal.jsonl) read /19" \
+  || bad "22 child files (19 agent-*.jsonl + 3 workflow journal.jsonl) read /19" "$(flat "$r1")"
+[ "$(subeff "$r1")" = "$(subeff "$r0")" ] && [ -n "$(subeff "$r1")" ] \
+  && ok "the journals add no usage: eff with them equals eff without ($(subeff "$r1"))" \
+  || bad "the journals add no usage: eff with them equals eff without" "with=$(subeff "$r1") without=$(subeff "$r0")"
+
+# a non-agent .jsonl among the children does not count, nor do near-miss agent names
+cp -R "$LH1" "$TMP/l-notes"
+LN="$TMP/l-notes/.claude/projects/-a/$LU/subagents"
+for n in notes.jsonl agent-zz.jsonl agent-.jsonl agent-0a.jsonl.bak xagent-0a.jsonl; do
+  printf '{"type":"note"}\n' > "$LN/$n"
+done
+rn=$(l_run "$TMP/l-notes" 1a2b3c4d 2>/dev/null)
+[ "$(subcount "$rn")" = 19 ] && [ "$(subeff "$rn")" = "$(subeff "$r0")" ] \
+  && ok "notes.jsonl, agent-zz.jsonl, agent-.jsonl, a .bak and an x-prefixed name do not count (still /19)" \
+  || bad "notes.jsonl, agent-zz.jsonl, agent-.jsonl, a .bak and an x-prefixed name do not count (still /19)" "$(flat "$rn")"
+
+# the issue comment's case: an explicit path OUTSIDE projects, children copied beside it,
+# while the same uuid also lives under projects. One agent, counted once; eff unchanged.
+CU=2b3c4d5e-2222-4333-8444-666666666666
+CH="$TMP/l-copy"; mkdir -p "$CH/.claude/projects/-a/$CU/subagents" "$TMP/l-copy-out/$CU/subagents"
+gen "$CH/.claude/projects/-a/$CU.jsonl" 10 1 msgid
+gen_distinct "$CH/.claude/projects/-a/$CU/subagents/agent-0c.jsonl" cp_
+cp "$CH/.claude/projects/-a/$CU.jsonl" "$TMP/l-copy-out/$CU.jsonl"
+cp "$CH/.claude/projects/-a/$CU/subagents/agent-0c.jsonl" "$TMP/l-copy-out/$CU/subagents/agent-0c.jsonl"
+rc1=$(l_run "$CH" 2b3c4d5e 2>/dev/null); rc2=$(l_run "$CH" "$TMP/l-copy-out/$CU.jsonl" 2>/dev/null)
+[ "$(subcount "$rc1")" = 1 ] && [ "$(subcount "$rc2")" = 1 ] && [ "$(subeff "$rc2")" = "$(subeff "$rc1")" ] \
+  && [ -n "$(subeff "$rc2")" ] \
+  && ok "a transcript copied beside an explicit path is counted once (/1), eff unchanged" \
+  || bad "a transcript copied beside an explicit path is counted once (/1), eff unchanged" \
+         "projects='$(flat "$rc1")' explicit='$(flat "$rc2")'"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
