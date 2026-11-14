@@ -227,6 +227,7 @@ jsonl(sa + "/sess-split/subagents/agent-5b000001.jsonl", [assistant("R.\n\n" + f
 jfile(sa + "/sess-split/subagents/agent-5b000001.meta.json", {"agentType": "general-purpose"})
 jsonl(sb + "/sess-split/subagents/agent-5b000002.jsonl", [assistant("R.\n\n" + fenced(GOOD))])
 jfile(sb + "/sess-split/subagents/agent-5b000002.meta.json", {"agentType": "general-purpose"})
+jfile(sa + "/sess-split/workflows/wf_split.json", {"runId": "wf_split", "result": dict(GOOD)})
 jfile(sa + "/sess-split/subagents/workflows/wf-s/agent-5b000003.result.json",
       {"schema": 1, "source": "record", "session": "sess-split", "agent": "agent-5b000003",
        "result": GOOD})
@@ -725,11 +726,17 @@ echo "$out" > "$TMP/list-split.json"
 "$PY" - "$TMP/list-split.json" <<'PY'
 import json, sys
 ids = sorted(r["id"] for r in json.load(open(sys.argv[1])))
-assert ids == ["agent-5b000001", "agent-5b000002", "agent-5b000003"], ids
+assert ids == ["agent-5b000001", "agent-5b000002", "agent-5b000003", "wf_split result"], ids
 PY
 py_rc=$?
 [ "$rc" -eq 0 ] && [ "$py_rc" -eq 0 ] && ok "split: list reads results from both folders (incl. nested workflow level)" \
   || bad "split: list reads results from both folders" "rc=$rc $(cat "$TMP/list-split.json")"
+# a symlinked alias of a project dir is the same folder, not a second match
+ln -s "$S1" "$PROJ-s1alias"
+run sess-splite list
+[ "$rc" -eq 0 ] && ok "split: a symlinked alias of a project dir is not counted as a second folder" \
+  || bad "split: a symlinked alias of a project dir is not counted as a second folder" "rc=$rc $(flat "$out")"
+rm "$PROJ-s1alias"
 rm -f "$S1/sess-split/subagents/agent-5b000001.result.json" "$S2/sess-split/subagents/agent-5b000002.result.json"
 run sess-split harvest
 [ "$rc" -eq 0 ] && [ -f "$S1/sess-split/subagents/agent-5b000001.result.json" ] \

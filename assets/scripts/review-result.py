@@ -458,7 +458,13 @@ PROJECTS_ROOT = "~/.claude/projects"
 
 def _session_matches(sid):
     pattern = os.path.join(os.path.expanduser(PROJECTS_ROOT), "*", glob.escape(sid))
-    return sorted(p for p in glob.glob(pattern) if os.path.isdir(p))
+    seen, out = set(), []
+    for p in sorted(p for p in glob.glob(pattern) if os.path.isdir(p)):
+        rp = os.path.realpath(p)        # a symlinked alias is the same folder, not a second one
+        if rp not in seen:
+            seen.add(rp)
+            out.append(p)
+    return out
 
 
 def _has_children(d):
@@ -879,7 +885,13 @@ def cmd_list(a):
             wrapper.get("agent") or os.path.basename(path), skill, pr, result,
             wrapper.get("source", "record")))
 
-    for path in sorted(glob.glob(os.path.join(session_dir, "workflows", "wf_*.json"))):
+    wf_paths, wf_seen = [], set()
+    for folder in _session_folders(session_dir):   # every folder of a split session (#384)
+        for p in sorted(glob.glob(os.path.join(glob.escape(folder), "workflows", "wf_*.json"))):
+            if os.path.realpath(p) not in wf_seen:
+                wf_seen.add(os.path.realpath(p))
+                wf_paths.append(p)
+    for path in wf_paths:
         try:
             with open(path, encoding="utf-8") as f:
                 wf = json.load(f)
