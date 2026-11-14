@@ -1479,6 +1479,16 @@ def _regime_note(instants, windows=MULTIPLIER_WINDOWS):
     return "; " + "; ".join(parts) if parts else ""
 
 
+# A meter period is WELL FIT, and enters --calibrate's median, CAUTION and REGIME count,
+# when its regression's R2 is at least this. One constant and one predicate, so the
+# lists built from it cannot drift apart (#486).
+MIN_FIT_R2 = 0.95
+
+
+def _well_fit(r2):
+    return r2 is not None and r2 >= MIN_FIT_R2
+
+
 def _period_regimes(spans, windows=MULTIPLIER_WINDOWS):
     """[(n_before, n_after, why)] for each window that well-fit periods sit on BOTH sides of.
 
@@ -2475,7 +2485,9 @@ def main():
         print(f"{'meter period (PT)':32}{'n':>5}{'implied cap':>13}{'R2':>8}")
         for label, cap, r2, n in rowsc:
             print(f"{label:32}{n:5d}{cap:>13,.0f}{(r2 if r2 is not None else 0):>8.3f}")
-        good = [(c, r) for _, c, r, _ in rowsc if r is not None and r >= 0.95]
+        # One selection, read twice: the (cap, R2) pairs and the same periods' spans.
+        fit = [i for i, (_, _, r, _) in enumerate(rowsc) if _well_fit(r)]
+        good = [(rowsc[i][1], rowsc[i][2]) for i in fit]
         if good:
             v = sorted(c for c, _ in good)
             med = v[len(v)//2] if len(v) % 2 else (v[len(v)//2-1]+v[len(v)//2])/2
@@ -2498,8 +2510,7 @@ def main():
                       f"middle of that range.\n  Treat ${med:,.0f} as a central estimate, "
                       f"not a measured constant.")
             # Independent of the spread: a mixed-cap median is wrong even when it is tight.
-            gp = [sp for (_, _, r, _), sp in zip(rowsc, spans) if r is not None and r >= 0.95]
-            for nb, na, why in _period_regimes(gp):
+            for nb, na, why in _period_regimes([spans[i] for i in fit]):
                 print(f"  REGIME: {nb} period(s) precede and {na} follow a cap change "
                       f"({why}), so the median mixes two caps (#250).")
             print("NOTE: these samples carry no Fable meter, so the Fable cap still needs "
