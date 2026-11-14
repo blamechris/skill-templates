@@ -589,6 +589,19 @@ jobs:
         # reindex-after-merge.yml's `paths:` filter.
         run: ./scripts/check-index-fresh.test.sh
 
+      - name: html-dark regression tests
+        # Proves the dark-by-default check detects HTML-rendering templates, flags
+        # each of its three rule violations, and fails closed (exit 2) rather than
+        # passing over zero cases or an unreadable tree.
+        run: ./scripts/check-html-dark.test.sh
+
+      - name: HTML-rendering templates carry the dark rule (#381)
+        # A generic/*.md that renders an HTML page must set `color-scheme: dark`
+        # and add no prefers-color-scheme switch (assets/AGENTS.md
+        # `html-dark-by-default`). Detection is structural, so a new HTML skill
+        # is covered without editing this step.
+        run: python3 scripts/check-html-dark.py
+
       - name: this repo's own installed skills lint clean
         run: |
           # #156: the registry was invisible to its own drift detection — nothing ran
