@@ -1,4 +1,5 @@
 """Synthetic edge cases and the preserved, sanitized recent-cohort arithmetic."""
+import fnmatch
 import hashlib
 import json
 import importlib.util
@@ -2885,6 +2886,129 @@ class TrendArgumentTests(unittest.TestCase):
         self.assertNotEqual(self.state()[1], before_refs)
         self.assertIn("usage: ", self.git("--git-dir", str(self.remote), "log", "-1",
                                           "--format=%s", "main"))
+
+
+class SessionFolderParityTests(SessionFixture):
+    """review-result.py and the usage scripts find a session's children with two
+    implementations, kept apart on purpose (skill-templates#481): a shared helper in either
+    file would change what every install has to copy. This pins that the two agree, so
+    neither can drift alone.
+
+    review-result.py: resolve_session_dir(sid), then _session_folders and sidecar_dirs /
+    iter_agent_jsonl (#384). The usage scripts: session_subagent_roots(transcript), then
+    session_child_files (#254, #377, #397). Both are compared as SORTED REALPATH LISTS,
+    not sets, so a lost realpath dedupe on either side shows up as a duplicate."""
+
+    def setUp(self):
+        super().setUp()
+        self.rr = load("review_result_parity", HERE / "review-result.py")
+
+    def finders(self, transcript):
+        """(review-result's view, the usage scripts' view): each is (subagents folders,
+        agent transcripts), as sorted realpath lists."""
+        sid = os.path.basename(str(transcript))[:-len(".jsonl")]
+        session_dir = self.rr.resolve_session_dir(sid)
+        # sidecar_dirs is what review-result.py reads from: each subagents/ folder plus its
+        # workflows/<run>/ folders. Its subagents/ entries are the folders compared here.
+        rr_folders = [d for d in self.rr.sidecar_dirs(session_dir) if os.path.basename(d) == "subagents"]
+        rr_view = (sorted(os.path.realpath(d) for d in rr_folders),
+                   sorted(os.path.realpath(p) for p in self.rr.iter_agent_jsonl(session_dir)))
+        roots, _main_dir = usage_accounting.session_subagent_roots(str(transcript))
+        files, _holding = usage_accounting.session_child_files(roots)
+        ua_view = (sorted(os.path.realpath(r) for r in roots),
+                   sorted(os.path.realpath(f) for f in files
+                          if fnmatch.fnmatch(os.path.basename(f), "agent-*.jsonl")))
+        return rr_view, ua_view
+
+    def assert_agree(self, transcript, folders, agents):
+        rr_view, ua_view = self.finders(transcript)
+        self.assertEqual(rr_view, ua_view)
+        # Agreement is not enough: two finders that both lost a folder would agree too.
+        self.assertEqual(len(ua_view[0]), folders)
+        self.assertEqual(len(ua_view[1]), agents)
+
+    def child(self, project, *parts, sid=SPLIT):
+        write_records(self.projects / project / sid / "subagents" / Path(*parts), [priced_child(parts[-1])])
+
+    def main_transcript(self, project, sid=SPLIT):
+        path = self.projects / project / (sid + ".jsonl")
+        write_records(path, [priced_parent(project)])
+        return path
+
+    def test_one_project_dir_with_direct_and_workflow_children(self):
+        transcript = self.main_transcript("-only")
+        self.child("-only", "agent-a1.jsonl")
+        self.child("-only", "workflows", "wf_1", "agent-b2.jsonl")
+        self.child("-only", "workflows", "wf_1", "journal.jsonl")   # no agent: neither counts it
+        self.child("-only", "workflows", "wf_2", "agent-c3.jsonl")
+        self.assert_agree(transcript, folders=1, agents=3)
+
+    def test_recycled_session_children_in_both_dirs(self):
+        # The new dir sorts after the old one, so discovery order and sorted order differ.
+        transcript = self.main_transcript("-zzz-new")
+        self.child("-zzz-new", "agent-0e.jsonl")
+        self.child("-aaa-old", "agent-0a.jsonl")
+        self.child("-aaa-old", "workflows", "wf_x", "agent-0b.jsonl")
+        self.main_transcript("-aaa-old", sid=FOREIGN)                            # another session's tree
+        self.child("-aaa-old", "agent-ff.jsonl", sid=FOREIGN)
+        self.assert_agree(transcript, folders=2, agents=3)
+
+    def test_recycled_session_every_child_in_the_old_dir_no_folder_beside_the_transcript(self):
+        transcript = self.main_transcript("-zzz-new")
+        self.child("-aaa-old", "agent-0a.jsonl")
+        self.child("-aaa-old", "workflows", "wf_x", "agent-0b.jsonl")
+        self.assert_agree(transcript, folders=1, agents=2)
+
+    def test_recycled_session_with_an_eager_empty_folder_beside_the_transcript(self):
+        transcript = self.main_transcript("-zzz-new")
+        (self.projects / "-zzz-new" / SPLIT / "subagents").mkdir(parents=True)
+        self.child("-aaa-old", "agent-0a.jsonl")
+        self.assert_agree(transcript, folders=2, agents=1)
+
+    def test_three_dirs_one_holding_only_workflow_children(self):
+        transcript = self.main_transcript("-mmm-now")
+        self.child("-mmm-now", "agent-01.jsonl")
+        self.child("-aaa-first", "agent-02.jsonl")
+        self.child("-zzz-second", "workflows", "wf_y", "agent-03.jsonl")
+        self.assert_agree(transcript, folders=3, agents=3)
+
+    def test_a_symlinked_alias_of_a_project_dir_is_one_folder(self):
+        transcript = self.main_transcript("-zzz-new")
+        self.child("-zzz-new", "agent-0e.jsonl")
+        self.child("-aaa-old", "agent-0a.jsonl")
+        (self.projects / "-bbb-alias").symlink_to(self.projects / "-aaa-old", target_is_directory=True)
+        self.assert_agree(transcript, folders=2, agents=2)
+
+    def test_an_alias_of_the_transcripts_own_dir_still_resolves_to_one_session(self):
+        # Without the realpath dedupe in review-result.py's matching, the alias would be a
+        # second folder beside a main transcript, and resolution would REFUSE.
+        transcript = self.main_transcript("-aaa-old")
+        self.child("-aaa-old", "agent-0a.jsonl")
+        (self.projects / "-bbb-alias").symlink_to(self.projects / "-aaa-old", target_is_directory=True)
+        self.assert_agree(transcript, folders=1, agents=1)
+
+    def test_a_subagents_folder_symlinked_to_another_is_read_once(self):
+        transcript = self.main_transcript("-zzz-new")
+        self.child("-zzz-new", "agent-0e.jsonl")
+        self.child("-zzz-new", "workflows", "wf_x", "agent-0b.jsonl")
+        (self.projects / "-aaa-old" / SPLIT).mkdir(parents=True)
+        (self.projects / "-aaa-old" / SPLIT / "subagents").symlink_to(
+            self.projects / "-zzz-new" / SPLIT / "subagents", target_is_directory=True)
+        self.assert_agree(transcript, folders=1, agents=2)
+
+    def test_depth_beyond_a_workflow_run_is_where_the_two_differ(self):
+        """The one known difference, kept on purpose: review-result.py looks one level into
+        subagents/workflows/<run>/ (the deepest the harness writes), while
+        session_child_files walks every depth. A change to either side's depth fails here,
+        so the #481 decision is revisited rather than silently outgrown."""
+        transcript = self.main_transcript("-only")
+        self.child("-only", "agent-a1.jsonl")
+        self.child("-only", "workflows", "wf_1", "nested", "agent-d4.jsonl")
+        rr_view, ua_view = self.finders(transcript)
+        self.assertEqual(rr_view[0], ua_view[0])
+        self.assertEqual([os.path.basename(p) for p in rr_view[1]], ["agent-a1.jsonl"])
+        self.assertEqual(sorted(os.path.basename(p) for p in ua_view[1]),
+                         ["agent-a1.jsonl", "agent-d4.jsonl"])
 
 
 if __name__ == "__main__":
