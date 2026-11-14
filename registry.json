@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "0d26843",
+  "generatedFromCommit": "89a7540",
   "skillCount": 45,
   "skills": [
     {
@@ -363,10 +363,9 @@
           "label": "cap-findings-at-six",
           "anyOf": [
             "[Cc]ap your findings at 6",
-            "cap findings at 6",
-            "Quality over quantity",
-            "Quality over noise"
-          ]
+            "cap findings at 6"
+          ],
+          "note": "Vacuity fix (#495 PR A, panel): the 'Quality over quantity' and 'Quality over noise' alternates are slogans that share a line with the cap sentences, so deleting 'Cap your findings at 6.' and 'Hunters MUST cap findings at 6.' left the guard green on them. Now binds only the cap sentences. No installed copy relied on the slogans."
         },
         {
           "label": "confirm-before-filing",
