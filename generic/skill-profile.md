@@ -29,7 +29,7 @@ Discover, don't assume. Pull from the repo itself:
 - **Build / test / lint commands** — the manifest's scripts and `CLAUDE.md`. Capture the *exact* commands.
 - **Conventions** — branch naming, commit style + scope list, source-file globs — from `CLAUDE.md` and recent `git log`.
 - **Hard requirements / invariants** — non-negotiables from `CLAUDE.md` (e.g. "never return stale data", "ESM only", a zero-attribution policy).
-- **Labels** — `gh label list` (for skills that file issues). Record the real label families; never invent.
+- **Labels** — `gh label list --limit 500` (30 labels by default, oldest first, so a bare call misses newer ones; for skills that file issues). Record the real label families; never invent.
 - **Per-skill needs** — for each skill this repo uses, read its **registry template** (`generic/<name>.md` in the resolved registry — see `/skill`'s "Resolving the registry") to learn what its `{{CUSTOMIZE}}` markers ask for (persona, review criteria, audit focus, required-check names, test conventions, label scheme, publish footguns, …). The installed `.claude/commands/<name>.md` has already had its markers filled, so the **template** is the source of truth for what needs a value — then decide whether this repo has a real, specific one.
 
 ### 3. Compose the profile

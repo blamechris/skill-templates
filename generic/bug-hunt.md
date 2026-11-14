@@ -249,7 +249,7 @@ EOF
 
 **Verify labels exist** before using them. Skip missing labels rather than failing.
 
-{{CUSTOMIZE: Adjust the label set to match this repo's conventions. Some repos use `bug` + `from-review`, others use `type:bug` + `triaged:no`. Match what `gh label list` shows.}}
+{{CUSTOMIZE: Adjust the label set to match this repo's conventions. Some repos use `bug` + `from-review`, others use `type:bug` + `triaged:no`. Match what `gh label list --limit 500` shows (30 by default, oldest first).}}
 
 ### 8. Commit Candidate List (only if files were written)
 
