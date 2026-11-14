@@ -76,6 +76,11 @@ certificate. It refuses custom Codex root markers/profiles and any project Codex
 or Gemini settings layer with exit 2 rather than guessing trust-dependent precedence.
 Gemini machine settings (system defaults, user, system overrides) must select only
 GEMINI.md; an alternative or additional filename requires a separate migration.
+They are read the way Gemini CLI reads them: `//` line comments and `/* */` block
+comments are ignored, and an unclosed `/*` runs to the end of the file. Comment
+markers inside a string are part of the string. Whatever remains must be strict JSON,
+so trailing commas, single quotes and a byte-order mark still refuse with exit 2,
+and the exit codes keep their meanings.
 Invocation flags, extension instructions and injected host configuration need a fresh
 session smoke test; do not treat this check as proof of those runtime settings.
 

@@ -176,6 +176,51 @@ def codex_config(path):
         die(f"Codex config {path!r} is malformed TOML ({exc})")
 
 
+def strip_json_comments(text):
+    """The text Gemini CLI hands to JSON.parse: comments blanked, strings untouched (#409).
+
+    Gemini's settings loader runs `JSON.parse(stripJsonComments(content))` with the
+    package's default options, so this mirrors exactly that and nothing more:
+      - `//` runs to the end of its line; `/* */` to its close, or to the end of the
+        input when it is never closed;
+      - each comment character becomes a space (newlines stay, so error positions in
+        the remaining JSON are unchanged);
+      - nothing inside a double-quoted string is a comment, including after an escaped
+        quote.
+    Trailing commas, single-quoted strings and a byte-order mark stay errors, as they
+    are for Gemini, and the result is still refused unless it parses as JSON.
+    """
+    out, i, n, in_string = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_string:
+            if c == "\\" and i + 1 < n:
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            in_string = c != '"'
+            out.append(c)
+            i += 1
+        elif c == '"':
+            in_string = True
+            out.append(c)
+            i += 1
+        elif text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(re.sub(r"\S", " ", text[i:end]))
+            i = end
+        elif text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            end = n if close < 0 else close + 2
+            out.append(re.sub(r"\S", " ", text[i:end]))
+            i = end
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def verify_gemini_settings(adapter):
     """Verify the supported fixed-name adapter against machine settings layers.
 
@@ -196,7 +241,7 @@ def verify_gemini_settings(adapter):
         if not os.path.lexists(path):
             continue
         try:
-            settings = json.loads(read_text(path, "Gemini settings"))
+            settings = json.loads(strip_json_comments(read_text(path, "Gemini settings")))
         except ValueError as exc:
             die(f"Gemini settings {str(path)!r} are malformed JSON ({exc})")
         if not isinstance(settings, dict) or not isinstance(settings.get("context", {}), dict):

@@ -544,6 +544,36 @@ printf '{"context":{"fileName":["GEMINI.md"]}}\n' > "$TMP/home/.gemini/settings.
 assert "explicit default Gemini filename passes" 0 "OK:" "$M/identical.md"
 printf '{broken\n' > "$TMP/home/.gemini/settings.json"
 assert "malformed Gemini settings refuse" 2 "malformed JSON" "$M/identical.md"
+# #409: Gemini CLI strips // and /* */ comments before JSON.parse, so commented
+# settings are valid to Gemini and must be to this check. A comment-like sequence inside
+# a string is not a comment, including after an escaped quote, and what remains must
+# still parse as strict JSON.
+G="$TMP/home/.gemini/settings.json"
+printf '// user settings\n{\n  /* the adapter */ "context": {"fileName": "GEMINI.md"} // only this\n}\n' > "$G"
+assert "commented Gemini settings selecting GEMINI.md pass" 0 "OK:" "$M/identical.md"
+printf '{"note": "see https://example.test/a//b", "context": {"fileName": "GEMINI.md"}}\n' > "$G"
+assert "a // inside a Gemini settings string is not a comment" 0 "OK:" "$M/identical.md"
+printf '{"note": "say \\"//\\" and \\"/*\\" here", "context": {"fileName": "GEMINI.md"}}\n' > "$G"
+assert "comment markers after an escaped quote stay inside the string" 0 "OK:" "$M/identical.md"
+printf '{"context": {"fileName": "GEMINI.md/*not a comment*/"}}\n' > "$G"
+assert "a /* inside the fileName string is part of the name" 2 "context.fileName" "$M/identical.md"
+printf '{"context": {/* "fileName": "GEMINI.md", */ "fileName": "AGENTS.md"}} // GEMINI.md\n' > "$G"
+assert "a GEMINI.md that only a comment names still refuses" 2 "context.fileName" "$M/identical.md"
+printf '{"context": {"fileName": "GEMINI.md"}} /* never closed\n' > "$G"
+assert "an unclosed block comment runs to the end of the file, as in Gemini" 0 "OK:" "$M/identical.md"
+printf '{"context": {"fileName": "GEMINI.md",}} // trailing comma\n' > "$G"
+assert "commented settings with a trailing comma still refuse as malformed" 2 "malformed JSON" "$M/identical.md"
+printf '\357\273\277{"context": {"fileName": "GEMINI.md"}}\n' > "$G"
+assert "settings starting with a byte-order mark still refuse as malformed, as in Gemini" 2 "malformed JSON" "$M/identical.md"
+printf '/* only a comment */\n' > "$G"
+assert "settings that are nothing but a comment still refuse as malformed" 2 "malformed JSON" "$M/identical.md"
+# Comments are blanked, not deleted, so a parse error still names its real position
+# in the file the reader opens (column 13 here, past the 10-character comment).
+printf '/* note */ {broken\n' > "$G"
+assert "a parse error after a comment reports its real column" 2 "line 1 column 13" "$M/identical.md"
+rm "$G"
+printf '// system override\n{"context": {"fileName": "AGENTS.md"}}\n' > "$M/system-gemini-commented.json"
+GEMINI_CLI_SYSTEM_SETTINGS_PATH="$M/system-gemini-commented.json" assert "commented Gemini system override still refuses" 2 "context.fileName" "$M/identical.md"
 rm "$TMP/home/.gemini/settings.json"
 printf '{"context":{"fileName":"AGENTS.md"}}\n' > "$M/system-gemini.json"
 GEMINI_CLI_SYSTEM_SETTINGS_PATH="$M/system-gemini.json" assert "Gemini system override refuses" 2 "context.fileName" "$M/identical.md"
