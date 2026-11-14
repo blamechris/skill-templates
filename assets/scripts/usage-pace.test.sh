@@ -1225,6 +1225,63 @@ print(a==b, len(a["all"])==3, ins.get("all")==want, ins.get("fable") is None)')
   || bad "implied_caps instants out-param" "$(flat "$got")"
 
 
+# Edges, pinned exactly (review of #485: every one of these survived as a mutant). A
+# reading AT w0 is inside the window (closed near edge); a reading AT w1 is after it
+# (half-open far edge) -- the semantics of multiplier_change_between.
+got=$(pymod '
+w0,w1,why=up.MULTIPLIER_WINDOWS[0]; n=up._regime_note
+two=lambda b,a,extra="": "; %d reading(s) precede and %d follow a cap change (%s)%s, so this median mixes two caps (#250)" % (b,a,why,extra)
+ins=lambda k: "; %d reading(s) fall inside a cap-change window (%s) and cannot be assigned to either cap (#250)" % (k,why)
+checks=[n([w0-1, w1])==two(1,1),                      # just before w0, exactly w1: both sides
+        n([w0])==ins(1),                              # exactly w0: inside
+        n([w1-0.001])==ins(1),                        # just before w1: still inside
+        n([w0, w1])==ins(1),                          # w0 is NOT before, so one side only
+        n([w0-1, w0, w1])==two(1,1,", and 1 fall inside it and cannot be assigned to either"),
+        n([w1])=="", n([w0-1])=="", n([None, None])==""]
+print(" ".join(str(c) for c in checks))')
+[ "$got" = "True True True True True True True True" ] \
+  && ok "_regime_note's edges: w0 is inside, w1 is after, and an inside reading beside both sides is named" \
+  || bad "_regime_note edges" "$(flat "$got")"
+
+got=$(pymod '
+w0,w1,why=up.MULTIPLIER_WINDOWS[0]; p=up._period_regimes
+checks=[p([(w0-100, w0-1), (w1, w1+100)])==[(1,1,why)],     # starts exactly at w1: after
+        p([(w0-100, w0), (w1, w1+100)])==[],                # ends AT w0: touches the window, not before
+        p([(w0-100, w0-1), (w1-1, w1+100)])==[],            # starts inside: not after
+        p([(w1, w1+100)])==[], p([])==[]]
+print(" ".join(str(c) for c in checks))')
+[ "$got" = "True True True True True" ] \
+  && ok "_period_regimes' edges: a period ending at w0 is not before, one starting at w1 is after" \
+  || bad "_period_regimes edges" "$(flat "$got")"
+
+# The CAUTION's numbers, and the R2 filter on the REGIME count, against periods whose R2
+# differ visibly: min R2 must read 0.960 (max would be 0.990), the half-spread of
+# $1,000-$2,000 is (2000-1000)/(2000+1000) = 33%, and the poorly fit period (R2 0.50,
+# before the window) must count neither in the CAUTION nor in the REGIME line.
+got=$("$PY" - "$SUT" "$TMP" <<'R2FAKE' 2>&1
+import importlib.util, io, contextlib, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); up.CALIB=tmp/"r2fake_calib.json"
+w0,w1,_=up.MULTIPLIER_WINDOWS[0]
+rows=[("a",1000.0,0.99,10),("b",2000.0,0.96,10),("c",9000.0,0.50,10)]
+sp=[(w0-9000,w0-8000),(w1+1000,w1+2000),(w0-7000,w0-6000)]
+def fake(unit="$", spans=None):
+    if spans is not None: spans.extend(sp)
+    return list(rows)
+up.sampled_caps=fake
+out=io.StringIO(); sys.argv=["x","--calibrate"]
+with contextlib.redirect_stdout(out): rc=up.main()
+o=out.getvalue()
+print(rc, "the 2 well-fit period(s) span $1,000-$2,000 (2.00x; min R2 0.960), +/-33% about" in o,
+      "REGIME: 1 period(s) precede and 1 follow" in o)
+R2FAKE
+)
+[ "$got" = "0 True True" ] \
+  && ok "--calibrate's CAUTION prints the exact computed spread and min R2, and the REGIME count excludes a poorly fit period" \
+  || bad "--calibrate computed CAUTION numbers and R2 filter" "$(flat "$got")"
+
+
 # ------------------------- 15. A PAIR THAT STRADDLES A RESET THE METER CLIMBED PAST
 # The dp<0 guard only sees a reset when the LATER reading reads lower. The two real
 # readings on file straddle the 2026-09-04 out-of-band reset and their delta is

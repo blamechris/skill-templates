@@ -1467,12 +1467,34 @@ def _regime_note(instants, windows=MULTIPLIER_WINDOWS):
         after = sum(1 for t in ts if t >= w1)
         inside = sum(1 for t in ts if w0 <= t < w1)
         if before and after:
+            # An inside reading next to both sides is still unassignable: say so rather
+            # than letting "mixes two caps" stand for it.
+            also = (f", and {inside} fall inside it and cannot be assigned to either"
+                    if inside else "")
             parts.append(f"{before} reading(s) precede and {after} follow a cap change "
-                         f"({why}), so this median mixes two caps (#250)")
+                         f"({why}){also}, so this median mixes two caps (#250)")
         elif inside:
             parts.append(f"{inside} reading(s) fall inside a cap-change window ({why}) and "
                          f"cannot be assigned to either cap (#250)")
     return "; " + "; ".join(parts) if parts else ""
+
+
+def _period_regimes(spans, windows=MULTIPLIER_WINDOWS):
+    """[(n_before, n_after, why)] for each window that well-fit periods sit on BOTH sides of.
+
+    `spans` are (t0, t1) epoch seconds of the periods the median is taken over. A period
+    is before a window only if it ENDS before w0 and after it only if it STARTS at or
+    after w1 -- the same closed-near, half-open-far edges as `multiplier_change_between`,
+    so a period with a sample at w0 is in neither (#250). `_segments` already drops
+    in-window samples, so for --calibrate's own periods that case cannot arise.
+    """
+    out = []
+    for w0, w1, why in windows:
+        nb = sum(1 for _, t1 in spans if t1 < w0)
+        na = sum(1 for t0, _ in spans if t0 >= w1)
+        if nb and na:
+            out.append((nb, na, why))
+    return out
 
 
 def resolve_cap(kind, rows, use_cached=True):
@@ -2476,14 +2498,10 @@ def main():
                       f"middle of that range.\n  Treat ${med:,.0f} as a central estimate, "
                       f"not a measured constant.")
             # Independent of the spread: a mixed-cap median is wrong even when it is tight.
-            for w0, w1, why in MULTIPLIER_WINDOWS:
-                gp = [sp for (_, _, r, _), sp in zip(rowsc, spans)
-                      if r is not None and r >= 0.95]
-                nb = sum(1 for _, t1 in gp if t1 < w0)
-                na = sum(1 for t0, _ in gp if t0 >= w1)
-                if nb and na:
-                    print(f"  REGIME: {nb} period(s) precede and {na} follow a cap change "
-                          f"({why}), so the median mixes two caps (#250).")
+            gp = [sp for (_, _, r, _), sp in zip(rowsc, spans) if r is not None and r >= 0.95]
+            for nb, na, why in _period_regimes(gp):
+                print(f"  REGIME: {nb} period(s) precede and {na} follow a cap change "
+                      f"({why}), so the median mixes two caps (#250).")
             print("NOTE: these samples carry no Fable meter, so the Fable cap still needs "
                   "a hand-recorded reading.")
         return 0
