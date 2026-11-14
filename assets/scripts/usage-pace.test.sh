@@ -1103,6 +1103,185 @@ case "$got" in
 esac
 
 
+# ------------------------- 15a. CAP-REGIME DISCLOSURE (#250, item 4)
+# --calibrate's CAUTION used to assert one historical dataset as present fact ("the six
+# periods", "NOT explained by the +50% boost", "R2 is 0.98+"), and the --caps absolute
+# fallback named only resets as a caveat. Every figure below must come from THIS run.
+REGPY=$TMP/regime-e2e.py
+cat > "$REGPY" <<'REGEOF'
+import importlib.util, json, pathlib, shutil, sys, io, contextlib
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); tag=sys.argv[3]; periods=json.loads(sys.argv[4])
+root=tmp/("rg-"+tag); shutil.rmtree(root, ignore_errors=True); root.mkdir()
+up.ROOT=root; up.HIST=tmp; up.CACHE=tmp/(tag+"_c.json"); up.CALIB=tmp/(tag+"_calib.json")
+up.READINGS=tmp/(tag+"_r.md")
+D=lambda d,h: int(up.datetime(2026,9,d,h,0,tzinfo=up.PT).timestamp()*1000)
+recs=[]; samples=[]; n=0; bases=[]
+for (day,hour,per_step) in periods:
+    base=D(day,hour); bases.append(base)
+    for i in range(40):
+        for _ in range(per_step):
+            recs.append(json.dumps({"type":"assistant","timestamp":
+                up.datetime.fromtimestamp((base+i*10*60000+n)/1000, up.timezone.utc)
+                  .isoformat().replace("+00:00","Z"),
+                "message":{"id":"m%d"%n,"model":"claude-opus-5",
+                           "usage":{"output_tokens":80000,"inference_geo":"global"}}}, separators=(",",":")))
+            n+=1
+        samples.append({"t": base+i*10*60000, "u": {"sd": i}})
+(root/"t.jsonl").write_text("\n".join(recs)+"\n")
+up.PLAN_SAMPLES=tmp/(tag+"_plan.json")
+up.PLAN_SAMPLES.write_text(json.dumps({"version":2,"samples":samples}))
+sp=[]; plain=up.sampled_caps(); withsp=up.sampled_caps(spans=sp)
+out=io.StringIO(); sys.argv=["x","--calibrate"]
+with contextlib.redirect_stdout(out): rc=up.main()
+exp=[(b/1000.0,(b+39*10*60000)/1000.0) for b in bases]
+print("RC", rc)
+print("SAMEVALS", plain==withsp)
+print("SPANS", len(sp)==len(withsp) and sp==exp)
+print("OUT", out.getvalue().replace("\n","|"))
+REGEOF
+
+# both sides: two periods before 09-13 (09-05, 09-07) and one after (09-15)
+got=$("$PY" "$REGPY" "$SUT" "$TMP" both '[[5,0,1],[7,0,2],[15,0,1]]' 2>&1)
+out=$(printf '%s\n' "$got" | sed -n 's/^OUT //p')
+rc=$(printf '%s\n' "$got" | sed -n 's/^RC //p')
+c1=0; case "$out" in *"REGIME: 2 period(s) precede and 1 follow a cap change (the +50% boost expired"*"mixes two caps (#250)"*) c1=1 ;; esac
+c2=0; case "$out" in *"the 3 well-fit period(s) span"*"min R2 "*) c2=1 ;; esac
+c3=1; case "$out" in *"six"*|*"NOT explained"*|*"0.98"*|*"model mix"*) c3=0 ;; esac
+[ "$rc" = 0 ] && [ "$c1" = 1 ] && [ "$c2" = 1 ] && [ "$c3" = 1 ] \
+  && ok "--calibrate across a cap change prints a COMPUTED regime line (2 before, 1 after, with the window's why)" \
+  || bad "--calibrate regime line across a cap change" "rc=$rc c1=$c1 c2=$c2 c3=$c3 out=$out"
+
+# the printed min R2 is the minimum over the good periods, not a constant
+got2=$("$PY" "$REGPY" "$SUT" "$TMP" r2 '[[5,0,1],[7,0,2],[15,0,1]]' 2>&1)
+r2chk=$("$PY" - "$SUT" "$TMP" <<'R2PY' 2>&1
+import importlib.util, json, pathlib, re, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2])
+up.ROOT=tmp/"rg-r2"; up.HIST=tmp; up.CACHE=tmp/"r2_c.json"
+up.PLAN_SAMPLES=tmp/"r2_plan.json"
+good=[r for _,_,r,_ in up.sampled_caps() if r is not None and r>=0.95]
+print("%.3f" % min(good))
+R2PY
+)
+case "$got2" in *"min R2 $r2chk"*) ok "--calibrate prints the minimum R2 of the good periods (computed, not 0.98+)" ;;
+  *) bad "--calibrate prints the computed minimum R2" "want=$r2chk out=$got2" ;; esac
+
+# one side only: no regime line and no boost claim, though the CAUTION still fires
+got=$("$PY" "$REGPY" "$SUT" "$TMP" one '[[5,0,1],[7,0,2]]' 2>&1)
+out=$(printf '%s\n' "$got" | sed -n 's/^OUT //p')
+d1=1; case "$out" in *"REGIME"*|*"cap change"*|*"boost"*) d1=0 ;; esac
+d2=0; case "$out" in *"the 2 well-fit period(s) span"*) d2=1 ;; esac
+[ "$d1" = 1 ] && [ "$d2" = 1 ] \
+  && ok "--calibrate with every period on one side prints no regime line and no boost claim" \
+  || bad "--calibrate one-sided prints no regime line" "d1=$d1 d2=$d2 out=$out"
+
+# (4a) spans: filled in lockstep, in SECONDS, return value unchanged by the out-param
+sv=$(printf '%s\n' "$got" | sed -n 's/^SAMEVALS //p'); ss=$(printf '%s\n' "$got" | sed -n 's/^SPANS //p')
+[ "$sv" = True ] && [ "$ss" = True ] \
+  && ok "sampled_caps(spans=) appends one (t0,t1) epoch-SECOND span per period, in order, values unchanged" \
+  || bad "sampled_caps spans out-param" "same=$sv spans=$ss"
+
+# (3) resolve_cap absolute fallback
+OLDBASIS='median of 2 single reading(s) -- ABSOLUTE, assumes the meter zeroed at the week open; wrong after an out-of-band reset'
+export OLDBASIS
+got=$(pymod '
+import os
+row=lambda at,pct: {"week":"w","at":at,"all_pct":pct,"fable_pct":None,"all_at":1200.0,"fable_at":None,"policy":up.COST_POLICY}
+up.CALIB=pathlib.Path(sys.argv[3])+"" if False else pathlib.Path(sys.argv[3]+".nope")
+old=os.environ["OLDBASIS"]
+def basis(rows): c,b,_=up.resolve_cap("all", rows); return b
+both=basis([row("2026-09-10T12:00:00-07:00",40), row("2026-09-16T12:00:00-07:00",50)])
+one=basis([row("2026-09-16T12:00:00-07:00",40), row("2026-09-17T12:00:00-07:00",45)])
+before=basis([row("2026-09-08T12:00:00-07:00",40), row("2026-09-10T12:00:00-07:00",45)])
+inside=basis([row("2026-09-13T12:00:00-07:00",40), row("2026-09-16T12:00:00-07:00",45)])
+print("BOTH", both.startswith(old+"; 1 reading(s) precede and 1 follow a cap change (the +50% boost expired") and "mixes two caps (#250)" in both)
+print("ONE", one==old, before==old)
+print("INSIDE", "1 reading(s) fall inside a cap-change window" in inside and "ABSOLUTE" in inside)' "$TMP/none" 2>&1)
+[ "$(printf '%s' "$got" | sed -n 's/^BOTH //p')" = True ] \
+  && ok "absolute fallback with readings on both sides of the cap change names the window and says the median mixes two caps" \
+  || bad "absolute fallback cap-change caveat" "$(flat "$got")"
+[ "$(printf '%s' "$got" | sed -n 's/^ONE //p')" = "True True" ] \
+  && ok "absolute fallback with readings all on one side is byte-identical to the old basis" \
+  || bad "absolute fallback unchanged on one side" "$(flat "$got")"
+[ "$(printf '%s' "$got" | sed -n 's/^INSIDE //p')" = True ] \
+  && ok "absolute fallback names a reading inside the window as ambiguous" \
+  || bad "absolute fallback inside-window caveat" "$(flat "$got")"
+
+# (4b) instants: lockstep with the caps and only for CONTRIBUTING rows; values unchanged
+got=$(pymod '
+row=lambda at,pct,at_=1200.0: {"at":at,"all_pct":pct,"fable_pct":None,"all_at":at_,"fable_at":None}
+rows=[row("2026-09-10T12:00:00-07:00",40), row("2026-09-10T13:00:00-07:00",1),   # below MIN_PCT: dropped
+      row("",50), row("2026-09-16T12:00:00-07:00",50,0.0),                       # undated kept; no spend dropped
+      row("2026-09-16T14:00:00-07:00",60)]
+ins={}; a=up.implied_caps(rows, instants=ins); b=up.implied_caps(rows)
+want=[up.datetime.fromisoformat("2026-09-10T12:00:00-07:00").timestamp(), None,
+      up.datetime.fromisoformat("2026-09-16T14:00:00-07:00").timestamp()]
+print(a==b, len(a["all"])==3, ins.get("all")==want, ins.get("fable") is None)')
+[ "$got" = "True True True True" ] \
+  && ok "implied_caps(instants=) is filled in lockstep with the caps, contributing rows only, values unchanged" \
+  || bad "implied_caps instants out-param" "$(flat "$got")"
+
+
+# Edges, pinned exactly (review of #485: every one of these survived as a mutant). A
+# reading AT w0 is inside the window (closed near edge); a reading AT w1 is after it
+# (half-open far edge) -- the semantics of multiplier_change_between.
+got=$(pymod '
+w0,w1,why=up.MULTIPLIER_WINDOWS[0]; n=up._regime_note
+two=lambda b,a,extra="": "; %d reading(s) precede and %d follow a cap change (%s)%s, so this median mixes two caps (#250)" % (b,a,why,extra)
+ins=lambda k: "; %d reading(s) fall inside a cap-change window (%s) and cannot be assigned to either cap (#250)" % (k,why)
+checks=[n([w0-1, w1])==two(1,1),                      # just before w0, exactly w1: both sides
+        n([w0])==ins(1),                              # exactly w0: inside
+        n([w1-0.001])==ins(1),                        # just before w1: still inside
+        n([w0, w1])==ins(1),                          # w0 is NOT before, so one side only
+        n([w0-1, w0, w1])==two(1,1,", and 1 fall inside it and cannot be assigned to either"),
+        n([w1])=="", n([w0-1])=="", n([None, None])==""]
+print(" ".join(str(c) for c in checks))')
+[ "$got" = "True True True True True True True True" ] \
+  && ok "_regime_note's edges: w0 is inside, w1 is after, and an inside reading beside both sides is named" \
+  || bad "_regime_note edges" "$(flat "$got")"
+
+got=$(pymod '
+w0,w1,why=up.MULTIPLIER_WINDOWS[0]; p=up._period_regimes
+checks=[p([(w0-100, w0-1), (w1, w1+100)])==[(1,1,why)],     # starts exactly at w1: after
+        p([(w0-100, w0), (w1, w1+100)])==[],                # ends AT w0: touches the window, not before
+        p([(w0-100, w0-1), (w1-1, w1+100)])==[],            # starts inside: not after
+        p([(w1, w1+100)])==[], p([])==[]]
+print(" ".join(str(c) for c in checks))')
+[ "$got" = "True True True True True" ] \
+  && ok "_period_regimes' edges: a period ending at w0 is not before, one starting at w1 is after" \
+  || bad "_period_regimes edges" "$(flat "$got")"
+
+# The CAUTION's numbers, and the R2 filter on the REGIME count, against periods whose R2
+# differ visibly: min R2 must read 0.960 (max would be 0.990), the half-spread of
+# $1,000-$2,000 is (2000-1000)/(2000+1000) = 33%, and the poorly fit period (R2 0.50,
+# before the window) must count neither in the CAUTION nor in the REGIME line.
+got=$("$PY" - "$SUT" "$TMP" <<'R2FAKE' 2>&1
+import importlib.util, io, contextlib, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); up.CALIB=tmp/"r2fake_calib.json"
+w0,w1,_=up.MULTIPLIER_WINDOWS[0]
+rows=[("a",1000.0,0.99,10),("b",2000.0,0.96,10),("c",9000.0,0.50,10)]
+sp=[(w0-9000,w0-8000),(w1+1000,w1+2000),(w0-7000,w0-6000)]
+def fake(unit="$", spans=None):
+    if spans is not None: spans.extend(sp)
+    return list(rows)
+up.sampled_caps=fake
+out=io.StringIO(); sys.argv=["x","--calibrate"]
+with contextlib.redirect_stdout(out): rc=up.main()
+o=out.getvalue()
+print(rc, "the 2 well-fit period(s) span $1,000-$2,000 (2.00x; min R2 0.960), +/-33% about" in o,
+      "REGIME: 1 period(s) precede and 1 follow" in o)
+R2FAKE
+)
+[ "$got" = "0 True True" ] \
+  && ok "--calibrate's CAUTION prints the exact computed spread and min R2, and the REGIME count excludes a poorly fit period" \
+  || bad "--calibrate computed CAUTION numbers and R2 filter" "$(flat "$got")"
+
+
 # ------------------------- 15. A PAIR THAT STRADDLES A RESET THE METER CLIMBED PAST
 # The dp<0 guard only sees a reset when the LATER reading reads lower. The two real
 # readings on file straddle the 2026-09-04 out-of-band reset and their delta is
