@@ -4,10 +4,12 @@
     {
       "label": "mandatory-issues",
       "anyOf": [
-        "MANDATORY",
-        "mandatory",
-        "MUST.*issue"
-      ]
+        "MANDATORY[^\\n]{0,80}(?:create|file|open|track|raise) (?:a |an )?(?:tracked )?(?:GitHub )?issue",
+        "MUST get an? (?:tracked )?(?:GitHub )?issue",
+        "for everything else \\(MANDATORY",
+        "(?:[Nn]onblocking|[Dd]eferred) (?:findings|items|suggestions) may become follow-up issues"
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"MANDATORY\", \"mandatory\", \"MUST.*issue\"]. Deleting the MANDATORY sentence left the guard green on the `**CRITICAL: Every follow-up issue MUST be linked in the posted PR review comment.**` line, a different rule (the link requirement) that `MUST.*issue` matched. Now binds the MANDATORY sentence (a MANDATORY marker followed by a create/file/open issue verb on the same line) and three installed rewordings: exodus-loop `MUST get a tracked GitHub issue`, repo-relay `for everything else (MANDATORY`, and chroxy's softer `Nonblocking findings may become follow-up issues`. The chroxy wording is a considered relaxation of the template rule, kept green so those copies do not newly fail; drop that alternate if the fleet adopts the mandatory wording. The bare `MANDATORY` and `mandatory` are not alternates (they matched the exodus-loop heading and table cells). An inverted sentence that keeps the anchor (\"MANDATORY: do not create a tracked issue\") still matches: the known inversion class (#226). Owner decision (2026-11-14, #495): chroxy's fold-or-evidence policy ('Nonblocking findings may become follow-up issues with evidence ...') is accepted as a deliberate local form of this rule, so its alternate stays and the chroxy copies remain green."
     },
     {
       "label": "issue-creation-code",
@@ -68,18 +70,19 @@
     {
       "label": "evidence-over-vagueness",
       "anyOf": [
-        "Reference exact lines",
-        "read surrounding code in changed files",
-        "[Cc]ite exact lines"
-      ]
+        "Be specific\\. Reference exact lines",
+        "(?:[Cc]ite|[Rr]eference|[Qq]uote) (?:the )?exact (?:lines|file and line)",
+        "(?:[Cc]ite|[Rr]eference) (?:the )?(?:file(?:s)? and )?line numbers"
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"Reference exact lines\", \"read surrounding code in changed files\", \"[Cc]ite exact lines\"]. Deleting the `Be specific. Reference exact lines.` rule left the guard green on the neighbouring rule `Review the DIFF, but also read surrounding code in changed files for context.`, which is a different instruction. That alternate is dropped; the rest bind the exact-lines sentence and its rewordings."
     },
     {
       "label": "tiered-subagents",
       "anyOf": [
-        "workhorse tier by default",
-        "run at the workhorse tier",
-        "Delegation tiers"
-      ]
+        "workhorse[- ]tier(?: model)? by default",
+        "(?:[Rr]un|[Rr]uns|[Dd]efault|[Dd]efaults) (?:at|to|on) (?:the |a )?workhorse[- ]tier"
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"workhorse tier by default\", \"run at the workhorse tier\", \"Delegation tiers\"]. Deleting the bullet `Panel agents run at the workhorse tier by default.` left the guard green on the bold block label `**Delegation tiers (cost discipline — do not strip):**`, which is a heading for the whole block, not the default-tier rule. `Delegation tiers` is dropped; the rule bullet's own wording stays, widened to the genuine rewordings `default to the workhorse tier` and `workhorse-tier model by default`. The same shape sits in bug-hunt, parallel-dev (this batch) and project-audit and swarm-audit (batch B). An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
     },
     {
       "label": "hard-agent-ceiling",
@@ -163,10 +166,11 @@
     {
       "label": "cost-circuit-breaker",
       "anyOf": [
-        "circuit breaker",
         "[Oo]ver budget",
-        "stop and notify"
-      ]
+        "stop and notify",
+        "[Cc]ompare measured cost with the configured limit"
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"circuit breaker\", \"[Oo]ver budget\", \"stop and notify\"]. The bold label `**Cost circuit breaker at wave boundaries (queue checkpoints).**` survives rewriting the rule sentences that follow it, so `circuit breaker` held the guard green with the rule gone (the #494 panel's label shape; the line-level deletion goes red only because it removes the label too). The bare `circuit breaker` is dropped; the guard now binds the rule sentences (compare measured cost with the configured limit, over budget, stop and notify), the same alternates as tackle-issues/cost-circuit-breaker."
     },
     {
       "label": "explicit-path-staging",
@@ -312,10 +316,9 @@
       "label": "cap-findings-at-six",
       "anyOf": [
         "[Cc]ap your findings at 6",
-        "cap findings at 6",
-        "Quality over quantity",
-        "Quality over noise"
-      ]
+        "cap findings at 6"
+      ],
+      "note": "Vacuity fix (#495 PR A, panel): the 'Quality over quantity' and 'Quality over noise' alternates are slogans that share a line with the cap sentences, so deleting 'Cap your findings at 6.' and 'Hunters MUST cap findings at 6.' left the guard green on them. Now binds only the cap sentences. No installed copy relied on the slogans."
     },
     {
       "label": "confirm-before-filing",
@@ -328,10 +331,10 @@
     {
       "label": "tiered-subagents",
       "anyOf": [
-        "workhorse tier by default",
-        "run at the workhorse tier",
-        "Delegation tiers"
-      ]
+        "workhorse[- ]tier(?: model)? by default",
+        "(?:[Rr]un|[Rr]uns|[Dd]efault|[Dd]efaults) (?:at|to|on) (?:the |a )?workhorse[- ]tier"
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"workhorse tier by default\", \"run at the workhorse tier\", \"Delegation tiers\"]. Deleting the bullet `Hunters run at the workhorse tier by default.` left the guard green on the bold block label `**Delegation tiers (cost discipline — do not strip):**`. `Delegation tiers` is dropped; the bullet's own wording stays, widened to `default to the workhorse tier` and `workhorse-tier model by default`. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
     },
     {
       "label": "hard-agent-ceiling",
@@ -389,10 +392,12 @@
     {
       "label": "next-step",
       "anyOf": [
-        "Suggested next step",
-        "one next step",
-        "single .*next step"
-      ]
+        "[Ee]nd on (?:exactly )?one (?:suggested )?next step",
+        "[Ee]nd with (?:exactly )?(?:one|a single) (?:concrete )?(?:suggestion|next step|action)",
+        "(?:[Ff]inish|[Cc]lose|[Cc]onclude) (?:on|with) (?:exactly )?(?:one|a single) (?:suggested |concrete )?(?:next step|suggestion|action)",
+        "single concrete suggestion, not a menu"
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"Suggested next step\", \"one next step\", \"single .*next step\"]. Deleting the rule sentences (`End on exactly one suggested next step.` and Critical Rule 4 `One next step`) left the guard green on the `### Suggested next step` output-template heading and on the skill description (`ending with a single suggested next step`, via `single .*next step`). Both are dropped. The guard now binds the closing sentence, Critical Rule 4's `end with a single concrete suggestion, not a menu`, and rewordings; none matches the heading, the description or the `{ONE concrete action...}` template line."
     }
   ],
   "changelog": [
@@ -997,16 +1002,20 @@
       "label": "entry-cap",
       "anyOf": [
         "3 entries max",
-        "max 3",
-        "at most 3"
-      ]
+        "(?:[Aa]t most|[Nn]o more than|[Mm]ax(?:imum)?(?: of)?) \\*{0,2}(?:3|three)\\*{0,2} (?:entries|candidates|learnings|insights)",
+        "(?:3|three) (?:entries|candidates|learnings|insights) (?:max|maximum|at most)"
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"3 entries max\", \"max 3\", \"at most 3\"]. Deleting the cap sentences (Safety Rule 1 and Step 1's `extract at most 3 candidates`) left the guard green on the step heading `### 1. Extract Candidate Learnings (max 3)`, matched by `max 3`. That alternate is dropped; `at most 3` now needs a count noun after it, so it no longer matches loosely."
     },
     {
       "label": "self-ref-guard",
       "anyOf": [
-        "self-referential",
-        "Self-referential"
-      ]
+        "[Nn]o self-referential rules?",
+        "[Nn]ever (?:persist|save|store|record) rules? that (?:modify|change|alter)",
+        "(?:[Dd]o not|[Nn]ever|[Dd]on't) (?:persist|save|record|store)[^\\n]{0,30}self-referential",
+        "[Rr]eject (?:any )?self-referential"
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"self-referential\", \"Self-referential\"]. Deleting Safety Rule 7 left the guard green on the example heading `### Example: Self-referential rule detected`, matched by the capitalised alternate (and the bare lowercase one would match any mention). Both are dropped; the guard binds the prohibition sentence (`No self-referential rules`, `Never persist rules that modify...`) and rewordings, none of which match the example heading or its output."
     }
   ],
   "look-approve": [
@@ -1037,10 +1046,10 @@
     },
     {
       "label": "backup-and-restore-real-user-data",
-      "note": "The prototype overwrote a live save on its first run. The rule is the backup-plus-restore pair, not the mere mention of a save path — an alternate matching only the SAVE_DIR assignment would sit inside a code fence and survive deletion of the rule.",
+      "note": "The prototype overwrote a live save on its first run. The rule is the backup-plus-restore pair, not the mere mention of a save path — an alternate matching only the SAVE_DIR assignment would sit inside a code fence and survive deletion of the rule. Vacuity fix (#495, batch A): the alternate `-restore is mandatory, every run` matched the failure-modes table row `| A real save was clobbered | step 3 skipped | backup + `trap`-restore is mandatory, every run |`, which survived deleting the rule sentence. It is dropped, and a `back it up ... and restore it` reword alternate is added; none matches that row, the `trap` line or the Customization Points bullet (`backs up and restores`).",
       "anyOf": [
         "Back it up and restore it, every run",
-        "-restore is mandatory, every run",
+        "[Bb]ack (?:it|them|that|this) up (?:first )?and restore (?:it|them|that|this)",
         "[Bb]ack up and restore the (app|game)'s (real )?(user )?data"
       ]
     },
@@ -1063,10 +1072,10 @@
     {
       "label": "wait-on-completion-sentinel",
       "anyOf": [
-        "[Ww]ait on the sentinel, never on CPU or log activity",
-        "wait on `_DONE.txt`, not on CPU",
+        "[Ww]ait (?:on|for) the (?:completion )?sentinel",
         "[Nn]ever gate completion on CPU or log activity"
-      ]
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"[Ww]ait on the sentinel, never on CPU or log activity\", \"wait on `_DONE.txt`, not on CPU\", \"[Nn]ever gate completion on CPU or log activity\"]. The second alternate matched the failure-modes table row `| \"Hung\" for ~90s at first frame | ... | wait on `_DONE.txt`, not on CPU or log tail |`, which survived deleting the rule sentence. It is dropped; the first is shortened to `wait on/for the (completion) sentinel`, which matches the rule and rewordings but neither that row nor the artifact-table row `completion sentinel, written on success`."
     },
     {
       "label": "single-structured-verdict-ask",
@@ -1305,10 +1314,10 @@
     {
       "label": "tiered-subagents",
       "anyOf": [
-        "workhorse tier by default",
-        "run at the workhorse tier",
-        "Delegation tiers"
-      ]
+        "workhorse[- ]tier(?: model)? by default",
+        "(?:[Rr]un|[Rr]uns|[Dd]efault|[Dd]efaults) (?:at|to|on) (?:the |a )?workhorse[- ]tier"
+      ],
+      "note": "Vacuity fix (#495, batch A): was [\"workhorse tier by default\", \"run at the workhorse tier\", \"Delegation tiers\"]. Deleting the bullet `Implementers run at the workhorse tier by default.` left the guard green on the bold block label `**Delegation tiers (cost discipline — do not strip):**`. `Delegation tiers` is dropped; the bullet's own wording stays, widened to `default to the workhorse tier` and `workhorse-tier model by default`. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
     },
     {
       "label": "hard-agent-ceiling",
@@ -2024,10 +2033,10 @@
     {
       "label": "seed-written-by-the-script",
       "anyOf": [
-        "session-seed\\.py write",
+        "session-seed\\.py write (?:\\\\|--(?!refresh-pulse))",
         "[Dd]o not (hand-write the seed|reimplement any of this)"
       ],
-      "note": "The seed's scope key, session id, archive-on-collide, write and proof are ONE implementation with its own test suite (assets/scripts/session-seed.test.sh). Five adversarial rounds went into prose-containing-bash that every wave template then restated in a near-copy, and the copies drifted; a customized copy that reintroduces an inline version is that regression returning. Alternate 1 is the invocation, alternate 2 the prohibition on replacing it — both state the same rule, and neither matches a heading or a path mention."
+      "note": "The seed's scope key, session id, archive-on-collide, write and proof are ONE implementation with its own test suite (assets/scripts/session-seed.test.sh). Five adversarial rounds went into prose-containing-bash that every wave template then restated in a near-copy, and the copies drifted; a customized copy that reintroduces an inline version is that regression returning. Alternate 1 is the invocation, alternate 2 the prohibition on replacing it — both state the same rule, and neither matches a heading or a path mention. Tightened (#495, batch A, part c): alternate 1 was the bare `session-seed\\.py write`, which also matched the `/pulse persists a new snapshot only through session-seed.py write --refresh-pulse` cross-reference in the artifact ② paragraph, so deleting the invocation and the prohibition left the guard green on a pointer to a different mode of the same script. It now matches the fenced invocation (`session-seed.py write \\` with its line continuation) or a one-line `write --<flag>` form, and never `write --refresh-pulse`. The deliberate design stands: the invocation is the rule, and the prohibition is its restatement. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
     },
     {
       "label": "run-report-read-run-record",
@@ -2195,14 +2204,12 @@
     {
       "label": "read-only-never-writes",
       "anyOf": [
-        "[Nn]ever writes files, creates issues, creates PRs",
         "NEVER writes files",
         "[Nn]o file writes",
         "does NOT write report files",
-        "purely informational",
-        "writes nothing"
+        "purely informational"
       ],
-      "note": "Vacuity fix (#224, batch 2): the first alternate `[Nn]ever writes files` matched the intro line ('This skill is read-only \u2014 it never writes files, creates issues, or commits'), which is the skill's description, not the rule. Deleting Critical Rules 1 and 8 left it green. It is now `[Nn]ever writes files, creates issues, creates PRs`, the Critical Rule 1 enumeration, which the intro line lacks (`creates PRs`). The other alternates already matched only Critical Rules 1 and 8. An inverted rule that keeps the anchor (\"It NEVER writes files \u2014 unless asked to\") still matches: the known inversion class (#226)."
+      "note": "Vacuity fix (#224, batch 2): the first alternate `[Nn]ever writes files` matched the intro line ('This skill is read-only \u2014 it never writes files, creates issues, or commits'), which is the skill's description, not the rule. Deleting Critical Rules 1 and 8 left it green. It was then `[Nn]ever writes files, creates issues, creates PRs`, the Critical Rule 1 enumeration, which the intro line lacks (`creates PRs`). The other alternates already matched only Critical Rules 1 and 8. An inverted rule that keeps the anchor (\"It NEVER writes files \u2014 unless asked to\") still matches: the known inversion class (#226). Dead alternates dropped (#495, batch A): `[Nn]ever writes files, creates issues, creates PRs` could never match, because the template's Critical Rule 1 says `NEVER` in capitals and its intro line says `never` without `creates PRs`; and `writes nothing` matches neither the template nor any of the 33 installed copies. All 33 installed copies match `NEVER writes files`, `[Nn]o file writes`, `does NOT write report files` and `purely informational` and none relied on the dropped two, so no copy changes verdict."
     },
     {
       "label": "deduplicate-across-sources",
