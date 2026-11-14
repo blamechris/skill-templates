@@ -1282,6 +1282,38 @@ R2FAKE
   || bad "--calibrate computed CAUTION numbers and R2 filter" "$(flat "$got")"
 
 
+# The well-fit cutoff itself (#486): a period at exactly R2 0.95 is IN, one at 0.9499 is
+# OUT, and the median, the cached calibration, the CAUTION and the REGIME count all see
+# the same selection. Moving the cutoff either way, or letting one list use its own copy
+# of it, changes at least one of the asserted figures.
+got=$("$PY" - "$SUT" "$TMP" <<'CUTFAKE' 2>&1
+import importlib.util, io, contextlib, json, pathlib, sys
+spec=importlib.util.spec_from_file_location("up", sys.argv[1])
+up=importlib.util.module_from_spec(spec); spec.loader.exec_module(up)
+tmp=pathlib.Path(sys.argv[2]); up.CALIB=tmp/"cutfake_calib.json"
+w0,w1,_=up.MULTIPLIER_WINDOWS[0]
+rows=[("a",1000.0,0.95,10),("b",2500.0,0.9499,10),("c",3000.0,0.99,10)]
+sp=[(w0-9000,w0-8000),(w0-7000,w0-6000),(w1+1000,w1+2000)]
+def fake(unit="$", spans=None):
+    if spans is not None: spans.extend(sp)
+    return list(rows)
+up.sampled_caps=fake
+out=io.StringIO(); sys.argv=["x","--calibrate"]
+with contextlib.redirect_stdout(out): rc=up.main()
+o=out.getvalue(); c=json.loads(up.CALIB.read_text())
+print(rc,
+      "median of 2 well-fit period(s), mean R2 0.970" in o,
+      "the 2 well-fit period(s) span $1,000-$3,000 (3.00x; min R2 0.950)" in o,
+      "REGIME: 1 period(s) precede and 1 follow" in o,
+      (c["all"], c["periods"], c["lo"], c["hi"]) == (2000.0, 2, 1000.0, 3000.0),
+      up._well_fit(0.95), up._well_fit(0.9499), up._well_fit(None))
+CUTFAKE
+)
+[ "$got" = "0 True True True True True False False" ] \
+  && ok "--calibrate's well-fit cutoff: R2 0.95 is in and 0.9499 out, for the median, the cache, the CAUTION and the REGIME count alike" \
+  || bad "--calibrate well-fit cutoff at 0.95" "$(flat "$got")"
+
+
 # ------------------------- 15. A PAIR THAT STRADDLES A RESET THE METER CLIMBED PAST
 # The dp<0 guard only sees a reset when the LATER reading reads lower. The two real
 # readings on file straddle the 2026-09-04 out-of-band reset and their delta is
