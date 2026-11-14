@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "1a3d94b",
+  "generatedFromCommit": "10cf4a3",
   "skillCount": 45,
   "skills": [
     {
@@ -1320,17 +1320,17 @@
           "label": "gated-retry",
           "anyOf": [
             "[Rr]equire clean `?/full-review`? evidence covering the final head",
-            "ALL CI checks green on (?:that|the final) commit"
+            "(?:ALL|[Aa]ll) CI checks green on (?:that|the final) commit"
           ],
-          "note": "Vacuity fix (#495, strong-signal batch C): recovery never waives review, current-head CI, thread dispositions or protection. The old alternate matched the bold step label `Recheck every merge gate before retrying.`; deleting only the `Require clean /full-review evidence ..., ALL CI checks green ...` sentence left the guard green. Now binds that sentence."
+          "note": "Vacuity fix (#495, strong-signal batch C): recovery never waives review, current-head CI, thread dispositions or protection. The old alternate matched the bold step label `Recheck every merge gate before retrying.`; deleting only the `Require clean /full-review evidence ..., ALL CI checks green ...` sentence left the guard green. Now binds that sentence. Panel fix (#502): the CI alternate now also accepts lowercase 'all CI checks green'."
         },
         {
           "label": "reserved-prerequisite-only",
           "anyOf": [
             "[Aa]sk the owner only for an action reserved to them",
-            "[Rr]eport that exact requirement"
+            "(?:[Aa]sk|[Ee]scalate to) the owner (?:only|solely) (?:for|about) (?:an? )?(?:action|step|decision)s? (?:reserved|that is reserved) to (?:them|the owner)"
           ],
-          "note": "Vacuity fix (#495, strong-signal batch C): routine delegated merge stays with the agent in both modes; only actual owner prerequisites are handed off. The old alternate matched the bold step label `Escalate only the genuine prerequisite.`; deleting the two operative sentences left the guard green. Now binds them (report that exact requirement; ask the owner only for an action reserved to them). Two-statement rule: it goes red only when both are deleted."
+          "note": "Vacuity fix (#495, strong-signal batch C): routine delegated merge stays with the agent in both modes; only actual owner prerequisites are handed off. The old alternate matched the bold step label `Escalate only the genuine prerequisite.`; deleting the two operative sentences left the guard green. Now binds them (report that exact requirement; ask the owner only for an action reserved to them). Two-statement rule: it goes red only when both are deleted. Panel fix (#502): dropped the 'Report that exact requirement' alternate. It matched the step's escalation half, so deleting the limiting sentence 'Ask the owner only for an action reserved to them' left the guard green. It now binds that sentence and a rewording of it."
         }
       ]
     },
