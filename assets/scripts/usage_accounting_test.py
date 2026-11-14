@@ -2897,7 +2897,15 @@ class SessionFolderParityTests(SessionFixture):
     review-result.py: resolve_session_dir(sid), then _session_folders and sidecar_dirs /
     iter_agent_jsonl (#384). The usage scripts: session_subagent_roots(transcript), then
     session_child_files (#254, #377, #397). Both are compared as SORTED REALPATH LISTS,
-    not sets, so a lost realpath dedupe on either side shows up as a duplicate."""
+    not sets, so a lost realpath dedupe on either side shows up as a duplicate.
+
+    The parity is over the folders and transcripts each side READS. Which folder
+    resolve_session_dir picks does not reach that output (sidecar_dirs reads every folder of
+    the session either way); only whether it resolves or REFUSES does. Two differences are
+    deliberate and pinned below rather than hidden: depth below workflows/<run>/, and a
+    session that review-result.py cannot attribute to one folder. One more is out of scope
+    here: an unsearchable folder is counted as non-empty by review-result.py's resolver
+    (_has_children) and REFUSED by the usage scripts (_refuse_hidden_roots, #397)."""
 
     def setUp(self):
         super().setUp()
@@ -2996,6 +3004,20 @@ class SessionFolderParityTests(SessionFixture):
             self.projects / "-zzz-new" / SPLIT / "subagents", target_is_directory=True)
         self.assert_agree(transcript, folders=1, agents=2)
 
+    def test_two_holding_folders_with_no_transcript_beside_either_is_where_review_result_refuses(self):
+        """The second deliberate difference: with the main transcript in a third dir that has
+        no folder of its own, and children in two others, review-result.py cannot say which
+        folder is the session's and REFUSES, while the usage scripts read both."""
+        transcript = self.main_transcript("-mmm-now")
+        self.child("-aaa-first", "agent-01.jsonl")
+        self.child("-zzz-second", "agent-02.jsonl")
+        with redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            self.rr.resolve_session_dir(SPLIT)
+        self.assertIn("none holds the main transcript and 2 are non-empty", err.getvalue())
+        roots, _main_dir = usage_accounting.session_subagent_roots(str(transcript))
+        files, _holding = usage_accounting.session_child_files(roots)
+        self.assertEqual(sorted(os.path.basename(f) for f in files), ["agent-01.jsonl", "agent-02.jsonl"])
+
     def test_depth_beyond_a_workflow_run_is_where_the_two_differ(self):
         """The one known difference, kept on purpose: review-result.py looks one level into
         subagents/workflows/<run>/ (the deepest the harness writes), while
@@ -3007,8 +3029,7 @@ class SessionFolderParityTests(SessionFixture):
         rr_view, ua_view = self.finders(transcript)
         self.assertEqual(rr_view[0], ua_view[0])
         self.assertEqual([os.path.basename(p) for p in rr_view[1]], ["agent-a1.jsonl"])
-        self.assertEqual(sorted(os.path.basename(p) for p in ua_view[1]),
-                         ["agent-a1.jsonl", "agent-d4.jsonl"])
+        self.assertEqual([os.path.basename(p) for p in ua_view[1]], ["agent-a1.jsonl", "agent-d4.jsonl"])
 
 
 if __name__ == "__main__":
