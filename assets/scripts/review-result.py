@@ -453,14 +453,49 @@ def resolve_session_id(explicit):
     return sid
 
 
+PROJECTS_ROOT = "~/.claude/projects"
+
+
+def _session_matches(sid):
+    pattern = os.path.join(os.path.expanduser(PROJECTS_ROOT), "*", glob.escape(sid))
+    return sorted(p for p in glob.glob(pattern) if os.path.isdir(p))
+
+
+def _has_children(d):
+    # An unreadable folder may hold children: treat it as non-empty, so it is
+    # never silently ignored (a silent undercount is what #384 fixes).
+    try:
+        return bool(os.listdir(d))
+    except OSError:
+        return True
+
+
 def resolve_session_dir(sid):
-    pattern = os.path.join(os.path.expanduser("~/.claude/projects"), "*", glob.escape(sid))
-    matches = sorted(p for p in glob.glob(pattern) if os.path.isdir(p))
-    if len(matches) != 1:
+    """The session's directory. A session can be split across project dirs
+    (the harness re-slugs the cwd), leaving <sid>/ under more than one
+    ~/.claude/projects/*/. Prefer the folder beside the main transcript
+    (<proj>/<sid>.jsonl) and ignore extra folders that hold nothing;
+    sidecar_dirs() then reads children from every folder. REFUSE only when
+    nothing matches or no choice is defensible."""
+    matches = _session_matches(sid)
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        beside = [m for m in matches if os.path.isfile(m + ".jsonl")]
+        pool = beside if beside else matches
+        if len(beside) == 1:
+            return beside[0]
+        non_empty = [m for m in pool if _has_children(m)]
+        if len(non_empty) == 1:
+            return non_empty[0]
+        why = ("%d folders hold the main transcript" % len(beside) if len(beside) > 1
+               else "none holds the main transcript and %d are non-empty" % len(non_empty))
         die("session directory for %r is not exactly one match under "
-            "~/.claude/projects/*/%s (found %d) — cannot resolve where "
-            "subagent results live" % (sid, sid, len(matches)))
-    return matches[0]
+            "~/.claude/projects/*/%s (found %d; %s) — cannot resolve where "
+            "subagent results live" % (sid, sid, len(matches), why))
+    die("session directory for %r is not exactly one match under "
+        "~/.claude/projects/*/%s (found %d) — cannot resolve where "
+        "subagent results live" % (sid, sid, len(matches)))
 
 
 def normalize_agent(raw):
@@ -471,15 +506,38 @@ def normalize_agent(raw):
     return "agent-" + hexpart.lower()
 
 
+def _session_folders(session_dir):
+    """session_dir first, then every other ~/.claude/projects/*/<sid> of the
+    same session (sorted). A session_dir outside ~/.claude/projects has no
+    siblings."""
+    first = os.path.normpath(session_dir)
+    folders = [first]
+    root = os.path.realpath(os.path.expanduser(PROJECTS_ROOT))
+    if os.path.realpath(os.path.dirname(os.path.dirname(first))) == root:
+        folders += [m for m in _session_matches(os.path.basename(first)) if m != first]
+    return folders
+
+
 def sidecar_dirs(session_dir):
     """Every directory that can hold an agent-<hex>.{meta.json,jsonl} pair:
     <session-dir>/subagents/ itself (an agent the top-level session spawned
     directly), and one level into subagents/workflows/<runId>/ for each
     Workflow run (an agent that Workflow spawned — these do NOT appear
-    directly under subagents/ at all)."""
-    dirs = [os.path.join(session_dir, "subagents")]
-    dirs += sorted(glob.glob(os.path.join(session_dir, "subagents", "workflows", "*")))
-    return [d for d in dirs if os.path.isdir(d)]
+    directly under subagents/ at all). Covers every folder of a split
+    session (see resolve_session_dir), the given one first."""
+    dirs = []
+    for folder in _session_folders(session_dir):
+        dirs.append(os.path.join(folder, "subagents"))
+        dirs += sorted(glob.glob(os.path.join(glob.escape(folder), "subagents", "workflows", "*")))
+    seen, out = set(), []
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        rp = os.path.realpath(d)
+        if rp not in seen:
+            seen.add(rp)
+            out.append(d)
+    return out
 
 
 def find_sidecar_dir(session_dir, agent_name):

@@ -427,6 +427,22 @@ w_jsonl(os.path.join(sdir_287, "subagents", "agent-287amb0001.jsonl"), [
 ])
 
 print("fixtures OK")
+
+# ============================================================ split sessions (#384)
+# <sid>/ under two project slugs. sess-split: main transcript beside the
+# SECOND folder, one agent in each. sess-splite: extra folder is empty.
+spa, spb = proj + "-s1", proj + "-s2"
+w_jsonl(spb + "/sess-split.jsonl", [user("Real ask", "2026-09-21T01:00:00Z", origin="human"),
+                                    assistant("reply", "2026-09-21T01:00:01Z")])
+for folder, name in ((spa, "agent-5d000001"), (spb, "agent-5d000002")):
+    w_jsonl(os.path.join(folder, "sess-split", "subagents", name + ".jsonl"), [
+        user_blocks("brief", "2026-09-21T01:01:00Z"), assistant("report", "2026-09-21T01:01:05Z")])
+w_jsonl(spa + "/sess-splite.jsonl", [user("Real ask", "2026-09-21T02:00:00Z", origin="human"),
+                                     assistant("reply", "2026-09-21T02:00:01Z")])
+w_jsonl(os.path.join(spa, "sess-splite", "subagents", "agent-5d000003.jsonl"), [
+    user_blocks("brief", "2026-09-21T02:01:00Z"), assistant("report", "2026-09-21T02:01:05Z")])
+os.makedirs(spb + "/sess-splite", exist_ok=True)
+
 PYEOF
 
 # --------------------------------------------------------------- model stub
@@ -786,6 +802,28 @@ assert d["subagent_runs"] == 0, d["subagent_runs"]
 PY
 [ $? -eq 0 ] && ok "runs sess-empty: no subagents/ dir does not crash" \
   || bad "runs sess-empty: no subagents/ dir does not crash" "$(cat "$TMP/runs-empty.json")"
+
+run_stdout sess-split runs --json
+[ "$rc" -eq 0 ] && ok "runs sess-split (split session) exits 0" || bad "runs sess-split (split session) exits 0" "rc=$rc"
+echo "$out" > "$TMP/runs-split.json"
+"$PY" - "$TMP/runs-split.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["main_turns"] == 1, d["main_turns"]
+assert d["subagent_runs"] == 2, d["subagent_runs"]
+PY
+[ $? -eq 0 ] && ok "runs sess-split: subagent runs read from both folders" \
+  || bad "runs sess-split: subagent runs read from both folders" "$(cat "$TMP/runs-split.json")"
+run_stdout sess-splite runs --json
+echo "$out" > "$TMP/runs-splite.json"
+"$PY" - "$TMP/runs-splite.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["main_turns"] == 1 and d["subagent_runs"] == 1, d
+PY
+py_rc=$?
+[ "$rc" -eq 0 ] && [ "$py_rc" -eq 0 ] && ok "runs sess-splite: an empty extra folder is ignored" \
+  || bad "runs sess-splite: an empty extra folder is ignored" "rc=$rc $(cat "$TMP/runs-splite.json")"
 
 # ============================================================ GROUP D — distill pipeline
 echo; echo "D. distill — vocabulary enforcement, model-failure handling"

@@ -219,6 +219,36 @@ jfile(os.path.join(sdir, "workflows", "wf_xyz.json"), {
 os.makedirs(os.path.join(proj + "-a", "sess-ambig"), exist_ok=True)
 os.makedirs(os.path.join(proj + "-b", "sess-ambig"), exist_ok=True)
 
+# ---- split session (#384): <sid>/ under two project slugs, main transcript
+# beside the SECOND one. Agents live in both folders.
+sa, sb = proj + "-s1", proj + "-s2"
+jsonl(sb + "/sess-split.jsonl", [{"type": "user", "message": {"content": "main"}}])
+jsonl(sa + "/sess-split/subagents/agent-5b000001.jsonl", [assistant("R.\n\n" + fenced(GOOD))])
+jfile(sa + "/sess-split/subagents/agent-5b000001.meta.json", {"agentType": "general-purpose"})
+jsonl(sb + "/sess-split/subagents/agent-5b000002.jsonl", [assistant("R.\n\n" + fenced(GOOD))])
+jfile(sb + "/sess-split/subagents/agent-5b000002.meta.json", {"agentType": "general-purpose"})
+jfile(sa + "/sess-split/subagents/workflows/wf-s/agent-5b000003.result.json",
+      {"schema": 1, "source": "record", "session": "sess-split", "agent": "agent-5b000003",
+       "result": GOOD})
+# ---- split session whose extra folder is empty
+jsonl(sa + "/sess-splite.jsonl", [{"type": "user", "message": {"content": "main"}}])
+jsonl(sa + "/sess-splite/subagents/agent-5e000001.jsonl", [assistant("R.\n\n" + fenced(GOOD))])
+jfile(sa + "/sess-splite/subagents/agent-5e000001.meta.json", {"agentType": "general-purpose"})
+os.makedirs(sb + "/sess-splite", exist_ok=True)
+# ---- no folder holds the main transcript: the one non-empty folder is chosen
+jsonl(sa + "/sess-notr/subagents/agent-6a000001.jsonl", [assistant("R.\n\n" + fenced(GOOD))])
+jfile(sa + "/sess-notr/subagents/agent-6a000001.meta.json", {"agentType": "general-purpose"})
+os.makedirs(sb + "/sess-notr", exist_ok=True)
+# ---- the transcript sits beside an EMPTY folder; the agents are in the other one
+jsonl(sb + "/sess-besidee.jsonl", [{"type": "user", "message": {"content": "main"}}])
+os.makedirs(sb + "/sess-besidee", exist_ok=True)
+jsonl(sa + "/sess-besidee/subagents/agent-6b000001.jsonl", [assistant("R.\n\n" + fenced(GOOD))])
+jfile(sa + "/sess-besidee/subagents/agent-6b000001.meta.json", {"agentType": "general-purpose"})
+# ---- no transcript; one folder has an agent, the other will be made unreadable
+jsonl(sa + "/sess-unread/subagents/agent-6c000001.jsonl", [assistant("R.\n\n" + fenced(GOOD))])
+jfile(sa + "/sess-unread/subagents/agent-6c000001.meta.json", {"agentType": "general-purpose"})
+os.makedirs(sb + "/sess-unread/subagents", exist_ok=True)
+
 print("fixtures OK")
 PYEOF
 
@@ -679,6 +709,62 @@ PY
 py_rc=$?
 [ "$py_rc" -eq 0 ] && ok "list --json --near-misses emits {rows, near_misses} with the exact path/error" \
   || bad "list --json --near-misses emits {rows, near_misses} with the exact path/error" "$(cat "$TMP/list-nm.json")"
+
+# ------------------------------------------------- split session (#384)
+S1="$PROJ-s1"; S2="$PROJ-s2"
+run_in sess-split "$GOOD" record --agent agent-5b000001 --skill agent-review
+[ "$rc" -eq 0 ] && [ -f "$S1/sess-split/subagents/agent-5b000001.result.json" ] \
+  && ok "split: record on an agent in the non-transcript folder writes beside that agent" \
+  || bad "split: record on an agent in the non-transcript folder writes beside that agent" "rc=$rc $(flat "$out")"
+run_in sess-split "$GOOD" record --agent agent-5b000002 --skill agent-review
+[ "$rc" -eq 0 ] && [ -f "$S2/sess-split/subagents/agent-5b000002.result.json" ] \
+  && ok "split: record on an agent in the transcript folder writes beside that agent" \
+  || bad "split: record on an agent in the transcript folder writes beside that agent" "rc=$rc $(flat "$out")"
+run_stdout sess-split list --json
+echo "$out" > "$TMP/list-split.json"
+"$PY" - "$TMP/list-split.json" <<'PY'
+import json, sys
+ids = sorted(r["id"] for r in json.load(open(sys.argv[1])))
+assert ids == ["agent-5b000001", "agent-5b000002", "agent-5b000003"], ids
+PY
+py_rc=$?
+[ "$rc" -eq 0 ] && [ "$py_rc" -eq 0 ] && ok "split: list reads results from both folders (incl. nested workflow level)" \
+  || bad "split: list reads results from both folders" "rc=$rc $(cat "$TMP/list-split.json")"
+rm -f "$S1/sess-split/subagents/agent-5b000001.result.json" "$S2/sess-split/subagents/agent-5b000002.result.json"
+run sess-split harvest
+[ "$rc" -eq 0 ] && [ -f "$S1/sess-split/subagents/agent-5b000001.result.json" ] \
+  && [ -f "$S2/sess-split/subagents/agent-5b000002.result.json" ] \
+  && ok "split: harvest reads agents from both folders and writes beside each" \
+  || bad "split: harvest reads agents from both folders and writes beside each" "rc=$rc $(flat "$out")"
+# empty extra folder is ignored, not an ambiguity
+run_in sess-splite "$GOOD" record --agent agent-5e000001 --skill agent-review
+[ "$rc" -eq 0 ] && [ -f "$S1/sess-splite/subagents/agent-5e000001.result.json" ] \
+  && ok "split: an empty extra folder is ignored (record succeeds)" \
+  || bad "split: an empty extra folder is ignored (record succeeds)" "rc=$rc $(flat "$out")"
+run sess-splite list
+[ "$rc" -eq 0 ] && ok "split: list works with an empty extra folder" \
+  || bad "split: list works with an empty extra folder" "rc=$rc $(flat "$out")"
+# no folder holds the transcript: the single non-empty one is chosen, the empty one ignored
+run_in sess-notr "$GOOD" record --agent agent-6a000001 --skill agent-review
+[ "$rc" -eq 0 ] && [ -f "$S1/sess-notr/subagents/agent-6a000001.result.json" ] \
+  && ok "split: with no transcript beside either, the one non-empty folder is chosen" \
+  || bad "split: with no transcript beside either, the one non-empty folder is chosen" "rc=$rc $(flat "$out")"
+# the transcript's folder wins even when it is empty; its sibling's agents are still read
+run_in sess-besidee "$GOOD" record --agent agent-6b000001 --skill agent-review
+[ "$rc" -eq 0 ] && [ -f "$S1/sess-besidee/subagents/agent-6b000001.result.json" ] \
+  && ok "split: the folder beside the transcript is preferred even when empty, siblings still read" \
+  || bad "split: the folder beside the transcript is preferred even when empty" "rc=$rc $(flat "$out")"
+# an unreadable folder may hold agents: no silent choice, a legible REFUSE instead
+chmod 000 "$S2/sess-unread"
+if ls "$S2/sess-unread" >/dev/null 2>&1; then
+  printf '  skip %s\n' "split: unreadable folder (chmod has no effect here, e.g. root)"
+else
+  run sess-unread list
+  [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "cannot resolve where" && ! printf '%s' "$out" | grep -q Traceback \
+    && ok "split: an unreadable extra folder is not silently ignored (legible REFUSE)" \
+    || bad "split: an unreadable extra folder is not silently ignored" "rc=$rc $(flat "$out")"
+fi
+chmod 755 "$S2/sess-unread"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
