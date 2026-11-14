@@ -1594,9 +1594,10 @@
         {
           "label": "idempotent-reentry",
           "anyOf": [
-            "[Ii]dempotent",
-            "duplicate work"
-          ]
+            "[Rr]esum\\w* (?:mid-run )?(?:must|should) (?:never|not) (?:duplicate|repeat|redo)[^\\n.]{0,20}work",
+            "(?:[Dd]erive progress|[Pp]rogress is derived) from durable external state"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"[Ii]dempotent\", \"duplicate work\"]. Deleting the sentences `Resuming mid-run must never duplicate work. Derive progress from durable external state ...` left the guard green on the bold label `**Re-entry is idempotent.**`, which `[Ii]dempotent` matched. The label alternate is dropped; the guard now binds the two rule sentences (`never duplicate work`, `Derive progress from durable external state`) and the genuine rewording `must not repeat work`. 32 of 33 installed copies carry the sentences verbatim; the 33rd matched neither old alternate. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "mission-convergence",
@@ -1638,9 +1639,9 @@
         {
           "label": "zero-attribution",
           "anyOf": [
-            "[Zz]ero attribution",
-            "Co-Authored-By"
-          ]
+            "(?:[Nn]ever|NEVER|[Nn]o|[Dd]o not)(?: (?:add|include|write))?(?: an?)? `?[Cc]o-[Aa]uthored-[Bb]y"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"[Zz]ero attribution\", \"Co-Authored-By\"]. Deleting the rule sentence `never add `Co-Authored-By`, \"Generated with …\", or any AI/assistant mention to commits, PRs, issues, or docs.` left the guard green on the bold label `**Zero attribution**`, which `[Zz]ero attribution` matched (the bare `Co-Authored-By` alternate also matched anywhere the trailer is merely named). Now binds the prohibition itself: a `never` / `no` / `do not` (optionally followed by add, include or write) in front of `Co-Authored-By`, any case of the trailer name. All 33 installed copies match, including the 6 that say `Co-Authored-By: Claude` and the one that says `ZERO AI attribution anywhere (no Co-Authored-By, ...)`. An inverted sentence that keeps a negation word before the trailer still matches: the known inversion class (#226). Not bound: `any AI/assistant mention` (it is the second half of the same sentence, and a customization that keeps the trailer ban while rewording the rest is still correct)."
         },
         {
           "label": "never-commit-main",
@@ -1857,10 +1858,10 @@
         {
           "label": "tiered-subagents",
           "anyOf": [
-            "workhorse tier by default",
-            "run at the workhorse tier",
-            "Delegation tiers"
-          ]
+            "workhorse[- ]tier(?: model)? by default",
+            "(?:[Rr]un|[Rr]uns|[Dd]efault|[Dd]efaults) (?:at|to|on) (?:the |a )?workhorse[- ]tier"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"workhorse tier by default\", \"run at the workhorse tier\", \"Delegation tiers\"]. Deleting the bullet `Audit agents run at the workhorse tier by default.` left the guard green on the bold block label `**Delegation tiers (cost discipline — do not strip):**`. `Delegation tiers` is dropped; the bullet's own wording stays, widened to `default to the workhorse tier` and `workhorse-tier model by default`, the same shape as batch A's tiered-subagents guards. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "hard-agent-ceiling",
@@ -2063,10 +2064,10 @@
         {
           "label": "open-questions-over-guessing",
           "anyOf": [
-            "rather than guess",
-            "than fabricate",
-            "flag a gap"
-          ]
+            "[Ll]ist open questions (?:rather than|instead of) (?:guess|fabricat|invent)",
+            "[Ss]couts? (?:SHOULD|should|MUST|must) (?:list|flag|record|note) (?:the )?(?:open questions|unknowns|gaps)"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"rather than guess\", \"than fabricate\", \"flag a gap\"]. The rule sentence `Scouts SHOULD list open questions rather than guess.` is followed by the slogan `Better to flag a gap than fabricate.`, and `than fabricate` and `flag a gap` both matched that slogan, so deleting the rule sentence left the guard green. Now binds the rule sentence only: `list open questions rather than/instead of guess|fabricate|invent`, or a scout `SHOULD/MUST list|flag|record|note open questions|unknowns|gaps`. All 23 installed copies carry the sentence verbatim. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "never-push-recon-output",
@@ -2339,7 +2340,8 @@
           "label": "hard-trigger-table",
           "anyOf": [
             "\\| `review-churn` \\| `rounds` is 3 or more \\|"
-          ]
+          ],
+          "note": "Adjudicated (#495, batch B), guard unchanged: `guard-audit.py` lists this guard as a vacuity candidate because its only alternate is a table row. It is not vacuous. The threshold `rounds is 3 or more` appears nowhere else in the template (the prose above the table names the codes but not their thresholds), so the table row IS the rule, and deleting it turns the guard red. run-report has no installed copy to regress."
         },
         {
           "label": "security-lane-silent-on-issue",
@@ -2458,8 +2460,10 @@
         {
           "label": "cost-aggregate-command",
           "anyOf": [
-            "python3 ~/\\.claude/scripts/usage-checkpoint\\.py --aggregate-dir \"\\$T\""
-          ]
+            "[Cc]opy this run's checkpoints to a scratch directory",
+            "the aggregate sums (?:everything|all|every checkpoint)[^\\n.]{0,20} (?:in )?its directory"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [`python3 ~/.claude/scripts/usage-checkpoint.py --aggregate-dir \"$T\"`], the fenced command that ENACTS the rule. Deleting the rule sentence `Copy this run's checkpoints to a scratch directory and aggregate them, since the aggregate sums everything in its directory:` left the guard green on the command, and `guard-audit.py` listed it as a vacuity candidate for the same reason. The command is dropped (an anyOf is an OR, and the _comment says to bind the sentence and drop the command); the guard now binds the isolation rule: copy this run's checkpoints to a scratch directory, or the stated reason, that the aggregate sums everything in its directory. Deleting the `--aggregate-dir` command alone is no longer caught by this guard. run-report has no installed copy to regress."
         },
         {
           "label": "reach-release-by-tag-glob",
@@ -2568,9 +2572,10 @@
         {
           "label": "prs-split-by-author",
           "anyOf": [
-            "split by author",
-            "-author:@me"
-          ]
+            "the split matters so external contributions aren't lost",
+            "external (?:contributions|PRs|pull requests) (?:aren't|are not|don't get|do not get) (?:lost|missed|overlooked|buried)"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"split by author\", \"-author:@me\"]. Deleting the rule sentence `the split matters so external contributions aren't lost before autonomous work starts` left the guard green twice over: on the bold step label `**Open PRs, split by author**` (`split by author`) and on the `gh pr list --state open --search \"-author:@me\"` invocation that ENACTS the rule (`-author:@me`). Both are dropped. The guard now binds the rationale sentence, the only prose that states the rule, or a rewording of it (`external contributions/PRs aren't/are not lost|missed|overlooked|buried`). 23 of 35 installed copies carry the sentence verbatim and keep passing; the other 12 already failed the old guard (they restate the step as `open PRs (mine/others)`) and still fail. Trade-off, deliberate: a customization that deletes the rationale but keeps the label and both `gh pr list` commands still performs the split and now reads red, a false red rather than a false green. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "rederive-not-trust",
@@ -2683,7 +2688,8 @@
           "label": "run-report-follow-on-row",
           "anyOf": [
             "\\| `/run-report` \\| Run-level report and record"
-          ]
+          ],
+          "note": "Adjudicated (#495, batch B), guard unchanged: `guard-audit.py` lists this guard as a vacuity candidate because its only alternate is a table row. It is not vacuous. The components table is the one place the template says `/run-report` is a component to install alongside the bundle head (the other two mentions, in the seed and executive-brief steps, say to run it, not to install it), so the row IS the rule, and deleting it turns the guard red. 30 of 35 installed copies predate the row and already fail the guard; none changes verdict."
         }
       ]
     },
@@ -2722,10 +2728,10 @@
         {
           "label": "idempotent-profile",
           "anyOf": [
-            "[Ii]dempotent",
-            "[Rr]e-running reproduces the same profile",
+            "(?:[Rr]e-?running|[Rr]unning (?:it )?again)[^\\n.]{0,40}(?:same|identical) profile",
             "only changes when the repo does"
-          ]
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"[Ii]dempotent\", \"[Rr]e-running reproduces the same profile\", \"only changes when the repo does\"]. Deleting the rule sentence `Re-running reproduces the same profile from the same repo state; it only changes when the repo does.` left the guard green on the bold bullet label `**Idempotent.**`, which `[Ii]dempotent` matched. The label alternate is dropped and the sentence's own wording is widened to `running it again ... the same|identical profile`. All 8 installed copies carry the sentence verbatim. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "planned-posture-never-chosen",
@@ -2945,10 +2951,10 @@
         {
           "label": "tiered-subagents",
           "anyOf": [
-            "workhorse tier by default",
-            "run at the workhorse tier",
-            "Delegation tiers"
-          ]
+            "workhorse[- ]tier(?: model)? by default",
+            "(?:[Rr]un|[Rr]uns|[Dd]efault|[Dd]efaults) (?:at|to|on) (?:the |a )?workhorse[- ]tier"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"workhorse tier by default\", \"run at the workhorse tier\", \"Delegation tiers\"]. Deleting the bullet `Panel agents run at the workhorse tier by default.` left the guard green on the bold block label `**Delegation tiers (cost discipline — do not strip):**`. `Delegation tiers` is dropped; the bullet's own wording stays, widened to `default to the workhorse tier` and `workhorse-tier model by default`, the same shape as batch A's tiered-subagents guards. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "hard-agent-ceiling",
@@ -3289,12 +3295,12 @@
         {
           "label": "no-up-tier-delegation",
           "anyOf": [
-            "[Nn]o up-tier drift",
             "delegated \\*up\\*",
             "above the session ceiling",
             "never assume a higher tier",
             "[Nn]ever delegate up"
-          ]
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"[Nn]o up-tier drift\", \"delegated \\\\*up\\\\*\", \"above the session ceiling\", \"never assume a higher tier\", \"[Nn]ever delegate up\"]. Deleting the rule sentences (`nothing is ever delegated *up* past the session model ...` in the core-invariant paragraph and `Worker briefs and skills must not hard-code a model name above the session ceiling ...` in rule 3) left the guard green on the bold rule label `**No up-tier drift.**`, which `[Nn]o up-tier drift` matched. That alternate is dropped. The skill states this rule twice, once in the core invariant and once in rule 3, and the guard stays green if either survives, which is two genuine statements and not a label; it goes red when both are gone. The last two alternates match no template line and no installed copy, as before. 34 of 34 installed copies match. Known inversion class (#226): `delegated *up*` and `above the session ceiling` also match an inverted sentence."
         },
         {
           "label": "never-invent-a-tier",
@@ -3315,18 +3321,19 @@
         {
           "label": "orchestrator-checks-before-relaying",
           "anyOf": [
-            "prime investigator",
             "never relay a subagent conclusion",
-            "conserves tokens, not accountability"
-          ]
+            "[Ss]pot-check the load-bearing calls yourself",
+            "(?:[Nn]ever|[Dd]o not|[Dd]on't) (?:relay|forward|pass on)[^\\n.]{0,50}(?:subagent|worker|delegate)[^\\n.]{0,30}(?:conclusion|finding|claim|result)"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"prime investigator\", \"never relay a subagent conclusion\", \"conserves tokens, not accountability\"]. Deleting the rule sentences `Spot-check the load-bearing calls yourself; read the synthesis inputs yourself; never relay a subagent conclusion to the user that you haven't at least sanity-checked.` left the guard green twice over: on the bold rule label `**The orchestrator stays the prime investigator.**` and on the slogan `Delegation tiers conserves tokens, not accountability.` that follows. Both alternates are dropped. The guard now binds the rule sentence (`never relay a subagent conclusion`, `Spot-check the load-bearing calls yourself`) and a rewording of the relay prohibition (`never|do not relay|forward|pass on ... subagent|worker|delegate ... conclusion|finding|claim|result`). All 34 installed copies match. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "no-duplicate-delegated-work",
           "anyOf": [
-            "[Dd]on't duplicate delegated work",
             "waits for the result instead of re-running",
-            "not \\*re-doing\\*"
-          ]
+            "(?:waits?|should wait) (?:for|on) the (?:result|worker|delegate)[^\\n.]{0,40}(?:instead of|rather than) re-?(?:running|doing|searching|implementing)"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"[Dd]on't duplicate delegated work\", \"waits for the result instead of re-running\", \"not \\\\*re-doing\\\\*\"]. Deleting the rule sentence `Once a search/implementation is delegated, the orchestrator waits for the result instead of re-running it inline.` left the guard green on the bold rule label `**Don't duplicate delegated work.**` and on the slogan `Inline spot-checks are for *verifying*, not re-doing.` (`not \\\\*re-doing\\\\*`, which matched no installed copy's alternate before either). The label and slogan alternates are dropped; the sentence's own wording stays, widened to `wait(s) for the result|worker|delegate instead of|rather than re-running|re-doing|re-searching|re-implementing`. All 34 installed copies match. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "parallel-writers-get-worktrees",
@@ -3397,10 +3404,11 @@
         {
           "label": "report-entry",
           "anyOf": [
-            "report entry",
-            "entry in the end-of-session report",
-            "Merged by this session"
-          ]
+            "[Ee]very self-merged PR MUST appear (?:as (?:its own|an) entry )?in the end-of-session report",
+            "MUST appear as an entry in the end-of-session report",
+            "own entry in the end-of-session report"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"report entry\", \"entry in the end-of-session report\", \"Merged by this session\"]. Only `report entry` matched the template, and it matched the bold rule label `**A ledger and report entry are mandatory**`, so deleting the rule sentences after it left the guard green; the other two matched nothing in the template. `Merged by this session` was the heading of the report-format block that installed copies carry, a heading and not a rule, and is dropped with `report entry`. The guard now binds `Every self-merged PR MUST appear ... in the end-of-session report` in the template wording and in the installed wording (`as its own entry`, `as an entry`). All 5 installed copies match. Not bound: the ledger half of the same item (`immediately record the PR ... merge SHA in the session ledger`), which is a separate rule. Known inversion class (#226): `MUST appear` matches only if the sentence keeps that anchor."
         },
         {
           "label": "failed-gate-flags",
@@ -3458,10 +3466,12 @@
         {
           "label": "surface-unverified-claims",
           "anyOf": [
-            "Honesty surfaces",
+            "[Uu]nverified[^\\n]{0,40}mark it\\s*\\n?\\s*visually",
+            "[Mm]ark it\\s*\\n?\\s*visually",
             "don't bury it",
-            "mark it\\s*\\n?\\s*visually"
-          ]
+            "[Uu]nverified[^\\n.]{0,60}(?:warning callout|flagged|marked visually)"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"Honesty surfaces\", \"don't bury it\", \"mark it\\\\s*\\\\n?\\\\s*visually\"]. Deleting the rule sentence `if something is unverified / needs the user, mark it visually (a warning callout), don't bury it.` left the guard green on the bold bullet label `**Honesty surfaces:**`, which `Honesty surfaces` matched. That alternate is dropped; the other two stay, with a rewording that flags or surfaces unverified items in a warning callout. All 35 installed copies match."
         },
         {
           "label": "dark-by-default-no-light-flip",
@@ -3536,9 +3546,10 @@
           "label": "every-needs-user-item-reaches-the-owner",
           "anyOf": [
             "if an item appeared there, it appears here",
-            "[Ee]very `needs_user` item (goes|belongs) in the (chat )?message",
-            "no open owner decision is dropped between the scan and the message"
-          ]
+            "[Nn]o open owner decision is dropped between the scan and the message",
+            "opens with the decision list: every open owner decision"
+          ],
+          "note": "Vacuity fix (#495, batch B): was [\"if an item appeared there, it appears here\", \"[Ee]very `needs_user` item (goes|belongs) in the (chat )?message\", \"no open owner decision is dropped between the scan and the message\"]. Deleting the rule sentence in step 8 (`Pull it from the `needs_user` field of every agent's return — if an item appeared there, it appears here ...`) left the guard green on the failure-modes TABLE ROW `| Owner misses a decision | it lived only in the note | every `needs_user` item goes in the chat message |`, which restates the rule as a fix, not as the rule. That alternate is dropped. The step-8 lead sentence `The final chat message opens with the decision list: every open owner decision ...` is added as a second statement of the same rule, so the guard stays green while either step-8 sentence survives and goes red when both are gone. weekly-review has no installed copy to regress."
         },
         {
           "label": "final-message-is-not-a-prose-wall",
