@@ -80,6 +80,14 @@ d="$(tree)"; put "$d/generic/a.md" "$GOOD"$'\n''@media (prefers-color-scheme: li
 run "a prefers-color-scheme media query fails" 1 "$d" "prefers-color-scheme"
 d="$(tree)"; put "$d/generic/a.md" "$GOOD"$'\n''@media(  prefers-color-scheme :dark){}'
 run "media query with odd whitespace fails" 1 "$d" "prefers-color-scheme"
+d="$(tree)"; put "$d/generic/a.md" "$GOOD"$'\n''<link rel="stylesheet" href="l.css" media="(prefers-color-scheme: light)">'
+run "a link media attribute switch fails" 1 "$d" "prefers-color-scheme"
+d="$(tree)"; put "$d/generic/a.md" "$GOOD"$'\n''@import url(l.css) (prefers-color-scheme: light);'
+run "an @import switch fails" 1 "$d" "prefers-color-scheme"
+d="$(tree)"; put "$d/generic/a.md" "$GOOD"$'\n''<meta name="color-scheme" content="dark; light">'
+run "meta naming both schemes with another separator fails" 1 "$d" "combined"
+d="$(tree)"; put "$d/generic/a.md" "$GOOD"$'\n''<meta name="color-scheme" content="dark">'
+run "meta naming dark alone passes" 0 "$d"
 d="$(tree)"; put "$d/generic/a.md" "$GOOD"$'\n''Add no `prefers-color-scheme` light flip.'
 run "prose forbidding prefers-color-scheme passes" 0 "$d"
 d="$(tree)"; put "$d/generic/a.md" "$GOOD"$'\n'':root[data-theme="light"]{color-scheme:light;}'

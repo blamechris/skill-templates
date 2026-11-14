@@ -9,6 +9,14 @@ Detection is structural, not a name list, so a NEW HTML-emitting skill is held t
 the rule the day it lands: a template renders HTML if it contains an HTML
 document skeleton (`<!DOCTYPE html` / `<html`) or names a `.html` output file.
 
+Limits, stated so nobody reads more into a green run than it proves: every
+check is a text-presence test over the whole template. Rule 1 is satisfied by
+the declaration appearing anywhere, prose or comment included, so a skeleton
+that says `color-scheme: light` next to prose saying `color-scheme: dark`
+passes, and so does a sentence that negates the rule (the inversion-blindness
+of #226). What it does catch is the rule being DROPPED from a template, or a
+new HTML-rendering template that never had it, which is #381's gap.
+
 Usage: check-html-dark.py [--root DIR]
 Exit:  0 all detected templates comply
        1 at least one violation (every violation is reported)
@@ -26,13 +34,22 @@ HTML_OUTPUT = re.compile(r"[\w>\]\-`]\.html\b", re.I)
 
 DARK_ALONE = re.compile(r"(?<!prefers-)color-scheme\s*:\s*dark\b(?!\s*light)", re.I)
 COMBINED_DECL = re.compile(r"color-scheme\s*:\s*(?:light\s+dark|dark\s+light)\b", re.I)
+# A meta `content` value naming both schemes, in either order and with any
+# separator, in either attribute order.
+_BOTH = r"[^\"']*\b(?:light\b[^\"']*\bdark|dark\b[^\"']*\blight)\b"
 COMBINED_META = [
     re.compile(
-        r"name\s*=\s*[\"']color-scheme[\"'][^>]*content\s*=\s*[\"']\s*(?:light\s+dark|dark\s+light)\b", re.I),
+        r"name\s*=\s*[\"']color-scheme[\"'][^>]*content\s*=\s*[\"']" + _BOTH, re.I),
     re.compile(
-        r"content\s*=\s*[\"']\s*(?:light\s+dark|dark\s+light)\b[^>]*name\s*=\s*[\"']color-scheme[\"']", re.I),
+        r"content\s*=\s*[\"']" + _BOTH + r"[^>]*name\s*=\s*[\"']color-scheme[\"']", re.I),
 ]
-MEDIA_QUERY = re.compile(r"@media[^{;]*prefers-color-scheme", re.I)
+# A light/dark switch: an `@media` or `@import` query, or a `media="..."`
+# attribute (e.g. `<link media="(prefers-color-scheme: light)">`), that tests
+# prefers-color-scheme. Prose that names prefers-color-scheme to forbid it is
+# none of these.
+MEDIA_QUERY = re.compile(
+    r"@(?:media|import)\b[^{;]*prefers-color-scheme"
+    r"|\bmedia\s*=\s*[\"'][^\"']*prefers-color-scheme", re.I)
 
 
 def renders_html(text):
@@ -48,8 +65,8 @@ def violations(text):
         out.append("declares a combined `color-scheme: light dark` value "
                    "(CSS or meta tag); dark must stand alone")
     if MEDIA_QUERY.search(text):
-        out.append("contains an `@media (prefers-color-scheme ...)` query; "
-                   "no light/dark switch is allowed")
+        out.append("contains a prefers-color-scheme switch (`@media`, `@import` "
+                   "or a `media=` attribute); no light/dark switch is allowed")
     return out
 
 
