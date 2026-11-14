@@ -2167,10 +2167,9 @@
         {
           "label": "deprecate-never-delete",
           "anyOf": [
-            "(?:[Dd]o not|[Nn]ever) (?:delete|unpublish)|[Dd]on't (?:delete|unpublish) (?:it|the)",
-            "[Uu]npublishing breaks everyone who pinned"
+            "(?:[Dd]o not|[Nn]ever) (?:delete|unpublish)|[Dd]on't (?:delete|unpublish) (?:it|the)"
           ],
-          "note": "Vacuity fix (#495, batch D): was [\"do not delete/unpublish\", \"[Dd]eprecate, don't delete\", \"[Pp]refer deprecate over unpublish\"]. With step 3's rule sentences deleted the guard stayed green on the Notes bullet label `**Deprecate, don't delete.**` (alternate 1) and on the CUSTOMIZE marker text `prefer deprecate over unpublish` (alternate 2), which a customizing agent replaces anyway. Both are dropped. The guard now binds step 3's rule (`do not delete/unpublish it`, with rewordings `never unpublish` / `don't delete the ...`) and its rationale sentence `Unpublishing breaks everyone who pinned it`. The Notes bullet is deliberately not an alternate: it is a restatement, so it would keep the guard green after step 3 was gutted. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
+          "note": "Vacuity fix (#495, batch D): was [\"do not delete/unpublish\", \"[Dd]eprecate, don't delete\", \"[Pp]refer deprecate over unpublish\"]. With step 3's rule sentences deleted the guard stayed green on the Notes bullet label `**Deprecate, don't delete.**` (alternate 1) and on the CUSTOMIZE marker text `prefer deprecate over unpublish` (alternate 2), which a customizing agent replaces anyway. Both are dropped. The guard now binds step 3's rule (`do not delete/unpublish it`, with rewordings `never unpublish` / `don't delete the ...`) and its rationale sentence `Unpublishing breaks everyone who pinned it`. The Notes bullet is deliberately not an alternate: it is a restatement, so it would keep the guard green after step 3 was gutted. An inverted sentence that keeps the anchor still matches: the known inversion class (#226). Panel fix (#504): dropped the 'Unpublishing breaks everyone who pinned' alternate. That is the rationale sentence, so deleting the rule sentence ('do not delete/unpublish it') left the guard green."
         },
         {
           "label": "revert-not-force-reset",
@@ -2646,7 +2645,7 @@
             "[Rr]e-?(?:check|assert|verify)[^\\n]{0,80}git branch --show-current",
             "before (?:your |the )?first edit[^\\n]{0,120}before staging"
           ],
-          "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. The second alternate requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure. Vacuity fix (#495, batch D): the original alternate 0 `[Aa]ssert the branch before (?:you )?writ` matched the bold bullet label `**Assert the branch before you write.**`, so deleting the rule sentences left the guard green. It is dropped; the two alternates above (both inside the rule sentence) are unchanged. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
+          "note": "Binds the re-verification rule, not the branch variable. `SESSION_BRANCH` is deliberately NOT an alternate: it appears in the bash blocks, so a guard on it would still pass after the rule sentence was deleted — vacuous. The first alternate requires a re-check verb on the same line as the command, so `BRANCH=$(git branch --show-current)` (the ordinary one-time read, e.g. create-pr step 1) does not satisfy it; the point of #163 is that reading the branch ONCE is exactly the failure. Vacuity fix (#495, batch D): the original alternate 0 `[Aa]ssert the branch before (?:you )?writ` matched the bold bullet label `**Assert the branch before you write.**`, so deleting the rule sentences left the guard green. It is dropped; the two alternates above (both inside the rule sentence) are unchanged. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
         },
         {
           "label": "archive-on-collide",
@@ -3355,10 +3354,9 @@
           "label": "effort-dial-before-tier",
           "anyOf": [
             "[Rr]aising effort is cheaper than raising tier",
-            "[Rr]aise effort before (?:you )?rais\\w+ (?:the )?tier",
-            "[Mm]echanical stages run at low effort"
+            "[Rr]aise effort before (?:you )?rais\\w+ (?:the )?tier"
           ],
-          "note": "Vacuity fix (#495, batch D): was [\"Effort is a dial\", \"Raising effort is cheaper than raising tier\"]. Deleting the rule sentences left the guard green on the bold bullet label `**Effort is a dial, not a default.**`. The label alternate is dropped. The guard binds the two halves of the step, the dial (`Mechanical stages run at low effort`) and the order (`Raising effort is cheaper than raising tier`, `raise effort before raising the tier`); it goes red only when both are deleted. An inverted sentence that keeps the anchor still matches: the known inversion class (#226)."
+          "note": "Vacuity fix (#495, batch D): was [\"Effort is a dial\", \"Raising effort is cheaper than raising tier\"]. Deleting the rule sentences left the guard green on the bold bullet label `**Effort is a dial, not a default.**`. The label alternate is dropped. An inverted sentence that keeps the anchor still matches: the known inversion class (#226). Panel fix (#504): dropped the 'Mechanical stages run at low effort' alternate. It binds the dial half, not this guard's order rule, so deleting 'Raising effort is cheaper than raising tier' left the guard green. It now binds only the order rule."
         },
         {
           "label": "routine-orchestration-below-top-tier",
