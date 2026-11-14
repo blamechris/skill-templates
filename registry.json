@@ -344,10 +344,12 @@
         {
           "label": "duplicate-check-before-filing",
           "anyOf": [
-            "Check for existing issues",
-            "flag possible duplicates",
-            "gh issue list --search"
-          ]
+            "flag possible duplicates of already-filed issues",
+            "(?:flag|mark|annotate|note)\\w* (?:any |each |the )?(?:possible|likely|potential) duplicates",
+            "duplicates? of (?:already[- ]filed|existing|open) issues",
+            "avoid (?:filing )?duplicates?"
+          ],
+          "note": "Vacuity fix (#495, strong-signal batch C): the alternates were the bold step label `Check for existing issues`, the `gh issue list --search` command that enacts the check, and one phrase of the rule sentence. Deleting only the rule sentence (`for each candidate, run a quick ... to flag possible duplicates of already-filed issues`) left the label and the command, so the guard stayed green. Now binds rewordings of the flag-possible-duplicates sentence only; the label and the command are gone."
         },
         {
           "label": "concrete-verified-findings",
@@ -725,18 +727,20 @@
         {
           "label": "rung4-recommendation-first",
           "anyOf": [
-            "[Ll]ead with your recommendation",
             "[Ff]irst option is the one you would",
-            "labell?ed as the recommendation"
-          ]
+            "labell?ed as the recommendation",
+            "(?:first|top) option (?:is|should be|must be) (?:your recommendation|the recommended)"
+          ],
+          "note": "Vacuity fix (#495, strong-signal batch C): the first alternate matched the bold bullet label `Lead with your recommendation.`, so deleting only the sentence that states the rule (`The first option is the one you would take, and it is labelled as the recommendation.`) left the guard green. Now binds only that sentence and rewordings of it."
         },
         {
           "label": "rung5-never-idle",
           "anyOf": [
-            "block on one thread is not a block",
-            "one blocked thread does not block the work",
-            "a partial block is not a full stop"
-          ]
+            "[Kk]eep (?:going|working) on everything else",
+            "[Kk]eep (?:going|working) on (?:the )?(?:independent|other|unblocked) (?:work|items|tasks)",
+            "[Cc]ontinue (?:with )?(?:the )?(?:independent|unblocked) work"
+          ],
+          "note": "Vacuity fix (#495, strong-signal batch C): the only live alternate matched the bold slogan `A block on one thread is not a block on the work.`, which is a principle headline; the two other alternates were rewordings of that slogan and matched nothing in the template. The operative requirement is the `Keep going on everything else` bullet under it. Now binds that bullet's requirement, so deleting it turns the guard red; the slogan alone no longer holds it green."
         }
       ]
     },
@@ -841,9 +845,10 @@
           "anyOf": [
             "cheapest and most foundational first",
             "most foundational first",
-            "cheapest layer first",
-            "stop drilling once you find the root cause"
-          ]
+            "cheapest (?:check|layer|probe|test)s? first",
+            "(?:simplest|cheapest) (?:and|,) (?:most )?(?:basic|foundational)"
+          ],
+          "note": "Rebound (#495, strong-signal batch C): the old `stop drilling once you find the root cause` alternate binds a different rule (stop once the root cause is found) that shares the sentence's second clause, so deleting only the ordering clause `Run the checks in order, cheapest and most foundational first` left the guard green. Dropped it and added rewordings of the ordering clause; the bold span is part of that clause, not a label."
         },
         {
           "label": "confirm-before-destructive-fix",
@@ -872,10 +877,9 @@
       "guards": [
         {
           "label": "refresh-existing-clone",
-          "note": "Binds the refresh of an ALREADY-CLONED docs repo, not the clone-if-absent branch — a missing clone fails loudly, a never-refreshed one serves stale docs silently. Vacuity fix found by scripts/guard-audit.py: the alternates used to be the `git -C … pull --rebase` command itself, which failed in both directions — deleting the rule sentence and leaving the bash fence intact kept the guard green, while a consumer that refreshes with `fetch` + `reset --hard` (honouring the rule exactly) went red. Now binds the sentence that states it; the pull command is the ENACTMENT, not the rule. Still deliberately excludes the neighbouring `Pulling latest docs...` echo, which survives deletion of the rule. The `nothing to clone or pull` alternate is the same instruction as restated by a repo whose docs live in-tree (no-it-all), where there is no clone to refresh.",
+          "note": "Binds the refresh of an ALREADY-CLONED docs repo, not the clone-if-absent branch — a missing clone fails loudly, a never-refreshed one serves stale docs silently. Vacuity fix found by scripts/guard-audit.py: the alternates used to be the `git -C … pull --rebase` command itself, which failed in both directions — deleting the rule sentence and leaving the bash fence intact kept the guard green, while a consumer that refreshes with `fetch` + `reset --hard` (honouring the rule exactly) went red. Now binds the sentence that states it; the pull command is the ENACTMENT, not the rule. Still deliberately excludes the neighbouring `Pulling latest docs...` echo, which survives deletion of the rule. The `nothing to clone or pull` alternate is the same instruction as restated by a repo whose docs live in-tree (no-it-all), where there is no clone to refresh. Batch C (#495) dropped the `stale until it is refreshed` alternate: it is the rationale sentence, so deleting only the imperative `Sync first, always.` left the guard green. The imperative is now the bound sentence.",
           "anyOf": [
             "[Ss]ync first, always",
-            "stale until it is (?:refreshed|synced|pulled)",
             "[Aa]lways (?:sync|refresh) (?:the )?(?:docs |clone )?before (?:reading|citing|using)",
             "[Rr]efresh (?:the |an )?existing clone before",
             "[Nn]othing to clone or pull"
@@ -1043,9 +1047,11 @@
         {
           "label": "sequential-execution",
           "anyOf": [
-            "Sequential.*not parallel",
-            "MUST complete before"
-          ]
+            "MUST complete before",
+            "(?:[Cc]heck-pr|the check-pr step) (?:must not|MUST NOT|never) (?:start|run|begin)",
+            "(?:finish|complete|completes) before check-pr"
+          ],
+          "note": "Vacuity fix (#495, strong-signal batch C): the first alternate matched the bold slogan `Sequential, not parallel.`, which omits what must precede what, so deleting only `Agent-review MUST complete before check-pr starts.` left the guard green. Now binds that sentence and rewordings of it."
         },
         {
           "label": "zero-attribution-rule",
@@ -1195,10 +1201,11 @@
         {
           "label": "card-is-one-screen-not-prose",
           "anyOf": [
-            "\\*\\*no prose section\\*\\*",
-            "screen, one ask",
-            "[Nn]o prose section, no per-PR narrative"
-          ]
+            "[Hh]ard limits: \\*{0,2}no prose section",
+            "no prose section\\*{0,2},? no per-PR narrative",
+            "no per-PR narrative"
+          ],
+          "note": "Vacuity fix (#495, strong-signal batch C): the `screen, one ask` alternate matched the `What this is not` bullet that distinguishes the card from a status brief, a description line that survives deletion of the rule. The bold `no prose section` alternate sat inside the rule sentence but was the only thing binding it. Now binds the `Hard limits: no prose section, no per-PR narrative` sentence and rewordings of it only."
         },
         {
           "label": "wait-on-completion-sentinel",
@@ -1296,30 +1303,34 @@
         {
           "label": "current-head-recovery",
           "anyOf": [
-            "Re-read the gate at the CURRENT head"
+            "reading is not evidence about the (?:new|current) head",
+            "after every push or base update"
           ],
-          "note": "Replaces the obsolete no-diagnosis policy: a stale merge reading cannot justify a user handoff or a merge."
+          "note": "Vacuity fix (#495, strong-signal batch C): replaces the obsolete no-diagnosis policy: a stale merge reading cannot justify a user handoff or a merge. The old alternate matched the bold step label `Re-read the gate at the CURRENT head.`, which omits the requirement itself, so deleting the two operative sentences left the guard green. Now binds those sentences (re-query after every push or base update; a stale reading is not evidence about the new head). Two-statement rule: it goes red only when both are deleted."
         },
         {
           "label": "identify-actual-requirement",
           "anyOf": [
-            "Identify the actual failed requirement"
+            "[Dd]o(?: not|n't) (?:guess|assume) that every block is",
+            "(?:[Dd]o not|[Nn]ever) claim that only (?:humans|the owner) can resolve threads"
           ],
-          "note": "Recover the real failed requirement rather than assuming only the owner can resolve threads."
+          "note": "Vacuity fix (#495, strong-signal batch C): recover the real failed requirement rather than assuming only the owner can resolve threads. The old alternate matched the bold step label `Identify the actual failed requirement.`; deleting only `Do not guess that every block is an unresolved thread ...` left the guard green. Now binds that prohibition. Deliberately does NOT match a bare `only humans can resolve threads`: 14 installed copies assert exactly that (`Human intervention point`), which is the policy this rule retires."
         },
         {
           "label": "gated-retry",
           "anyOf": [
-            "Recheck every merge gate before retrying"
+            "[Rr]equire clean `?/full-review`? evidence covering the final head",
+            "ALL CI checks green on (?:that|the final) commit"
           ],
-          "note": "Recovery never waives review, current-head CI, thread dispositions or protection."
+          "note": "Vacuity fix (#495, strong-signal batch C): recovery never waives review, current-head CI, thread dispositions or protection. The old alternate matched the bold step label `Recheck every merge gate before retrying.`; deleting only the `Require clean /full-review evidence ..., ALL CI checks green ...` sentence left the guard green. Now binds that sentence."
         },
         {
           "label": "reserved-prerequisite-only",
           "anyOf": [
-            "Escalate only the genuine prerequisite"
+            "[Aa]sk the owner only for an action reserved to them",
+            "[Rr]eport that exact requirement"
           ],
-          "note": "Routine delegated merge stays with the agent in both modes; only actual owner prerequisites are handed off."
+          "note": "Vacuity fix (#495, strong-signal batch C): routine delegated merge stays with the agent in both modes; only actual owner prerequisites are handed off. The old alternate matched the bold step label `Escalate only the genuine prerequisite.`; deleting the two operative sentences left the guard green. Now binds them (report that exact requirement; ask the owner only for an action reserved to them). Two-statement rule: it goes red only when both are deleted."
         }
       ]
     },
