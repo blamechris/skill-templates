@@ -52,7 +52,8 @@ prrec acme/other ffffffff 2026-11-01T09:00:00Z 2026-11-01T09:00:00Z   # old: no 
 # an archived seed must be ignored
 cp "$CLAUDE_HANDOFF_DIR/NEXT-alpha.md" "$CLAUDE_HANDOFF_DIR/NEXT-alpha.20261001T000000Z-old.md"
 
-snap() { (cd "$TMP" && find . -path ./home -prune -o -type f -print0 | sort -z | xargs -0 shasum; find . -path ./home -prune -o -type d -print | sort); }
+mkdir -p "$HOME/Obsidian/no-it-all/ledgers" "$HOME/Obsidian/no-it-all/handoffs"
+snap() { (cd "$TMP" && find . -type f -print0 | sort -z | xargs -0 shasum; find . -type d -print | sort); }
 before=$(snap)
 out=$(run); rc=$?
 after=$(snap)
@@ -89,6 +90,45 @@ printf -- '---\ntype: handoff\nscope: nodate\n---\n' > "$CLAUDE_HANDOFF_DIR/NEXT
 run >/dev/null 2>&1; [ $? = 2 ] && ok "seed without date exits 2" || bad "no date"
 rm "$CLAUDE_HANDOFF_DIR/NEXT-nodate.md"
 CLAUDE_HANDOFF_DIR=relative run >/dev/null 2>&1; [ $? = 2 ] && ok "relative handoff dir exits 2" || bad "relative dir"
+
+
+# ---- same-minute resolution, in the real renderer's date format (no seconds)
+seed minute mmmmmmmm 2026-11-02T10:45Z "issue 8"
+decision minute "same minute, before the write" 2026-11-02T10:45:20Z
+run --scope minute | grep -q '^FRESH minute$' && ok "event earlier in the seed's minute is FRESH" || bad "same minute before"
+decision minute "next minute" 2026-11-02T10:46:00Z
+run --scope minute | grep -q '^STALE minute' && ok "event in the next minute is STALE" || bad "next minute"
+seed secs ssssssss 2026-11-02T10:45:30Z "issue 9"
+decision secs "before, same minute" 2026-11-02T10:45:20Z
+run --scope secs | grep -q '^FRESH secs$' && ok "seconds date: earlier event FRESH" || bad "secs before"
+decision secs "after, same minute" 2026-11-02T10:45:40Z
+run --scope secs | grep -q '^STALE secs' && ok "seconds date used exactly: later event STALE" || bad "secs after"
+prrec acme/minute mmmmmmmm-1 2026-11-02T10:45:10Z 2026-11-02T10:45:10Z
+rm -f "$CLAUDE_DECISION_LEDGER"; : > "$CLAUDE_PR_LEDGER"
+prrec acme/minute zzzzzzzz 2026-11-02T10:45:10Z 2026-11-02T10:45:10Z
+run --scope minute | grep -q '^FRESH minute$' && ok "pr-record in the seed's minute is FRESH" || bad "pr same minute"
+prrec acme/minute zzzzzzzz 2026-11-02T10:47:00Z 2026-11-02T10:47:00Z
+run --scope minute | grep -q '^STALE minute' && ok "pr-record in a later minute is STALE" || bad "pr later minute"
+
+# ---- UUID session ids match case-insensitively on the seed's 8-char prefix
+: > "$CLAUDE_PR_LEDGER"
+seed uu 7613cec0 2026-11-02T10:45Z "issue 10"
+prrec acme/zzz 7613CEC0-38A1-41FB-84A7-F3BC43823911 2026-11-02T11:00:00Z 2026-11-02T11:00:00Z
+run --scope uu | grep -q '^STALE uu' && ok "uppercase UUID session id matches the seed" || bad "uuid case"
+
+# ---- malformed rows: skipped, line-numbered, exit 2, valid rows still counted
+: > "$CLAUDE_PR_LEDGER"; : > "$CLAUDE_DECISION_LEDGER"
+printf '{"kind":"pr-record","repo":"acme/minute","pr":1,"pr_meta":"oops","recorded_at":"2026-11-02T12:00:00Z"}\n' >> "$CLAUDE_PR_LEDGER"
+printf '{"kind":"pr-record","repo":"acme/minute","pr":2,"session":[1],"recorded_at":"2026-11-02T12:00:00Z"}\n' >> "$CLAUDE_PR_LEDGER"
+printf '{"kind":"pr-record","repo":"acme/minute","pr":3}\n' >> "$CLAUDE_PR_LEDGER"
+printf '\xff\xfe not utf8\n' >> "$CLAUDE_PR_LEDGER"
+printf '{"kind":"decision-record","id":"dec-1","scope":"minute","received_at":"garbage"}\n' >> "$CLAUDE_DECISION_LEDGER"
+prrec acme/minute zzzzzzzz 2026-11-02T13:00:00Z 2026-11-02T13:00:00Z
+out=$(run --scope minute 2>"$TMP/err"); rc=$?
+[ $rc = 2 ] && ok "malformed rows exit 2" || bad "malformed exit" "rc=$rc"
+echo "$out" | grep -q '^STALE minute .*PR 7' && ok "valid rows still counted" || bad "valid rows" "$out"
+for n in "line 1:" "line 2:" "line 3:" "line 4:" ; do grep -q "prs.jsonl $n" "$TMP/err" && ok "error names pr ledger $n" || bad "err $n" "$(cat "$TMP/err")"; done
+grep -q "decisions.jsonl line 1:" "$TMP/err" && ok "undatable decision is an error, not FRESH" || bad "undatable decision"
 
 echo
 echo "passed: $pass failed: $fail"

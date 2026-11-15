@@ -17,9 +17,9 @@ bad() { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '
 run() { "$PY" -B "$SUT" "$@"; }
 expect_refuse() { # name, then args; expects exit 2 and an unchanged ledger
   local name=$1; shift
-  local before; before=$(cat "$L" 2>/dev/null | wc -c)
+  local before; before=$(shasum "$L" 2>/dev/null)
   local err; err=$(run "$@" 2>&1 >/dev/null); local rc=$?
-  local after; after=$(cat "$L" 2>/dev/null | wc -c)
+  local after; after=$(shasum "$L" 2>/dev/null)
   if [ "$rc" = 2 ] && [ "$before" = "$after" ] && [[ "$err" == REFUSE* ]]; then ok "$name"; else bad "$name" "rc=$rc err=$err"; fi
 }
 BASE=(add --scope demo --session s1 --question "Merge?" --answer-verbatim "yes, merge it")
@@ -94,6 +94,96 @@ rows = [json.loads(l) for l in open(sys.argv[1])]
 race = [r for r in rows if r["scope"] == "race"]
 assert len(race) == 24 and len({r["id"] for r in race}) == 24
 PYEOF
+
+# ---- raw-value validation, credentials, line separators
+expect_refuse "session with raw newline/tab" add --scope demo --session $'\ns1\t' --question Q --answer-verbatim r1
+expect_refuse "whitespace-only relay_via" "${BASE[@]}" --answer-verbatim r2 --channel relay --relay-via "   "
+expect_refuse "whitespace-only answer" "${BASE[@]}" --answer-verbatim "   "
+expect_refuse "U+2028 in answer" "${BASE[@]}" --answer-verbatim $'a\xe2\x80\xa8b'
+expect_refuse "U+2029 in question" "${BASE[@]}" --question $'a\xe2\x80\xa9b' --answer-verbatim r3
+expect_refuse "U+0085 in answer" "${BASE[@]}" --answer-verbatim $'a\xc2\x85b'
+expect_refuse "lowercase bearer" "${BASE[@]}" --answer-verbatim "use bearer abcdefghijklmnopqrstuvwxyz123"
+expect_refuse "stripe live key" "${BASE[@]}" --answer-verbatim "sk_live_abcdefgh12345678"
+expect_refuse "pk_live key" "${BASE[@]}" --answer-verbatim "pk_live_abcdefgh12345678"
+expect_refuse "JWT" "${BASE[@]}" --answer-verbatim "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"
+expect_refuse "password assignment" "${BASE[@]}" --answer-verbatim "password: hunter2"
+expect_refuse "api_key assignment" "${BASE[@]}" --answer-verbatim "API_KEY=abc"
+
+# ---- canonical timestamps
+run add --scope ts --session s1 --question Q --answer-verbatim A --received-at 2026-2-1T1:2:3Z >/dev/null
+run add --scope ts --session s1 --question Q --answer-verbatim A2 --received-at 2026-02-01T03:00:00+02:00 >/dev/null
+run list --scope ts --json | "$PY" -c "
+import json,sys
+d=json.load(sys.stdin)
+assert [r['received_at'] for r in d]==['2026-02-01T01:02:03Z','2026-02-01T01:00:00Z'], d" \
+  && ok "unpadded and offset timestamps are canonicalized" || bad "canonical ts"
+expect_refuse "same instant, other spelling, is a duplicate" add --scope ts --session s1 --question Q --answer-verbatim A --received-at 2026-02-01T01:02:03+00:00
+expect_refuse "naive timestamp" "${BASE[@]}" --answer-verbatim r4 --received-at 2026-02-01T01:02:03
+[ "$(run list --scope ts --since 2026-2-1T1:1:0Z | wc -l | tr -d ' ')" = 1 ] && ok "--since compares parsed values" || bad "since parsed"
+
+# ---- append integrity
+cp "$L" "$TMP/ledger.bak"
+printf '%s' "$(tail -1 "$L")" > "$TMP/lastline"; head -n -1 "$L" > "$TMP/rest" 2>/dev/null || sed '$d' "$L" > "$TMP/rest"
+cat "$TMP/rest" "$TMP/lastline" > "$L"                      # now ends without a newline
+n_before=$(wc -l < "$L" | tr -d ' ')
+run add --scope nl --session s1 --question Q --answer-verbatim "after missing newline" >/dev/null 2>&1 && ok "add after missing final newline" || bad "missing newline add"
+"$PY" - "$L" "$n_before" <<'PYEOF' && ok "prior record preserved, no joined line" || bad "newline repair"
+import json, sys
+lines = open(sys.argv[1], 'rb').read().split(b"\n")
+assert lines[-1] == b"" , lines[-1]
+rows = [json.loads(l) for l in lines[:-1]]
+assert rows[-1]["scope"] == "nl" and len(rows) == int(sys.argv[2]) + 2
+PYEOF
+cat > "$TMP/inject.py" <<'PYEOF'
+import os, runpy, sys, hashlib
+mode, ledger = sys.argv[1], sys.argv[2]
+g = runpy.run_path(os.environ["SUT"])
+real = os.write
+calls = {"n": 0}
+def short(fd, data):
+    calls["n"] += 1
+    return real(fd, data[:len(data) // 2]) if calls["n"] == 1 else real(fd, data)
+def boom(fd, data):
+    real(fd, data[:len(data) // 2])
+    raise OSError(28, "No space left on device")
+os.write = short if mode == "short" else boom
+rec = {"kind": "decision-record", "schema_version": 1, "id": "dec-inject" + mode, "scope": "inj", "received_at": "2026-11-01T00:00:00Z",
+       "answer_verbatim": "x" * 200, "supersedes": None}
+h = lambda: hashlib.sha256(open(ledger, "rb").read()).hexdigest() if os.path.exists(ledger) and os.path.getsize(ledger) else "none"
+before = h()
+try:
+    g["append_locked"](ledger, rec)
+    rc = 0
+except SystemExit as e:
+    rc = e.code
+print(rc, "same" if h() == before else "changed")
+PYEOF
+export SUT
+SUT="$SUT" "$PY" "$TMP/inject.py" short "$L" | grep -q '^0 changed$' && "$PY" -c "
+import json;[json.loads(l) for l in open('$L')]" && ok "short write is continued to a whole line" || bad "short write"
+SUT="$SUT" "$PY" "$TMP/inject.py" boom "$L" 2>/dev/null | grep -q '^2 same$' && ok "write error restores the ledger bytes, exit 2" || bad "write error"
+SUT="$SUT" "$PY" "$TMP/inject.py" boom "$TMP/fresh/new.jsonl" 2>/dev/null | grep -q '^2 same$' && ok "write error on a new ledger leaves it empty" || bad "write error new"
+
+# ---- corruption policy: one bad line never bricks list or add
+cp "$L" "$TMP/good.bak"
+printf 'not json\n' >> "$L"; printf '\xff\xfe\n' >> "$L"
+printf '{"kind":"decision-record","id":"dec-x","scope":"demo","received_at":"nope"}\n' >> "$L"
+out=$(run list 2>"$TMP/err"); rc=$?
+[ $rc = 2 ] && [ -n "$out" ] && ok "list prints good rows and exits 2" || bad "list corrupt" "rc=$rc"
+grep -q "line [0-9]*: unreadable" "$TMP/err" && grep -q "no parseable received_at" "$TMP/err" && ok "list names bad lines on stderr" || bad "list errors" "$(cat "$TMP/err")"
+run add --scope after --session s1 --question Q --answer-verbatim "after corruption" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc = 0 ] && grep -q '^warning:' "$TMP/err" && ok "add appends and warns past bad lines" || bad "add corrupt" "rc=$rc"
+
+# ---- printed commands are shell-quoted
+SP="$TMP/dir with space & \$x;/led ger.jsonl"
+out=$(run "${BASE[@]}" --answer-verbatim quote --ledger "$SP")
+line=$(echo "$out" | grep 'git -C' | head -1)
+eval "set -- $line"; [ "$1 $2" = "git -C" ] && [ "$3" = "$(cd "$(dirname "$SP")" && pwd)" ] && [ "$6" = "led ger.jsonl" ] \
+  && ok "git lines survive shell parsing with spaces and metacharacters" || bad "shlex" "$line"
+
+# ---- ledger privacy: refused inside a worktree
+wt=$(cd "$TMP/myrepo" && run add --scope demo --session s1 --question Q --answer-verbatim priv --ledger "$TMP/myrepo/docs/decisions.jsonl" 2>&1)
+[[ "$wt" == *"inside the worktree"* ]] && [ ! -e "$TMP/myrepo/docs/decisions.jsonl" ] && ok "ledger inside a repo worktree is refused" || bad "worktree refusal" "$wt"
 
 echo
 echo "passed: $pass failed: $fail"

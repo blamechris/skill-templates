@@ -45,20 +45,36 @@ acting on the answer**, plus a read-only check that compares seeds against it.
    so a later reader can tell what the owner said from what an agent said they said.
 2. **`id` is a hash of the content** (scope, received_at, decided_by, question,
    answer), so recording the same decision twice is a refusal, not a duplicate line.
-   `supersedes` names an earlier id that must already be in the ledger.
+   The duplicate refusal only catches an identical `received_at`: the same answer
+   recorded with a different arrival time is a new record, so record once, at the
+   moment the answer arrives. `supersedes` names an earlier id that must already be
+   in the ledger.
 3. **`received_at` is when the answer arrived**, not when it was written down, and may
    be passed explicitly for a late record. `recorded_at` is the write time. The
-   freshness check compares `received_at`.
+   freshness check compares `received_at`. Every accepted timestamp, offsets and
+   unpadded fields included, is normalized to canonical `YYYY-MM-DDTHH:MM:SSZ`
+   before it is stored and hashed, so equal instants get one id and `--since`
+   compares parsed values.
 4. **No session, no record.** The session comes from `--session`, then
    `$CLAUDE_CODE_SESSION_ID`; there is no third source, the same discipline as
    `session-seed.py`. `scope` defaults to `session-seed.py scope`.
-5. **Single-line fields only, and nothing credential-shaped.** A newline or control
-   character in any field, or a value shaped like a token (`ghp_`, `github_pat_`,
-   `sk-`, `xox*-`, `AKIA…`, a PEM private-key header, a long `Bearer` value), is a
-   refusal. This is a heuristic backstop, not a license to paste secrets.
-6. **One locked O_APPEND write.** The same `fcntl.flock` on a sidecar `.lock` file as
-   `pr-record.py`, so racing writers serialize and lines never interleave.
-7. **No git in the script.** Committing stays the writer's job under the
+5. **Single-line fields only, and nothing credential-shaped.** A newline, control
+   character, U+2028, U+2029 or U+0085 in any field (checked on the raw value, before
+   trimming), an empty or whitespace-only required field, or a value shaped like a
+   credential (`ghp_`, `github_pat_`, `sk-`, `sk_live_`, `pk_live_`, `xox*-`, `AKIA…`,
+   a JWT, a PEM private-key header, a `Bearer` value in any case, or
+   `password|secret|token|api_key` followed by `:` or `=` and a value) is a refusal.
+   This is a heuristic backstop, not a guarantee and not a license to paste secrets.
+6. **One locked, repaired O_APPEND write.** The same `fcntl.flock` on a sidecar `.lock`
+   file as `pr-record.py`, so racing writers serialize. Under the lock, a last record
+   missing its newline is preserved by prepending one, a short write is continued
+   until the whole line is down, and any write error truncates the ledger back to its
+   pre-append size and exits 2.
+7. **The ledger is private and vault-only.** `add` refuses a ledger path inside one of
+   the current session's repo worktrees (using `session-seed.py`'s worktree-roots
+   logic, loaded by path). Never quote a record or `answer_verbatim` into a repo, PR
+   or issue; cite the `dec-…` id instead.
+8. **No git in the script.** Committing stays the writer's job under the
    vault-writer-commits rule; `add` prints the exact `git -C <vault> add -- <p>` and
    `commit -m <m> -- <p>` lines to run.
 
@@ -83,8 +99,25 @@ completed check whatever it found; exit 2 on a usage error or an unreadable inpu
 (a seed, a malformed ledger line, a missing seed date), with the verdicts that could
 be computed still printed. It never writes, renames or commits anything.
 
+**Corruption policy, shared by `list`, `add` and `seed-freshness.py`.** A malformed
+line, invalid UTF-8, a non-object row, a `pr_meta` or `session` that is not an object,
+or an event that cannot be dated is skipped and reported with its line number on
+stderr; every computable result is still produced; `list` and `seed-freshness.py`
+then exit 2. An event that cannot be dated is an error, never "nothing happened".
+`add` repairs the newline, appends, warns about the bad lines and exits 0, so one bad
+line never bricks the ledger.
+
+**Seed date resolution.** `session-seed.py` writes the seed `date` at minute
+resolution. A date without seconds is treated as ending at the end of that minute, so
+a decision recorded earlier in the same minute (the normal flow) is not STALE. The
+tradeoff: an event in the same minute *after* the write is missed, a false-FRESH
+window under 60 seconds. A date carrying seconds is used exactly. Session ids are
+matched the way `session-seed.py` normalizes them (UUIDs lowercase, 8-character prefix).
+
 ## What it does not do
 
-It does not decide whether a stale seed is wrong, only that something happened after
+`owner-ask` is a heuristic: it does not match the later decision to the ask, only
+notes that an `OWNER:` seed predates some decision for its scope. It does not decide
+whether a stale seed is wrong, only that something happened after
 it was written. The remedy is the existing one: record the decision, then re-write the
 seed through `session-seed.py write` if its `picks_up_at` or pending decisions changed.

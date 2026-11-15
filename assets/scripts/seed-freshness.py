@@ -2,7 +2,8 @@
 """Report-only check: is a handoff seed older than something that happened after it?
 
 # Canonical copy (skill-templates). Bootstrap: cp assets/scripts/seed-freshness.py ~/.claude/scripts/
-# Needs session-seed.py beside it; the seed grammar is loaded from there, never restated.
+# Needs session-seed.py and decision-record.py beside it; the seed grammar and timestamp parsing
+# are loaded from them by path, never restated.
 
 Usage:
   seed-freshness.py [--scope S] [--json] [--decision-ledger PATH] [--pr-ledger PATH]
@@ -20,88 +21,102 @@ from session-seed.py), or the single --scope, prints `FRESH <scope>` or
                 holds: the seed asks the owner for something a later
                 decision may have answered.
 
-Exit 0 on a completed check, whatever it found. Exit 2 on a usage error or an
-unreadable input (a seed, a ledger line, a missing date); verdicts that could
-be computed are still printed. It never writes, renames or commits anything.
+SEED DATE RESOLUTION: session-seed.py writes `date` at minute resolution. A
+seed date without seconds is treated as ending at the END of that minute, so
+an event earlier in the same minute (the normal flow: record the decision,
+then write the seed) is not STALE. Tradeoff: an event in the same minute AFTER
+the write is missed, a false-FRESH window of under 60 seconds. A date that
+carries seconds is used exactly.
+
+Session ids are matched the way session-seed.py normalizes them (a UUID is
+compared by its lowercase 8-character prefix).
+
+CORRUPTION POLICY (same as decision-record.py): a malformed ledger line,
+invalid UTF-8, a non-object row, a pr_meta/session that is not an object, or
+an event that cannot be dated is skipped and reported with its line number on
+stderr; every computable verdict is still printed; the exit is 2 at the end.
+
+Exit 0 on a completed check with no input errors, whatever it found. Exit 2 on
+a usage error or any unreadable input. It never writes, renames or commits
+anything.
 """
 import argparse
 import json
 import os
+import re
 import runpy
 import sys
-from datetime import datetime, timezone
+from datetime import timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DECISIONS = "~/Obsidian/no-it-all/ledgers/decisions.jsonl"
 DEFAULT_PRS = "~/Obsidian/no-it-all/ledgers/pr-records.jsonl"
+HEXISH = re.compile(r"\A[0-9A-Fa-f-]+\Z")
 
 
 class Usage(Exception):
     pass
 
 
-def load_seed_module():
-    path = os.path.join(HERE, "session-seed.py")
+def load(name):
+    path = os.path.join(HERE, name)
     if not os.path.isfile(path):
-        raise Usage("session-seed.py not found beside %s" % __file__)
+        raise Usage("%s not found beside %s" % (name, os.path.basename(__file__)))
     return runpy.run_path(path)
 
 
-def parse_ts(value):
-    if not isinstance(value, str):
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
-        try:
-            return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            pass
-    try:
-        d = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+def read_prs(dr, path):
+    """Usable pr-records: dict pr_meta/session (or null) and a datable stamp."""
+    rows, errors = dr["read_jsonl"](path, "pr-record")
+    good = []
+    for n, r in rows:
+        meta, sess = r.get("pr_meta"), r.get("session")
+        bad = None
+        if meta is not None and not isinstance(meta, dict):
+            bad = "pr_meta is not an object"
+        elif sess is not None and not isinstance(sess, dict):
+            bad = "session is not an object"
+        else:
+            stamps = [dr["parse_ts"](r.get("recorded_at"))]
+            if meta and meta.get("merged_at") is not None:
+                stamps.append(dr["parse_ts"](meta.get("merged_at")))
+            if any(t is None for t in stamps):
+                bad = "recorded_at or merged_at is missing or not a timestamp"
+        if bad:
+            errors.append("%s line %d: pr-record %s: %s" % (path, n, r.get("pr"), bad))
+        else:
+            good.append(r)
+    return good, errors
 
 
-def read_jsonl(path, kind, errors):
-    rows = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for n, line in enumerate(f, 1):
-                if not line.strip():
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    errors.append("%s line %d is not JSON" % (path, n))
-                    continue
-                if isinstance(obj, dict) and obj.get("kind") == kind:
-                    rows.append(obj)
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        errors.append("cannot read %s: %s" % (path, e))
-    return rows
+def norm_sid(sid):
+    sid = str(sid or "").strip()
+    return sid.lower() if HEXISH.match(sid) else sid
 
 
-def check_seed(scope, fm, decisions, prs):
-    seed_date = parse_ts(fm.get("date", ""))
+def check_seed(dr, scope, fm, decisions, prs):
+    parse = dr["parse_ts"]
+    seed_date, has_seconds = parse(fm.get("date", ""), with_precision=True)
     if seed_date is None:
         raise Usage("seed for %s has no parseable date: %r" % (scope, fm.get("date")))
+    end = seed_date if has_seconds else seed_date + timedelta(minutes=1)
+
+    def after(t):
+        return t > seed_date if has_seconds else t >= end
+
     reasons = []
-    later = [d for d in decisions if d.get("scope") == scope
-             and (parse_ts(d.get("received_at")) or seed_date) > seed_date]
+    later = [d for d in decisions if d["scope"] == scope and after(parse(d["received_at"]))]
     if later:
-        ids = ", ".join(str(d.get("id")) for d in later)
         reasons.append({"code": "decision", "detail":
-                        "decision received after the seed was written (%s)" % ids})
-    sid = (fm.get("session") or "").strip()
+                        "decision received after the seed was written (%s)" % ", ".join(d["id"] for d in later)})
+    sid = norm_sid(fm.get("session"))
     for r in prs:
         repo = str(r.get("repo") or "")
-        rsid = str(((r.get("session") or {}).get("id")) or "")
+        rsid = norm_sid((r.get("session") or {}).get("id"))
         if repo.split("/")[-1] != scope and not (sid and sid != "unknown" and rsid.startswith(sid)):
             continue
-        stamps = [parse_ts(r.get("recorded_at")), parse_ts((r.get("pr_meta") or {}).get("merged_at"))]
-        if any(t and t > seed_date for t in stamps):
+        stamps = [parse(r.get("recorded_at")), parse((r.get("pr_meta") or {}).get("merged_at"))]
+        if any(t and after(t) for t in stamps):
             reasons.append({"code": "pr-record", "detail":
                             "PR %s of %s recorded or merged after the seed was written" % (r.get("pr"), repo)})
     if "OWNER:" in (fm.get("picks_up_at") or "") and later:
@@ -122,7 +137,8 @@ def main(argv=None):
         return 2 if e.code else 0
     errors = []
     try:
-        mod = load_seed_module()
+        mod = load("session-seed.py")
+        dr = load("decision-record.py")
         directory = mod["handoff_dir"]()
     except SystemExit:
         print("error: cannot resolve the handoff dir", file=sys.stderr)
@@ -132,8 +148,9 @@ def main(argv=None):
         return 2
     dpath = os.path.expanduser(a.decision_ledger or os.environ.get("CLAUDE_DECISION_LEDGER") or DEFAULT_DECISIONS)
     ppath = os.path.expanduser(a.pr_ledger or os.environ.get("CLAUDE_PR_LEDGER") or DEFAULT_PRS)
-    decisions = read_jsonl(dpath, "decision-record", errors)
-    prs = read_jsonl(ppath, "pr-record", errors)
+    decisions, e1 = dr["read_decisions"](dpath)
+    prs, e2 = read_prs(dr, ppath)
+    errors += e1 + e2
 
     if a.scope:
         names = ["NEXT-%s.md" % a.scope]
@@ -158,7 +175,7 @@ def main(argv=None):
         try:
             with open(path, encoding="utf-8") as f:
                 fm = mod["parse_frontmatter"](f.read())
-            reasons = check_seed(scope, fm, decisions, prs)
+            reasons = check_seed(dr, scope, fm, decisions, prs)
         except (OSError, UnicodeDecodeError, Usage) as e:
             errors.append("%s: %s" % (path, e))
             continue

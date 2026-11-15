@@ -15,6 +15,8 @@ Invoke it the moment you catch yourself about to write *"I need your input"*, *"
 
 Run the rungs **in order**, and stop at the first one that resolves the question. A question reaches the user only by surviving rungs 1 and 2 — that ordering is the whole mechanism, and jumping straight to "ask" is the failure this skill exists to prevent.
 
+Whenever the owner makes a decision or gives a directive — typed, relayed by another agent, or an `AskUserQuestion` answer, at any rung — record it before acting on it with `python3 ~/.claude/scripts/decision-record.py add` (their exact words; `--channel relay --relay-via <agent>` when relayed). Bootstrap the script per `/session-lifecycle`; if it is absent, put the verbatim answer in the seed and the DECISION slot instead. The ledger is private and vault-only: never quote a record into a repo, PR or issue; cite the `dec-…` id instead.
+
 ### 1. Answer it yourself from the repo
 
 Most questions that feel like they need the user are already answered by artifacts you can read. Search before you escalate:
@@ -65,8 +67,6 @@ Escalate only if at least one of these is true:
 - **Spends the user's money, quota or reputation** — paid API calls, provisioned infrastructure, anything published under their name.
 - **Overrides something they already said** — you would be carving an exception out of a stated preference. Ask; do not assume the exception.
 - **Legal, security or privacy weight** — credentials, licences, personal data.
-
-When the owner answers a rung-3 question, record the answer with `python3 ~/.claude/scripts/decision-record.py add` (their exact words; `--channel relay --relay-via <agent>` if relayed) before acting on it.
 
 None of those? Go back down to rung 2 and decide. Asking is not free: it costs the user a context switch and it costs the run its momentum. Weigh that against the cost of being wrong — and remember that a wrong rung-2 call is usually a one-commit fix.
 
