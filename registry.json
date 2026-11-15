@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "6ebd070",
+  "generatedFromCommit": "55deca9",
   "skillCount": 45,
   "skills": [
     {
@@ -671,8 +671,8 @@
     },
     {
       "name": "decide",
-      "hash": "84fe5f4",
-      "lines": 133,
+      "hash": "55deca9",
+      "lines": 135,
       "description": "A decision protocol for an agent that thinks it is blocked. Most apparent blocks are not blocks: they are questions the repo already answers, or cheap reversible calls the agent is entitled to make and record. The few that are real deserve a structured question carrying options and a recommendation — not a paragraph of prose that hands the problem back and waits. This skill routes any pending decision down a fixed ladder, and dictates the shape of the ask when escalation is genuinely warranted.",
       "guards": [
         {
@@ -2574,8 +2574,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "0f0cc15",
-      "lines": 341,
+      "hash": "55deca9",
+      "lines": 343,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`, `/decide`, `/pulse`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
@@ -2828,7 +2828,7 @@
     },
     {
       "name": "smoke-test",
-      "hash": "6ebd070",
+      "hash": "6fec53a",
       "lines": 251,
       "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results.",
       "guards": [
@@ -3432,7 +3432,7 @@
     },
     {
       "name": "visual-brief",
-      "hash": "6ebd070",
+      "hash": "6fec53a",
       "lines": 277,
       "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together.",
       "guards": [
