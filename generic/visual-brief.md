@@ -152,22 +152,34 @@ If the brief landed in a git-backed vault (`$CLAUDE_BRIEF_DIR` inside a git work
 tree), commit that one file before ending; do not leave it for a later cleanup:
 
 ```bash
-case "$FILE" in
-  "${CLAUDE_BRIEF_DIR%/}"/*)
-    if [ -n "$CLAUDE_BRIEF_DIR" ] &&
-       git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      git -C "$DIR" add -- "$FILE" &&
-        git -C "$DIR" commit -q -m "briefs: <slug>" -- "$FILE" ||
-        echo "brief NOT committed; commit $FILE by path before ending"
+# Resolve both sides physically, so a relative path, `..` or a symlink cannot
+# carry a --dir outside $CLAUDE_BRIEF_DIR, and `:-` keeps `set -u` callers alive.
+BRIEF_ROOT=$(CDPATH= cd -- "${CLAUDE_BRIEF_DIR:-/nonexistent}" 2>/dev/null && pwd -P) || BRIEF_ROOT=
+REAL_DIR=$(CDPATH= cd -- "$DIR" 2>/dev/null && pwd -P) || REAL_DIR=
+case "$REAL_DIR/" in
+  "$BRIEF_ROOT"/*)
+    TOP=$(git -C "$BRIEF_ROOT" rev-parse --show-toplevel 2>/dev/null) || TOP=
+    if [ -n "$BRIEF_ROOT" ] && [ -n "$TOP" ] &&
+       [ "$TOP" = "$(git -C "$REAL_DIR" rev-parse --show-toplevel 2>/dev/null)" ]; then
+      P="$REAL_DIR/${FILE##*/}"
+      git --literal-pathspecs -C "$TOP" add -- "$P" &&
+        { git --literal-pathspecs -C "$TOP" diff --cached --quiet -- "$P" ||
+          git --literal-pathspecs -C "$TOP" commit -q -m "briefs: <slug>" -- "$P" >/dev/null; } ||
+        echo "brief NOT committed; commit $P by path before ending"
     fi ;;
 esac
 ```
 
 The path after `--` on the commit records this file alone, even when another
-session has staged work in the vault's shared index. Never widen it to `-A`, `.`,
-`-u` or a directory, and never commit a `--dir` outside `$CLAUDE_BRIEF_DIR` this
-way: that may be a product checkout. If the commit fails (an `index.lock` held by
-another session, a hook), report the path as uncommitted; never delete the lock.
+session has staged work in the vault's shared index, and `--literal-pathspecs`
+stops a `[` or `*` in a name from matching sibling files. An unchanged file is
+skipped rather than reported. Never widen it to `-A`, `.`, `-u` or a directory,
+and never commit a `--dir` outside `$CLAUDE_BRIEF_DIR` (or in a different
+repository from it) this way: that may be a product checkout. A brief is a new
+file you created; never use this to commit a shared tracked file such as an
+index, which would sweep in other sessions' edits to it. Never commit a brief
+that embeds a credential. If the commit fails (an `index.lock` held by another
+session, a hook), report the path as uncommitted; never delete the lock.
 
 ## HTML skeleton (house style — adapt content, keep the chrome)
 
