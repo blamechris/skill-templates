@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "6ebd070",
+  "generatedFromCommit": "adf9d9c",
   "skillCount": 45,
   "skills": [
     {
@@ -2574,8 +2574,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "0f0cc15",
-      "lines": 341,
+      "hash": "adf9d9c",
+      "lines": 342,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`, `/decide`, `/pulse`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
@@ -2828,7 +2828,7 @@
     },
     {
       "name": "smoke-test",
-      "hash": "6ebd070",
+      "hash": "6fec53a",
       "lines": 251,
       "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results.",
       "guards": [
@@ -3432,7 +3432,7 @@
     },
     {
       "name": "visual-brief",
-      "hash": "6ebd070",
+      "hash": "6fec53a",
       "lines": 277,
       "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together.",
       "guards": [
