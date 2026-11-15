@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "0616f2b",
+  "generatedFromCommit": "aebe995",
   "skillCount": 45,
   "skills": [
     {
@@ -671,8 +671,8 @@
     },
     {
       "name": "decide",
-      "hash": "84fe5f4",
-      "lines": 133,
+      "hash": "e6698f6",
+      "lines": 135,
       "description": "A decision protocol for an agent that thinks it is blocked. Most apparent blocks are not blocks: they are questions the repo already answers, or cheap reversible calls the agent is entitled to make and record. The few that are real deserve a structured question carrying options and a recommendation — not a paragraph of prose that hands the problem back and waits. This skill routes any pending decision down a fixed ladder, and dictates the shape of the ask when escalation is genuinely warranted.",
       "guards": [
         {
@@ -741,6 +741,30 @@
             "[Cc]ontinue (?:with )?(?:the )?(?:independent|unblocked) work"
           ],
           "note": "Vacuity fix (#495, strong-signal batch C): the only live alternate matched the bold slogan `A block on one thread is not a block on the work.`, which is a principle headline; the two other alternates were rewordings of that slogan and matched nothing in the template. The operative requirement is the `Keep going on everything else` bullet under it. Now binds that bullet's requirement, so deleting it turns the guard red; the slogan alone no longer holds it green."
+        },
+        {
+          "label": "owner-decision-recorded-before-acting",
+          "anyOf": [
+            "Whenever the owner makes a decision or gives a directive[^\\n]*record it before acting on it with `python3 [^`\\n]*decision-record\\.py add`",
+            "[Rr]ecord (?:the|each|every) owner decision[^\\n.]*with `python3 [^`\\n]*decision-record\\.py add`[^\\n.]*before (?:acting|you act)"
+          ],
+          "note": "The rule applies at any rung, not only rung 3. Binds the sentence that states it, not the bootstrap clause."
+        },
+        {
+          "label": "owner-decision-ledger-is-private",
+          "anyOf": [
+            "never quote a record[^\\n]*(?:repo|PR|issue)[^\\n]*cite the `dec-",
+            "[Nn]ever (?:quote|paste) [^\\n]*(?:decision )?record[^\\n]*(?:repo|PR|issue)[^\\n]*cite the `dec-"
+          ],
+          "note": "The decision ledger is private. Binds the sentence that forbids quoting a record into a repo, PR or issue and says to cite the dec- id instead."
+        },
+        {
+          "label": "owner-decision-any-rung",
+          "anyOf": [
+            "at any rung[^\\n]*record it before acting on it",
+            "not only (?:at )?rung 3[^\\n]*record it before acting"
+          ],
+          "note": "Recording applies at any rung, not only when a rung-3 question was asked. Binds the clause that says so."
         }
       ]
     },
@@ -2574,8 +2598,8 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "0616f2b",
-      "lines": 342,
+      "hash": "aebe995",
+      "lines": 344,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`, `/decide`, `/pulse`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
         {
@@ -2698,6 +2722,22 @@
             "\\| `/run-report` \\| Run-level report and record"
           ],
           "note": "Adjudicated (#495, batch B), guard unchanged: `guard-audit.py` lists this guard as a vacuity candidate because its only alternate is a table row. It is not vacuous. The components table is the one place the template says `/run-report` is a component to install alongside the bundle head (the other two mentions, in the seed and executive-brief steps, say to run it, not to install it), so the row IS the rule, and deleting it turns the guard red. 30 of 35 installed copies predate the row and already fail the guard; none changes verdict."
+        },
+        {
+          "label": "owner-decision-recorded-before-acting",
+          "anyOf": [
+            "When the owner makes a decision or gives a directive[^\\n]*run `python3 [^`\\n]*decision-record\\.py add`[^\\n]*first[^\\n]*then act",
+            "[Rr]ecord (?:the|each|every) owner decision[^\\n.]*with `python3 [^`\\n]*decision-record\\.py add`[^\\n.]*before (?:acting|you act)"
+          ],
+          "note": "An owner decision, typed, relayed or an AskUserQuestion answer, is written to the private decision ledger BEFORE the agent acts on it (the seed otherwise keeps asking for a choice already made). Binds the rule sentence, not the bold label or the bootstrap `cp` line."
+        },
+        {
+          "label": "owner-decision-ledger-is-private",
+          "anyOf": [
+            "never quote a record[^\\n]*(?:repo|PR|issue)[^\\n]*cite the `dec-",
+            "[Nn]ever (?:quote|paste) [^\\n]*(?:decision )?record[^\\n]*(?:repo|PR|issue)[^\\n]*cite the `dec-"
+          ],
+          "note": "The decision ledger is private. Binds the sentence that forbids quoting a record or answer_verbatim into a repo, PR or issue and says to cite the dec- id instead, not the bold label."
         }
       ]
     },
