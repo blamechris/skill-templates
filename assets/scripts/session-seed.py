@@ -5,6 +5,7 @@
 
 Usage:
   python3 ~/.claude/scripts/session-seed.py write  --picks-up-at TEXT --boundary-reason TEXT --next TEXT --body-file F [--alt TEXT]
+  (write commits its own seed and archive by path; --no-commit or CLAUDE_SEED_COMMIT=0 skips that)
   python3 ~/.claude/scripts/session-seed.py verify [--topic T] [--session ID]
   python3 ~/.claude/scripts/session-seed.py verify --file PATH
   python3 ~/.claude/scripts/session-seed.py path   [--topic T]
@@ -51,6 +52,21 @@ Exit codes:
      in order: an `archived: <path>` line iff an incumbent was moved, then `seed:
      <path>` iff the proof passed. Read those; do not infer them from the exit code.
   2  usage error.
+
+THE COMMIT STEP (after the proof, never before it)
+  A seed that is written but never committed sits orphaned in the vault: the
+  fleet's explicit-path staging rule forbids every OTHER session from staging
+  someone else's file, so the writer is the only party that can. `write` therefore
+  commits exactly its own paths — the canonical seed, plus the archive when an
+  incumbent was moved — with `add -- <paths>` then `commit --only -- <paths>`, which
+  leaves anything another session staged still staged and out of the commit. It
+  never pushes, fetches, pulls, rebases, stashes, resets, restores or checks out.
+  A failed commit is NEVER a failed write: the seed is already on disk and proved,
+  so the step prints `UNCOMMITTED: <reason>` on stderr and the exit stays 0. It is
+  skipped (stdout `commit: skipped (...)`) outside a git repository, with
+  `--no-commit` or `CLAUDE_SEED_COMMIT=0`, and after `--no-verify`: an unproved
+  seed is not committed. Stdout otherwise says `commit: <short sha>` or
+  `commit: unchanged`.
 """
 import argparse
 import errno
@@ -875,6 +891,87 @@ def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body, ne
     return "\n".join(head) + body.rstrip("\n") + tail + "\n" + CLOSING
 
 
+# ---------------------------------------------------------------------- commit
+
+def _git_soft(*args, literal=True):
+    """Like _git, but a missing git is a result, not a REFUSE: the commit step runs
+    after the seed is written and proved, and must never turn that into a failure."""
+    try:
+        # `check-ignore` takes paths, not pathspecs, and refuses the literal-pathspec
+        # magic outright; it is the one call that opts out (literal=False).
+        return subprocess.run(["git", *(["--literal-pathspecs"] if literal else []), *args],
+                              capture_output=True, text=True)
+    except OSError as e:
+        return subprocess.CompletedProcess(args, 127, "", "cannot run git (%s)" % e)
+
+
+def _uncommitted(reason):
+    print("UNCOMMITTED: %s. The seed is written and proved; it is NOT in a commit."
+          % reason, file=sys.stderr)
+
+
+def commit_own_paths(scope, sid, directory, paths):
+    """Commit exactly `paths` in the repository holding the handoff dir, or say why not.
+
+    Called only after the proof passed, and never raises or exits: the write has
+    already succeeded and a commit problem (no identity, a rejecting hook, an index
+    lock) must not undo or block it. Every git call uses literal pathspecs, so a
+    scope such as `a*b` names one file rather than widening the commit, and the
+    commit is `--only -- <paths>`, so whatever another session has staged stays
+    staged and stays out of it. This step adds and commits; it never pushes,
+    fetches, pulls, rebases, stashes, resets, restores or checks out.
+    """
+    real_dir = os.path.realpath(directory)
+    top = _git_soft("-C", real_dir, "rev-parse", "--show-toplevel")
+    if top.returncode != 0:
+        if "not a git repository" in (top.stderr or "").lower():
+            print("commit: skipped (handoff dir is not in a git repository)")
+        else:
+            _uncommitted("could not resolve the handoff repository (%s)"
+                         % ((top.stderr or "").strip() or "no stderr"))
+        return
+    repo = os.path.realpath(top.stdout.strip())
+    rel = []
+    for p in paths:
+        full = os.path.join(real_dir, os.path.basename(p))
+        if not _is_under(full, repo):
+            _uncommitted("%s is not inside the repository %s" % (full, repo))
+            return
+        rel.append(os.path.relpath(full, repo))
+
+    for r in rel:
+        ign = _git_soft("-C", repo, "check-ignore", "-q", "--", r, literal=False)
+        if ign.returncode == 0:
+            _uncommitted("%s is git-ignored in %s, so it is not committed" % (r, repo))
+            return
+        if ign.returncode != 1:
+            _uncommitted("could not check whether %s is ignored (%s)"
+                         % (r, (ign.stderr or "").strip() or "git exit %d" % ign.returncode))
+            return
+
+    add = _git_soft("-C", repo, "add", "--", *rel)
+    if add.returncode != 0:
+        _uncommitted("git add failed (%s)" % ((add.stderr or "").strip() or "no stderr"))
+        return
+    # Staged-vs-HEAD for OUR paths only; another session's staged files are not looked at.
+    same = _git_soft("-C", repo, "diff", "--cached", "--quiet", "--", *rel)
+    if same.returncode == 0:
+        print("commit: unchanged")
+        return
+    if same.returncode != 1:
+        _uncommitted("could not compare the staged seed with HEAD (%s)"
+                     % ((same.stderr or "").strip() or "git exit %d" % same.returncode))
+        return
+    msg = "handoffs: seed %s (%s)" % (scope, slug(sid))
+    com = _git_soft("-C", repo, "commit", "-q", "-m", msg, "--only", "--", *rel)
+    if com.returncode != 0:
+        detail = ((com.stderr or "") + (com.stdout or "")).strip().replace("\n", " | ")
+        _uncommitted("git commit failed (%s); the paths stay staged" % (detail or "no output"))
+        return
+    sha = _git_soft("-C", repo, "rev-parse", "--short", "HEAD")
+    print("commit: %s" % ((sha.stdout or "").strip() or "made"))
+
+
 def atomic_write(path, text):
     """Write via a sibling temp file, so a failure never leaves a truncated seed.
 
@@ -947,6 +1044,13 @@ def cmd_write(a):
     return finish_write(a, scope, sid, now, text)
 
 
+def commit_step(a, scope, sid, directory, paths):
+    if a.no_commit or os.environ.get("CLAUDE_SEED_COMMIT") == "0":
+        print("commit: skipped (opted out)")
+        return
+    commit_own_paths(scope, sid, directory, paths)
+
+
 def finish_write(a, scope, sid, now, text):
     # Validate BEFORE creating directories or moving an incumbent. A hollow new
     # seed must not displace the useful context the next session would have read.
@@ -991,6 +1095,7 @@ def finish_write(a, scope, sid, now, text):
         sys.stderr.write(r.stderr)
         if r.returncode != 0:
             sys.exit(r.returncode)
+        commit_step(a, scope, sid, directory, [seed] + ([archived] if archived else []))
         if not a.refresh_pulse:
             announce_seed(seed)
     else:
@@ -998,6 +1103,7 @@ def finish_write(a, scope, sid, now, text):
         # the proof emits it, so "the write printed a path" can never be mistaken
         # for "the write proved the path".
         print("wrote (UNPROVED): %s" % seed)
+        print("commit: skipped (unproved)")
     return 0
 
 
@@ -1179,6 +1285,8 @@ def main(argv=None):
     w.add_argument("--now", help="pin the clock (ISO-8601 UTC) for `date:` and the archive stamp")
     w.add_argument("--no-verify", action="store_true",
                    help="skip the built-in proof (it is the point; for tests only)")
+    w.add_argument("--no-commit", action="store_true",
+                   help="do not commit the seed (also: CLAUDE_SEED_COMMIT=0)")
     w.set_defaults(fn=cmd_write)
 
     v = scoped(sub.add_parser("verify", help="prove the canonical seed is this session's"))

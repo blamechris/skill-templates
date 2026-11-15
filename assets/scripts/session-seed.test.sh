@@ -35,6 +35,11 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 unset CLAUDE_HANDOFF_DIR CLAUDE_CODE_SESSION_ID
 # These offline fixtures must never discover a developer's running daemon.
 export CHROXY_SEED_ANNOUNCE=0
+# Never read the developer's HOME or global git config, and never let the commit
+# step see a real identity: a temp HOME and an empty global config.
+export HOME="$TMP/home"; mkdir -p "$HOME"
+export GIT_CONFIG_GLOBAL="$TMP/gitconfig-global"; : > "$GIT_CONFIG_GLOBAL"
+export GIT_CONFIG_NOSYSTEM=1
 
 # The archive-vs-canonical discriminator, written out HERE rather than imported, so
 # the script cannot satisfy these assertions by redefining its own rule. This is
@@ -1291,6 +1296,169 @@ out=$(cd "$TMP/l1/demo" && CLAUDE_HANDOFF_DIR="$TMP/l1/handoffs" \
 [ "$real_rc" -eq 0 ] && [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q '^REFUSE:' \
   && ok 'negative control: valid inline-literal assertion fails without inline recognition' \
   || bad 'negative control: valid inline-literal assertion fails without inline recognition' "real=$real_rc mutant=$rc $(flat "$out")"
+
+# ============================================================ GROUP M — commit step
+# `write` commits exactly its own paths (the seed, plus the archive on a collide)
+# after the proof, and never pushes. The vault here is a REAL temp git repo.
+echo; echo "M. commit own paths"
+
+new_vault() {           # $1 = case -> $TMP/<case>/{vault/handoffs,demo}; vault has an initial commit
+  mkdir -p "$TMP/$1/vault/handoffs"
+  git -c init.defaultBranch=main init -q "$TMP/$1/vault"
+  echo keep > "$TMP/$1/vault/README"
+  git -C "$TMP/$1/vault" add -- README
+  git -C "$TMP/$1/vault" commit -q -m init
+  new_repo "$TMP/$1/demo"
+}
+mrun() {                # <case> [args...] -> $out (stdout) $err (stderr) $rc ; handoff dir is the vault's
+  local c=$1; shift
+  local o="$TMP/$c.stdout" e="$TMP/$c.stderr"
+  (cd "$TMP/$c/demo" && CLAUDE_HANDOFF_DIR="$TMP/$c/vault/handoffs" \
+     "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --now "$STAMP" \
+     --picks-up-at 'the next thing (agent Sol)' "$@" >"$o" 2>"$e"); rc=$?
+  out=$(cat "$o"); err=$(cat "$e")
+}
+V() { git -C "$TMP/$1/vault" "${@:2}"; }
+
+# M1 first write commits the seed, and only the seed
+new_vault m1
+mrun m1
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}$' \
+  && [ "$(V m1 show --name-only --format= HEAD)" = "handoffs/NEXT-demo.md" ] \
+  && [ -z "$(V m1 status --porcelain)" ] \
+  && ok "M1 first write commits the seed and nothing else" \
+  || bad "M1 first write commits the seed and nothing else" "rc=$rc $(flat "$out") $(flat "$err") $(flat "$(V m1 status --porcelain)")"
+[ "$(V m1 log -1 --format=%s)" = "handoffs: seed demo (beefcafe)" ] \
+  && ok "M1 commit message names scope and session slug" \
+  || bad "M1 commit message names scope and session slug" "$(V m1 log -1 --format=%s)"
+[ "$(V m1 log -1 --format=%B | grep -ci 'co-authored')" -eq 0 ] \
+  && ok "M1 commit carries no attribution trailer" || bad "M1 commit carries no attribution trailer"
+
+# M2 collide-archive write commits both paths
+new_vault m2
+mkdir -p "$TMP/m2/handoffs"; put_seed m2 NEXT-demo.md other-session "$LOST"
+mv "$TMP/m2/handoffs/NEXT-demo.md" "$TMP/m2/vault/handoffs/NEXT-demo.md"
+V m2 add -- handoffs/NEXT-demo.md; V m2 commit -q -m "other seed" -- handoffs/NEXT-demo.md
+mrun m2
+files=$(V m2 show --name-only --format= HEAD | sort | tr '\n' '|')
+[ "$rc" -eq 0 ] && [ "$(printf '%s' "$files" | tr '|' '\n' | grep -c .)" -eq 2 ] \
+  && printf '%s' "$files" | grep -Eq 'handoffs/NEXT-demo\.20260811T000000Z-other-session\.md' \
+  && printf '%s' "$files" | grep -q 'handoffs/NEXT-demo\.md|' \
+  && [ -z "$(V m2 status --porcelain)" ] \
+  && ok "M2 collide-archive write commits the seed and the archive" \
+  || bad "M2 collide-archive write commits the seed and the archive" "rc=$rc files=$files $(flat "$err") $(flat "$(V m2 status --porcelain)")"
+
+# M3 another session's staged file stays staged and out of the commit;
+# M4 an unrelated dirty file stays untouched
+new_vault m3
+echo theirs > "$TMP/m3/vault/handoffs/NEXT-other.md"; V m3 add -- handoffs/NEXT-other.md
+echo dirty >> "$TMP/m3/vault/README"
+mrun m3
+[ "$rc" -eq 0 ] \
+  && [ "$(V m3 diff --cached --name-only)" = "handoffs/NEXT-other.md" ] \
+  && [ "$(V m3 show --name-only --format= HEAD)" = "handoffs/NEXT-demo.md" ] \
+  && ok "M3 another session's staged file stays staged and uncommitted" \
+  || bad "M3 another session's staged file stays staged and uncommitted" "rc=$rc staged=$(V m3 diff --cached --name-only | tr '\n' '|') head=$(V m3 show --name-only --format= HEAD | tr '\n' '|')"
+[ "$(V m3 diff --name-only)" = "README" ] && [ "$(V m3 diff --cached --name-only | grep -c README)" -eq 0 ] \
+  && [ "$(tail -1 "$TMP/m3/vault/README")" = dirty ] \
+  && ok "M4 an unrelated modified file stays unstaged, uncommitted and intact" \
+  || bad "M4 an unrelated modified file stays unstaged, uncommitted and intact" "$(V m3 status --porcelain | tr '\n' '|')"
+
+# M5 handoff dir outside git -> skipped, exit 0, seed present
+new_case m5
+run_raw m5 demo write "${FILLED[@]}" --session "$MINE" --now "$STAMP" --picks-up-at 'x (agent Sol)'
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^commit: skipped (handoff dir is not in a git repository)$' \
+  && [ -f "$TMP/m5/handoffs/NEXT-demo.md" ] \
+  && ok "M5 handoff dir outside git: skipped, exit 0, seed present" \
+  || bad "M5 handoff dir outside git: skipped, exit 0, seed present" "rc=$rc $(flat "$out")"
+
+# M6 ignored seed -> UNCOMMITTED, exit 0, seed present, nothing committed
+new_vault m6
+echo 'handoffs/NEXT-*.md' > "$TMP/m6/vault/.gitignore"; V m6 add -- .gitignore; V m6 commit -q -m ign
+before=$(V m6 rev-parse HEAD)
+mrun m6
+[ "$rc" -eq 0 ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: .*git-ignored' \
+  && [ -f "$TMP/m6/vault/handoffs/NEXT-demo.md" ] && [ "$(V m6 rev-parse HEAD)" = "$before" ] \
+  && printf '%s' "$out" | grep -q '^seed: ' \
+  && ok "M6 ignored seed: UNCOMMITTED on stderr, exit 0, seed present and proved" \
+  || bad "M6 ignored seed: UNCOMMITTED on stderr, exit 0, seed present and proved" "rc=$rc $(flat "$out") $(flat "$err")"
+
+# M7 a rejecting hook -> UNCOMMITTED, exit 0, seed present
+new_vault m7
+printf '#!/bin/sh\necho hook says no >&2\nexit 1\n' > "$TMP/m7/vault/.git/hooks/pre-commit"
+chmod +x "$TMP/m7/vault/.git/hooks/pre-commit"
+before=$(V m7 rev-parse HEAD)
+mrun m7
+[ "$rc" -eq 0 ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: git commit failed' \
+  && [ -f "$TMP/m7/vault/handoffs/NEXT-demo.md" ] && [ "$(V m7 rev-parse HEAD)" = "$before" ] \
+  && printf '%s' "$out" | grep -q '^seed: ' \
+  && ok "M7 hook failure: UNCOMMITTED on stderr, exit 0, seed written and proved" \
+  || bad "M7 hook failure: UNCOMMITTED on stderr, exit 0, seed written and proved" "rc=$rc $(flat "$out") $(flat "$err")"
+
+# M8 opt-outs
+new_vault m8
+before=$(V m8 rev-parse HEAD)
+mrun m8 --no-commit
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^commit: skipped (opted out)$' \
+  && [ "$(V m8 rev-parse HEAD)" = "$before" ] && [ -f "$TMP/m8/vault/handoffs/NEXT-demo.md" ] \
+  && ok "M8 --no-commit skips the commit" || bad "M8 --no-commit skips the commit" "rc=$rc $(flat "$out")"
+new_vault m9
+before=$(V m9 rev-parse HEAD)
+CLAUDE_SEED_COMMIT=0 mrun m9
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^commit: skipped (opted out)$' \
+  && [ "$(V m9 rev-parse HEAD)" = "$before" ] \
+  && ok "M9 CLAUDE_SEED_COMMIT=0 skips the commit" || bad "M9 CLAUDE_SEED_COMMIT=0 skips the commit" "rc=$rc $(flat "$out")"
+
+# M10 --no-verify never commits
+new_vault m10
+before=$(V m10 rev-parse HEAD)
+mrun m10 --no-verify
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^wrote (UNPROVED)' \
+  && [ "$(V m10 rev-parse HEAD)" = "$before" ] && ! printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}' \
+  && ok "M10 --no-verify (unproved) is never committed" \
+  || bad "M10 --no-verify (unproved) is never committed" "rc=$rc $(flat "$out")"
+
+# M11 identical content -> unchanged
+new_vault m11
+mrun m11; first=$(V m11 rev-parse HEAD)
+mrun m11
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^commit: unchanged$' && [ "$(V m11 rev-parse HEAD)" = "$first" ] \
+  && ok "M11 identical rewrite reports unchanged and makes no commit" \
+  || bad "M11 identical rewrite reports unchanged and makes no commit" "rc=$rc $(flat "$out") $(flat "$err")"
+
+# M12 a scope containing `*` does not widen the commit
+mkdir -p "$TMP/m12/vault/handoffs" "$TMP/m12/we*rd"
+git -c init.defaultBranch=main init -q "$TMP/m12/vault"
+git -C "$TMP/m12/we*rd" init -q -b main 2>/dev/null || git -c init.defaultBranch=main init -q "$TMP/m12/we*rd"
+git -C "$TMP/m12/we*rd" commit -q --allow-empty -m init
+echo r > "$TMP/m12/vault/README"; git -C "$TMP/m12/vault" add -- README; git -C "$TMP/m12/vault" commit -q -m init
+echo a > "$TMP/m12/vault/handoffs/NEXT-weXrd.md"; echo b > "$TMP/m12/vault/handoffs/NEXT-weYYrd.md"
+git -C "$TMP/m12/vault" add -- handoffs/NEXT-weXrd.md handoffs/NEXT-weYYrd.md
+git -C "$TMP/m12/vault" commit -q -m siblings
+echo a2 > "$TMP/m12/vault/handoffs/NEXT-weXrd.md"; echo b2 > "$TMP/m12/vault/handoffs/NEXT-weYYrd.md"
+(cd "$TMP/m12/we*rd" && CLAUDE_HANDOFF_DIR="$TMP/m12/vault/handoffs" "$PY" "$SUT" write "${FILLED[@]}" \
+   --session "$MINE" --now "$STAMP" --picks-up-at 'x (agent Sol)' >"$TMP/m12.out" 2>"$TMP/m12.err"); rc=$?
+files=$(git -C "$TMP/m12/vault" show --name-only --format= HEAD | tr '\n' '|')
+[ "$rc" -eq 0 ] && [ "$files" = 'handoffs/NEXT-we*rd.md|' ] \
+  && [ "$(git -C "$TMP/m12/vault" diff --name-only | sort | tr '\n' '|')" = 'handoffs/NEXT-weXrd.md|handoffs/NEXT-weYYrd.md|' ] \
+  && ok "M12 a '*' in the scope commits only the literal path" \
+  || bad "M12 a '*' in the scope commits only the literal path" "rc=$rc files=$files $(cat "$TMP/m12.out" "$TMP/m12.err" | tr '\n' '|')"
+
+# M13 --refresh-pulse commits too, and nothing is ever pushed (no remote exists to push to)
+new_vault m13
+mrun m13
+pulse="$TMP/m13-pulse.json"
+"$PY" - "$pulse" <<'PY'
+import json,sys
+json.dump({"state":{"scope":"demo"}},open(sys.argv[1],"w"))
+PY
+# the snapshot schema is owned by validate_pulse_snapshot; only assert that a refused
+# refresh leaves the vault untouched, which is the property this case needs
+head_before=$(V m13 rev-parse HEAD)
+(cd "$TMP/m13/demo" && CLAUDE_HANDOFF_DIR="$TMP/m13/vault/handoffs" "$PY" "$SUT" write --session "$MINE" \
+   --now "$STAMP" --refresh-pulse "$pulse" >/dev/null 2>&1); rc=$?
+[ "$rc" -ne 0 ] && [ "$(V m13 rev-parse HEAD)" = "$head_before" ] \
+  && ok "M13 a refused refresh-pulse commits nothing" || bad "M13 a refused refresh-pulse commits nothing" "rc=$rc"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
