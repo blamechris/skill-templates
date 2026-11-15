@@ -58,9 +58,20 @@ THE COMMIT STEP (after the proof, never before it)
   fleet's explicit-path staging rule forbids every OTHER session from staging
   someone else's file, so the writer is the only party that can. `write` therefore
   commits exactly its own paths — the canonical seed, plus the archive when an
-  incumbent was moved — with `add -- <paths>` then `commit --only -- <paths>`, which
-  leaves anything another session staged still staged and out of the commit. It
-  never pushes, fetches, pulls, rebases, stashes, resets, restores or checks out.
+  incumbent was moved — and it does so with git PLUMBING, never `git add` or
+  `git commit`: the bytes the writer proved (and the archive's bytes, read right
+  after it was made) are hashed with --no-filters, put into a PRIVATE index read
+  from HEAD, written to a tree, committed with commit-tree and the branch is moved
+  with a compare-and-swap update-ref. So no commit hook runs (a
+  `reference-transaction` hook, if installed, still sees the ref update), the shared
+  index is never read-tree'd, reset or locked for the commit, and whatever another
+  session staged stays staged and out of it. If either path has a separately staged
+  entry, the branch moved, HEAD is detached, the seed changed after the proof, a git
+  call times out (CLAUDE_SEED_GIT_TIMEOUT seconds, default 20) or anything else
+  fails, nothing is committed. Afterwards only those two shared-index entries are
+  moved to the new blob, and only while each still equals HEAD's old entry. Every git call
+  drops the GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE family from its environment.
+  It never pushes, fetches, pulls, rebases, stashes, resets, restores or checks out.
   A failed commit is NEVER a failed write: the seed is already on disk and proved,
   so the step prints `UNCOMMITTED: <reason>` on stderr and the exit stays 0. It is
   skipped (stdout `commit: skipped (...)`) outside a git repository, with
@@ -73,9 +84,11 @@ import errno
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import ipaddress
 import urllib.request
@@ -893,83 +906,210 @@ def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body, ne
 
 # ---------------------------------------------------------------------- commit
 
-def _git_soft(*args, literal=True):
-    """Like _git, but a missing git is a result, not a REFUSE: the commit step runs
-    after the seed is written and proved, and must never turn that into a failure."""
+class Uncommitted(Exception):
+    """The seed is written and proved but cannot be committed; the reason is the text."""
+
+
+# Everything that can point git at a different repository, index, object store or
+# config than the one named by the handoff dir. They are removed from every git call
+# of the commit step: a session started from inside a hook or a wrapper can carry them.
+_GIT_ENV_DROP = frozenset((
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
+    "GIT_PREFIX", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"))
+
+
+def _git_timeout():
+    # The env knob exists so the suite can prove the timeout without waiting 20 seconds.
     try:
-        # `check-ignore` takes paths, not pathspecs, and refuses the literal-pathspec
-        # magic outright; it is the one call that opts out (literal=False).
-        return subprocess.run(["git", *(["--literal-pathspecs"] if literal else []), *args],
-                              capture_output=True, text=True)
-    except OSError as e:
-        return subprocess.CompletedProcess(args, 127, "", "cannot run git (%s)" % e)
+        return float(os.environ.get("CLAUDE_SEED_GIT_TIMEOUT") or 20)
+    except ValueError:
+        return 20.0
 
 
-def _uncommitted(reason):
-    print("UNCOMMITTED: %s. The seed is written and proved; it is NOT in a commit."
-          % reason, file=sys.stderr)
+def _clean_git_env(extra=None):
+    env = {k: v for k, v in os.environ.items()
+           if k not in _GIT_ENV_DROP and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env.update(extra or {})
+    return env
 
 
-def commit_own_paths(scope, sid, directory, paths):
-    """Commit exactly `paths` in the repository holding the handoff dir, or say why not.
+def _cg(args, cwd, extra_env=None, stdin=None, ok=(0,), literal=True):
+    """One git call of the commit step: sanitized env, timeout, tolerant decoding.
 
-    Called only after the proof passed, and never raises or exits: the write has
-    already succeeded and a commit problem (no identity, a rejecting hook, an index
-    lock) must not undo or block it. Every git call uses literal pathspecs, so a
-    scope such as `a*b` names one file rather than widening the commit, and the
-    commit is `--only -- <paths>`, so whatever another session has staged stays
-    staged and stays out of it. This step adds and commits; it never pushes,
-    fetches, pulls, rebases, stashes, resets, restores or checks out.
+    Returns (rc, stdout, stderr) when rc is in `ok`; anything else is Uncommitted.
+    A timeout kills the child (subprocess.run does) and is reported, never raised.
     """
+    cmd = ["git"] + (["--literal-pathspecs"] if literal else []) + list(args)
+    kw = {"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}
+    try:
+        r = subprocess.run(cmd, cwd=cwd, env=_clean_git_env(extra_env),
+                           capture_output=True, timeout=_git_timeout(), **kw)
+    except subprocess.TimeoutExpired:
+        raise Uncommitted("git %s timed out after %gs" % (args[0], _git_timeout()))
+    except OSError as e:
+        raise Uncommitted("cannot run git (%s)" % e)
+    out = r.stdout.decode("utf-8", "replace")
+    err = r.stderr.decode("utf-8", "replace")
+    if r.returncode not in ok:
+        raise Uncommitted("git %s failed (%s)" % (args[0], (err.strip() or out.strip()
+                                                           or "exit %d" % r.returncode).replace("\n", " | ")))
+    return r.returncode, out, err
+
+
+def _index_entry(repo, rel):
+    """(mode, blob) of `rel` in the SHARED index, None if absent, ("conflict",) if unmerged."""
+    _, out, _ = _cg(["ls-files", "-s", "-z", "--", rel], repo)
+    recs = [r for r in out.split("\0") if r]
+    if not recs:
+        return None
+    meta = recs[0].split("\t", 1)[0].split()
+    if len(recs) > 1 or len(meta) != 3 or meta[2] != "0":
+        return ("conflict",)
+    return (meta[0], meta[1])
+
+
+def _tree_entry(repo, commit, rel):
+    if commit is None:
+        return None
+    _, out, _ = _cg(["ls-tree", "-z", commit, "--", rel], repo)
+    recs = [r for r in out.split("\0") if r]
+    if not recs:
+        return None
+    meta = recs[0].split("\t", 1)[0].split()
+    return (meta[0], meta[2]) if len(meta) == 3 else ("conflict",)
+
+
+def _commit_plumbing(scope, sid, directory, items):
     real_dir = os.path.realpath(directory)
-    top = _git_soft("-C", real_dir, "rev-parse", "--show-toplevel")
-    if top.returncode != 0:
-        if "not a git repository" in (top.stderr or "").lower():
+    try:
+        _, top, _ = _cg(["rev-parse", "--show-toplevel"], real_dir)
+    except Uncommitted as e:
+        if "not a git repository" in str(e).lower():
             print("commit: skipped (handoff dir is not in a git repository)")
-        else:
-            _uncommitted("could not resolve the handoff repository (%s)"
-                         % ((top.stderr or "").strip() or "no stderr"))
-        return
-    repo = os.path.realpath(top.stdout.strip())
-    rel = []
-    for p in paths:
-        full = os.path.join(real_dir, os.path.basename(p))
-        if not _is_under(full, repo):
-            _uncommitted("%s is not inside the repository %s" % (full, repo))
             return
-        rel.append(os.path.relpath(full, repo))
+        raise
+    repo = os.path.realpath(top.strip())
+    rels = []
+    for path, _data in items:
+        full = os.path.join(real_dir, os.path.basename(path))
+        if not _is_under(os.path.realpath(full), repo):
+            raise Uncommitted("%s is not inside the repository %s" % (full, repo))
+        rels.append(os.path.relpath(full, repo))
 
-    for r in rel:
-        ign = _git_soft("-C", repo, "check-ignore", "-q", "--", r, literal=False)
-        if ign.returncode == 0:
-            _uncommitted("%s is git-ignored in %s, so it is not committed" % (r, repo))
-            return
-        if ign.returncode != 1:
-            _uncommitted("could not check whether %s is ignored (%s)"
-                         % (r, (ign.stderr or "").strip() or "git exit %d" % ign.returncode))
-            return
+    for rel in rels:
+        rc, _, _ = _cg(["check-ignore", "-q", "--", rel], repo, ok=(0, 1), literal=False)
+        if rc == 0:
+            raise Uncommitted("%s is git-ignored in %s, so it is not committed" % (rel, repo))
 
-    add = _git_soft("-C", repo, "add", "--", *rel)
-    if add.returncode != 0:
-        _uncommitted("git add failed (%s)" % ((add.stderr or "").strip() or "no stderr"))
-        return
-    # Staged-vs-HEAD for OUR paths only; another session's staged files are not looked at.
-    same = _git_soft("-C", repo, "diff", "--cached", "--quiet", "--", *rel)
-    if same.returncode == 0:
-        print("commit: unchanged")
-        return
-    if same.returncode != 1:
-        _uncommitted("could not compare the staged seed with HEAD (%s)"
-                     % ((same.stderr or "").strip() or "git exit %d" % same.returncode))
-        return
+    rc, ref, _ = _cg(["symbolic-ref", "-q", "HEAD"], repo, ok=(0, 1))
+    if rc != 0:
+        raise Uncommitted("detached HEAD")
+    ref = ref.strip()
+    rc, old, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
+    old = old.strip() if rc == 0 else None          # None: an unborn branch, no parent
+
+    # OWNERSHIP, read-only against the SHARED index: if another session has staged
+    # either path, the shared index holds something this write did not put there, and
+    # committing "our" version would either bury it or lie about it. Commit nothing.
+    heads = {}
+    for rel in rels:
+        heads[rel] = _tree_entry(repo, old, rel)
+        if _index_entry(repo, rel) != heads[rel]:
+            raise Uncommitted("%s has separately staged changes" % rel)
+
+    # Bind to the proof: the bytes committed are the bytes the writer proved, from
+    # memory, never re-read from the file. Re-reading the canonical seed is only the
+    # tripwire for another writer having replaced it since.
+    canonical_path, proved = items[0]
+    try:
+        with open(canonical_path, "rb") as f:
+            current = f.read()
+    except OSError as e:
+        raise Uncommitted("seed changed after proof (%s)" % e)
+    if current != proved:
+        raise Uncommitted("seed changed after proof")
+    blobs = {}
+    for (path, data), rel in zip(items, rels):
+        if data is None:
+            raise Uncommitted("could not read %s after archiving" % path)
+        # --no-filters: a clean filter or autocrlf must not rewrite what was proved.
+        _, sha, _ = _cg(["hash-object", "-w", "--no-filters", "--stdin"], repo, stdin=data)
+        blobs[rel] = sha.strip()
+
     msg = "handoffs: seed %s (%s)" % (scope, slug(sid))
-    com = _git_soft("-C", repo, "commit", "-q", "-m", msg, "--only", "--", *rel)
-    if com.returncode != 0:
-        detail = ((com.stderr or "") + (com.stdout or "")).strip().replace("\n", " | ")
-        _uncommitted("git commit failed (%s); the paths stay staged" % (detail or "no output"))
-        return
-    sha = _git_soft("-C", repo, "rev-parse", "--short", "HEAD")
-    print("commit: %s" % ((sha.stdout or "").strip() or "made"))
+    tmpd = tempfile.mkdtemp(prefix="seed-index-")
+    try:
+        # A PRIVATE index: the shared one is never read-tree'd, reset or locked here.
+        idx = {"GIT_INDEX_FILE": os.path.join(tmpd, "index")}
+        if old is not None:
+            _cg(["read-tree", old], repo, idx)
+        for rel in rels:
+            _cg(["update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blobs[rel], rel)], repo, idx)
+        _, tree, _ = _cg(["write-tree"], repo, idx)
+        tree = tree.strip()
+        if old is not None:
+            _, old_tree, _ = _cg(["rev-parse", "--verify", "%s^{tree}" % old], repo)
+            if tree == old_tree.strip():
+                print("commit: unchanged")
+                return
+        sign = []
+        rc, g, _ = _cg(["config", "--bool", "--get", "commit.gpgsign"], repo, ok=(0, 1))
+        if rc == 0 and g.strip() == "true":
+            sign = ["-S"]                  # honoured, not overridden; the timeout bounds a prompt
+        ct = ["commit-tree", tree] + (["-p", old] if old else []) + sign + ["-m", msg]
+        _, new, _ = _cg(ct, repo)
+        new = new.strip()
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    # Compare-and-swap: only moves the branch if it is still where `old` was. `""`
+    # is "must not exist yet" for an unborn branch. (update-ref runs the
+    # reference-transaction hook if one is installed; commit hooks never run.)
+    try:
+        _cg(["update-ref", "-m", msg, ref, new, old or ""], repo)
+    except Uncommitted as e:
+        raise Uncommitted("branch moved or ref update failed (%s)" % e)
+
+    # The shared index still holds the old blob for these paths, which `status`
+    # would show as a staged revert. Move ONLY these entries, and only while each is
+    # still what `old` had; never read-tree, reset or checkout the shared index.
+    notes = []
+    for rel in rels:
+        try:
+            if _index_entry(repo, rel) == heads[rel]:
+                _cg(["update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blobs[rel], rel)], repo)
+            else:
+                notes.append("%s changed in the shared index meanwhile; left alone" % rel)
+        except Uncommitted as e:
+            notes.append("shared index entry for %s not refreshed (%s)" % (rel, e))
+    _, short, _ = _cg(["rev-parse", "--short", new], repo)
+    print("commit: %s" % (short.strip() or new))
+    for n in notes:
+        print("note: %s" % n, file=sys.stderr)
+
+
+def commit_own_paths(scope, sid, directory, items):
+    """Commit exactly `items` ([(path, bytes)], canonical seed first) or say why not.
+
+    Called only after the proof passed, and it never raises or exits: the write has
+    already succeeded, and a commit problem must not undo or block it. It is a
+    PLUMBING commit — hash-object, a private index, write-tree, commit-tree and a
+    compare-and-swap update-ref — so it never runs commit hooks, never touches the
+    shared index except to move these two entries to the new blob, and never
+    stages anything another session staged. It never pushes, fetches, pulls,
+    rebases, stashes, resets, restores or checks out.
+    """
+    try:
+        _commit_plumbing(scope, sid, directory, items)
+    except Uncommitted as e:
+        print("UNCOMMITTED: %s. The seed is written and proved; it is NOT in a commit."
+              % e, file=sys.stderr)
+    except Exception as e:                 # OSError, UnicodeError, ... : never fail the write
+        print("UNCOMMITTED: unexpected %s (%s). The seed is written and proved; it is NOT "
+              "in a commit." % (type(e).__name__, e), file=sys.stderr)
+
 
 
 def atomic_write(path, text):
@@ -1044,11 +1184,11 @@ def cmd_write(a):
     return finish_write(a, scope, sid, now, text)
 
 
-def commit_step(a, scope, sid, directory, paths):
+def commit_step(a, scope, sid, directory, items):
     if a.no_commit or os.environ.get("CLAUDE_SEED_COMMIT") == "0":
         print("commit: skipped (opted out)")
         return
-    commit_own_paths(scope, sid, directory, paths)
+    commit_own_paths(scope, sid, directory, items)
 
 
 def finish_write(a, scope, sid, now, text):
@@ -1071,10 +1211,18 @@ def finish_write(a, scope, sid, now, text):
                 "teardown, branch switch or index can put it out of reach." % (seed, root))
 
     archived = None
+    archived_bytes = None
     if os.path.exists(seed):
         prev = incumbent_session(seed)
         if prev != sid:
             archived = archive(seed, scope, directory, now.strftime("%Y%m%dT%H%M%SZ"))
+            # The archive's bytes are read HERE, right after it exists, and are what a
+            # commit would record — not whatever the file holds later.
+            try:
+                with open(archived, "rb") as f:
+                    archived_bytes = f.read()
+            except OSError:
+                archived_bytes = None
 
     atomic_write(seed, text)
 
@@ -1095,7 +1243,8 @@ def finish_write(a, scope, sid, now, text):
         sys.stderr.write(r.stderr)
         if r.returncode != 0:
             sys.exit(r.returncode)
-        commit_step(a, scope, sid, directory, [seed] + ([archived] if archived else []))
+        items = [(seed, text.encode("utf-8"))] + ([(archived, archived_bytes)] if archived else [])
+        commit_step(a, scope, sid, directory, items)
         if not a.refresh_pulse:
             announce_seed(seed)
     else:
