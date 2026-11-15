@@ -1144,7 +1144,8 @@ jobs:
       - name: plan-status tests
         # The plan-lifecycle linter/writer (docs/plan-lifecycle.md). There is no
         # `*.test.sh` glob in this workflow, so it gets its own named step. The suite
-        # is hermetic (temp dirs, HOME and CLAUDE_PLAN_DIR redirected, no network) and
-        # proves `set` preserves every other byte, refuses illegal transitions, writes
-        # atomically and never runs git.
+        # is hermetic (temp dirs, HOME and CLAUDE_PLAN_DIR redirected, no network). It
+        # covers the check/scan/set cases listed in plan-status.test.sh, including
+        # byte-exact `set` fixtures, refusals that leave the file untouched, a simulated
+        # failed rename and a fake failing `git` on PATH.
         run: ./assets/scripts/plan-status.test.sh

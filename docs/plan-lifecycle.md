@@ -14,7 +14,7 @@ contract fixes the vocabulary, the transitions and the one writer that changes t
 type: plan
 status: in-delivery
 status_updated: 2026-11-15T09:30Z
-superseded_by:            # required only when status is superseded
+# superseded_by: <plan>   (required only when status is superseded; put a value on the key line)
 decisions: [DEC-0042]     # optional
 ---
 ```
@@ -53,6 +53,9 @@ narrative, for example:
 > **Update 2026-11-15T09:30Z** first PR opened
 ```
 
+Prefer timestamped stamps (`> **Update YYYY-MM-DDTHH:MMZ`); a date-only stamp is only
+compared by date.
+
 but they never replace the header: when the state changes, change `status` too. The linter
 flags a `status_updated` older than the newest body update stamp it can find.
 
@@ -68,6 +71,19 @@ python3 ~/.claude/scripts/plan-status.py check <plan.md>...
 python3 ~/.claude/scripts/plan-status.py scan [--dir D] [--since YYYY-MM-DD]
 ```
 
+- `set` handles a strict subset of YAML and refuses everything else (exit 1, file
+  untouched): top-level `key: value` lines; scalar lifecycle values on one line with an
+  optional trailing `# comment` (kept byte for byte; an unquoted `#` tail is never part of
+  the value, so `status: delivered # merged` is `delivered`); `decisions` absent, empty,
+  a one-line `[a, b]` list with no nested brackets (a trailing comment stays after the
+  list) or a contiguous `- item` block. It also refuses duplicate lifecycle keys, comment
+  or blank lines inside an edited key's span, multi-line values, a read-only file, and a
+  file with a UTF-8 BOM before the opening `---` (reported by `check` as having no
+  frontmatter). Before writing it re-parses the result and refuses unless every prior and
+  new decision id is present, every other key is unchanged and every byte outside the
+  edited key lines is identical. A best-effort guard refuses if the file changed (mtime,
+  size or content hash) between the read and the rename; it narrows, not closes, that
+  race. CRLF line endings are preserved.
 - `set` rewrites only `status`, `status_updated`, and when given `superseded_by` and
   `decisions`; every other byte of the file is preserved and the write is atomic (temp file
   in the same directory, then rename). It refuses an illegal transition, a missing file or a
@@ -76,9 +92,9 @@ python3 ~/.claude/scripts/plan-status.py scan [--dir D] [--since YYYY-MM-DD]
   it prints the `git add` and `git commit` lines and the writer commits under the vault's
   existing rule.
 - `check` is a report-only lint: `OK <file>` or `WARN <file> <reason>`. It warns on a missing
-  or unknown status, a missing or malformed `status_updated`, a `superseded` plan with no
-  `superseded_by`, and a `status_updated` earlier than the newest body update stamp. The
-  stamp heuristic is a line (outside code fences) beginning `> **Update YYYY-MM-DD`,
+  or unknown status, a duplicated lifecycle key, a missing or malformed `status_updated`, a `superseded` plan with no
+  `superseded_by`, and a `status_updated` earlier than a valid body update stamp (malformed stamps are ignored). The
+  stamp heuristic is a line (outside code fences, matched by opener character and length) beginning `> **Update YYYY-MM-DD`,
   optionally followed by `THH:MM` or `THH:MMZ`; a date-only stamp counts as stale only when
   its date is after the date of `status_updated`.
 - `scan` runs `check` over `*.md` in the plans directory (`--dir`, else `$CLAUDE_PLAN_DIR`,

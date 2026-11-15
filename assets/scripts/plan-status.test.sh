@@ -6,6 +6,7 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 export PYTHONDONTWRITEBYTECODE=1
+export TZ=UTC
 SUT="$HERE/plan-status.py"
 PY=$(command -v python3) || { echo "python3 not found"; exit 1; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/plan-status-test.XXXXXX")
@@ -114,8 +115,8 @@ expect_eq "set success exit 0" 0 "$rc"
 has "prints git add" "$out" "git -C "; has "prints add pathspec" "$out" "add -- s1.md"; has "prints commit" "$out" "commit -m"
 expect_eq "status rewritten" "accepted" "$(sed -n 's/^status: //p' "$f")"
 expect_eq "status_updated rewritten" "$NOW" "$(sed -n 's/^status_updated: //p' "$f")"
-# everything outside the two changed lines is byte-identical
-diff <(grep -v '^status' "$f") <(grep -v '^status' "$TMP/s1.orig") >/dev/null; expect_eq "other bytes preserved" 0 "$?"
+# byte-exact: only the status line changes (status_updated has the same length text here)
+expect_eq "byte-exact result" "$(printf -- '---\ntype: plan\nstatus: accepted\nstatus_updated: %s\ntags: [a, b]\n---\n# Plan\n\nBody text with  odd   spacing\t\nlast line, no newline' "$NOW" | shasum | cut -c1-40)" "$(shasum < "$f" | cut -c1-40)"
 expect_eq "no trailing newline preserved" "line" "$(tail -c 4 "$f" | tr -d '\n')"
 [ -z "$(ls -a "$TMP" | grep '^\.plan-status\.')" ] && ok "no temp file left" || bad "temp file left"
 
@@ -146,9 +147,7 @@ run set "$g" --status in-delivery --now $NOW >/dev/null; expect_eq "same status 
 expect_eq "decisions untouched without --decision" "[DEC-1, DEC-2, DEC-3]" "$(sed -n 's/^decisions: //p' "$g")"
 b=$(mk s3 'type: plan' 'status: accepted' 'decisions:' '  - DEC-9' 'owner: me')
 run set "$b" --status in-delivery --decision DEC-10 --now $NOW >/dev/null
-expect_eq "block-list decisions rewritten" "[DEC-9, DEC-10]" "$(sed -n 's/^decisions: //p' "$b")"
-expect_eq "block continuation removed, next key kept" "owner: me" "$(grep '^owner:' "$b")"
-expect_eq "no stray list line" 0 "$(grep -c '^  - DEC-9' "$b")"
+expect_eq "block list extended in place" "$(printf -- '---\ntype: plan\nstatus: in-delivery\ndecisions:\n  - DEC-9\n  - DEC-10\nowner: me\nstatus_updated: %s\n---\n# Plan\n\nBody text with  odd   spacing\t\nlast line, no newline' "$NOW" | shasum | cut -c1-40)" "$(shasum < "$b" | cut -c1-40)"
 
 # legacy free-text status may move to any status
 for legacy in "proposal-awaiting-owner-review" "proposed — awaiting Chris's go on Phase 1" "draft-not-filed"; do
@@ -176,6 +175,136 @@ run set "$g" >/dev/null 2>&1; expect_eq "set usage error exit 2" 2 "$?"
 m=$(mk mode 'status: proposal'); chmod 640 "$m"
 run set "$m" --status accepted >/dev/null
 expect_eq "file mode preserved" "640" "$("$PY" -c 'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode&0o777)[2:])' "$m")"
+
+echo "== strict subset, comments, CRLF, duplicates (round-1 regressions)"
+sha() { shasum < "$1" | cut -c1-40; }
+# refuse <name> <file> <set-args...>: exit 1 and the file is byte-identical afterwards
+refuse() { local n=$1 fl=$2; shift 2; local b; b=$(sha "$fl"); run set "$fl" "$@" >/dev/null 2>&1; local rc=$?
+  expect_eq "$n: refused exit 1" 1 "$rc"; expect_eq "$n: file untouched" "$b" "$(sha "$fl")"; }
+# fixture <name> <exact bytes via printf format>
+fixture() { printf -- "$2" > "$TMP/$1.md"; echo "$TMP/$1.md"; }
+# expect_file <name> <file> <exact expected bytes via printf format>
+expect_file() { local e="$TMP/expected.$$"; printf -- "$3" > "$e"; if cmp -s "$e" "$2"; then ok "$1"; else bad "$1" "$(diff "$e" "$2" | head -6 | tr '\n' '|')"; fi; }
+
+# 1. inline comments
+f=$(fixture c1 '---\nstatus: delivered # merged\nstatus_updated: 2026-11-15T09:30Z\n---\nb\n')
+refuse "terminal with comment cannot skip the check" "$f" --status accepted
+out=$(run check "$f"); expect_eq "comment stripped for check" "OK $f" "$out"
+f=$(fixture c2 '---\nstatus: accepted # ok\nstatus_updated: 2026-11-15T09:30Z\n---\n')
+expect_eq "no false WARN on a status comment" "OK $f" "$(run check "$f")"
+f=$(fixture c3 '---\nstatus: superseded\nstatus_updated: 2026-11-15T09:30Z\nsuperseded_by:   # required when superseded\n---\n')
+has "comment-only superseded_by is empty" "$(run check "$f")" "superseded_by is missing"
+refuse "comment-only superseded_by does not satisfy set" "$f" --status superseded
+f=$(fixture c4 '---\nstatus: proposal # why\nstatus_updated: 2026-11-14T00:00Z  # when\n---\nb\n')
+run set "$f" --status accepted --now $NOW >/dev/null
+expect_file "scalar rewrite keeps comment bytes" "$f" '---\nstatus: accepted # why\nstatus_updated: 2026-11-15T10:00Z  # when\n---\nb\n'
+f=$(fixture c5 '---\nstatus: delivered\nstatus_updated: 2026-11-14T00:00Z\nsuperseded_by:   # who\n---\n')
+run set "$f" --status superseded --superseded-by "plan-b" --now $NOW >/dev/null
+expect_file "empty value with comment is filled, comment kept" "$f" '---\nstatus: superseded\nstatus_updated: 2026-11-15T10:00Z\nsuperseded_by: plan-b   # who\n---\n'
+
+# 2. span detection
+f=$(fixture s4 '---\nstatus: proposal\n  # indented note\nstatus_updated: 2026-11-14T00:00Z\n---\n')
+refuse "indented comment after a key" "$f" --status accepted
+f=$(fixture s5 '---\nstatus: accepted\ndecisions:\n  - DEC-1\n\n  - DEC-2\n---\n')
+refuse "block list with a blank line" "$f" --status in-delivery --decision DEC-3
+f=$(fixture s6 '---\nstatus: accepted\ndecisions:\n  - DEC-1\n  # note\n  - DEC-2\n---\n')
+refuse "block list with a comment" "$f" --status in-delivery --decision DEC-3
+f=$(fixture s7 '---\nstatus: accepted\ndecisions: [DEC-1,\n  DEC-2]\n---\n')
+refuse "multi-line flow list" "$f" --status in-delivery --decision DEC-3
+f=$(fixture s8 '---\nstatus: accepted\ndecisions: [[DEC-1]]\n---\n')
+refuse "nested brackets" "$f" --status in-delivery --decision DEC-3
+f=$(fixture s9 '---\nstatus: accepted\ndecisions: DEC-1\n---\n')
+refuse "scalar decisions" "$f" --status in-delivery --decision DEC-3
+f=$(fixture s10 '---\nstatus: accepted\nstatus_updated: 2026-11-14T00:00Z\ndecisions: [DEC-42]  # optional\n---\n')
+run set "$f" --status in-delivery --decision DEC-43 --now $NOW >/dev/null
+expect_file "flow list: trailing comment kept after the list" "$f" '---\nstatus: in-delivery\nstatus_updated: 2026-11-15T10:00Z\ndecisions: [DEC-42, DEC-43]  # optional\n---\n'
+f=$(fixture s11 '---\nstatus: accepted\ndecisions: []\n---\n')
+run set "$f" --status in-delivery --decision DEC-1 --now $NOW >/dev/null
+expect_file "empty flow list" "$f" '---\nstatus: in-delivery\ndecisions: [DEC-1]\nstatus_updated: 2026-11-15T10:00Z\n---\n'
+f=$(fixture s12 '---\nstatus: accepted\ndecisions:\nowner: me\n---\n')
+run set "$f" --status in-delivery --decision DEC-1 --now $NOW >/dev/null
+expect_file "empty decisions key" "$f" '---\nstatus: in-delivery\ndecisions: [DEC-1]\nowner: me\nstatus_updated: 2026-11-15T10:00Z\n---\n'
+f=$(fixture s13 '---\nstatus: accepted\nstatus_notes: keep me\n---\nstatus report: not a key\n')
+run set "$f" --status in-delivery --now $NOW >/dev/null
+expect_file "similar keys and body lines untouched" "$f" '---\nstatus: in-delivery\nstatus_notes: keep me\nstatus_updated: 2026-11-15T10:00Z\n---\nstatus report: not a key\n'
+f=$(fixture s14 '---\nstatus: proposal\n  more\n---\n')
+refuse "multi-line scalar status" "$f" --status accepted
+f=$(fixture bom "\xef\xbb\xbf---\nstatus: proposal\n---\n")
+refuse "BOM before frontmatter" "$f" --status accepted
+has "check reports BOM" "$(run check "$f")" "BOM"
+
+# 3. CRLF
+f=$(fixture crlf2 '---\r\nstatus: accepted\r\ndecisions:\r\nowner: me\r\n---\r\nb\r\n')
+run set "$f" --status in-delivery --decision DEC-1 --now $NOW >/dev/null
+expect_file "CRLF empty decisions: no duplicate key" "$f" '---\r\nstatus: in-delivery\r\ndecisions: [DEC-1]\r\nowner: me\r\nstatus_updated: 2026-11-15T10:00Z\r\n---\r\nb\r\n'
+f=$(fixture crlf3 '---\r\nstatus: accepted\r\ndecisions:\r\n  - DEC-1\r\n---\r\n')
+run set "$f" --status in-delivery --decision DEC-2 --now $NOW >/dev/null
+expect_file "CRLF block list" "$f" '---\r\nstatus: in-delivery\r\ndecisions:\r\n  - DEC-1\r\n  - DEC-2\r\nstatus_updated: 2026-11-15T10:00Z\r\n---\r\n'
+f=$(fixture crlf4 '---\r\nstatus: accepted # ok\r\nstatus_updated: 2026-11-15T09:30Z\r\n---\r\n')
+expect_eq "CRLF comment value parses" "OK $f" "$(run check "$f")"
+
+# 4. duplicate lifecycle keys
+f=$(fixture dup '---\nstatus: proposal\nstatus: accepted\nstatus_updated: 2026-11-15T09:30Z\n---\n')
+has "check warns on duplicate key" "$(run check "$f")" "duplicate key 'status'"
+refuse "set refuses duplicate keys" "$f" --status accepted
+
+# 5. lost update (a writer changes the file between read and rename)
+f=$(fixture lost '---\nstatus: proposal\n---\n'); cp "$f" "$f.orig"
+out=$("$PY" - "$SUT" "$f" <<'PYEOF' 2>&1
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("ps", sys.argv[1])
+ps = importlib.util.module_from_spec(spec); spec.loader.exec_module(ps)
+real = os.fsync
+def racing(fd):
+    real(fd)
+    with open(sys.argv[2], "a") as h: h.write("concurrent edit\n")
+os.fsync = racing
+print("rc=%s" % ps.main(["set", sys.argv[2], "--status", "accepted"]))
+PYEOF
+)
+has "lost update refused" "$out" "rc=1"
+expect_eq "concurrent edit survives" "concurrent edit" "$(tail -1 "$f")"
+expect_eq "no temp left after lost update" 0 "$(ls -a "$TMP" | grep -c '^\.plan-status\.' || true)"
+
+# 6. fences
+f="$TMP/fence1.md"
+printf -- '---\nstatus: accepted\nstatus_updated: 2026-11-15T09:30Z\n---\n```\n~~~\n> **Update 2027-01-01** inside\n```\n' > "$f"
+expect_eq "tilde line inside a backtick fence does not close it" "OK $f" "$(run check "$f")"
+printf -- '---\nstatus: accepted\nstatus_updated: 2026-11-15T09:30Z\n---\n````\n```\n> **Update 2027-01-01** inside\n````\n' > "$f"
+expect_eq "3-backtick line inside a 4-backtick fence does not close it" "OK $f" "$(run check "$f")"
+printf -- '---\nstatus: accepted\nstatus_updated: 2026-11-15T09:30Z\n---\n```\ncode\n```\n> **Update 2027-01-01** after\n' > "$f"
+has "stamp after a closed fence counts" "$(run check "$f")" "older than the newest body update 2027-01-01"
+
+# 7. malformed stamps
+printf -- '---\nstatus: accepted\nstatus_updated: 2026-11-15T09:30Z\n---\n> **Update 2026-11-20T08:00Z** real\n> **Update 2026-99-99** junk\n> **Update 2027-01-01T25:00Z** junk\n' > "$f"
+out=$(run check "$f")
+has "malformed stamps do not hide a valid one" "$out" "newest body update 2026-11-20T08:00"
+printf -- '---\nstatus: accepted\nstatus_updated: 2026-11-15T09:30Z\n---\n> **Update 2026-99-99** junk\n' > "$f"
+expect_eq "malformed stamp alone is ignored" "OK $f" "$(run check "$f")"
+
+# 8. scan since / enumeration errors
+run scan --dir "$D" --since 2026-99-99 >/dev/null 2>&1; expect_eq "impossible calendar date exit 2" 2 "$?"
+if [ "$(id -u)" != 0 ]; then
+  P="$TMP/locked"; mkdir "$P"; chmod 000 "$P"
+  out=$(run scan --dir "$P" 2>&1); rc=$?; chmod 755 "$P"
+  expect_eq "unlistable dir exit 2" 2 "$rc"; has "ERROR names the dir" "$out" "ERROR $P"; hasnt "no traceback" "$out" "Traceback"
+fi
+
+# 9. --superseded-by whitespace
+f=$(fixture ws '---\nstatus: accepted\n---\n')
+refuse "whitespace-only --superseded-by" "$f" --status superseded --superseded-by "   "
+
+# 10. read-only file
+if [ "$(id -u)" != 0 ]; then
+  f=$(fixture ro '---\nstatus: proposal\n---\n'); chmod 444 "$f"
+  refuse "read-only plan" "$f" --status accepted
+  chmod 644 "$f"
+fi
+
+# snapshots: check and scan never modify their inputs
+SN=$(for x in "$D"/*.md "$TMP"/c1.md "$TMP"/dup.md; do shasum < "$x"; done | shasum)
+run check "$TMP"/c1.md "$TMP"/dup.md >/dev/null; run scan --dir "$D" --since 2026-01-01 >/dev/null
+expect_eq "check and scan leave inputs byte-identical" "$SN" "$(for x in "$D"/*.md "$TMP"/c1.md "$TMP"/dup.md; do shasum < "$x"; done | shasum)"
 
 echo "== atomic write"
 a=$(mk atomic 'status: proposal'); cp "$a" "$a.orig"
