@@ -129,7 +129,7 @@ run set "$f" --status abandoned >/dev/null 2>&1; expect_eq "delivered -> abandon
 run set "$f" --status superseded >/dev/null 2>&1; expect_eq "superseded without --superseded-by refused" 1 "$?"
 expect_eq "refusal leaves status" "delivered" "$(sed -n 's/^status: //p' "$f")"
 run set "$f" --status superseded --superseded-by "plans/next-plan.md" --now $NOW >/dev/null; expect_eq "terminal -> superseded ok" 0 "$?"
-expect_eq "superseded_by inserted" "plans/next-plan.md" "$(sed -n 's/^superseded_by: //p' "$f")"
+expect_eq "superseded_by inserted, quoted (not id-style)" "\"plans/next-plan.md\"" "$(sed -n 's/^superseded_by: //p' "$f")"
 expect_eq "result passes check" "OK $f" "$(run check "$f")"
 
 g=$(mk s2 'type: plan' 'status: proposal')
@@ -305,6 +305,72 @@ fi
 SN=$(for x in "$D"/*.md "$TMP"/c1.md "$TMP"/dup.md; do shasum < "$x"; done | shasum)
 run check "$TMP"/c1.md "$TMP"/dup.md >/dev/null; run scan --dir "$D" --since 2026-01-01 >/dev/null
 expect_eq "check and scan leave inputs byte-identical" "$SN" "$(for x in "$D"/*.md "$TMP"/c1.md "$TMP"/dup.md; do shasum < "$x"; done | shasum)"
+
+echo "== closed grammar and id rules (round-2 regressions)"
+# every shape below must be refused by set (file untouched) AND warned by check at its line
+gram() { local n=$1 body=$2 line=$3; local f; f=$(fixture "$n" "$body")
+  refuse "$n: set refuses" "$f" --status in-delivery
+  has "$n: check warns with the line" "$(run check "$f")" "unsupported frontmatter syntax at line $line"; }
+gram g1 "---\nstatus: accepted\n'decisions': [DEC-1]\n---\n" 3
+gram g2 "---\nstatus: accepted\n\"status\": proposal\n---\n" 3
+gram g3 "---\nstatus: accepted\nnotes: \"first\nstatus: delivered\"\n---\n" 3
+gram g4 "---\nstatus: accepted\nnotes: 'first\nstatus: delivered'\n---\n" 3
+gram g5 "---\nstatus: accepted\nnotes: [a,\n  b]\n---\n" 3
+gram g6 "---\nstatus: accepted\nnotes: >\n  folded\n---\n" 3
+gram g7 "---\nstatus: accepted\nnotes: {a: 1}\n---\n" 3
+gram g8 "---\nstatus: accepted\nnotes: &anchor x\n---\n" 3
+gram g9 "---\nstatus: accepted\n...\n---\n" 3
+gram g10 "---\nstatus: accepted\nsome key: x\n---\n" 3
+gram g11 "---\nstatus: accepted\n- stray\n---\n" 3
+gram g12 "---\nstatus: accepted\ntags:\n\n  - a\n---\n" 5
+gram g13 "---\nstatus: accepted\ntags:\n  - a\n  # c\n  - b\n---\n" 6
+gram g14 "---\nstatus: accepted\nrelated: [[note]]\n---\n" 3
+gram g15 "---\nstatus: accepted\ntags:\n  - 'open\n---\n" 4
+# supported shapes still pass the grammar
+f=$(fixture ok1 '---\n# a comment\nstatus: accepted\nstatus_updated: 2026-11-15T09:30Z\n\ntags:\n  - a\n  - "b"\nq: "x # y"\nr: '"'"'it'"''"'s'"'"'\n---\n')
+expect_eq "supported subset passes check" "OK $f" "$(run check "$f")"
+
+# lifecycle scalars
+f=$(fixture l1 '---\nstatus: "deliv\\u0065red"\n---\n')
+refuse "escape in status" "$f" --status accepted
+has "check warns on escape" "$(run check "$f")" "unsupported 'status' value"
+f=$(fixture l2 '---\nstatus: "delivered"\nstatus_updated: 2026-11-14T00:00Z\n---\n')
+refuse "decoded double-quoted status drives the transition check" "$f" --status accepted
+f=$(fixture l3 "---\nstatus: 'accepted'\n---\n")
+refuse "single-quoted status" "$f" --status in-delivery
+f=$(fixture l4 '---\nstatus: accepted\nstatus_updated: 2026-11-14T00:00Z\n---\n')
+run set "$f" --status superseded --superseded-by 'C:\a # plan' --now $NOW >/dev/null; expect_eq "backslash and hash value set ok" 0 "$?"
+expect_file "superseded_by encoded" "$f" '---\nstatus: superseded\nstatus_updated: 2026-11-15T10:00Z\nsuperseded_by: "C:\\\\a # plan"\n---\n'
+expect_eq "round-trips through check" "OK $f" "$(run check "$f")"
+run set "$f" --status superseded --superseded-by 'D:\b "x"' --now $NOW >/dev/null; expect_eq "quote and backslash re-set ok" 0 "$?"
+expect_eq "re-set round-trips" "OK $f" "$(run check "$f")"
+for v in 'plan:' 'null' '~' 'Yes'; do
+  f=$(fixture l5 '---\nstatus: accepted\n---\n'); run set "$f" --status superseded --superseded-by "$v" >/dev/null 2>&1; rc=$?
+  expect_eq "superseded_by '$v' set and quoted" "0:1" "$rc:$(grep -c "^superseded_by: \"" "$f")"
+done
+f=$(fixture l6 '---\nstatus: accepted\n---\n'); run set "$f" --status superseded --superseded-by plan-b >/dev/null
+expect_eq "id-style superseded_by stays plain" "superseded_by: plan-b" "$(grep '^superseded_by' "$f")"
+
+# lifecycle shapes validated even when the key is not edited
+for body in 'decisions: [[DEC-1]]' 'decisions: DEC-1' 'decisions: ["DEC:"]' 'decisions: ["true","123"]' 'decisions: [null]' "decisions: [2026-11-15]"; do
+  f=$(fixture sh '---\nstatus: proposal\n'"$body"'\n---\n')
+  refuse "unedited bad decisions ($body)" "$f" --status accepted
+  has "check warns ($body)" "$(run check "$f")" "WARN"
+done
+
+# decision ids
+f=$(fixture di1 '---\nstatus: accepted\n---\n')
+for id in 'x:' null true No y n off '~' 123 2026-11-15 'a:b' ''; do
+  refuse "decision id '$id'" "$f" --status in-delivery --decision "$id"
+done
+run set "$f" --status in-delivery --decision dec-0123456789ab --now $NOW >/dev/null; expect_eq "ledger-style id accepted" "decisions: [dec-0123456789ab]" "$(grep '^decisions' "$f")"
+f=$(fixture di2 '---\nstatus: accepted\ndecisions: ["DEC-1", '"'"'DEC-2'"'"']\n---\n')
+run set "$f" --status in-delivery --decision DEC-3 --now $NOW >/dev/null
+expect_eq "quoted existing ids re-emitted plain" "decisions: [DEC-1, DEC-2, DEC-3]" "$(grep '^decisions' "$f")"
+
+# scan --since strictness
+run scan --dir "$D" --since 2026-1-1 >/dev/null 2>&1; expect_eq "--since 2026-1-1 exit 2" 2 "$?"
+run scan --dir "$D" --since 20261101 >/dev/null 2>&1; expect_eq "--since 20261101 exit 2" 2 "$?"
 
 echo "== atomic write"
 a=$(mk atomic 'status: proposal'); cp "$a" "$a.orig"

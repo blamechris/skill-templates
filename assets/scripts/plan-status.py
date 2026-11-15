@@ -52,7 +52,10 @@ TRANSITIONS = {
 
 TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$")
 STAMP_RE = re.compile(r"^>\s*\*\*Update\s+(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}))?")
-ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
+ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*$")
+RESERVED = ("null", "true", "false", "yes", "no", "on", "off", "y", "n", "~")
+TOP_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*:(?=\s|$)")
+SCALAR_LC = ("status", "status_updated", "superseded_by")
 
 
 class Refuse(Exception):
@@ -112,12 +115,74 @@ def split_value(rest):
         m = rx.match(body)
         if m:
             v = m.group(1)
-            v = v.replace('\\"', '"') if rx is DQ_RE else v.replace("''", "'")
+            v = re.sub(r"\\(.)", r"\1", v) if rx is DQ_RE else v.replace("''", "'")
             return v, m.group(2) if m.group(2).strip() else ""
     m = re.search(r"\s+#", body)
     if m:
         return body[:m.start()].strip(), body[m.start():]
     return body.strip(), ""
+
+
+def value_complete(rest):
+    """True when a value (text after `key:` or after `- `) is complete on its
+    own line: plain, a closed quoted scalar, or a balanced one-line flow list
+    with no nested brackets. `{ | > & * !` openers are never supported."""
+    body = rest.strip()
+    if not body or body.startswith("#"):
+        return True
+    c = body[0]
+    if c == '"':
+        return bool(DQ_RE.match(body))
+    if c == "'":
+        return bool(SQ_RE.match(body))
+    if c == "[":
+        v = split_value(rest)[0]
+        return v.startswith("[") and v.endswith("]") and not re.search(r"[\[\]{}]", v[1:-1])
+    return c not in "{|>&*!"
+
+
+def grammar_errors(lines, span):
+    """[(line_number, message)] for lines outside the closed frontmatter grammar:
+    comment lines; blank lines; unquoted col-0 `key: value`; indented `- item`
+    lines directly following a key with an empty value (or another item); and
+    complete-on-one-line values for EVERY key."""
+    errs = []
+    cont = False  # the previous line was an empty-valued key or a block item
+    for i in range(span[0] + 1, span[1]):
+        c = lines[i][0]
+        n = i + 1
+        if not c.strip() or re.match(r"^\s*#", c):
+            cont = False
+            continue
+        if TOP_KEY_RE.match(c):
+            rest = c.split(":", 1)[1]
+            if not value_complete(rest):
+                errs.append((n, "value must be complete on one line"))
+            v, _suf = split_value(rest)
+            cont = not v and not rest.strip().startswith(("\"", "'"))
+            continue
+        m = re.match(r"^\s+-\s+(\S.*)$", c)
+        if m and cont:
+            if not value_complete(m.group(1)):
+                errs.append((n, "list item must be complete on one line"))
+            continue
+        errs.append((n, "line is outside the supported subset"))
+        cont = False
+    return errs
+
+
+def lc_value(rest):
+    """(value, suffix) of a lifecycle scalar: plain, or double-quoted with only
+    the \\ and \" escapes (the exact inverse of fmt_value). Refuses the rest."""
+    body = rest.lstrip()
+    if body.startswith('"'):
+        m = DQ_RE.match(body)
+        if not m or not re.fullmatch(r'(?:[^"\\]|\\[\\"])*', m.group(1)):
+            raise Refuse("unsupported quoting or escape in a lifecycle value")
+        return re.sub(r'\\([\\"])', r"\1", m.group(1)), (m.group(2) if m.group(2).strip() else "")
+    if body and body[0] in "'[{|>&*!":
+        raise Refuse("a lifecycle value must be a plain or double-quoted scalar")
+    return split_value(rest)
 
 
 def key_lines(lines, span):
@@ -131,10 +196,26 @@ def key_lines(lines, span):
     return out
 
 
-def parse_fm(lines, span):
+def parse_fm(lines, span, errs=None):
+    """Top-level key -> decoded value (first occurrence). Lifecycle scalars are
+    decoded strictly: a bad one raises Refuse, or is appended to `errs`."""
     out = {}
-    for _i, k, v, _s in key_lines(lines, span):
-        out.setdefault(k, v)
+    for i in range(span[0] + 1, span[1]):
+        m = KEY_RE.match(lines[i][0])
+        if not m or m.group(1) in out:
+            continue
+        k = m.group(1)
+        if k in SCALAR_LC:
+            try:
+                v = lc_value(m.group(2))[0]
+            except Refuse as e:
+                if errs is None:
+                    raise Refuse("'%s': %s" % (k, e))
+                errs.append("unsupported '%s' value (line %d)" % (k, i + 1))
+                v = ""
+        else:
+            v = split_value(m.group(2))[0]
+        out[k] = v
     return out
 
 
@@ -167,10 +248,14 @@ def key_run(lines, span, kidx):
     return run_end
 
 
+def id_ok(s):
+    return bool(ID_RE.match(s)) and s.lower() not in RESERVED
+
+
 def check_ids(items):
     for it in items:
-        if not ID_RE.match(it):
-            raise Refuse("unsupported decisions entry '%s'" % it)
+        if not id_ok(it):
+            raise Refuse("unsupported decisions entry '%s' (ids match [A-Za-z][A-Za-z0-9._-]*, no reserved words)" % it)
     return items
 
 
@@ -260,8 +345,16 @@ def lint(text):
         if text.startswith("\ufeff"):
             return ["no frontmatter block (a UTF-8 BOM before --- is not supported)"]
         return ["no frontmatter block"]
-    fm = parse_fm(lines, span)
     warns = []
+    for n, _msg in grammar_errors(lines, span)[:1]:
+        warns.append("unsupported frontmatter syntax at line %d" % n)
+    errs = []
+    fm = parse_fm(lines, span, errs)
+    warns.extend(errs)
+    try:
+        parse_decisions(lines, span)
+    except Refuse as e:
+        warns.append("unsupported decisions: %s" % e)
     for k in duplicates(lines, span):
         warns.append("duplicate key '%s'" % k)
     status = fm.get("status", "")
@@ -308,15 +401,18 @@ def cmd_check(files):
 
 
 def file_date(path, text):
-    mt = datetime.datetime.fromtimestamp(os.stat(path).st_mtime, datetime.timezone.utc).strftime("%Y-%m-%d")
+    mt = datetime.datetime.fromtimestamp(os.stat(path).st_mtime, datetime.timezone.utc).date()
     lines = split_lines(text)
     span = frontmatter_span(lines)
-    d = ""
+    best = mt
     if span:
-        m = re.match(r"^(\d{4}-\d{2}-\d{2})", parse_fm(lines, span).get("date", ""))
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})", parse_fm(lines, span, []).get("date", ""))
         if m:
-            d = m.group(1)
-    return max(mt, d)
+            try:
+                best = max(mt, datetime.datetime.strptime(m.group(1), "%Y-%m-%d").date())
+            except ValueError:
+                pass
+    return best
 
 
 def cmd_scan(dirpath, since):
@@ -353,14 +449,18 @@ def cmd_scan(dirpath, since):
                 print("WARN %s %s" % (p, w))
         else:
             print("OK %s" % p)
-    print("SCAN %s: %d checked, %d with warnings, %d before %s skipped" % (d, checked, warned, skipped, since))
+    print("SCAN %s: %d checked, %d with warnings, %d before %s skipped" % (d, checked, warned, skipped, since.isoformat()))
     return rc
 
 
 def fmt_value(v):
-    if re.search(r"(^[\s\-?:,\[\]{}#&*!|>'\"%@`])|(: )|( #)|(\s$)", v):
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return v
+    """Plain only when id-style safe (and not a reserved word); otherwise
+    double-quoted with `\\` and `\"` escaped, the exact inverse of lc_value."""
+    if id_ok(v):
+        return v
+    if re.search(r"[\x00-\x1f\x7f]", v):
+        raise Refuse("--superseded-by must not contain control characters")
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def others(lines, span):
@@ -390,10 +490,14 @@ def plan_set(path, status, superseded_by, decisions, now):
     span = frontmatter_span(lines)
     if not span:
         raise Refuse("%s has no frontmatter block (--- ... ---; a UTF-8 BOM before --- is not supported)" % path)
+    gerr = grammar_errors(lines, span)
+    if gerr:
+        raise Refuse("unsupported frontmatter syntax at line %d: %s" % gerr[0])
     dup = duplicates(lines, span)
     if dup:
         raise Refuse("duplicate lifecycle key(s): %s" % ", ".join(dup))
     fm = parse_fm(lines, span)
+    old_ids = parse_decisions(lines, span)[0]  # shape-checked even when not edited
     old = fm.get("status", "")
     if status not in STATUSES:
         raise Refuse("unknown status '%s'" % status)
@@ -410,8 +514,8 @@ def plan_set(path, status, superseded_by, decisions, now):
     elif superseded_by:
         raise Refuse("--superseded-by is only valid with --status superseded")
     for d in decisions:
-        if not ID_RE.match(d):
-            raise Refuse("invalid decision id '%s'" % d)
+        if not id_ok(d):
+            raise Refuse("invalid decision id '%s' (ids match [A-Za-z][A-Za-z0-9._-]*, no reserved words)" % d)
     if not TS_RE.match(now):
         raise Refuse("--now '%s' is not YYYY-MM-DDTHH:MMZ" % now)
     try:
@@ -435,7 +539,6 @@ def plan_set(path, status, superseded_by, decisions, now):
         else:
             edits.append((span[1], span[1], [("%s: %s" % (key, val), nl)], False))
     want_ids = list(decisions)
-    old_ids = []
     if want_ids:
         old_ids, form, di, run_end, suf = parse_decisions(lines, span)
         add = [d for d in want_ids if d not in old_ids]
@@ -468,7 +571,7 @@ def plan_set(path, status, superseded_by, decisions, now):
     # self-verification: re-parse the result and prove nothing else moved
     nlines = split_lines(new_text)
     nspan = frontmatter_span(nlines)
-    if not nspan or duplicates(nlines, nspan):
+    if not nspan or grammar_errors(nlines, nspan) or duplicates(nlines, nspan):
         raise Refuse("internal check failed: result frontmatter is malformed")
     nfm = parse_fm(nlines, nspan)
     if nfm.get("status") != status or nfm.get("status_updated") != now:
@@ -559,10 +662,12 @@ def main(argv=None):
         return cmd_check(args.files)
     if args.cmd == "scan":
         try:
-            datetime.datetime.strptime(args.since, "%Y-%m-%d")
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", args.since):
+                raise ValueError
+            since = datetime.datetime.strptime(args.since, "%Y-%m-%d").date()
         except ValueError:
             ap.error("--since must be a real calendar date YYYY-MM-DD")
-        return cmd_scan(args.dir, args.since)
+        return cmd_scan(args.dir, since)
     return cmd_set(args)
 
 
