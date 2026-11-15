@@ -124,6 +124,10 @@ intended branch and assert it again before continuing.
 <!--floor:explicit-path-staging-->
 **Stage explicit paths.** `git status --short` first, then `git add` the files you changed, **by name**. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a`. A bulk add commits whatever else is in the tree — three separate incidents in one week trace to exactly that. `-u` is not the safe one, and this is the failure mode worth remembering: it looks harmless because it only touches *tracked* files, but "tracked and modified" includes every file a clean/smudge filter rewrote in the worktree without you touching it. A git-lfs filter doing precisely that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as a legitimate edit.
 
+<!--default:vault-writer-commits-->
+Commit vault notes you create before ending, with `git -C <v>`: `add -- <p>`,
+then `commit -m <m> -- <p>`. Machine output only where `check-ignore -q` succeeds.
+
 <!--floor:worktree-by-default-->
 **Work in your own worktree — this is the default, not a preference.** Before writing to a
 repo, if the harness has not already placed you in one, create one:
