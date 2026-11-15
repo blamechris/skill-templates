@@ -66,6 +66,8 @@ Escalate only if at least one of these is true:
 - **Overrides something they already said** — you would be carving an exception out of a stated preference. Ask; do not assume the exception.
 - **Legal, security or privacy weight** — credentials, licences, personal data.
 
+When the owner answers a rung-3 question, record the answer with `python3 ~/.claude/scripts/decision-record.py add` (their exact words; `--channel relay --relay-via <agent>` if relayed) before acting on it.
+
 None of those? Go back down to rung 2 and decide. Asking is not free: it costs the user a context switch and it costs the run its momentum. Weigh that against the cost of being wrong — and remember that a wrong rung-2 call is usually a one-commit fix.
 
 {{CUSTOMIZE: unattended-run override — name the choices covered by the autonomous authority grant (e.g. `/prime-directive`) that therefore resolve at rung 2, and the choices the owner still reserves. Owner-reserved choices require an answer and remain blocked without one; a recommendation or default never expands the grant.}}

@@ -1094,6 +1094,20 @@ jobs:
         # accident whenever only the highest round is ever on file).
         run: ./assets/scripts/pr-record.test.sh
 
+      - name: decision-record regression tests
+        # Owner decisions get a durable ledger the way merges have pr-record.py.
+        # There is no `*.test.sh` glob in this workflow, so each test is named.
+        # Pins append/list round-trip, the refusals (no session, relay without
+        # relay_via, control characters, credential-shaped values) and that
+        # concurrent appends never interleave. Hermetic: temp dirs only.
+        run: ./assets/scripts/decision-record.test.sh
+
+      - name: seed-freshness regression tests
+        # Report-only check that a seed predates a later decision or merge. Pins
+        # STALE for each of the three cases, FRESH otherwise, that nothing is
+        # written, and the exit codes.
+        run: ./assets/scripts/seed-freshness.test.sh
+
       - name: gate-ledger regression tests
         # #272, epic #266: for every gate (a skill-guard, a hook, a CI step, a
         # script-check, a doctrine rule), record the failure mode it targets and
