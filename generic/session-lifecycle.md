@@ -75,6 +75,7 @@ Then state, in one short block: branch/HEAD, dirty files, open PRs (mine/others)
 - **Assert the branch before you write.** `git` state is global to the working copy and several sessions share it, so re-check `git branch --show-current` against `SESSION_BRANCH` (claimed at start, step 2) **immediately before your first edit** and **again immediately before staging**. A checkout from earlier in the session proves nothing — another session can move HEAD in between, and your edits then land on its branch. Re-check, never remember; if HEAD has moved, stop and re-establish the branch before writing anything.
 - **Stage explicit paths.** `git status --short`, then `git add` the files you changed, **by name**. Never `git add -A`, `git add .`, `git add -u`, `git add <dir>/`, or `git commit -a` — a foreign file in a shared tree is the normal case, so a bulk add commits someone else's work into your PR. `-u` is not the safe one: it restages every *tracked* file whose worktree copy differs, including files a clean/smudge filter rewrote without you touching them — that is how `git add -u` turned a tracked 21KB `.docx` into a git-lfs pointer and committed it as an edit.
 - **Prefer a per-session worktree.** Where the harness gives this session its own `git worktree`, use it; where it does not, the two rules above are the whole of the protection and apply verbatim.
+- **Plans follow the lifecycle contract** (`docs/plan-lifecycle.md`). Write a plan note with `type: plan`, a `status:` of `proposal`, `accepted`, `in-delivery`, `delivered`, `superseded` or `abandoned`, and a UTC `status_updated:`. When the state changes (owner acceptance, first PR, verified delivery) run `python3 ~/.claude/scripts/plan-status.py set <plan> --status <state>`; an update blockquote in the body never replaces the header. Before ending, run `python3 ~/.claude/scripts/plan-status.py check` on every plan you touched, and commit the vault note as usual (`set` never runs git).
 
 ### The interactive flow — use the authority already granted
 
@@ -250,7 +251,7 @@ cp assets/scripts/session-seed.py assets/scripts/session-pulse.py assets/scripts
    assets/scripts/usage-pace.py assets/scripts/usage-trend.py assets/scripts/filed-from.py \
    assets/scripts/review-result.py assets/scripts/rework-lag.py \
    assets/scripts/session-distill.py assets/scripts/pr-record.py \
-   assets/scripts/gate-ledger.py ~/.claude/scripts/
+   assets/scripts/gate-ledger.py assets/scripts/plan-status.py ~/.claude/scripts/
 cp assets/scripts/usage-trend.py assets/scripts/usage_accounting.py \
    ~/.claude/usage-history/
 ```

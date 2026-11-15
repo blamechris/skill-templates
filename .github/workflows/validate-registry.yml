@@ -1140,3 +1140,11 @@ jobs:
         # "this repo's own installed skills lint clean" step above does for
         # skill-lint.
         run: python3 assets/scripts/gate-ledger.py check --registry .
+
+      - name: plan-status tests
+        # The plan-lifecycle linter/writer (docs/plan-lifecycle.md). There is no
+        # `*.test.sh` glob in this workflow, so it gets its own named step. The suite
+        # is hermetic (temp dirs, HOME and CLAUDE_PLAN_DIR redirected, no network) and
+        # proves `set` preserves every other byte, refuses illegal transitions, writes
+        # atomically and never runs git.
+        run: ./assets/scripts/plan-status.test.sh
