@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "cc54b85",
+  "generatedFromCommit": "e6698f6",
   "skillCount": 45,
   "skills": [
     {
@@ -671,7 +671,7 @@
     },
     {
       "name": "decide",
-      "hash": "cc54b85",
+      "hash": "e6698f6",
       "lines": 135,
       "description": "A decision protocol for an agent that thinks it is blocked. Most apparent blocks are not blocks: they are questions the repo already answers, or cheap reversible calls the agent is entitled to make and record. The few that are real deserve a structured question carrying options and a recommendation — not a paragraph of prose that hands the problem back and waits. This skill routes any pending decision down a fixed ladder, and dictates the shape of the ask when escalation is genuinely warranted.",
       "guards": [
@@ -2598,7 +2598,7 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "cc54b85",
+      "hash": "e6698f6",
       "lines": 343,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`, `/decide`, `/pulse`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
