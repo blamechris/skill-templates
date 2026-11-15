@@ -666,6 +666,22 @@
         "[Rr]ecord (?:the|each|every) owner decision[^\\n.]*with `python3 [^`\\n]*decision-record\\.py add`[^\\n.]*before (?:acting|you act)"
       ],
       "note": "The rule applies at any rung, not only rung 3. Binds the sentence that states it, not the bootstrap clause."
+    },
+    {
+      "label": "owner-decision-ledger-is-private",
+      "anyOf": [
+        "never quote a record[^\\n]*(?:repo|PR|issue)[^\\n]*cite the `dec-",
+        "[Nn]ever (?:quote|paste) [^\\n]*(?:decision )?record[^\\n]*(?:repo|PR|issue)[^\\n]*cite the `dec-"
+      ],
+      "note": "The decision ledger is private. Binds the sentence that forbids quoting a record into a repo, PR or issue and says to cite the dec- id instead."
+    },
+    {
+      "label": "owner-decision-any-rung",
+      "anyOf": [
+        "at any rung[^\\n]*record it before acting on it",
+        "not only (?:at )?rung 3[^\\n]*record it before acting"
+      ],
+      "note": "Recording applies at any rung, not only when a rung-3 question was asked. Binds the clause that says so."
     }
   ],
   "decompose-issue": [
@@ -2082,6 +2098,14 @@
         "[Rr]ecord (?:the|each|every) owner decision[^\\n.]*with `python3 [^`\\n]*decision-record\\.py add`[^\\n.]*before (?:acting|you act)"
       ],
       "note": "An owner decision, typed, relayed or an AskUserQuestion answer, is written to the private decision ledger BEFORE the agent acts on it (the seed otherwise keeps asking for a choice already made). Binds the rule sentence, not the bold label or the bootstrap `cp` line."
+    },
+    {
+      "label": "owner-decision-ledger-is-private",
+      "anyOf": [
+        "never quote a record[^\\n]*(?:repo|PR|issue)[^\\n]*cite the `dec-",
+        "[Nn]ever (?:quote|paste) [^\\n]*(?:decision )?record[^\\n]*(?:repo|PR|issue)[^\\n]*cite the `dec-"
+      ],
+      "note": "The decision ledger is private. Binds the sentence that forbids quoting a record or answer_verbatim into a repo, PR or issue and says to cite the dec- id instead, not the bold label."
     }
   ],
   "skill": [

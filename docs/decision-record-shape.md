@@ -51,25 +51,36 @@ acting on the answer**, plus a read-only check that compares seeds against it.
    in the ledger.
 3. **`received_at` is when the answer arrived**, not when it was written down, and may
    be passed explicitly for a late record. `recorded_at` is the write time. The
-   freshness check compares `received_at`. Every accepted timestamp, offsets and
-   unpadded fields included, is normalized to canonical `YYYY-MM-DDTHH:MM:SSZ`
-   before it is stored and hashed, so equal instants get one id and `--since`
+   freshness check compares `received_at`, which may not be more than 5 minutes in
+   the future. Every accepted timestamp, offsets (at most 14:59) and unpadded fields
+   included, is normalized to canonical `YYYY-MM-DDTHH:MM:SSZ`, or with `.ffffffZ`
+   when the fraction is non-zero, before it is stored and hashed; comparisons keep
+   full precision, so equal instants get one id and `--since`
    compares parsed values.
 4. **No session, no record.** The session comes from `--session`, then
    `$CLAUDE_CODE_SESSION_ID`; there is no third source, the same discipline as
    `session-seed.py`. `scope` defaults to `session-seed.py scope`.
-5. **Single-line fields only, and nothing credential-shaped.** A newline, control
-   character, U+2028, U+2029 or U+0085 in any field (checked on the raw value, before
-   trimming), an empty or whitespace-only required field, or a value shaped like a
+5. **Single-line fields, except the owner's words, and nothing credential-shaped.**
+   `answer_verbatim` and `question` may span lines (`\n`; `\r\n` is normalized to
+   `\n`; JSON escapes it safely), and `--answer-file PATH|-` reads a multi-line answer
+   from a file or stdin. Every other field is single-line. Any other control
+   character, U+2028, U+2029 or U+0085 anywhere is refused (checked on the raw value,
+   before trimming), as is an empty or whitespace-only required field, or a value shaped like a
    credential (`ghp_`, `github_pat_`, `sk-`, `sk_live_`, `pk_live_`, `xox*-`, `AKIA…`,
    a JWT, a PEM private-key header, a `Bearer` value in any case, or
-   `password|secret|token|api_key` followed by `:` or `=` and a value) is a refusal.
+   `password|secret|token|api_key` followed by `:` or `=` and a value of at least 8
+   characters that contains a digit or mixed case, so prose like "token: rotation
+   weekly" passes) is a refusal. The message tells the agent to paraphrase the
+   credential part, keep the rest verbatim and note that it did so.
    This is a heuristic backstop, not a guarantee and not a license to paste secrets.
 6. **One locked, repaired O_APPEND write.** The same `fcntl.flock` on a sidecar `.lock`
    file as `pr-record.py`, so racing writers serialize. Under the lock, a last record
    missing its newline is preserved by prepending one, a short write is continued
    until the whole line is down, and any write error truncates the ledger back to its
-   pre-append size and exits 2.
+   pre-append size and exits 2. The ledger path is resolved with `realpath` first, so
+   an alias and its target share one lock; if the rollback itself fails the message
+   says restoring FAILED and partial bytes may remain. A refusal creates no directory
+   and no `.lock`.
 7. **The ledger is private and vault-only.** `add` refuses a ledger path inside one of
    the current session's repo worktrees (using `session-seed.py`'s worktree-roots
    logic, loaded by path). Never quote a record or `answer_verbatim` into a repo, PR
@@ -108,11 +119,14 @@ then exit 2. An event that cannot be dated is an error, never "nothing happened"
 line never bricks the ledger.
 
 **Seed date resolution.** `session-seed.py` writes the seed `date` at minute
-resolution. A date without seconds is treated as ending at the end of that minute, so
-a decision recorded earlier in the same minute (the normal flow) is not STALE. The
-tradeoff: an event in the same minute *after* the write is missed, a false-FRESH
-window under 60 seconds. A date carrying seconds is used exactly. Session ids are
-matched the way `session-seed.py` normalizes them (UUIDs lowercase, 8-character prefix).
+resolution. When the seed file's mtime falls inside that same UTC minute it is the
+exact write instant. Otherwise a date without seconds is treated as ending at the end
+of that minute, so a decision recorded earlier in the same minute (the normal flow) is
+not STALE; the tradeoff is that an event in that minute *after* the write is missed, a
+false-FRESH window under 60 seconds. A date carrying seconds is used exactly. Session ids are
+matched the way `session-seed.py` normalizes them: only UUID-shaped ids are lowercased, any
+other id is compared case-sensitively, and a seed session shorter than 8 characters
+must match exactly, never as a prefix.
 
 ## What it does not do
 

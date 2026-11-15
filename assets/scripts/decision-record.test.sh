@@ -20,7 +20,7 @@ expect_refuse() { # name, then args; expects exit 2 and an unchanged ledger
   local before; before=$(shasum "$L" 2>/dev/null)
   local err; err=$(run "$@" 2>&1 >/dev/null); local rc=$?
   local after; after=$(shasum "$L" 2>/dev/null)
-  if [ "$rc" = 2 ] && [ "$before" = "$after" ] && [[ "$err" == REFUSE* ]]; then ok "$name"; else bad "$name" "rc=$rc err=$err"; fi
+  if [ "$rc" = 2 ] && [ "$before" = "$after" ] && grep -q "^REFUSE" <<<"$err"; then ok "$name"; else bad "$name" "rc=$rc err=$err"; fi
 }
 BASE=(add --scope demo --session s1 --question "Merge?" --answer-verbatim "yes, merge it")
 
@@ -28,7 +28,7 @@ echo "decision-record.test.sh"
 
 out=$(run "${BASE[@]}" --received-at 2026-11-01T10:00:00Z --authorizes "merge PR 9115" --limit "no force push" \
   --pin pr=9115 --pin head=abc123 --ref https://example.test/pr/9115 2>&1); rc=$?
-[ $rc = 0 ] && [[ "$out" == decision:\ dec-*"$L"* ]] && ok "add prints decision line" || bad "add" "$out"
+[ $rc = 0 ] && [[ "$out" == decision:\ dec-*/ledger/decisions.jsonl* ]] && ok "add prints decision line" || bad "add" "$out"
 [[ "$out" == *"git -C "*" add -- decisions.jsonl"* && "$out" == *"commit -m"* ]] && ok "add prints git lines" || bad "git lines" "$out"
 "$PY" - "$L" <<'PYEOF' && ok "record fields round-trip" || bad "record fields"
 import json, sys
@@ -60,7 +60,8 @@ run list --scope demo --json | "$PY" -c "import json,sys;d=json.load(sys.stdin);
 expect_refuse "missing session" add --scope demo --question Q --answer-verbatim A2
 expect_refuse "relay without relay_via" "${BASE[@]}" --answer-verbatim a3 --channel relay
 expect_refuse "relay_via with direct" "${BASE[@]}" --answer-verbatim a4 --relay-via dot
-expect_refuse "newline in answer" "${BASE[@]}" --answer-verbatim $'line1\nline2'
+expect_refuse "lone CR in answer" "${BASE[@]}" --answer-verbatim $'line1\rline2'
+expect_refuse "newline in a single-line field" "${BASE[@]}" --answer-verbatim a0 --decided-by $'Chris\nX'
 expect_refuse "control char in question" "${BASE[@]}" --question $'bad\x01q' --answer-verbatim a5
 expect_refuse "control char in list item" "${BASE[@]}" --answer-verbatim a6 --authorizes $'x\ty'
 expect_refuse "ghp token" "${BASE[@]}" --answer-verbatim "use ghp_abcdefghijklmnopqrstuvwxyz0123456789"
@@ -106,8 +107,8 @@ expect_refuse "lowercase bearer" "${BASE[@]}" --answer-verbatim "use bearer abcd
 expect_refuse "stripe live key" "${BASE[@]}" --answer-verbatim "sk_live_abcdefgh12345678"
 expect_refuse "pk_live key" "${BASE[@]}" --answer-verbatim "pk_live_abcdefgh12345678"
 expect_refuse "JWT" "${BASE[@]}" --answer-verbatim "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"
-expect_refuse "password assignment" "${BASE[@]}" --answer-verbatim "password: hunter2"
-expect_refuse "api_key assignment" "${BASE[@]}" --answer-verbatim "API_KEY=abc"
+expect_refuse "password assignment" "${BASE[@]}" --answer-verbatim "password: Hunter2xyz"
+expect_refuse "api_key assignment" "${BASE[@]}" --answer-verbatim "API_KEY=Abc12345xy"
 
 # ---- canonical timestamps
 run add --scope ts --session s1 --question Q --answer-verbatim A --received-at 2026-2-1T1:2:3Z >/dev/null
@@ -178,12 +179,106 @@ run add --scope after --session s1 --question Q --answer-verbatim "after corrupt
 SP="$TMP/dir with space & \$x;/led ger.jsonl"
 out=$(run "${BASE[@]}" --answer-verbatim quote --ledger "$SP")
 line=$(echo "$out" | grep 'git -C' | head -1)
-eval "set -- $line"; [ "$1 $2" = "git -C" ] && [ "$3" = "$(cd "$(dirname "$SP")" && pwd)" ] && [ "$6" = "led ger.jsonl" ] \
+eval "set -- $line"; [ "$1 $2" = "git -C" ] && [ "$3" = "$(cd "$(dirname "$SP")" && pwd -P)" ] && [ "$6" = "led ger.jsonl" ] \
   && ok "git lines survive shell parsing with spaces and metacharacters" || bad "shlex" "$line"
 
 # ---- ledger privacy: refused inside a worktree
 wt=$(cd "$TMP/myrepo" && run add --scope demo --session s1 --question Q --answer-verbatim priv --ledger "$TMP/myrepo/docs/decisions.jsonl" 2>&1)
 [[ "$wt" == *"inside the worktree"* ]] && [ ! -e "$TMP/myrepo/docs/decisions.jsonl" ] && ok "ledger inside a repo worktree is refused" || bad "worktree refusal" "$wt"
+
+# ======================= round 2 (fresh ledger) =======================
+export CLAUDE_DECISION_LEDGER="$TMP/r2/decisions.jsonl"; L="$CLAUDE_DECISION_LEDGER"
+# ---- multi-line question/answer, --answer-file
+printf 'line one\r\nline two\n' > "$TMP/ans.txt"
+run add --scope ml --session s1 --question $'two\nlines?' --answer-file "$TMP/ans.txt" --received-at 2026-11-01T10:00:00Z >/dev/null 2>&1 \
+  && run list --scope ml --json | "$PY" -c "
+import json,sys
+r=json.load(sys.stdin)[0]
+assert r['answer_verbatim']=='line one\nline two' and r['question']=='two\nlines?', r" \
+  && ok "multi-line answer from a file, CRLF normalized" || bad "answer-file"
+printf 'from stdin\nsecond' | run add --scope ml --session s1 --question Q --answer-file - --received-at 2026-11-01T10:01:00Z >/dev/null 2>&1 \
+  && ok "--answer-file - reads stdin" || bad "answer stdin"
+expect_refuse "answer and answer-file together" "${BASE[@]}" --answer-file "$TMP/ans.txt" --received-at 2026-11-01T10:02:00Z
+printf 'a\tb' > "$TMP/tab.txt"
+expect_refuse "tab in an answer file" add --scope ml --session s1 --question Q --answer-file "$TMP/tab.txt"
+expect_refuse "unreadable answer file" add --scope ml --session s1 --question Q --answer-file "$TMP/nope.txt"
+
+# ---- future timestamps
+expect_refuse "received_at far in the future" "${BASE[@]}" --answer-verbatim fut --received-at 2999-01-01T00:00:00Z
+
+# ---- credential heuristic: prose passes, credential-shaped values do not
+run add --scope pr --session s1 --question Q --answer-verbatim "token: rotation weekly" --received-at 2026-11-01T10:03:00Z >/dev/null 2>&1 \
+  && ok "prose after 'token:' is not a credential" || bad "token prose"
+expect_refuse "token with digits" "${BASE[@]}" --answer-verbatim "token: abcd1234efgh"
+msg=$(run "${BASE[@]}" --answer-verbatim "secret=AbCdEfGhIj" 2>&1 >/dev/null)
+[[ "$msg" == *"Paraphrase the credential part"* && "$msg" == *"note that you did so"* ]] && ok "refusal tells the agent how to paraphrase" || bad "refusal text" "$msg"
+
+# ---- fractional seconds and offsets
+run add --scope fr --session s1 --question Q --answer-verbatim A --received-at 2026-11-01T10:45:30.5+00:00 >/dev/null 2>&1
+run add --scope fr --session s1 --question Q --answer-verbatim B --received-at 2026-11-01T10:45:30Z >/dev/null 2>&1
+run list --scope fr --json | "$PY" -c "
+import json,sys
+d={r['answer_verbatim']:r['received_at'] for r in json.load(sys.stdin)}
+assert d=={'A':'2026-11-01T10:45:30.500000Z','B':'2026-11-01T10:45:30Z'}, d" && ok "fraction kept in canonical storage" || bad "fraction"
+expect_refuse "duplicate through an equal fractional spelling" add --scope fr --session s1 --question Q --answer-verbatim A --received-at 2026-11-01T10:45:30.50Z
+expect_refuse "offset minutes above 59" "${BASE[@]}" --answer-verbatim o1 --received-at 2026-11-01T10:00:00+00:99
+expect_refuse "offset hours above 14" "${BASE[@]}" --answer-verbatim o2 --received-at 2026-11-01T10:00:00+99:00
+[ "$(run list --scope fr --since 2026-11-01T10:45:30.25Z | wc -l | tr -d ' ')" = 1 ] && ok "--since keeps fractional precision" || bad "since fraction"
+
+# ---- decoder errors are per-line; later valid rows survive
+cp "$L" "$TMP/pre.bak"
+"$PY" -c "print('{\"kind\":\"decision-record\",\"n\":' + '9'*6000 + '}')" >> "$L"
+"$PY" -c "print('['*200000)" >> "$L"
+run add --scope dec --session s1 --question Q --answer-verbatim "after decoder errors" --received-at 2026-11-01T10:04:00Z >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc = 0 ] && grep -c "unreadable" "$TMP/err" | grep -q 2 && ok "add survives int-limit and recursion rows" || bad "decoder add" "rc=$rc $(cat "$TMP/err")"
+out=$(run list --scope dec 2>/dev/null); rc=$?
+[ $rc = 2 ] && [[ "$out" == *"after decoder errors"* ]] && ok "list returns the valid row after bad ones" || bad "decoder list" "rc=$rc"
+
+# ---- ledger aliasing: a symlink and its target share one lock
+mkdir -p "$TMP/real"; : > "$TMP/real/target.jsonl"; ln -s "$TMP/real/target.jsonl" "$TMP/alias.jsonl"
+for i in $(seq 1 12); do
+  run add --scope al --session s1 --question "A$i" --answer-verbatim "alias-$i" --ledger "$TMP/alias.jsonl" --received-at 2026-11-01T10:10:00Z >/dev/null 2>&1 &
+  run add --scope al --session s1 --question "T$i" --answer-verbatim "target-$i" --ledger "$TMP/real/target.jsonl" --received-at 2026-11-01T10:10:00Z >/dev/null 2>&1 &
+done
+wait
+"$PY" - "$TMP/real/target.jsonl" <<'PYEOF' && ok "alias and target appends share one lock" || bad "alias concurrency"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+assert len(rows) == 24 and len({r["id"] for r in rows}) == 24, len(rows)
+PYEOF
+[ -e "$TMP/real/target.jsonl.lock" ] && [ ! -e "$TMP/alias.jsonl.lock" ] && ok "lock sits beside the real path" || bad "lock path"
+
+# ---- honest rollback reporting
+cat > "$TMP/inject2.py" <<'PYEOF'
+import os, runpy, sys
+g = runpy.run_path(os.environ["SUT"])
+real = os.write
+def boom(fd, data):
+    real(fd, data[:len(data) // 2]); raise OSError(5, "io")
+def bad_trunc(fd, n): raise OSError(5, "truncate failed")
+os.write = boom
+if sys.argv[2] == "trunc":
+    os.ftruncate = bad_trunc
+rec = {"kind": "decision-record", "id": "dec-r", "supersedes": None}
+try:
+    g["append_locked"](sys.argv[1], rec)
+except SystemExit:
+    pass
+PYEOF
+M=$(SUT="$SUT" "$PY" "$TMP/inject2.py" "$TMP/rb1.jsonl" ok 2>&1); [[ "$M" == *"was restored"* ]] && ok "successful rollback says restored" || bad "rollback msg" "$M"
+M=$(SUT="$SUT" "$PY" "$TMP/inject2.py" "$TMP/rb2.jsonl" trunc 2>&1); [[ "$M" == *"FAILED"* && "$M" == *"partial bytes may remain"* && "$M" != *"was restored"* ]] && ok "failed rollback is reported honestly" || bad "rollback fail msg" "$M"
+
+# ---- refusals create nothing; a directory ledger is a refusal
+NEWDIR="$TMP/neverdir"
+run add --scope demo --question Q --answer-verbatim A --ledger "$NEWDIR/x/l.jsonl" >/dev/null 2>&1
+run add "${BASE[@]:1}" --answer-verbatim "ghp_abcdefghijklmnopqrstuvwxyz0123456789" --ledger "$NEWDIR/x/l.jsonl" >/dev/null 2>&1
+run add "${BASE[@]:1}" --answer-verbatim sup --supersedes dec-000000000000 --ledger "$NEWDIR/x/l.jsonl" >/dev/null 2>&1
+[ ! -e "$NEWDIR" ] && ok "refusals create no directory or lock" || bad "created dir"
+mkdir "$TMP/adir"
+err=$(run "${BASE[@]}" --answer-verbatim dirled --ledger "$TMP/adir" 2>&1 >/dev/null); rc=$?
+[ $rc = 2 ] && [[ "$err" == REFUSE* && "$err" != *Traceback* ]] && [ ! -e "$TMP/adir.lock" ] && ok "directory as ledger is a REFUSE" || bad "dir ledger" "$err"
+err=$(run list --ledger "$TMP/adir" 2>&1 >/dev/null); rc=$?
+[ $rc = 2 ] && [[ "$err" != *Traceback* ]] && ok "list on a directory ledger exits 2 without a traceback" || bad "list dir" "$err"
 
 echo
 echo "passed: $pass failed: $fail"

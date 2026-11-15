@@ -15,7 +15,7 @@ Invoke it the moment you catch yourself about to write *"I need your input"*, *"
 
 Run the rungs **in order**, and stop at the first one that resolves the question. A question reaches the user only by surviving rungs 1 and 2 — that ordering is the whole mechanism, and jumping straight to "ask" is the failure this skill exists to prevent.
 
-Whenever the owner makes a decision or gives a directive — typed, relayed by another agent, or an `AskUserQuestion` answer, at any rung — record it before acting on it with `python3 ~/.claude/scripts/decision-record.py add` (their exact words; `--channel relay --relay-via <agent>` when relayed). Bootstrap the script per `/session-lifecycle`; if it is absent, put the verbatim answer in the seed and the DECISION slot instead. The ledger is private and vault-only: never quote a record into a repo, PR or issue; cite the `dec-…` id instead.
+Whenever the owner makes a decision or gives a directive — typed, relayed by another agent, or an `AskUserQuestion` answer, at any rung — record it before acting on it with `python3 ~/.claude/scripts/decision-record.py add` (their exact words, multi-line via `--answer-file PATH`; `--channel relay --relay-via <agent>` when relayed). Bootstrap the script per `/session-lifecycle`; if it is absent, put the verbatim answer in the seed and the DECISION slot instead. The ledger is private and vault-only: never quote a record into a repo, PR or issue; cite the `dec-…` id instead.
 
 ### 1. Answer it yourself from the repo
 

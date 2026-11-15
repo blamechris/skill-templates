@@ -130,6 +130,62 @@ echo "$out" | grep -q '^STALE minute .*PR 7' && ok "valid rows still counted" ||
 for n in "line 1:" "line 2:" "line 3:" "line 4:" ; do grep -q "prs.jsonl $n" "$TMP/err" && ok "error names pr ledger $n" || bad "err $n" "$(cat "$TMP/err")"; done
 grep -q "decisions.jsonl line 1:" "$TMP/err" && ok "undatable decision is an error, not FRESH" || bad "undatable decision"
 
+# ======================= round 2 =======================
+: > "$CLAUDE_PR_LEDGER"; : > "$CLAUDE_DECISION_LEDGER"
+settime() { "$PY" -c "import os,sys,calendar,time;t=calendar.timegm(time.strptime(sys.argv[2],'%Y-%m-%dT%H:%M:%SZ'));os.utime(sys.argv[1],(t,t))" "$CLAUDE_HANDOFF_DIR/NEXT-$1.md" "$2"; }
+
+# ---- fractional seconds are compared exactly
+seed frac ffffffff 2026-11-03T10:45:30Z "issue 11"
+settime frac 2026-11-03T10:45:30Z
+decision frac "half a second later" 2026-11-03T10:45:30.500Z
+run --scope frac | grep -q '^STALE frac' && ok "fractional second after a seed with seconds is STALE" || bad "fraction"
+
+# ---- offsets beyond +14:59 are errors, not silent
+printf '{"kind":"decision-record","id":"dec-o","scope":"frac","received_at":"2026-11-03T10:00:00+00:99"}\n' >> "$CLAUDE_DECISION_LEDGER"
+printf '{"kind":"decision-record","id":"dec-p","scope":"frac","received_at":"2026-11-03T10:00:00+99:00"}\n' >> "$CLAUDE_DECISION_LEDGER"
+run --scope frac >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc = 2 ] && grep -q "line 2:" "$TMP/err" && grep -q "line 3:" "$TMP/err" && ok "bad offsets are line-numbered errors" || bad "offsets" "rc=$rc $(cat "$TMP/err")"
+: > "$CLAUDE_DECISION_LEDGER"
+
+# ---- decoder-limit rows are per-line errors; a later valid row still counts
+"$PY" -c "print('{\"kind\":\"pr-record\",\"pr\":' + '9'*6000 + '}')" >> "$CLAUDE_DECISION_LEDGER"
+"$PY" -c "print('['*200000)" >> "$CLAUDE_DECISION_LEDGER"
+decision frac "valid after bad" 2026-11-03T11:00:00Z
+out=$(run --scope frac 2>"$TMP/err"); rc=$?
+[ $rc = 2 ] && echo "$out" | grep -q '^STALE frac' && grep -q "line 1:" "$TMP/err" && grep -q "line 2:" "$TMP/err" && ok "decoder errors reported, valid row used" || bad "decoder" "rc=$rc $out"
+: > "$CLAUDE_DECISION_LEDGER"
+
+# ---- the seed's mtime is the exact write instant inside the seed's own minute
+seed mt mmtttttt 2026-11-03T12:30Z "issue 12"
+settime mt 2026-11-03T12:30:45Z
+decision mt "same minute, before the write" 2026-11-03T12:30:20Z
+run --scope mt | grep -q '^FRESH mt$' && ok "mtime: earlier in the minute is FRESH" || bad "mtime before"
+decision mt "same minute, after the write" 2026-11-03T12:30:50Z
+run --scope mt | grep -q '^STALE mt' && ok "mtime: a later event in the same minute is STALE (closes the window)" || bad "mtime after"
+: > "$CLAUDE_DECISION_LEDGER"
+settime mt 2026-11-05T09:00:00Z   # mtime outside the seed's minute: end-of-minute rule
+decision mt "same minute, after" 2026-11-03T12:30:50Z
+run --scope mt | grep -q '^FRESH mt$' && ok "mtime outside the minute: end-of-minute rule" || bad "mtime outside"
+
+# ---- session id matching
+: > "$CLAUDE_PR_LEDGER"
+seed ci abc12345 2026-11-03T10:00Z "issue 13"; settime ci 2026-11-03T10:00:10Z
+prrec acme/zz ABC12345-ffff 2026-11-03T11:00:00Z 2026-11-03T11:00:00Z
+run --scope ci | grep -q '^FRESH ci$' && ok "custom (non-UUID) ids compare case-sensitively" || bad "custom case"
+: > "$CLAUDE_PR_LEDGER"
+prrec acme/zz abc12345-ffff 2026-11-03T11:00:00Z 2026-11-03T11:00:00Z
+run --scope ci | grep -q '^STALE ci' && ok "custom id prefix matches case-sensitively" || bad "custom prefix"
+seed short abc 2026-11-03T10:00Z "issue 14"; settime short 2026-11-03T10:00:10Z
+: > "$CLAUDE_PR_LEDGER"; prrec acme/zz abcdef 2026-11-03T11:00:00Z 2026-11-03T11:00:00Z
+run --scope short | grep -q '^FRESH short$' && ok "a seed session shorter than 8 never prefix-matches" || bad "short sid"
+: > "$CLAUDE_PR_LEDGER"; prrec acme/zz abc 2026-11-03T11:00:00Z 2026-11-03T11:00:00Z
+run --scope short | grep -q '^STALE short' && ok "a short seed session still matches exactly" || bad "short exact"
+
+# ---- datetime.max boundary goes through the normal error path
+seed maxd mmmmmmmm 9999-12-31T23:59Z "issue 15"
+err=$(run --scope maxd 2>&1 >/dev/null); rc=$?
+[ $rc = 2 ] && [[ "$err" != *Traceback* ]] && ok "9999-12-31T23:59Z is a normal error, not OverflowError" || bad "datetime.max" "rc=$rc $err"
+
 echo
 echo "passed: $pass failed: $fail"
 [ "$fail" = 0 ]

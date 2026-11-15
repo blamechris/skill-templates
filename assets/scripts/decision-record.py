@@ -4,7 +4,7 @@
 # Canonical copy (skill-templates). Bootstrap: cp assets/scripts/decision-record.py ~/.claude/scripts/
 
 Usage:
-  decision-record.py add --question Q --answer-verbatim A
+  decision-record.py add --question Q (--answer-verbatim A | --answer-file PATH|-)
       [--scope S] [--session SID] [--received-at UTC] [--decided-by NAME]
       [--channel direct|relay] [--relay-via NAME] [--authorizes ITEM ...]
       [--limit ITEM ...] [--pin KEY=VALUE ...] [--ref URL ...]
@@ -29,8 +29,10 @@ file and is one O_APPEND write of one line, so racing writers never interleave.
 REFUSALS (exit 2, nothing written, ledger bytes unchanged): no session id
 (--session, then $CLAUDE_CODE_SESSION_ID, never guessed); channel=relay
 without --relay-via; relay_via given with channel=direct; an empty or
-whitespace-only required field; a control character, newline, U+2028, U+2029
-or U+0085 in any field (checked on the RAW value, before trimming); a
+whitespace-only required field; a control character, U+2028, U+2029 or
+U+0085 in any field, or a newline outside question/answer_verbatim (those two
+may be multi-line, also via --answer-file PATH|-; checked on the RAW value,
+before trimming); a received_at more than 5 minutes in the future; a
 credential-shaped value anywhere (a HEURISTIC backstop, not a guarantee and
 not a license to paste secrets); a malformed timestamp or pin; a duplicate id;
 a --supersedes naming an id not in the ledger; a ledger path inside one of
@@ -65,7 +67,7 @@ TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 CONTROL = re.compile("[\x00-\x1f\x7f\u0085\u2028\u2029]")
 PIN_KEY = re.compile(r"\A[A-Za-z_][A-Za-z0-9_.-]*\Z")
 TS_LOOSE = re.compile(
-    r"\A(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.\d+)?)?"
+    r"\A(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?"
     r"(Z|[+-]\d{2}:?\d{2})\Z")
 SECRET = re.compile(
     r"(?:\bgh[pousr]_[A-Za-z0-9]{16,}"
@@ -78,9 +80,12 @@ SECRET = re.compile(
     r"|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
     r"|\bbearer\s+[A-Za-z0-9._~+/=-]{20,}"
-    r"|\b(?:password|secret|token|api[_-]?key)\s*[:=]\s*\S+)",
+    r")",
     re.IGNORECASE,
 )
+ASSIGNED = re.compile(r"\b(?:password|secret|token|api[_-]?key)\s*[:=]\s*(\S+)", re.IGNORECASE)
+MAX_ANSWER_FILE = 65536
+FUTURE_SLACK = timedelta(minutes=5)
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -94,37 +99,66 @@ def now_utc():
 
 
 def parse_ts(value, with_precision=False):
-    """A timestamp as an aware UTC datetime, or None. Accepts a trailing Z or an
-    offset, optional seconds, unpadded fields. With with_precision, returns
+    """A timestamp as an aware UTC datetime (microsecond precision kept), or None.
+    Accepts a trailing Z or an offset (hours <= 14, minutes <= 59), optional
+    seconds and fraction, unpadded fields. With with_precision, returns
     (datetime, had_seconds) so a minute-resolution value can be told apart."""
+    none = (None, False) if with_precision else None
     m = TS_LOOSE.match(value) if isinstance(value, str) else None
     if not m:
-        return (None, False) if with_precision else None
-    y, mo, d, h, mi, sec, tz = m.groups()
+        return none
+    y, mo, d, h, mi, sec, frac, tz = m.groups()
     try:
-        dt = datetime(int(y), int(mo), int(d), int(h), int(mi), int(sec or 0), tzinfo=timezone.utc)
+        micro = int((frac or "0")[:6].ljust(6, "0"))
+        dt = datetime(int(y), int(mo), int(d), int(h), int(mi), int(sec or 0), micro, tzinfo=timezone.utc)
         if tz != "Z":
-            sign = 1 if tz[0] == "+" else -1
             digits = tz[1:].replace(":", "")
-            dt -= sign * timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))
+            oh, om = int(digits[:2]), int(digits[2:])
+            if oh > 14 or om > 59:
+                return none
+            dt -= (1 if tz[0] == "+" else -1) * timedelta(hours=oh, minutes=om)
     except (ValueError, OverflowError):
-        return (None, False) if with_precision else None
+        return none
     return (dt, sec is not None) if with_precision else dt
+
+
+def format_ts(dt):
+    """Canonical storage: YYYY-MM-DDTHH:MM:SSZ, or with .ffffff when non-zero."""
+    if dt.microsecond:
+        return dt.strftime("%Y-%m-%dT%H:%M:%S") + ".%06dZ" % dt.microsecond
+    return dt.strftime(TS_FORMAT)
 
 
 def canon_ts(value, field):
     dt = parse_ts(value)
     if dt is None:
-        die("%s %r is not a UTC timestamp (YYYY-MM-DDTHH:MM[:SS]Z or with an offset)" % (field, value))
-    return dt.strftime(TS_FORMAT)
+        die("%s %r is not a UTC timestamp (YYYY-MM-DDTHH:MM[:SS[.f]]Z, or an offset of at most 14:59)" % (field, value))
+    return format_ts(dt)
 
 
-def clean(value, field, required=True):
-    """Validate the RAW value (before any trimming), then return it stripped."""
-    if CONTROL.search(value):
-        die("%s contains a newline or control character; single-line fields only" % field)
+def looks_secret(value):
     if SECRET.search(value):
-        die("%s looks like a credential; a decision record never carries one" % field)
+        return True
+    for m in ASSIGNED.finditer(value):
+        v = m.group(1)
+        if len(v) >= 8 and (any(c.isdigit() for c in v)
+                            or (any(c.islower() for c in v) and any(c.isupper() for c in v))):
+            return True
+    return False
+
+
+def clean(value, field, required=True, multiline=False):
+    """Validate the RAW value (before any trimming), then return it stripped.
+    multiline (question and answer only) allows \\n, with \\r\\n normalized to \\n."""
+    if multiline:
+        value = value.replace("\r\n", "\n")
+    check = value.replace("\n", "") if multiline else value
+    if CONTROL.search(check):
+        die("%s contains a control character%s" % (
+            field, "" if multiline else " or newline; single-line field only"))
+    if looks_secret(value):
+        die("%s looks like a credential. Paraphrase the credential part, keep the rest "
+            "verbatim, and note that you did so; a decision record never carries a credential" % field)
     value = value.strip()
     if required and not value:
         die("%s must not be empty" % field)
@@ -179,14 +213,14 @@ def read_jsonl(path, kind):
             raw = f.read()
     except FileNotFoundError:
         return rows, errors
-    except OSError as e:
+    except OSError as e:  # includes IsADirectoryError
         return rows, ["%s: cannot read: %s" % (path, e)]
     for n, bline in enumerate(raw.split(b"\n"), 1):
         if not bline.strip():
             continue
         try:
             obj = json.loads(bline.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        except (UnicodeDecodeError, ValueError, RecursionError) as e:
             errors.append("%s line %d: unreadable (%s)" % (path, n, type(e).__name__))
             continue
         if not isinstance(obj, dict):
@@ -216,10 +250,30 @@ def decision_id(scope, received_at, decided_by, question, answer):
     return "dec-" + hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
 
 
+def read_answer(a):
+    if (a.answer_verbatim is None) == (a.answer_file is None):
+        die("give exactly one of --answer-verbatim and --answer-file")
+    if a.answer_verbatim is not None:
+        return a.answer_verbatim
+    try:
+        if a.answer_file == "-":
+            raw = sys.stdin.buffer.read(MAX_ANSWER_FILE + 1)
+        else:
+            with open(a.answer_file, "rb") as f:
+                raw = f.read(MAX_ANSWER_FILE + 1)
+        if len(raw) > MAX_ANSWER_FILE:
+            die("--answer-file is larger than %d bytes" % MAX_ANSWER_FILE)
+        return raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        die("cannot read --answer-file: %s" % e)
+
+
 def build_record(a):
     sid = resolve_session(a.session)
     scope = resolve_scope(a.scope)
     received = canon_ts(a.received_at, "received_at") if a.received_at else now_utc()
+    if parse_ts(received) > datetime.now(timezone.utc) + FUTURE_SLACK:
+        die("received_at %s is more than 5 minutes in the future" % received)
     decided_by = clean(a.decided_by, "decided_by")
     channel = a.channel
     relay_via = clean(a.relay_via, "relay_via") if a.relay_via is not None else None
@@ -227,8 +281,8 @@ def build_record(a):
         die("channel=relay requires --relay-via (who carried the answer)")
     if channel == "direct" and relay_via:
         die("--relay-via given with channel=direct")
-    question = clean(a.question, "question")
-    answer = clean(a.answer_verbatim, "answer_verbatim")
+    question = clean(a.question, "question", multiline=True)
+    answer = clean(read_answer(a), "answer_verbatim", multiline=True)
     pins = {}
     for p in a.pin:
         k, sep, v = clean(p, "pin").partition("=")
@@ -257,9 +311,15 @@ def build_record(a):
 
 
 def append_locked(path, record):
-    """Append one whole line under an exclusive lock. A last record missing its
-    newline is preserved by prepending one; a short write is continued until the
-    whole line is down; any write error truncates back to the pre-append size."""
+    """Append one whole line under an exclusive lock on the REAL path (an alias and
+    its target share one lock). A last record missing its newline is preserved by
+    prepending one; a short write is continued until the whole line is down; a write
+    error truncates back to the pre-append size, and says so honestly if it cannot.
+    Nothing (directory, lock file) is created before validation has passed."""
+    if os.path.isdir(path):
+        die("ledger %s is a directory" % path)
+    if record["supersedes"] and not os.path.exists(path):
+        die("--supersedes %s is not in %s" % (record["supersedes"], path))
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     lock = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
@@ -289,8 +349,9 @@ def append_locked(path, record):
             except OSError as e:
                 try:
                     os.ftruncate(fd, size)
-                except OSError:
-                    pass
+                except OSError as e2:
+                    die("write to %s failed (%s) and restoring it FAILED (%s); partial bytes may "
+                        "remain at the end of the ledger" % (path, e, e2))
                 die("write to %s failed (%s); the ledger was restored" % (path, e))
         finally:
             os.close(fd)
@@ -301,8 +362,8 @@ def append_locked(path, record):
 
 def cmd_add(a):
     record = build_record(a)
-    path = ledger_path(a)
-    refuse_in_worktree(os.path.abspath(path))
+    path = os.path.realpath(ledger_path(a))
+    refuse_in_worktree(path)
     append_locked(path, record)
     print("decision: %s %s" % (record["id"], path))
     d = os.path.dirname(os.path.abspath(path))
@@ -318,7 +379,7 @@ def cmd_list(a):
         since = parse_ts(a.since)
         if since is None:
             die("--since %r is not a UTC timestamp" % a.since)
-    rows, errors = read_decisions(ledger_path(a))
+    rows, errors = read_decisions(os.path.realpath(ledger_path(a)))
     if a.scope:
         rows = [r for r in rows if r.get("scope") == a.scope]
     if since:
@@ -348,7 +409,8 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True, parser_class=Parser)
     add = sub.add_parser("add")
     add.add_argument("--question", required=True)
-    add.add_argument("--answer-verbatim", required=True)
+    add.add_argument("--answer-verbatim")
+    add.add_argument("--answer-file", help="read the answer from PATH, or - for stdin (multi-line)")
     add.add_argument("--scope")
     add.add_argument("--session")
     add.add_argument("--received-at")

@@ -21,15 +21,18 @@ from session-seed.py), or the single --scope, prints `FRESH <scope>` or
                 holds: the seed asks the owner for something a later
                 decision may have answered.
 
-SEED DATE RESOLUTION: session-seed.py writes `date` at minute resolution. A
-seed date without seconds is treated as ending at the END of that minute, so
-an event earlier in the same minute (the normal flow: record the decision,
-then write the seed) is not STALE. Tradeoff: an event in the same minute AFTER
-the write is missed, a false-FRESH window of under 60 seconds. A date that
-carries seconds is used exactly.
+SEED DATE RESOLUTION: session-seed.py writes `date` at minute resolution. When
+the seed file's mtime falls inside that same UTC minute it is the exact write
+instant. Otherwise a date without seconds is treated as ending at the END of
+that minute, so an event earlier in the same minute (the normal flow: record
+the decision, then write the seed) is not STALE; tradeoff: an event in that
+minute after the write is then missed, a false-FRESH window of under 60
+seconds. A date that carries seconds is used exactly. Comparisons keep full
+(microsecond) precision.
 
-Session ids are matched the way session-seed.py normalizes them (a UUID is
-compared by its lowercase 8-character prefix).
+Session ids: only UUID-shaped ids (full, or the canonical 8-character prefix)
+are lowercased; any other id is compared case-sensitively, and a seed session
+shorter than 8 characters must match exactly, never as a prefix.
 
 CORRUPTION POLICY (same as decision-record.py): a malformed ledger line,
 invalid UTF-8, a non-object row, a pr_meta/session that is not an object, or
@@ -46,12 +49,12 @@ import os
 import re
 import runpy
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DECISIONS = "~/Obsidian/no-it-all/ledgers/decisions.jsonl"
 DEFAULT_PRS = "~/Obsidian/no-it-all/ledgers/pr-records.jsonl"
-HEXISH = re.compile(r"\A[0-9A-Fa-f-]+\Z")
+UUID_SHAPED = re.compile(r"\A[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})?\Z")
 
 
 class Usage(Exception):
@@ -90,19 +93,43 @@ def read_prs(dr, path):
 
 
 def norm_sid(sid):
+    """Lowercase only UUID-shaped ids (full, or the canonical 8-character prefix);
+    any other id is compared case-sensitively."""
     sid = str(sid or "").strip()
-    return sid.lower() if HEXISH.match(sid) else sid
+    return sid.lower() if UUID_SHAPED.match(sid) else sid
 
 
-def check_seed(dr, scope, fm, decisions, prs):
+def same_session(seed_sid, record_sid):
+    """The seed names a session by its id or by a UUID's 8-character prefix. A seed id
+    shorter than 8 characters must match exactly, never as a prefix."""
+    if not seed_sid or seed_sid == "unknown":
+        return False
+    if len(seed_sid) < 8:
+        return record_sid == seed_sid
+    return record_sid.startswith(seed_sid)
+
+
+def check_seed(dr, scope, fm, decisions, prs, mtime=None):
     parse = dr["parse_ts"]
     seed_date, has_seconds = parse(fm.get("date", ""), with_precision=True)
     if seed_date is None:
         raise Usage("seed for %s has no parseable date: %r" % (scope, fm.get("date")))
-    end = seed_date if has_seconds else seed_date + timedelta(minutes=1)
+    if has_seconds:
+        wrote, exact = seed_date, True
+    else:
+        try:
+            end = seed_date + timedelta(minutes=1)
+        except OverflowError:
+            raise Usage("seed for %s has an out-of-range date: %r" % (scope, fm.get("date")))
+        # The file's mtime is the real write instant when it falls inside the seed's
+        # own minute; otherwise fall back to the end of that minute.
+        if mtime is not None and seed_date <= mtime < end:
+            wrote, exact = mtime, True
+        else:
+            wrote, exact = end, False
 
     def after(t):
-        return t > seed_date if has_seconds else t >= end
+        return t > wrote if exact else t >= wrote
 
     reasons = []
     later = [d for d in decisions if d["scope"] == scope and after(parse(d["received_at"]))]
@@ -113,7 +140,7 @@ def check_seed(dr, scope, fm, decisions, prs):
     for r in prs:
         repo = str(r.get("repo") or "")
         rsid = norm_sid((r.get("session") or {}).get("id"))
-        if repo.split("/")[-1] != scope and not (sid and sid != "unknown" and rsid.startswith(sid)):
+        if repo.split("/")[-1] != scope and not same_session(sid, rsid):
             continue
         stamps = [parse(r.get("recorded_at")), parse((r.get("pr_meta") or {}).get("merged_at"))]
         if any(t and after(t) for t in stamps):
@@ -175,7 +202,8 @@ def main(argv=None):
         try:
             with open(path, encoding="utf-8") as f:
                 fm = mod["parse_frontmatter"](f.read())
-            reasons = check_seed(dr, scope, fm, decisions, prs)
+            mtime = datetime.fromtimestamp(os.stat(path).st_mtime, timezone.utc)
+            reasons = check_seed(dr, scope, fm, decisions, prs, mtime)
         except (OSError, UnicodeDecodeError, Usage) as e:
             errors.append("%s: %s" % (path, e))
             continue
