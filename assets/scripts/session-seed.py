@@ -61,16 +61,31 @@ THE COMMIT STEP (after the proof, never before it)
   incumbent was moved — and it does so with git PLUMBING, never `git add` or
   `git commit`: the bytes the writer proved (and the archive's bytes, read right
   after it was made) are hashed with --no-filters, put into a PRIVATE index read
-  from HEAD, written to a tree, committed with commit-tree and the branch is moved
-  with a compare-and-swap update-ref. So no commit hook runs (a
-  `reference-transaction` hook, if installed, still sees the ref update), the shared
-  index is never read-tree'd, reset or locked for the commit, and whatever another
-  session staged stays staged and out of it. If either path has a separately staged
-  entry, the branch moved, HEAD is detached, the seed changed after the proof, a git
-  call times out (CLAUDE_SEED_GIT_TIMEOUT seconds, default 20) or anything else
-  fails, nothing is committed. Afterwards only those two shared-index entries are
-  moved to the new blob, and only while each still equals HEAD's old entry. Every git call
-  drops the GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE family from its environment.
+  from HEAD, written to a tree and committed with commit-tree. An existing path
+  keeps its mode (100755 stays 100755); a new one is 100644. No commit hook runs (a
+  `reference-transaction` hook, if installed, still sees the ref update) and the
+  shared index is never read-tree'd, reset or locked for the BUILD.
+  ORDER, because the shared index must never be left stale under a moved HEAD (that
+  shows as a staged revert the next plain commit would make): (1) pre-check that
+  neither path has a separately staged entry; (2) build the commit; (3) move ONLY
+  those shared-index entries to the new blob, each only while it still equals old
+  HEAD's entry, waiting out a held index.lock for CLAUDE_SEED_LOCK_WAIT seconds
+  (default 5) and committing nothing if it never clears; (4) compare-and-swap the
+  branch with update-ref; (5) if the swap loses, put the entries back to what HEAD
+  then holds (only where they still equal what was written) and, if the branch moved, redo
+  the whole build on the new HEAD, up to two more times, then `UNCOMMITTED: branch
+  moved`. ACCEPTED RESIDUAL WINDOW: another session's plain commit landing between
+  (3) and (4) would include our new seed bytes — which preserves the content and
+  never reverts it. The pre-check in (1) and the refresh in (3) are likewise a
+  check-then-act pair; (3) re-checks each entry first, and cannot be made atomic.
+  If either path has a separately staged entry, HEAD is detached, the seed changed
+  after the proof, a git call exceeds CLAUDE_SEED_GIT_TIMEOUT seconds (default 20;
+  the whole process group is killed, so a gpg or pinentry child cannot outlive git)
+  or anything else fails, nothing is committed. `commit.gpgsign=true` is honoured
+  (commit-tree -S); a signing failure or hang becomes `UNCOMMITTED`, never a failed
+  write. Every git call OF THE COMMIT STEP drops the GIT_DIR / GIT_INDEX_FILE /
+  GIT_WORK_TREE family and runs with LC_ALL=C; scope resolution and `verify` still
+  inherit the caller's environment, which is a pre-existing limit and not changed here.
   It never pushes, fetches, pulls, rebases, stashes, resets, restores or checks out.
   A failed commit is NEVER a failed write: the seed is already on disk and proved,
   so the step prints `UNCOMMITTED: <reason>` on stderr and the exit stays 0. It is
@@ -85,6 +100,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -931,6 +947,7 @@ def _clean_git_env(extra=None):
     env = {k: v for k, v in os.environ.items()
            if k not in _GIT_ENV_DROP and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["LC_ALL"] = "C"          # "not a git repository" detection must not depend on locale
     env.update(extra or {})
     return env
 
@@ -939,23 +956,39 @@ def _cg(args, cwd, extra_env=None, stdin=None, ok=(0,), literal=True):
     """One git call of the commit step: sanitized env, timeout, tolerant decoding.
 
     Returns (rc, stdout, stderr) when rc is in `ok`; anything else is Uncommitted.
-    A timeout kills the child (subprocess.run does) and is reported, never raised.
+    The child runs in its OWN process group and a timeout kills the whole group, so
+    a gpg or pinentry child of git cannot outlive it.
     """
     cmd = ["git"] + (["--literal-pathspecs"] if literal else []) + list(args)
-    kw = {"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}
     try:
-        r = subprocess.run(cmd, cwd=cwd, env=_clean_git_env(extra_env),
-                           capture_output=True, timeout=_git_timeout(), **kw)
-    except subprocess.TimeoutExpired:
-        raise Uncommitted("git %s timed out after %gs" % (args[0], _git_timeout()))
+        proc = subprocess.Popen(cmd, cwd=cwd, env=_clean_git_env(extra_env),
+                                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True)
     except OSError as e:
         raise Uncommitted("cannot run git (%s)" % e)
-    out = r.stdout.decode("utf-8", "replace")
-    err = r.stderr.decode("utf-8", "replace")
-    if r.returncode not in ok:
+    try:
+        so, se = proc.communicate(input=stdin, timeout=_git_timeout())
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
+        proc.communicate()
+        raise Uncommitted("git %s timed out after %gs" % (args[0], _git_timeout()))
+    except OSError as e:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.communicate()
+        raise Uncommitted("git %s failed (%s)" % (args[0], e))
+    out = so.decode("utf-8", "replace")
+    err = se.decode("utf-8", "replace")
+    if proc.returncode not in ok:
         raise Uncommitted("git %s failed (%s)" % (args[0], (err.strip() or out.strip()
-                                                           or "exit %d" % r.returncode).replace("\n", " | ")))
-    return r.returncode, out, err
+                                                           or "exit %d" % proc.returncode).replace("\n", " | ")))
+    return proc.returncode, out, err
 
 
 def _index_entry(repo, rel):
@@ -981,6 +1014,62 @@ def _tree_entry(repo, commit, rel):
     return (meta[0], meta[2]) if len(meta) == 3 else ("conflict",)
 
 
+def _lock_wait():
+    try:
+        return float(os.environ.get("CLAUDE_SEED_LOCK_WAIT") or 5)
+    except ValueError:
+        return 5.0
+
+
+def _set_index_entry(repo, rel, entry):
+    """Point ONE shared-index entry at `entry` ((mode, blob), or None to drop it).
+
+    A held index.lock is retried with a short backoff for CLAUDE_SEED_LOCK_WAIT
+    seconds (default 5); anything else, or a lock that never clears, raises.
+    """
+    if entry is None:
+        args = ["update-index", "--force-remove", "--", rel]
+    else:
+        args = ["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (entry[0], entry[1], rel)]
+    deadline = time.monotonic() + _lock_wait()
+    delay = 0.05
+    while True:
+        try:
+            _cg(args, repo)
+            return
+        except Uncommitted as e:
+            if "index.lock" not in str(e):
+                raise
+            if time.monotonic() >= deadline:
+                raise Uncommitted("shared index locked")
+            time.sleep(delay)
+            delay = min(delay * 2, 0.5)
+
+
+def _rollback_index(repo, written):
+    """Undo OUR refresh: put each entry back to what HEAD holds NOW, but only where the
+    index still has exactly what we wrote. (HEAD "now" is old HEAD unless the branch
+    moved; if a plain commit swept our blob in, the entry is already right and stays.)"""
+    notes = []
+    try:
+        rc, cur, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
+        cur = cur.strip() if rc == 0 else None
+    except Uncommitted as e:
+        return ["shared index not restored (%s); check `git status`" % e]
+    for rel, entry in written.items():
+        try:
+            if _index_entry(repo, rel) == entry:
+                target = _tree_entry(repo, cur, rel)
+                if target != entry:
+                    _set_index_entry(repo, rel, target)
+            else:
+                notes.append("%s changed in the shared index meanwhile; left alone" % rel)
+        except Uncommitted as e:
+            notes.append("shared index entry for %s could not be restored (%s); run "
+                         "`git restore --staged -- %s` yourself" % (rel, e, rel))
+    return notes
+
+
 def _commit_plumbing(scope, sid, directory, items):
     real_dir = os.path.realpath(directory)
     try:
@@ -1003,6 +1092,35 @@ def _commit_plumbing(scope, sid, directory, items):
         if rc == 0:
             raise Uncommitted("%s is git-ignored in %s, so it is not committed" % (rel, repo))
 
+    # Bind to the proof: the bytes committed are the bytes the writer proved, from
+    # memory, never re-read from the file. Re-reading the canonical seed is only the
+    # tripwire for another writer having replaced it since.
+    canonical_path, proved = items[0]
+    for path, data in items:
+        if data is None:
+            raise Uncommitted("could not read %s after archiving" % path)
+    try:
+        with open(canonical_path, "rb") as f:
+            current = f.read()
+    except OSError as e:
+        raise Uncommitted("seed changed after proof (%s)" % e)
+    if current != proved:
+        raise Uncommitted("seed changed after proof")
+    blobs = {}
+    for (path, data), rel in zip(items, rels):
+        # --no-filters: a clean filter or autocrlf must not rewrite what was proved.
+        _, sha, _ = _cg(["hash-object", "-w", "--no-filters", "--stdin"], repo, stdin=data)
+        blobs[rel] = sha.strip()
+
+    msg = "handoffs: seed %s (%s)" % (scope, slug(sid))
+    for _attempt in range(3):              # the build is redone twice if the branch moves
+        if _build_and_swap(repo, rels, blobs, msg) is not None:
+            return
+    raise Uncommitted("branch moved")
+
+
+def _build_and_swap(repo, rels, blobs, msg):
+    """One attempt. True/printed on success or unchanged; None if the branch moved (retry)."""
     rc, ref, _ = _cg(["symbolic-ref", "-q", "HEAD"], repo, ok=(0, 1))
     if rc != 0:
         raise Uncommitted("detached HEAD")
@@ -1013,56 +1131,55 @@ def _commit_plumbing(scope, sid, directory, items):
     # OWNERSHIP, read-only against the SHARED index: if another session has staged
     # either path, the shared index holds something this write did not put there, and
     # committing "our" version would either bury it or lie about it. Commit nothing.
-    heads = {}
+    heads, entries = {}, {}
     for rel in rels:
         heads[rel] = _tree_entry(repo, old, rel)
         if _index_entry(repo, rel) != heads[rel]:
             raise Uncommitted("%s has separately staged changes" % rel)
+        # An existing path keeps its mode (a 100755 seed stays 100755); a new one is 100644.
+        entries[rel] = ((heads[rel][0] if heads[rel] else "100644"), blobs[rel])
 
-    # Bind to the proof: the bytes committed are the bytes the writer proved, from
-    # memory, never re-read from the file. Re-reading the canonical seed is only the
-    # tripwire for another writer having replaced it since.
-    canonical_path, proved = items[0]
-    try:
-        with open(canonical_path, "rb") as f:
-            current = f.read()
-    except OSError as e:
-        raise Uncommitted("seed changed after proof (%s)" % e)
-    if current != proved:
-        raise Uncommitted("seed changed after proof")
-    blobs = {}
-    for (path, data), rel in zip(items, rels):
-        if data is None:
-            raise Uncommitted("could not read %s after archiving" % path)
-        # --no-filters: a clean filter or autocrlf must not rewrite what was proved.
-        _, sha, _ = _cg(["hash-object", "-w", "--no-filters", "--stdin"], repo, stdin=data)
-        blobs[rel] = sha.strip()
-
-    msg = "handoffs: seed %s (%s)" % (scope, slug(sid))
     tmpd = tempfile.mkdtemp(prefix="seed-index-")
     try:
-        # A PRIVATE index: the shared one is never read-tree'd, reset or locked here.
+        # A PRIVATE index: the shared one is never read-tree'd, reset or locked for the build.
         idx = {"GIT_INDEX_FILE": os.path.join(tmpd, "index")}
         if old is not None:
             _cg(["read-tree", old], repo, idx)
         for rel in rels:
-            _cg(["update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blobs[rel], rel)], repo, idx)
+            _cg(["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (entries[rel] + (rel,))], repo, idx)
         _, tree, _ = _cg(["write-tree"], repo, idx)
         tree = tree.strip()
         if old is not None:
             _, old_tree, _ = _cg(["rev-parse", "--verify", "%s^{tree}" % old], repo)
             if tree == old_tree.strip():
                 print("commit: unchanged")
-                return
+                return True
         sign = []
         rc, g, _ = _cg(["config", "--bool", "--get", "commit.gpgsign"], repo, ok=(0, 1))
         if rc == 0 and g.strip() == "true":
-            sign = ["-S"]                  # honoured, not overridden; the timeout bounds a prompt
+            sign = ["-S"]                  # honoured, not overridden; the timeout bounds a hang
         ct = ["commit-tree", tree] + (["-p", old] if old else []) + sign + ["-m", msg]
         _, new, _ = _cg(ct, repo)
         new = new.strip()
     finally:
         shutil.rmtree(tmpd, ignore_errors=True)
+
+    # REFRESH the shared index BEFORE the ref moves. Done after, a failed or raced
+    # refresh leaves the index at the old blobs under a HEAD that has the new ones,
+    # which `status` shows as a staged revert that the next plain commit would make.
+    # Each entry moves only while it still equals old HEAD's. A held index.lock is
+    # waited out; if it never clears nothing has been committed.
+    written = {}
+    try:
+        for rel in rels:
+            if _index_entry(repo, rel) != heads[rel]:
+                raise Uncommitted("%s has separately staged changes" % rel)
+            _set_index_entry(repo, rel, entries[rel])
+            written[rel] = entries[rel]
+    except Uncommitted:
+        for n in _rollback_index(repo, written):
+            print("note: %s" % n, file=sys.stderr)
+        raise
 
     # Compare-and-swap: only moves the branch if it is still where `old` was. `""`
     # is "must not exist yet" for an unborn branch. (update-ref runs the
@@ -1070,24 +1187,15 @@ def _commit_plumbing(scope, sid, directory, items):
     try:
         _cg(["update-ref", "-m", msg, ref, new, old or ""], repo)
     except Uncommitted as e:
-        raise Uncommitted("branch moved or ref update failed (%s)" % e)
-
-    # The shared index still holds the old blob for these paths, which `status`
-    # would show as a staged revert. Move ONLY these entries, and only while each is
-    # still what `old` had; never read-tree, reset or checkout the shared index.
-    notes = []
-    for rel in rels:
-        try:
-            if _index_entry(repo, rel) == heads[rel]:
-                _cg(["update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blobs[rel], rel)], repo)
-            else:
-                notes.append("%s changed in the shared index meanwhile; left alone" % rel)
-        except Uncommitted as e:
-            notes.append("shared index entry for %s not refreshed (%s)" % (rel, e))
+        for n in _rollback_index(repo, written):
+            print("note: %s" % n, file=sys.stderr)
+        rc, now, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
+        if (now.strip() if rc == 0 else None) != old:
+            return None                    # the branch moved: the caller rebuilds on the new HEAD
+        raise Uncommitted("ref update failed (%s)" % e)
     _, short, _ = _cg(["rev-parse", "--short", new], repo)
     print("commit: %s" % (short.strip() or new))
-    for n in notes:
-        print("note: %s" % n, file=sys.stderr)
+    return True
 
 
 def commit_own_paths(scope, sid, directory, items):

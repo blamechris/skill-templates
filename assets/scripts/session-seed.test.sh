@@ -1468,7 +1468,7 @@ files=$(git -C "$TMP/m12/vault" show --name-only --format= HEAD | tr '\n' '|')
   && ok "M12 a '*' in the scope commits only the literal path" \
   || bad "M12 a '*' in the scope commits only the literal path" "rc=$rc files=$files $(cat "$TMP/m12.out" "$TMP/m12.err" | tr '\n' '|')"
 
-# M13 --refresh-pulse commits too, and nothing is ever pushed (no remote exists to push to)
+# M13 an invalid pulse snapshot is refused and leaves the vault alone
 new_vault m13
 mrun m13
 pulse="$TMP/m13-pulse.json"
@@ -1482,7 +1482,7 @@ head_before=$(V m13 rev-parse HEAD)
 (cd "$TMP/m13/demo" && CLAUDE_HANDOFF_DIR="$TMP/m13/vault/handoffs" "$PY" "$SUT" write --session "$MINE" \
    --now "$STAMP" --refresh-pulse "$pulse" >/dev/null 2>&1); rc=$?
 [ "$rc" -ne 0 ] && [ "$(V m13 rev-parse HEAD)" = "$head_before" ] \
-  && ok "M13 a refused refresh-pulse commits nothing" || bad "M13 a refused refresh-pulse commits nothing" "rc=$rc"
+  && ok "M13 an invalid pulse snapshot is refused before any commit" || bad "M13 an invalid pulse snapshot is refused before any commit" "rc=$rc"
 
 # M14 hostile GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE: the decoy repo is untouched
 new_vault m14
@@ -1491,7 +1491,7 @@ decoy_before="$(cat "$TMP/m14/decoy/.git/HEAD") $(git -C "$TMP/m14/decoy" rev-pa
 GIT_DIR="$TMP/m14/decoy/.git" GIT_INDEX_FILE="$TMP/m14/decoy/.git/index" GIT_WORK_TREE="$TMP/m14/decoy" mrun m14
 decoy_after="$(cat "$TMP/m14/decoy/.git/HEAD") $(git -C "$TMP/m14/decoy" rev-parse HEAD) $(shasum "$TMP/m14/decoy/.git/index" 2>/dev/null | cut -d' ' -f1)"
 [ "$rc" -eq 0 ] && [ "$decoy_before" = "$decoy_after" ] && printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}$' \
-  && [ "$(V m14 log -1 --format=%s | cut -c1-9)" = "handoffs:" ] \
+  && [ "$(V m14 log -1 --format=%s | cut -c1-9)" = "handoffs:" ] && [ "handoffs/$(basename "$(printf '%s\n' "$out" | sed -n 's/^seed: //p')")" = "$(V m14 show --name-only --format= HEAD)" ] \
   && ok "M14 hostile GIT_DIR/GIT_INDEX_FILE: decoy HEAD and index byte-identical, vault committed" \
   || bad "M14 hostile GIT_DIR/GIT_INDEX_FILE: decoy HEAD and index byte-identical, vault committed" "rc=$rc before=$decoy_before after=$decoy_after $(flat "$out") $(flat "$err")"
 
@@ -1531,10 +1531,10 @@ V m17 show HEAD:handoffs/NEXT-demo.md > "$TMP/m17.blob"
   && ok "M17 clean filter: the committed blob equals the proved bytes" \
   || bad "M17 clean filter: the committed blob equals the proved bytes" "rc=$rc $(flat "$out") $(flat "$err")"
 
-# M18 the seed replaced between proof and commit (injected just before the ownership read)
+# M18 the seed replaced between proof and commit (injected before the re-read)
 new_vault m18
 head_before=$(V m18 rev-parse HEAD)
-FAKE_GIT_LOG="$TMP/m18.log" FAKE_GIT_PRE_SUB=ls-files FAKE_GIT_PRE_CMD="echo tamper >> '$TMP/m18/vault/handoffs/NEXT-demo.md'" mrun m18
+FAKE_GIT_LOG="$TMP/m18.log" FAKE_GIT_PRE_SUB=check-ignore FAKE_GIT_PRE_CMD="echo tamper >> '$TMP/m18/vault/handoffs/NEXT-demo.md'" mrun m18
 [ "$rc" -eq 0 ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: seed changed after proof' \
   && [ "$(V m18 rev-parse HEAD)" = "$head_before" ] && [ -f "$TMP/m18/vault/handoffs/NEXT-demo.md" ] \
   && ok "M18 seed changed after proof: UNCOMMITTED, nothing committed" \
@@ -1556,13 +1556,96 @@ FAKE_GIT_LOG="$TMP/m20.log" FAKE_GIT_SLEEP=write-tree CLAUDE_SEED_GIT_TIMEOUT=1 
   && ok "M20 git timeout: UNCOMMITTED, exit 0, seed present" \
   || bad "M20 git timeout: UNCOMMITTED, exit 0, seed present" "rc=$rc $(flat "$out") $(flat "$err")"
 
-# M21 the branch moves between the read of HEAD and update-ref: the other commit is kept
+# M21 the branch moves under EVERY update-ref (plumbing, so the index is not swept in): after
+# the retries it is UNCOMMITTED, the other commits are kept and the shared index is restored
 new_vault m21
-FAKE_GIT_LOG="$TMP/m21.log" FAKE_GIT_PRE_SUB=update-ref FAKE_GIT_PRE_CMD="\"\$REAL_GIT\" -C '$TMP/m21/vault' commit -q --allow-empty -m other" mrun m21
+MOVE="\"\$REAL_GIT\" -C '$TMP/m21/vault' update-ref refs/heads/main \$(\"\$REAL_GIT\" -C '$TMP/m21/vault' commit-tree 'HEAD^{tree}' -p HEAD -m other)"
+FAKE_GIT_LOG="$TMP/m21.log" FAKE_GIT_PRE_SUB=update-ref FAKE_GIT_PRE_CMD="$MOVE" mrun m21
 [ "$rc" -eq 0 ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: branch moved' \
-  && [ "$(V m21 log -1 --format=%s)" = other ] && [ -f "$TMP/m21/vault/handoffs/NEXT-demo.md" ] \
-  && ok "M21 branch moved: UNCOMMITTED and the other commit is preserved" \
-  || bad "M21 branch moved: UNCOMMITTED and the other commit is preserved" "rc=$rc $(flat "$out") $(flat "$err") head=$(V m21 log -1 --format=%s)"
+  && [ "$(V m21 log -1 --format=%s)" = other ] && [ "$(V m21 log --format=%s | grep -c '^other$')" -eq 3 ] \
+  && [ -f "$TMP/m21/vault/handoffs/NEXT-demo.md" ] \
+  && [ -z "$(V m21 ls-files -s -- handoffs)" ] && [ -z "$(V m21 status --porcelain | grep -E '^[ADMR]|^.[DM]')" ] \
+  && ok "M21 branch moved on every try: UNCOMMITTED, 3 builds, other commits kept, shared index restored" \
+  || bad "M21 branch moved on every try: UNCOMMITTED, 3 builds, other commits kept, shared index restored" "rc=$rc $(flat "$out") $(flat "$err") $(V m21 log --format=%s | tr '\n' ' ') idx=$(V m21 ls-files -s -- handoffs)"
+
+# M21b the branch moves once: the build is redone on the new HEAD and commits
+new_vault m21b
+MOVE_B="${MOVE//m21/m21b}"
+FAKE_GIT_LOG="$TMP/m21b.log" FAKE_GIT_PRE_SUB=update-ref \
+  FAKE_GIT_PRE_CMD="[ -e '$TMP/m21b.once' ] || { : > '$TMP/m21b.once'; $MOVE_B; }" mrun m21b
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}$' \
+  && [ "$(V m21b show --name-only --format= HEAD)" = "handoffs/NEXT-demo.md" ] && [ "$(V m21b log --format=%s | sed -n 2p)" = other ] \
+  && [ -z "$(V m21b status --porcelain | grep -E '^[ADMR]|^.[DM]')" ] \
+  && ok "M21b branch moved once: rebuilt on the new HEAD, committed, index clean" \
+  || bad "M21b branch moved once: rebuilt on the new HEAD, committed, index clean" "rc=$rc $(flat "$out") $(flat "$err") $(V m21b log --format=%s | tr '\n' ' ')"
+
+# M29 a held index.lock: UNCOMMITTED, nothing moves
+new_vault m29
+: > "$TMP/m29/vault/.git/index.lock"
+head_before=$(V m29 rev-parse HEAD); idx_before=$(V m29 ls-files -s | shasum)
+CLAUDE_SEED_LOCK_WAIT=1 mrun m29
+[ "$rc" -eq 0 ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: shared index locked' \
+  && [ "$(V m29 rev-parse HEAD)" = "$head_before" ] && [ "$(V m29 ls-files -s | shasum)" = "$idx_before" ] \
+  && [ -f "$TMP/m29/vault/handoffs/NEXT-demo.md" ] && printf '%s' "$out" | grep -q '^seed: ' \
+  && ok "M29 held index.lock: UNCOMMITTED, HEAD and shared index unchanged, seed on disk" \
+  || bad "M29 held index.lock: UNCOMMITTED, HEAD and shared index unchanged, seed on disk" "rc=$rc $(flat "$out") $(flat "$err")"
+
+# M30 a lock released mid-backoff: commits, and nothing is left staged or modified
+new_vault m30
+: > "$TMP/m30/vault/.git/index.lock"
+( sleep 1; rm -f "$TMP/m30/vault/.git/index.lock" ) &
+CLAUDE_SEED_LOCK_WAIT=10 mrun m30
+wait
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}$' \
+  && [ "$(V m30 show --name-only --format= HEAD)" = "handoffs/NEXT-demo.md" ] \
+  && [ -z "$(V m30 status --porcelain | grep -E '^[ADMR]|^.[DM]')" ] \
+  && ok "M30 lock released mid-backoff: commits and status shows nothing staged or modified" \
+  || bad "M30 lock released mid-backoff: commits and status shows nothing staged or modified" "rc=$rc $(flat "$out") $(flat "$err") $(V m30 status --porcelain | tr '\n' '|')"
+
+# M31 an executable seed keeps its mode
+new_vault m31
+mkdir -p "$TMP/m31/handoffs"; put_seed m31 NEXT-demo.md "$MINE" v0
+cp "$TMP/m31/handoffs/NEXT-demo.md" "$TMP/m31/vault/handoffs/NEXT-demo.md"; chmod +x "$TMP/m31/vault/handoffs/NEXT-demo.md"
+V m31 add -- handoffs/NEXT-demo.md; V m31 commit -q -m exec
+mrun m31
+[ "$rc" -eq 0 ] && [ "$(V m31 ls-tree HEAD -- handoffs/NEXT-demo.md | cut -c1-6)" = 100755 ] \
+  && [ "$(V m31 ls-files -s -- handoffs/NEXT-demo.md | cut -c1-6)" = 100755 ] && printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}$' \
+  && ok "M31 existing mode (100755) is preserved in the commit and the index" \
+  || bad "M31 existing mode (100755) is preserved in the commit and the index" "rc=$rc $(flat "$out") $(flat "$err")"
+
+# M32 four parallel writers into one vault: all rc 0, every reported commit really holds its seed
+new_vault m32
+for i in 1 2 3 4; do new_repo "$TMP/m32/w$i"; done
+for i in 1 2 3 4; do
+  ( cd "$TMP/m32/w$i" && CLAUDE_HANDOFF_DIR="$TMP/m32/vault/handoffs" "$PY" "$SUT" write "${FILLED[@]}" \
+      --session "$MINE" --now "$STAMP" --picks-up-at 'x (agent Sol)' >"$TMP/m32.$i.out" 2>"$TMP/m32.$i.err"; echo $? > "$TMP/m32.$i.rc" ) &
+done
+wait
+committed=0; allok=1
+for i in 1 2 3 4; do
+  [ "$(cat "$TMP/m32.$i.rc")" -eq 0 ] || allok=0
+  if grep -Eq '^commit: [0-9a-f]{7,}$' "$TMP/m32.$i.out"; then
+    committed=$((committed+1))
+    [ -n "$(V m32 ls-tree HEAD -- "handoffs/NEXT-w$i.md")" ] || allok=0
+  else
+    grep -q '^UNCOMMITTED:' "$TMP/m32.$i.err" || allok=0
+  fi
+done
+[ "$allok" -eq 1 ] && [ "$committed" -ge 3 ] && [ -z "$(V m32 status --porcelain | grep -E '^[ADMR]|^.[DM]')" ] \
+  && ok "M32 four parallel writers: exit 0 each, $committed committed, no stale or staged entries" \
+  || bad "M32 four parallel writers: exit 0 each, $committed committed, no stale or staged entries" "allok=$allok committed=$committed $(V m32 status --porcelain | tr '\n' '|') $(cat "$TMP"/m32.*.err | tr '\n' '|')"
+
+# M33 a successful --refresh-pulse commits the seed (and the archive of the previous session's)
+new_vault m33
+mrun m33
+head_before=$(V m33 rev-parse HEAD)
+(cd "$TMP/m33/demo" && CLAUDE_HANDOFF_DIR="$TMP/m33/vault/handoffs" "$PY" "$SUT" write --session next-session \
+   --now "$STAMP" --refresh-pulse "$TMP/pulse.json" >"$TMP/m33.out" 2>"$TMP/m33.err"); rc=$?
+[ "$rc" -eq 0 ] && grep -Eq '^commit: [0-9a-f]{7,}$' "$TMP/m33.out" && [ "$(V m33 rev-parse HEAD)" != "$head_before" ] \
+  && V m33 show --name-only --format= HEAD | grep -qx 'handoffs/NEXT-demo.md' \
+  && [ -z "$(V m33 status --porcelain | grep -E '^[ADMR]|^.[DM]')" ] \
+  && ok "M33 successful --refresh-pulse prints commit: <sha> and HEAD touches the seed" \
+  || bad "M33 successful --refresh-pulse prints commit: <sha> and HEAD touches the seed" "rc=$rc $(cat "$TMP/m33.out" "$TMP/m33.err" | tr '\n' '|')"
 
 # M22 detached HEAD, M23 unborn branch
 new_vault m22
@@ -1605,10 +1688,10 @@ MHD="$TMP/m27/wt/handoffs" mrun m27
 
 # M28 the invocation log: only plumbing, never a porcelain add/commit or a network/mutating verb
 new_vault m28
-put_seed m28 NEXT-demo.md other-session "$LOST"; mv "$TMP/m28/handoffs/NEXT-demo.md" "$TMP/m28/vault/handoffs/NEXT-demo.md"
+mkdir -p "$TMP/m28/handoffs"; put_seed m28 NEXT-demo.md other-session "$LOST"; mv "$TMP/m28/handoffs/NEXT-demo.md" "$TMP/m28/vault/handoffs/NEXT-demo.md"
 V m28 add -- handoffs/NEXT-demo.md; V m28 commit -q -m other
 FAKE_GIT_LOG="$TMP/m28.log" mrun m28
-[ "$rc" -eq 0 ] && [ -s "$TMP/m28.log" ] && grep -q '^commit-tree ' "$TMP/m28.log" && grep -q '^update-ref ' "$TMP/m28.log" \
+[ "$rc" -eq 0 ] && [ "$(V m28 show --name-only --format= HEAD | wc -l | tr -d ' ')" -eq 2 ] && [ -s "$TMP/m28.log" ] && grep -q '^commit-tree ' "$TMP/m28.log" && grep -q '^update-ref ' "$TMP/m28.log" \
   && ! grep -Eq '^(push|fetch|pull|reset|stash|checkout|commit|add|restore|rebase|read-tree .*--reset) ' "$TMP/m28.log" \
   && ! grep -Eq '^read-tree .*(-u|--reset)' "$TMP/m28.log" \
   && ok "M28 invocation log: plumbing only, no push/fetch/pull/reset/stash/checkout/commit/add" \
