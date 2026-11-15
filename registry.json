@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "ff2aa86",
+  "generatedFromCommit": "376f42c",
   "skillCount": 45,
   "skills": [
     {
@@ -2829,7 +2829,7 @@
     {
       "name": "smoke-test",
       "hash": "8913398",
-      "lines": 229,
+      "lines": 248,
       "description": "Run an automated visual smoke test of the application using Playwright. Launches a headless browser, navigates through key UI flows, takes screenshots, and reports pass/fail results.",
       "guards": [
         {
@@ -3432,8 +3432,8 @@
     },
     {
       "name": "visual-brief",
-      "hash": "4a39c94",
-      "lines": 244,
+      "hash": "376f42c",
+      "lines": 265,
       "description": "Generate a polished, **self-contained HTML brief** of a topic — session status, a plan, or a code walkthrough — saved to a durable folder and opened in the browser. Built for moments when a plain chat wall is hard to absorb: context switches, long-running sessions, or understanding how a codebase fits together.",
       "guards": [
         {

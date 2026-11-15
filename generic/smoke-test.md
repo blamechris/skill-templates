@@ -124,6 +124,25 @@ fi
 
 If the application was started by this skill (not already running), stop it.
 
+**Evidence kept in a git-backed vault.** When a run saves its report or kept
+screenshots as evidence in a vault, the run that wrote them commits the notes
+before ending, by path, so another session's staged work stays out:
+
+```bash
+VAULT="{{CUSTOMIZE: git-backed vault root that keeps smoke evidence, or empty for none}}"
+NOTES=()  # absolute paths of the report/note files this run wrote under $VAULT
+if [ -n "$VAULT" ] && [ "${#NOTES[@]}" -gt 0 ]; then
+  git -C "$VAULT" add -- "${NOTES[@]}" &&
+    git -C "$VAULT" commit -q -m "smoke: <run>" -- "${NOTES[@]}" ||
+    echo "smoke evidence NOT committed; commit those paths by name before ending"
+fi
+```
+
+Never `-A`, `.`, `-u` or a directory. Screenshots, video, traces and logs are
+machine output: write one into the vault only where
+`git -C "$VAULT" check-ignore -q <path>` succeeds, otherwise keep it outside the
+vault. Never commit a credential-bearing capture (tokens, cookies, auth frames).
+
 ## Writing the Smoke Test Script
 
 This is where step 0 sends you when the script is missing. If the test script

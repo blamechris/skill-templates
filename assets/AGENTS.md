@@ -107,6 +107,11 @@ The user (blamechris / Chris) is **responsible for and the sole author of all co
 
 Write clean, professional commit messages and PR bodies with no attribution footer of any kind.
 
+<!--default:vault-writer-commits-->
+Commit the vault notes you write before ending, by path:
+`git add -- <p> && git commit -m <msg> -- <p>`. Machine output
+goes only where `git check-ignore` passes.
+
 ## Writing to a shared working copy (all projects)
 
 <!--default:shared-copy-preamble-->

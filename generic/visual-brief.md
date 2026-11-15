@@ -148,6 +148,27 @@ isn't the short-circuited `--no-open` test.
 Report the absolute path so the user can find/link it. If `$CLAUDE_BRIEF_DIR`
 points into an Obsidian vault, mention it's now linkable there.
 
+If the brief landed in a git-backed vault (`$CLAUDE_BRIEF_DIR` inside a git work
+tree), commit that one file before ending; do not leave it for a later cleanup:
+
+```bash
+case "$FILE" in
+  "${CLAUDE_BRIEF_DIR%/}"/*)
+    if [ -n "$CLAUDE_BRIEF_DIR" ] &&
+       git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      git -C "$DIR" add -- "$FILE" &&
+        git -C "$DIR" commit -q -m "briefs: <slug>" -- "$FILE" ||
+        echo "brief NOT committed; commit $FILE by path before ending"
+    fi ;;
+esac
+```
+
+The path after `--` on the commit records this file alone, even when another
+session has staged work in the vault's shared index. Never widen it to `-A`, `.`,
+`-u` or a directory, and never commit a `--dir` outside `$CLAUDE_BRIEF_DIR` this
+way: that may be a product checkout. If the commit fails (an `index.lock` held by
+another session, a hook), report the path as uncommitted; never delete the lock.
+
 ## HTML skeleton (house style — adapt content, keep the chrome)
 
 ```html
