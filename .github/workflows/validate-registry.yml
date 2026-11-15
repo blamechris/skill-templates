@@ -1094,6 +1094,20 @@ jobs:
         # accident whenever only the highest round is ever on file).
         run: ./assets/scripts/pr-record.test.sh
 
+      - name: decision-record regression tests
+        # Owner decisions get a durable ledger the way merges have pr-record.py.
+        # There is no `*.test.sh` glob in this workflow, so each test is named.
+        # Pins append/list round-trip, the refusals (no session, relay without
+        # relay_via, control characters, credential-shaped values) and that
+        # concurrent appends never interleave. Hermetic: temp dirs only.
+        run: ./assets/scripts/decision-record.test.sh
+
+      - name: seed-freshness regression tests
+        # Report-only check that a seed predates a later decision or merge. Pins
+        # STALE for each of the three cases, FRESH otherwise, that nothing is
+        # written, and the exit codes.
+        run: ./assets/scripts/seed-freshness.test.sh
+
       - name: gate-ledger regression tests
         # #272, epic #266: for every gate (a skill-guard, a hook, a CI step, a
         # script-check, a doctrine rule), record the failure mode it targets and
@@ -1140,3 +1154,12 @@ jobs:
         # "this repo's own installed skills lint clean" step above does for
         # skill-lint.
         run: python3 assets/scripts/gate-ledger.py check --registry .
+
+      - name: plan-status tests
+        # The plan-lifecycle linter/writer (docs/plan-lifecycle.md). There is no
+        # `*.test.sh` glob in this workflow, so it gets its own named step. The suite
+        # is hermetic (temp dirs, HOME and CLAUDE_PLAN_DIR redirected, no network). It
+        # covers the check/scan/set cases listed in plan-status.test.sh, including
+        # byte-exact `set` fixtures, refusals that leave the file untouched, a simulated
+        # failed rename and a fake failing `git` on PATH.
+        run: ./assets/scripts/plan-status.test.sh
