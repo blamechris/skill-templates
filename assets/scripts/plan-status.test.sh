@@ -372,6 +372,36 @@ expect_eq "quoted existing ids re-emitted plain" "decisions: [DEC-1, DEC-2, DEC-
 run scan --dir "$D" --since 2026-1-1 >/dev/null 2>&1; expect_eq "--since 2026-1-1 exit 2" 2 "$?"
 run scan --dir "$D" --since 20261101 >/dev/null 2>&1; expect_eq "--since 20261101 exit 2" 2 "$?"
 
+echo "== other line breaks, value characters, null superseded_by (round-3 regressions)"
+f=$(fixture lb1 '---\nstatus: accepted\rfoo: x\n---\nb\n')
+refuse "A: lone CR inside frontmatter" "$f" --status in-delivery
+has "A: check warns" "$(run check "$f")" "unsupported frontmatter syntax at line 2"
+f=$(fixture lb2 '---\nstatus: accepted\xc2\x85foo: x\n---\nb\n')
+refuse "B: U+0085 inside frontmatter" "$f" --status in-delivery
+f=$(fixture lb3 '---\ntitle: x\rstatus: delivered\n---\nb\n')
+refuse "C: CR hides a terminal status (no transition bypass)" "$f" --status proposal
+f=$(fixture lb4 '---\nstatus: accepted\xe2\x80\xa8foo: x\n---\n')
+refuse "U+2028 inside frontmatter" "$f" --status in-delivery
+f=$(fixture lb5 '---\nstatus: accepted\x0bfoo: x\n---\n')
+refuse "VT inside frontmatter" "$f" --status in-delivery
+
+f=$(fixture bv '---\nstatus: accepted\n---\n')
+refuse "superseded-by with U+0085" "$f" --status superseded --superseded-by $'a\xc2\x85b'
+refuse "superseded-by with U+0090" "$f" --status superseded --superseded-by $'a\xc2\x90b'
+refuse "superseded-by with U+FFFE" "$f" --status superseded --superseded-by $'a\xef\xbf\xbeb'
+refuse "superseded-by with U+2028" "$f" --status superseded --superseded-by $'a\xe2\x80\xa8b'
+refuse "superseded-by with U+FEFF" "$f" --status superseded --superseded-by $'a\xef\xbb\xbfb'
+refuse "superseded-by with a DEL" "$f" --status superseded --superseded-by $'a\x7fb'
+out=$(run set "$f" --status superseded --superseded-by $'a\xffb' 2>&1); rc=$?
+expect_eq "invalid-UTF-8 argv refused, no traceback" "1:0" "$rc:$(printf '%s' "$out" | grep -c Traceback)"
+
+f=$(fixture nl '---\nstatus: accepted\nsuperseded_by: null\n---\n')
+refuse "null superseded_by counts as empty for set" "$f" --status superseded
+f=$(fixture nl2 '---\nstatus: superseded\nstatus_updated: 2026-11-15T09:30Z\nsuperseded_by: ~\n---\n')
+has "null superseded_by warned by check" "$(run check "$f")" "superseded_by is missing"
+f=$(fixture nl3 '---\nstatus: superseded\nstatus_updated: 2026-11-15T09:30Z\nsuperseded_by: "null"\n---\n')
+expect_eq "quoted \"null\" is a real value" "OK $f" "$(run check "$f")"
+
 echo "== atomic write"
 a=$(mk atomic 'status: proposal'); cp "$a" "$a.orig"
 out=$("$PY" - "$SUT" "$a" <<'PYEOF' 2>&1

@@ -95,6 +95,7 @@ python3 ~/.claude/scripts/plan-status.py scan [--dir D] [--since YYYY-MM-DD]
   passes may be re-emitted plain; one that fails is refused, never retyped. `decisions` is
   validated whether or not it is being edited: absent, empty, a one-line `[a, b]` list (a
   trailing comment is kept) or a contiguous `- item` block.
+- A frontmatter line containing a lone CR, VT, FF, U+0085, U+2028 or U+2029 (line breaks YAML honours but this script does not split on) is outside the grammar. A plain `null`/`~`/`Null` `superseded_by` is YAML null and counts as empty; `--superseded-by` values with control, line-break, non-character or surrogate characters are refused. `set` does not repair or validate YAML in keys it does not edit.
 - `set` also refuses duplicate lifecycle keys, comment or blank lines inside an edited
   key's span, a read-only file, and a file with a UTF-8 BOM before the opening `---`
   (`check` reports it as having no frontmatter). After building the result it re-validates

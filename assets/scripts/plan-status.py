@@ -54,6 +54,8 @@ TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$")
 STAMP_RE = re.compile(r"^>\s*\*\*Update\s+(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}))?")
 ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*$")
 RESERVED = ("null", "true", "false", "yes", "no", "on", "off", "y", "n", "~")
+LINE_BREAK_RE = re.compile("[\r\x0b\x0c\x85\u2028\u2029]")
+BAD_VALUE_RE = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\ufeff\ufffe\uffff\ud800-\udfff]")
 TOP_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*:(?=\s|$)")
 SCALAR_LC = ("status", "status_updated", "superseded_by")
 
@@ -151,6 +153,11 @@ def grammar_errors(lines, span):
     for i in range(span[0] + 1, span[1]):
         c = lines[i][0]
         n = i + 1
+        if LINE_BREAK_RE.search(c):
+            # YAML also breaks lines on a lone CR, NEL, LS and PS; split_lines does not.
+            errs.append((n, "unsupported line break character"))
+            cont = False
+            continue
         if not c.strip() or re.match(r"^\s*#", c):
             cont = False
             continue
@@ -208,6 +215,10 @@ def parse_fm(lines, span, errs=None):
         if k in SCALAR_LC:
             try:
                 v = lc_value(m.group(2))[0]
+                # a plain (unquoted) reserved word such as `null` or `~` is YAML null, i.e. empty
+                if k == "superseded_by" and not m.group(2).lstrip().startswith('"') \
+                        and v.lower() in RESERVED:
+                    v = ""
             except Refuse as e:
                 if errs is None:
                     raise Refuse("'%s': %s" % (k, e))
@@ -458,8 +469,6 @@ def fmt_value(v):
     double-quoted with `\\` and `\"` escaped, the exact inverse of lc_value."""
     if id_ok(v):
         return v
-    if re.search(r"[\x00-\x1f\x7f]", v):
-        raise Refuse("--superseded-by must not contain control characters")
     return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
@@ -506,8 +515,9 @@ def plan_set(path, status, superseded_by, decisions, now):
                      (old, status, old, ", ".join(TRANSITIONS[old])))
     if superseded_by is not None:
         superseded_by = superseded_by.strip()
-        if not superseded_by or re.search(r"[\r\n]", superseded_by):
-            raise Refuse("--superseded-by must be a non-empty single line")
+        if not superseded_by or BAD_VALUE_RE.search(superseded_by):
+            raise Refuse("--superseded-by must be non-empty with no control, line-break, "
+                         "non-character or surrogate characters")
     if status == "superseded":
         if not (superseded_by or fm.get("superseded_by")):
             raise Refuse("status superseded requires --superseded-by")
