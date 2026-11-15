@@ -79,7 +79,8 @@ acting on the answer**, plus a read-only check that compares seeds against it.
    until the whole line is down, and any write error truncates the ledger back to its
    pre-append size and exits 2. The ledger path is resolved with `realpath` first, so
    an alias and its target share one lock; if the rollback itself fails the message
-   says restoring FAILED and partial bytes may remain. A refusal creates no directory
+   says restoring FAILED and partial bytes may remain. Locks are keyed by realpath, so hardlinked aliases are not serialized for the
+   duplicate check or rollback: use one path per ledger. A refusal creates no directory
    and no `.lock`.
 7. **The ledger is private and vault-only.** `add` refuses a ledger path inside one of
    the current session's repo worktrees (using `session-seed.py`'s worktree-roots
@@ -101,7 +102,7 @@ after its `date`:
 
 | Code | Condition |
 |---|---|
-| `decision` | a decision record for the scope has a later `received_at` |
+| `decision` | a decision record for the scope has a later `received_at` or `recorded_at` (a late relay recorded after the seed was written is not in the seed) |
 | `pr-record` | a pr-record whose repo basename equals the scope, or whose `session.id` starts with the seed's `session`, has a later `recorded_at` or `pr_meta.merged_at` |
 | `owner-ask` | `picks_up_at` contains `OWNER:` and a later decision exists: the seed asks the owner for something a later decision may have answered |
 

@@ -124,9 +124,9 @@ def parse_ts(value, with_precision=False):
 
 def format_ts(dt):
     """Canonical storage: YYYY-MM-DDTHH:MM:SSZ, or with .ffffff when non-zero."""
-    if dt.microsecond:
-        return dt.strftime("%Y-%m-%dT%H:%M:%S") + ".%06dZ" % dt.microsecond
-    return dt.strftime(TS_FORMAT)
+    # %Y is not zero-padded on every platform, so pad the year explicitly.
+    base = "%04d-%02d-%02dT%02d:%02d:%02d" % (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+    return base + (".%06dZ" % dt.microsecond if dt.microsecond else "Z")
 
 
 def canon_ts(value, field):
@@ -154,6 +154,8 @@ def clean(value, field, required=True, multiline=False):
         value = value.replace("\r\n", "\n")
     check = value.replace("\n", "") if multiline else value
     if CONTROL.search(check):
+        if "\t" in check:
+            die("%s contains a tab; use spaces instead" % field)
         die("%s contains a control character%s" % (
             field, "" if multiline else " or newline; single-line field only"))
     if looks_secret(value):
@@ -320,8 +322,11 @@ def append_locked(path, record):
         die("ledger %s is a directory" % path)
     if record["supersedes"] and not os.path.exists(path):
         die("--supersedes %s is not in %s" % (record["supersedes"], path))
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    lock = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        lock = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as e:
+        die("cannot create %s or its lock file: %s" % (path, e))
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
         existing, errors = read_decisions(path)

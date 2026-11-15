@@ -29,7 +29,11 @@ sensitivity: vault
 # Handoff - $1
 SEED
 }
-decision() { "$PY" -B "$DR" add --scope "$1" --session x --question Q --answer-verbatim "$2" --received-at "$3" >/dev/null; }
+decision() { # scope answer received_at [recorded_at, default = received_at]; fabricated rows so recorded_at is controllable
+  "$PY" -c "
+import json,sys,hashlib
+sc,ans,rcv,rec=sys.argv[1:5]
+print(json.dumps({'kind':'decision-record','schema_version':1,'id':'dec-'+hashlib.sha256((sc+ans+rcv+rec).encode()).hexdigest()[:12],'scope':sc,'received_at':rcv,'recorded_at':rec or rcv,'answer_verbatim':ans}))" "$1" "$2" "$3" "${4:-}" >> "$CLAUDE_DECISION_LEDGER"; }
 prrec() { # repo sid recorded_at merged_at
   printf '{"kind":"pr-record","schema_version":1,"repo":"%s","pr":7,"recorded_at":"%s","pr_meta":{"merged_at":"%s"},"session":{"id":"%s"}}\n' \
     "$1" "$3" "$4" "$2" >> "$CLAUDE_PR_LEDGER"
@@ -185,6 +189,20 @@ run --scope short | grep -q '^STALE short' && ok "a short seed session still mat
 seed maxd mmmmmmmm 9999-12-31T23:59Z "issue 15"
 err=$(run --scope maxd 2>&1 >/dev/null); rc=$?
 [ $rc = 2 ] && [[ "$err" != *Traceback* ]] && ok "9999-12-31T23:59Z is a normal error, not OverflowError" || bad "datetime.max" "rc=$rc $err"
+
+# ---- a late-recorded decision: received before the seed, recorded after it
+: > "$CLAUDE_DECISION_LEDGER"
+seed late llllllll 2026-11-06T10:00:30Z "issue 16"; settime late 2026-11-06T10:00:30Z
+decision late "relayed late" 2026-11-06T09:50:00Z 2026-11-06T10:05:00Z
+run --scope late | grep -q '^STALE late' && ok "late-relayed decision recorded after the seed is STALE" || bad "late relay"
+: > "$CLAUDE_DECISION_LEDGER"
+decision late "recorded then seeded" 2026-11-06T09:59:00Z 2026-11-06T10:00:00Z
+run --scope late | grep -q '^FRESH late$' && ok "record-then-seed stays FRESH" || bad "record then seed"
+seed late2 llllllll 2026-11-06T10:00Z "issue 17"; settime late2 2026-11-06T10:00:40Z
+decision late2 "same minute, recorded before the write" 2026-11-06T09:00:00Z 2026-11-06T10:00:20Z
+run --scope late2 | grep -q '^FRESH late2$' && ok "recorded earlier in the seed minute is FRESH" || bad "late same minute"
+decision late2 "same minute, recorded after the write" 2026-11-06T09:00:00Z 2026-11-06T10:00:50Z
+run --scope late2 | grep -q '^STALE late2' && ok "recorded after the write in the same minute is STALE (mtime)" || bad "late same minute after"
 
 echo
 echo "passed: $pass failed: $fail"

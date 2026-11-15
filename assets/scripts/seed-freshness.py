@@ -11,7 +11,7 @@ Usage:
 For each canonical seed `NEXT-<scope>.md` in $CLAUDE_HANDOFF_DIR (default dir
 from session-seed.py), or the single --scope, prints `FRESH <scope>` or
 `STALE <scope> <reason>`. A seed is STALE when, after its `date`:
-  decision      a decision record for that scope was received
+  decision      a decision record for that scope was received or recorded
                 (decision-record.py ledger: --decision-ledger, then
                 $CLAUDE_DECISION_LEDGER, then its default);
   pr-record     a pr-record whose repo basename equals the scope, or whose
@@ -132,10 +132,13 @@ def check_seed(dr, scope, fm, decisions, prs, mtime=None):
         return t > wrote if exact else t >= wrote
 
     reasons = []
-    later = [d for d in decisions if d["scope"] == scope and after(parse(d["received_at"]))]
+    # A decision is later than the seed when it ARRIVED later, or was RECORDED later
+    # (a late relay, recorded after the seed was written, is not in the seed).
+    later = [d for d in decisions if d["scope"] == scope
+             and any(t is not None and after(t) for t in (parse(d["received_at"]), parse(d.get("recorded_at"))))]
     if later:
         reasons.append({"code": "decision", "detail":
-                        "decision received after the seed was written (%s)" % ", ".join(d["id"] for d in later)})
+                        "decision received or recorded after the seed was written (%s)" % ", ".join(d["id"] for d in later)})
     sid = norm_sid(fm.get("session"))
     for r in prs:
         repo = str(r.get("repo") or "")

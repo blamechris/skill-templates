@@ -280,6 +280,28 @@ err=$(run "${BASE[@]}" --answer-verbatim dirled --ledger "$TMP/adir" 2>&1 >/dev/
 err=$(run list --ledger "$TMP/adir" 2>&1 >/dev/null); rc=$?
 [ $rc = 2 ] && [[ "$err" != *Traceback* ]] && ok "list on a directory ledger exits 2 without a traceback" || bad "list dir" "$err"
 
+# ---- round 3: OS errors are refusals, tab message, year padding
+: > "$TMP/regfile"
+err=$(run "${BASE[@]}" --answer-verbatim rf1 --ledger "$TMP/regfile/x.jsonl" 2>&1 >/dev/null); rc=$?
+[ $rc = 2 ] && [[ "$err" == REFUSE:*"cannot create"* && "$err" != *Traceback* ]] && ok "ledger under a regular file is a REFUSE" || bad "regular-file parent" "rc=$rc $err"
+if [ "$(id -u)" != 0 ]; then
+  mkdir "$TMP/rodir" && chmod 555 "$TMP/rodir"
+  err=$(run "${BASE[@]}" --answer-verbatim rf2 --ledger "$TMP/rodir/x.jsonl" 2>&1 >/dev/null); rc=$?
+  [ $rc = 2 ] && [[ "$err" == REFUSE:*"cannot create"* && "$err" != *Traceback* ]] && ok "ledger in a read-only dir is a REFUSE" || bad "read-only dir" "rc=$rc $err"
+  chmod 755 "$TMP/rodir"
+else
+  echo "  skip read-only dir (root)"
+fi
+err=$(run "${BASE[@]}" --answer-verbatim $'a\tb' 2>&1 >/dev/null)
+[[ "$err" == *"contains a tab; use spaces"* ]] && ok "tab refusal says so" || bad "tab msg" "$err"
+"$PY" - "$SUT" <<'PYEOF' && ok "year is zero-padded to 4 digits" || bad "year pad"
+import runpy, sys
+from datetime import datetime, timezone
+g = runpy.run_path(sys.argv[1])
+assert g["format_ts"](datetime(5, 1, 2, 3, 4, 5, tzinfo=timezone.utc)) == "0005-01-02T03:04:05Z"
+assert g["format_ts"](datetime(2026, 1, 2, 3, 4, 5, 250000, tzinfo=timezone.utc)) == "2026-01-02T03:04:05.250000Z"
+PYEOF
+
 echo
 echo "passed: $pass failed: $fail"
 [ "$fail" = 0 ]
