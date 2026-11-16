@@ -87,7 +87,9 @@ class AnnouncementTests(unittest.TestCase):
     def assert_success(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)
         seed = self.root / "handoffs" / "NEXT-demo.md"
-        self.assertEqual(result.stdout, "seed: %s\n" % seed)
+        # These fixtures are not in a git repository, so the commit step reports a skip;
+        # what is asserted here is the announce contract, not the commit step's wording.
+        self.assertEqual(result.stdout, "seed: %s\ncommit: skipped (handoff dir is not in a git repository)\n" % seed)
         self.assertEqual(result.stderr, "")
         self.assertIn("Private seed body marker", seed.read_text())
         return seed
