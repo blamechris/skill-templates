@@ -5,6 +5,7 @@
 
 Usage:
   python3 ~/.claude/scripts/session-seed.py write  --picks-up-at TEXT --boundary-reason TEXT --next TEXT --body-file F [--alt TEXT]
+  (write commits its own seed and archive by path; --no-commit or CLAUDE_SEED_COMMIT=0 skips that)
   python3 ~/.claude/scripts/session-seed.py verify [--topic T] [--session ID]
   python3 ~/.claude/scripts/session-seed.py verify --file PATH
   python3 ~/.claude/scripts/session-seed.py path   [--topic T]
@@ -51,15 +52,76 @@ Exit codes:
      in order: an `archived: <path>` line iff an incumbent was moved, then `seed:
      <path>` iff the proof passed. Read those; do not infer them from the exit code.
   2  usage error.
+
+THE COMMIT STEP (after the proof, never before it)
+  A seed that is written but never committed sits orphaned in the vault: the
+  fleet's explicit-path staging rule forbids every OTHER session from staging
+  someone else's file, so the writer is the only party that can. `write` therefore
+  commits exactly its own paths — the canonical seed, plus the archive when an
+  incumbent was moved — and it does so with git PLUMBING, never `git add` or
+  `git commit`: the bytes the writer proved (and the archive's bytes, read right
+  after it was made) are hashed with --no-filters, put into a PRIVATE index read
+  from HEAD, written to a tree and committed with commit-tree. An existing path
+  keeps its mode (100755 stays 100755, in the commit and in the worktree); a new
+  one is 100644. No commit hook runs (a `reference-transaction` hook, if installed,
+  still sees the ref update).
+  THE LOCK PROTOCOL. The shared index is only ever changed under git's OWN lock,
+  `<git-dir>/index.lock` (per-worktree: --git-dir, not --git-common-dir), taken
+  with O_CREAT|O_EXCL, and is written exactly once, at the end, the way git
+  publishes an index: the new bytes go into the lock file, which is renamed over
+  `index`. In order, per attempt: (1) take the lock, waiting out a holder with
+  jittered backoff for CLAUDE_SEED_LOCK_WAIT seconds (default 5), else
+  `UNCOMMITTED: shared index locked` with nothing changed; (2) under it, read HEAD
+  and the shared-index entries of the owned paths: each must equal HEAD's entry or
+  exactly what this run means to write, else `separately staged changes`; on a
+  retry, a path another commit changed to anything but where we started or what we
+  intend is `seed changed by another commit`; the canonical seed is re-verified
+  against the proved bytes on every attempt; (3) build the tree and the commit;
+  (4) prepare the index's next contents as a COPY beside it; (5) compare-and-swap
+  the branch with update-ref; if it loses, drop the copy and the lock and start
+  over (up to 5 attempts, jittered, then `UNCOMMITTED: branch moved`) — the shared
+  index was never touched, so there is NOTHING to roll back, which is why there is
+  no rollback code: a rollback is a second write that races whatever commit moved
+  the branch; (6) only after the swap wins, publish the copy. If that final step
+  fails the commit exists and stderr says `UNCOMMITTED: committed <sha> but shared
+  index not refreshed` followed by the exact repair commands.
+  COST OF THE LOCK: while we hold index.lock any other git command that needs the
+  index (add, commit, status --refresh...) fails with the usual "index.lock exists"
+  message. The critical section is a handful of local plumbing calls with no network
+  and no prompts. The only unbounded thing in it is a signing hang, because
+  `commit.gpgsign=true` is honoured (commit-tree -S): each git call is bounded by
+  CLAUDE_SEED_GIT_TIMEOUT seconds (default 20) and the whole process group is killed
+  on expiry, so a gpg or pinentry child cannot outlive git; the result is
+  `UNCOMMITTED`, never a failed write.
+  If either path has a separately staged entry, HEAD is detached, the seed changed
+  after the proof or anything else fails, nothing is committed. Every git call OF
+  THE COMMIT STEP drops the GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE family and runs
+  with LC_ALL=C; scope resolution and `verify` still inherit the caller's
+  environment, which is a pre-existing limit and not changed here.
+  SIGNALS: SIGINT/SIGTERM/SIGHUP during the step abort it cleanly before the ref moves
+  (`UNCOMMITTED: interrupted before commit`, lock and copy removed, children killed); from
+  update-ref through the publish nothing is aborted; the signal is re-raised afterwards so the
+  exit status reflects it. SIGKILL is out of scope, as it is for git itself.
+  It never pushes, fetches, pulls, rebases, stashes, resets, restores or checks out.
+  A failed commit is NEVER a failed write: the seed is already on disk and proved,
+  so the step prints `UNCOMMITTED: <reason>` on stderr and the exit stays 0. It is
+  skipped (stdout `commit: skipped (...)`) outside a git repository, with
+  `--no-commit` or `CLAUDE_SEED_COMMIT=0`, and after `--no-verify`: an unproved
+  seed is not committed. Stdout otherwise says `commit: <short sha>` or
+  `commit: unchanged`.
 """
 import argparse
 import errno
 import json
 import os
+import random
 import re
+import shutil
+import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import ipaddress
 import urllib.request
@@ -875,7 +937,412 @@ def render(scope, sid, date, picks_up_at, title, boundary, sensitivity, body, ne
     return "\n".join(head) + body.rstrip("\n") + tail + "\n" + CLOSING
 
 
-def atomic_write(path, text):
+# ---------------------------------------------------------------------- commit
+
+class Uncommitted(Exception):
+    """The seed is written and proved but cannot be committed; the reason is the text."""
+
+
+# Everything that can point git at a different repository, index, object store or
+# config than the one named by the handoff dir. They are removed from every git call
+# of the commit step: a session started from inside a hook or a wrapper can carry them.
+_GIT_ENV_DROP = frozenset((
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
+    "GIT_PREFIX", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"))
+
+
+def _git_timeout():
+    # The env knob exists so the suite can prove the timeout without waiting 20 seconds.
+    try:
+        return float(os.environ.get("CLAUDE_SEED_GIT_TIMEOUT") or 20)
+    except ValueError:
+        return 20.0
+
+
+def _clean_git_env(extra=None):
+    env = {k: v for k, v in os.environ.items()
+           if k not in _GIT_ENV_DROP and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["LC_ALL"] = "C"          # "not a git repository" detection must not depend on locale
+    env.update(extra or {})
+    return env
+
+
+# SIGNALS. The commit step records SIGINT/SIGTERM/SIGHUP instead of dying on them,
+# because the process holds git's index.lock and has git children in their own process
+# groups: an uncaught signal would leave the lock and the prepared index copy behind
+# and let an orphaned `update-ref` commit with nobody to publish the index. Until the
+# compare-and-swap starts, a recorded signal aborts cleanly (children killed, lock and
+# copy removed, `UNCOMMITTED: interrupted before commit`). From the start of
+# update-ref through the publish nothing is aborted, so a commit is never left with a
+# stale index. When the step is over the signal is re-raised with its default action,
+# so the exit status still says what killed us. SIGKILL cannot be caught; it is out of
+# scope here exactly as it is for git itself.
+_SIG = {"got": None, "protected": False}
+
+
+def _on_signal(signum, _frame):
+    if _SIG["got"] is None:
+        _SIG["got"] = signum
+
+
+def _check_interrupt():
+    if _SIG["got"] is not None and not _SIG["protected"]:
+        raise Uncommitted("interrupted before commit")
+
+
+def _kill_group(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.communicate()
+    except (OSError, ValueError):
+        pass
+
+
+def _cg(args, cwd, extra_env=None, stdin=None, ok=(0,), literal=True):
+    """One git call of the commit step: sanitized env, timeout, tolerant decoding.
+
+    Returns (rc, stdout, stderr) when rc is in `ok`; anything else is Uncommitted.
+    The child runs in its OWN process group and a timeout (or a recorded signal,
+    before the commit is protected) kills the whole group, so a gpg or pinentry
+    child of git cannot outlive it.
+    """
+    _check_interrupt()
+    cmd = ["git"] + (["--literal-pathspecs"] if literal else []) + list(args)
+    try:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=_clean_git_env(extra_env),
+                                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True)
+    except OSError as e:
+        raise Uncommitted("cannot run git (%s)" % e)
+    deadline = time.monotonic() + _git_timeout()
+    first = True
+    while True:
+        try:
+            so, se = proc.communicate(input=stdin if first else None,
+                                      timeout=max(0.01, min(0.2, deadline - time.monotonic())))
+            break
+        except subprocess.TimeoutExpired:
+            first = False
+            if _SIG["got"] is not None and not _SIG["protected"]:
+                _kill_group(proc)
+                raise Uncommitted("interrupted before commit")
+            if time.monotonic() >= deadline:
+                _kill_group(proc)
+                raise Uncommitted("git %s timed out after %gs" % (args[0], _git_timeout()))
+        except OSError as e:
+            _kill_group(proc)
+            raise Uncommitted("git %s failed (%s)" % (args[0], e))
+    out = so.decode("utf-8", "replace")
+    err = se.decode("utf-8", "replace")
+    _check_interrupt()
+    if proc.returncode not in ok:
+        raise Uncommitted("git %s failed (%s)" % (args[0], (err.strip() or out.strip()
+                                                           or "exit %d" % proc.returncode).replace("\n", " | ")))
+    return proc.returncode, out, err
+
+
+def _index_entry(repo, rel):
+    """(mode, blob) of `rel` in the SHARED index, None if absent, ("conflict",) if unmerged."""
+    _, out, _ = _cg(["ls-files", "-s", "-z", "--", rel], repo)
+    recs = [r for r in out.split("\0") if r]
+    if not recs:
+        return None
+    meta = recs[0].split("\t", 1)[0].split()
+    if len(recs) > 1 or len(meta) != 3 or meta[2] != "0":
+        return ("conflict",)
+    return (meta[0], meta[1])
+
+
+def _tree_entry(repo, commit, rel):
+    if commit is None:
+        return None
+    _, out, _ = _cg(["ls-tree", "-z", commit, "--", rel], repo)
+    recs = [r for r in out.split("\0") if r]
+    if not recs:
+        return None
+    meta = recs[0].split("\t", 1)[0].split()
+    return (meta[0], meta[2]) if len(meta) == 3 else ("conflict",)
+
+
+def _lock_wait():
+    try:
+        return float(os.environ.get("CLAUDE_SEED_LOCK_WAIT") or 5)
+    except ValueError:
+        return 5.0
+
+
+def _acquire_index_lock(gitdir):
+    """Take git's OWN index lock: create <git-dir>/index.lock with O_CREAT|O_EXCL.
+
+    This is the lock every porcelain command takes before it touches the index, so
+    while we hold it a concurrent `git add` or `git commit` fails instead of racing
+    us. A held lock is retried with jittered backoff for CLAUDE_SEED_LOCK_WAIT
+    seconds (default 5); past that nothing has been changed. Returns (path, fd).
+    """
+    path = os.path.join(gitdir, "index.lock")
+    deadline = time.monotonic() + _lock_wait()
+    delay = 0.02
+    while True:
+        _check_interrupt()
+        try:
+            return path, os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise Uncommitted("shared index locked")
+            time.sleep(random.uniform(delay / 2, delay))
+            delay = min(delay * 2, 0.4)
+        except OSError as e:
+            raise Uncommitted("cannot take %s (%s)" % (path, e))
+
+
+def _check_proof(items):
+    """The canonical seed must still be exactly what the writer proved."""
+    canonical_path, proved, _mode = items[0]
+    for path, data, _m in items:
+        if data is None:
+            raise Uncommitted("could not read %s after archiving" % path)
+    try:
+        with open(canonical_path, "rb") as f:
+            current = f.read()
+    except OSError as e:
+        raise Uncommitted("seed changed after proof (%s)" % e)
+    if current != proved:
+        raise Uncommitted("seed changed after proof")
+
+
+def _commit_plumbing(scope, sid, directory, items):
+    real_dir = os.path.realpath(directory)
+    try:
+        _, top, _ = _cg(["rev-parse", "--show-toplevel"], real_dir)
+    except Uncommitted as e:
+        if "not a git repository" in str(e).lower():
+            print("commit: skipped (handoff dir is not in a git repository)")
+            return
+        raise
+    repo = os.path.realpath(top.strip())
+    rels = []
+    for path, _data, _m in items:
+        full = os.path.join(real_dir, os.path.basename(path))
+        if not _is_under(os.path.realpath(full), repo):
+            raise Uncommitted("%s is not inside the repository %s" % (full, repo))
+        rels.append(os.path.relpath(full, repo))
+
+    for rel in rels:
+        rc, _, _ = _cg(["check-ignore", "-q", "--", rel], repo, ok=(0, 1), literal=False)
+        if rc == 0:
+            raise Uncommitted("%s is git-ignored in %s, so it is not committed" % (rel, repo))
+
+    # Per-worktree: --git-dir, never --git-common-dir, because index and index.lock
+    # of a linked worktree live in ITS git dir.
+    _, gd, _ = _cg(["rev-parse", "--absolute-git-dir"], repo)
+    gitdir = os.path.realpath(gd.strip())
+
+    # Bind to the proof: the bytes committed are the bytes the writer proved, from
+    # memory, never re-read from the file. Re-reading the canonical seed (on every
+    # attempt, below) is only the tripwire for another writer having replaced it.
+    _check_proof(items)
+    blobs = {}
+    for (path, data, _m), rel in zip(items, rels):
+        # --no-filters: a clean filter or autocrlf must not rewrite what was proved.
+        _, sha, _ = _cg(["hash-object", "-w", "--no-filters", "--stdin"], repo, stdin=data)
+        blobs[rel] = sha.strip()
+
+    msg = "handoffs: seed %s (%s)" % (scope, slug(sid))
+    state = {"orig": None}
+    for attempt in range(5):
+        if attempt:
+            time.sleep(random.uniform(0.02, 0.2))
+        if _attempt(repo, gitdir, rels, blobs, items, msg, state) is not None:
+            return
+    raise Uncommitted("branch moved")
+
+
+def _attempt(repo, gitdir, rels, blobs, items, msg, state):
+    """One locked attempt. True when finished (committed, unchanged, or published
+    with a loud repair note); None when the branch moved and the caller retries.
+
+    EVERYTHING below runs under <git-dir>/index.lock, and the shared index is
+    written exactly once, at the very end, by git's own publish step (write the lock
+    file, rename it over `index`). Until then it is only READ, so a lost
+    compare-and-swap leaves nothing to roll back — which is the point: a rollback
+    is a second write that races whatever commit moved the branch.
+    """
+    lock_path, fd = _acquire_index_lock(gitdir)
+    replaced = False
+    copy = os.path.join(gitdir, "index.seed.%d" % os.getpid())
+    tmpd = None
+    try:
+        _check_proof(items)
+        rc, ref, _ = _cg(["symbolic-ref", "-q", "HEAD"], repo, ok=(0, 1))
+        if rc != 0:
+            raise Uncommitted("detached HEAD")
+        ref = ref.strip()
+        rc, old, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
+        old = old.strip() if rc == 0 else None      # None: an unborn branch, no parent
+
+        heads, intended = {}, {}
+        for (_path, _data, fmode), rel in zip(items, rels):
+            heads[rel] = _tree_entry(repo, old, rel)
+            # An existing path keeps its mode (100755 stays 100755); a NEW path takes
+            # the file's own (an archived executable incumbent stays executable).
+            intended[rel] = ((heads[rel][0] if heads[rel] else fmode), blobs[rel])
+        if state["orig"] is None:
+            state["orig"] = dict(heads)
+        else:
+            # A retry: the branch moved. It may move for anyone's reasons, but not by
+            # changing a path we own to something we did not start from or intend.
+            for rel in rels:
+                if heads[rel] not in (state["orig"][rel], intended[rel]):
+                    raise Uncommitted("seed changed by another commit (%s)" % rel)
+        # OWNERSHIP, read under the lock: the shared index may hold HEAD's entry or
+        # exactly what we mean to write, nothing else. Anything else is another
+        # session's staged work, which this write must neither bury nor adopt.
+        for rel in rels:
+            if _index_entry(repo, rel) not in (heads[rel], intended[rel]):
+                raise Uncommitted("%s has separately staged changes" % rel)
+
+        tmpd = tempfile.mkdtemp(prefix="seed-index-")
+        idx = {"GIT_INDEX_FILE": os.path.join(tmpd, "index")}     # PRIVATE index for the tree
+        if old is not None:
+            _cg(["read-tree", old], repo, idx)
+        for rel in rels:
+            _cg(["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (intended[rel] + (rel,))], repo, idx)
+        _, tree, _ = _cg(["write-tree"], repo, idx)
+        tree = tree.strip()
+        if old is not None:
+            _, old_tree, _ = _cg(["rev-parse", "--verify", "%s^{tree}" % old], repo)
+            if tree == old_tree.strip():
+                print("commit: unchanged")
+                return True
+        sign = []
+        rc, g, _ = _cg(["config", "--bool", "--get", "commit.gpgsign"], repo, ok=(0, 1))
+        if rc == 0 and g.strip() == "true":
+            sign = ["-S"]          # honoured; a hang is bounded by the per-call timeout
+        ct = ["commit-tree", tree] + (["-p", old] if old else []) + sign + ["-m", msg]
+        _, new, _ = _cg(ct, repo)
+        new = new.strip()
+
+        # The shared index's NEXT contents, prepared as a COPY next to it; the real
+        # file is untouched until the branch has moved.
+        index_path = os.path.join(gitdir, "index")
+        if os.path.exists(index_path):
+            shutil.copyfile(index_path, copy)
+        for rel in rels:
+            _cg(["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (intended[rel] + (rel,))],
+                repo, {"GIT_INDEX_FILE": copy})
+
+        # Compare-and-swap. `""` is "must not exist yet" for an unborn branch.
+        # (update-ref runs the reference-transaction hook if one is installed;
+        # commit hooks never run.)
+        _check_interrupt()                 # the last safe point: past here nothing is aborted
+        _SIG["protected"] = True
+        try:
+            _cg(["update-ref", "-m", msg, ref, new, old or ""], repo)
+        except Uncommitted as e:
+            _SIG["protected"] = False
+            rc, now, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
+            if (now.strip() if rc == 0 else None) != old:
+                return None                # the branch moved; the index was never touched
+            raise Uncommitted("ref update failed (%s)" % e)
+
+        # Publish exactly as git does: the new bytes go into the lock file, which is
+        # then renamed over `index`.
+        try:
+            with open(copy, "rb") as f:
+                data = f.read() if os.path.exists(copy) else b""
+            os.write(fd, data)
+            os.fsync(fd)
+            os.close(fd)
+            fd = None
+            os.replace(lock_path, index_path)
+            replaced = True
+        except OSError as e:
+            repair = "; ".join("git -C %s update-index --add --cacheinfo %s,%s,%s"
+                               % (repo, intended[rel][0], intended[rel][1], rel) for rel in rels)
+            print("UNCOMMITTED: committed %s but shared index not refreshed (%s). The commit "
+                  "exists; until the index is repaired `git status` shows a staged revert of "
+                  "these paths. Repair: %s" % (new[:12], e, repair), file=sys.stderr)
+            return True
+        try:
+            _, short, _ = _cg(["rev-parse", "--short", new], repo)
+            short = short.strip() or new[:7]
+        except Uncommitted:
+            short = new[:7]
+        print("commit: %s" % short)
+        return True
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if not replaced:
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+        for leftover in (copy,):
+            try:
+                os.unlink(leftover)
+            except OSError:
+                pass
+        if tmpd:
+            shutil.rmtree(tmpd, ignore_errors=True)
+
+
+def commit_own_paths(scope, sid, directory, items):
+    """Commit exactly `items` ([(path, bytes, "100644"|"100755")], canonical seed first) or say why not.
+
+    Called only after the proof passed, and it never raises or exits: the write has
+    already succeeded, and a commit problem must not undo or block it. It is a
+    PLUMBING commit — hash-object, a private index, write-tree, commit-tree and a
+    compare-and-swap update-ref — so it never runs commit hooks, changes the shared
+    index only by publishing it under git's own lock, and never stages anything
+    another session staged. SIGINT/SIGTERM/SIGHUP are recorded and handled as
+    described at `_SIG`. It never pushes, fetches, pulls,
+    rebases, stashes, resets, restores or checks out.
+    """
+    _SIG["got"], _SIG["protected"] = None, False
+    saved = {}
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        try:
+            saved[sig] = signal.signal(sig, _on_signal)
+        except (ValueError, OSError):      # not the main thread: no handlers, no protection
+            pass
+    try:
+        _commit_plumbing(scope, sid, directory, items)
+    except Uncommitted as e:
+        print("UNCOMMITTED: %s. The seed is written and proved; it is NOT in a commit."
+              % e, file=sys.stderr)
+    except Exception as e:                 # OSError, UnicodeError, ... : never fail the write
+        print("UNCOMMITTED: unexpected %s (%s). The seed is written and proved; it is NOT "
+              "in a commit." % (type(e).__name__, e), file=sys.stderr)
+    finally:
+        _SIG["protected"] = False
+        got = _SIG["got"]
+        for sig, prev in saved.items():
+            try:
+                signal.signal(sig, prev if prev is not None else signal.SIG_DFL)
+            except (ValueError, OSError):
+                pass
+        if got is not None:
+            # Re-raise with the default action so the exit status reflects the signal.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            signal.signal(got, signal.SIG_DFL)
+            os.kill(os.getpid(), got)
+
+
+def atomic_write(path, text, mode=None):
     """Write via a sibling temp file, so a failure never leaves a truncated seed.
 
     In a read-only handoff dir this fails at the temp file rather than truncating
@@ -888,6 +1355,8 @@ def atomic_write(path, text):
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)         # a 100755 seed stays executable in the worktree
         os.replace(tmp, path)
     except OSError as e:
         try:
@@ -947,6 +1416,13 @@ def cmd_write(a):
     return finish_write(a, scope, sid, now, text)
 
 
+def commit_step(a, scope, sid, directory, items):
+    if a.no_commit or os.environ.get("CLAUDE_SEED_COMMIT") == "0":
+        print("commit: skipped (opted out)")
+        return
+    commit_own_paths(scope, sid, directory, items)
+
+
 def finish_write(a, scope, sid, now, text):
     # Validate BEFORE creating directories or moving an incumbent. A hollow new
     # seed must not displace the useful context the next session would have read.
@@ -967,12 +1443,25 @@ def finish_write(a, scope, sid, now, text):
                 "teardown, branch switch or index can put it out of reach." % (seed, root))
 
     archived = None
+    archived_bytes = None
+    prior_mode = None
     if os.path.exists(seed):
+        try:
+            prior_mode = stat.S_IMODE(os.stat(seed).st_mode)
+        except OSError:
+            prior_mode = None
         prev = incumbent_session(seed)
         if prev != sid:
             archived = archive(seed, scope, directory, now.strftime("%Y%m%dT%H%M%SZ"))
+            # The archive's bytes are read HERE, right after it exists, and are what a
+            # commit would record — not whatever the file holds later.
+            try:
+                with open(archived, "rb") as f:
+                    archived_bytes = f.read()
+            except OSError:
+                archived_bytes = None
 
-    atomic_write(seed, text)
+    atomic_write(seed, text, prior_mode)
 
     if archived:
         print("archived: %s" % archived)
@@ -991,6 +1480,14 @@ def finish_write(a, scope, sid, now, text):
         sys.stderr.write(r.stderr)
         if r.returncode != 0:
             sys.exit(r.returncode)
+        def git_mode(path):
+            try:
+                return "100755" if os.stat(path).st_mode & 0o111 else "100644"
+            except OSError:
+                return "100644"
+        items = [(seed, text.encode("utf-8"), git_mode(seed))] + (
+            [(archived, archived_bytes, git_mode(archived))] if archived else [])
+        commit_step(a, scope, sid, directory, items)
         if not a.refresh_pulse:
             announce_seed(seed)
     else:
@@ -998,6 +1495,7 @@ def finish_write(a, scope, sid, now, text):
         # the proof emits it, so "the write printed a path" can never be mistaken
         # for "the write proved the path".
         print("wrote (UNPROVED): %s" % seed)
+        print("commit: skipped (unproved)")
     return 0
 
 
@@ -1179,6 +1677,8 @@ def main(argv=None):
     w.add_argument("--now", help="pin the clock (ISO-8601 UTC) for `date:` and the archive stamp")
     w.add_argument("--no-verify", action="store_true",
                    help="skip the built-in proof (it is the point; for tests only)")
+    w.add_argument("--no-commit", action="store_true",
+                   help="do not commit the seed (also: CLAUDE_SEED_COMMIT=0)")
     w.set_defaults(fn=cmd_write)
 
     v = scoped(sub.add_parser("verify", help="prove the canonical seed is this session's"))
