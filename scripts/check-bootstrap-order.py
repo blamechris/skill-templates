@@ -16,13 +16,17 @@ can land in either directory. The rule is therefore:
      it cannot finish the other directory first.
   3. The prose says the two engine copies must be the same file version.
 
-Importers are found structurally (a top-level `import usage_accounting` or
-`from usage_accounting import` in assets/scripts/*.py, test files excluded),
-so a new caller is covered the day it lands.
+Importers are found structurally: any `import usage_accounting` or
+`from usage_accounting import` statement anywhere in assets/scripts/*.py
+(parsed with `ast`, so indented and comma-listed imports count and docstrings
+do not), test files excluded. A new caller is covered the day it lands.
 
 Limits: this reads `cp` commands inside code fences, in document order, with
-backslash continuations joined. It does not run them, resolve shell variables
-or follow `cd`. Rule 3 is a text-presence test, so a sentence that negates it
+backslash continuations joined and `&&`/`;`/`||` split. It does not run them,
+follow `cd`, or resolve shell variables beyond spelling `$HOME`/`${HOME}` as
+`~`. A `cp` that names assets/scripts but cannot be read as plain sources and
+one destination (a glob, an unparseable quote) makes the check exit 2 rather
+than guess. Rule 3 is a text-presence test, so a sentence that negates it
 still passes (the inversion class of #226).
 
 Usage: check-bootstrap-order.py [--root DIR]
@@ -33,6 +37,7 @@ Exit:  0 the block copies the engine first, everywhere a caller goes
          cases must not report success)
 """
 import argparse
+import ast
 import re
 import shlex
 import sys
@@ -40,12 +45,32 @@ from pathlib import Path
 
 ENGINE = "usage_accounting.py"
 TEMPLATE = "generic/session-lifecycle.md"
-IMPORTS = re.compile(r"^(?:import usage_accounting\b|from usage_accounting import\b)", re.M)
+ENGINE_MOD = "usage_accounting"
 SAME_VERSION = re.compile(
-    r"usage_accounting\.py`?[^\n]{0,120}\bsame (?:file )?version"
-    r"|\bsame (?:file )?version[^\n]{0,120}usage_accounting\.py",
-    re.S,
+    r"usage_accounting\.py`?[\s\S]{0,160}?\bsame\s+(?:file\s+)?version"
+    r"|\bsame\s+(?:file\s+)?version[\s\S]{0,160}?usage_accounting\.py"
 )
+
+
+class Unparseable(Exception):
+    pass
+
+
+def imports_engine(source):
+    """True if any import statement in `source` names the engine module."""
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import) and any(a.name == ENGINE_MOD for a in node.names):
+            return True
+        if isinstance(node, ast.ImportFrom) and node.module == ENGINE_MOD and not node.level:
+            return True
+    return False
+
+
+def norm_dest(d):
+    for home in ("${HOME}", "$HOME"):
+        if d == home or d.startswith(home + "/"):
+            d = "~" + d[len(home):]
+    return d.rstrip("/") + "/"
 
 
 def fenced_commands(text):
@@ -72,21 +97,41 @@ def fenced_commands(text):
 
 
 def cp_commands(lines):
-    """(sources, destination) for each plain `cp` command, one per `;`/`&&` part."""
+    """(sources, destination) for each `cp` command, one per `;`/`&&`/`||` part.
+
+    Raises Unparseable for a `cp` that names assets/scripts but is not plain
+    sources and one destination, so the caller fails closed instead of guessing.
+    """
     out = []
     for line in lines:
         for part in re.split(r"&&|;|\|\|", line):
             try:
                 toks = shlex.split(part, comments=True)
             except ValueError:
+                if re.search(r"\bcp\b", part) and "assets/scripts" in part:
+                    raise Unparseable(part.strip())
                 continue
+            while toks and toks[0] in ("sudo", "command"):
+                toks = toks[1:]
             if not toks or toks[0] != "cp":
                 continue
-            args = [t for t in toks[1:] if not t.startswith("-")]
-            if len(args) < 2:
+            dest, args, it = None, [], iter(toks[1:])
+            for t in it:
+                if t in ("-t", "--target-directory"):
+                    dest = next(it, None)
+                elif t.startswith("--target-directory="):
+                    dest = t.split("=", 1)[1]
+                elif t.startswith("-"):
+                    continue
+                else:
+                    args.append(t)
+            if dest is None and len(args) >= 2:
+                dest, args = args[-1], args[:-1]
+            if dest is None or not args or any(c in a for a in args for c in "*?[$"):
+                if "assets/scripts" in part:
+                    raise Unparseable(part.strip())
                 continue
-            dest = args[-1].rstrip("/") + "/"
-            out.append(([Path(a).name for a in args[:-1]], dest))
+            out.append(([Path(a).name for a in args], norm_dest(dest)))
     return out
 
 
@@ -109,16 +154,21 @@ def main():
         if p.name == ENGINE or p.stem.endswith("_test") or p.stem.endswith(".test"):
             continue
         try:
-            if IMPORTS.search(p.read_text(encoding="utf-8")):
+            if imports_engine(p.read_text(encoding="utf-8")):
                 importers.add(p.name)
-        except OSError as e:
-            print(f"cannot check: {p} unreadable ({e})")
+        except (OSError, SyntaxError, ValueError) as e:
+            print(f"cannot check: {p} unreadable or not parseable ({e})")
             return 2
     if not importers:
         print(f"cannot check: no script in assets/scripts imports {ENGINE}")
         return 2
 
-    cmds = cp_commands(fenced_commands(text))
+    try:
+        cmds = cp_commands(fenced_commands(text))
+    except Unparseable as e:
+        print(f"cannot check: a fenced `cp` in {TEMPLATE} names assets/scripts but is not "
+              f"plain sources and one destination: {e}")
+        return 2
     first_caller = next((i for i, (srcs, _) in enumerate(cmds) if importers & set(srcs)), None)
     if first_caller is None:
         print(f"cannot check: no fenced `cp` in {TEMPLATE} copies a script that imports {ENGINE}")
@@ -128,7 +178,7 @@ def main():
     caller_dests = {d for srcs, d in cmds if importers & set(srcs)}
     engine_at = {}  # dest -> index of the first command delivering the engine there
     for i, (srcs, d) in enumerate(cmds):
-        if ENGINE in srcs:
+        if ENGINE in srcs and d in caller_dests:
             engine_at.setdefault(d, i)
     for d in sorted(caller_dests - set(engine_at)):
         errors.append(f"a caller is copied to {d} but {ENGINE} never is")

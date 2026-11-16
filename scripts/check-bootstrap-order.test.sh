@@ -139,7 +139,63 @@ ${FENCE}
 $SAME"
 run "non-importers and test files before the engine pass" 0 "$R" "OK:"
 
+# Imports inside a function, a try block or a comma list are still imports; a
+# docstring that mentions one is not.
+R=$(tree)
+printf 'def f():\n    from usage_accounting import RATES\n' > "$R/assets/scripts/usage-fn.py"
+printf 'try:\n    import os, usage_accounting\nexcept ImportError:\n    pass\n' > "$R/assets/scripts/usage-try.py"
+printf '"""\nimport usage_accounting\n"""\n' > "$R/assets/scripts/usage-doc.py"
+tpl "$R" "${FENCE}bash
+cp assets/scripts/usage-doc.py ~/.claude/scripts/
+cp assets/scripts/usage-fn.py assets/scripts/usage-try.py ~/.claude/scripts/
+cp assets/scripts/usage_accounting.py ~/.claude/scripts/
+${FENCE}
+$SAME"
+run "indented and comma-listed imports are callers, docstrings are not" 1 "$R" \
+  "not before copy command 2, which already copies its caller(s) usage-fn.py, usage-try.py"
+
+# A re-wrapped sentence still states the rule.
+R=$(tree); tpl "$R" "${FENCE}bash
+cp assets/scripts/usage_accounting.py ~/.claude/scripts/
+cp assets/scripts/usage-row.py ~/.claude/scripts/
+${FENCE}
+The two copies of \`usage_accounting.py\` must be the
+same
+file version."
+run "a same-version sentence wrapped across lines passes" 0 "$R" "OK:"
+
+# \$HOME and ~ name one directory; -t names the destination; && splits commands.
+R=$(tree); tpl "$R" "${FENCE}bash
+cp assets/scripts/usage_accounting.py \$HOME/.claude/scripts/ && cp -t \${HOME}/.claude/usage-history assets/scripts/usage_accounting.py
+cp -p assets/scripts/usage-row.py ~/.claude/scripts/; cp assets/scripts/usage-trend.py ~/.claude/usage-history/
+${FENCE}
+$SAME"
+run "\$HOME spellings, cp -t and && / ; splits read as one directory each" 0 "$R" \
+  "reaches ~/.claude/scripts/, ~/.claude/usage-history/ before"
+
+R=$(tree); tpl "$R" "${FENCE}bash
+cp assets/scripts/usage-row.py ~/.claude/scripts/ && cp assets/scripts/usage_accounting.py ~/.claude/scripts/
+${FENCE}
+$SAME"
+run "an && chain that copies the caller first fails" 1 "$R" "in copy command 2, not before copy command 1"
+
+# An engine copy to a directory no caller uses is irrelevant to the order.
+R=$(tree); tpl "$R" "${FENCE}bash
+cp assets/scripts/usage_accounting.py ~/.claude/scripts/
+cp assets/scripts/usage-row.py ~/.claude/scripts/
+cp assets/scripts/usage_accounting.py ~/backup/
+${FENCE}
+$SAME"
+run "a late engine copy to a caller-free directory passes" 0 "$R" "OK:"
+
 # Fail closed.
+R=$(tree); tpl "$R" "${FENCE}bash
+cp assets/scripts/*.py ~/.claude/scripts/
+cp assets/scripts/usage_accounting.py ~/.claude/scripts/
+${FENCE}
+$SAME"
+run "a glob copy of assets/scripts cannot be checked" 2 "$R" "is not plain sources and one destination"
+
 R=$(tree)
 run "a missing template cannot be checked" 2 "$R" "cannot check" "unreadable"
 
