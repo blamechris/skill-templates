@@ -32,11 +32,14 @@ printf '%s\n' "\$*" >>"$GITLOG"
 { env | grep '^GIT_'; echo ---; } >>"$ENVLOG"
 args=()
 for a in "\$@"; do args+=("\${a//\$WRAP_FROM/\$WRAP_TO}"); done
-export GIT_CONFIG_GLOBAL="$HOME/.gitconfig" GIT_CONFIG_NOSYSTEM=1
+[ -n "\${GIT_CONFIG_GLOBAL:-}" ] && [ "\$GIT_CONFIG_GLOBAL" != "$HOME/.gitconfig" ] && cp "\$GIT_CONFIG_GLOBAL" "$TMP/tconf" 2>/dev/null
+export GIT_CONFIG_GLOBAL="\${GIT_CONFIG_GLOBAL:-$HOME/.gitconfig}" GIT_CONFIG_NOSYSTEM="\${GIT_CONFIG_NOSYSTEM:-1}"
 case " \$* " in
   *" cat-file --batch-check "*)
     [ "\${WRAP_BC:-}" = fail ] && exit 1
     [ "\${WRAP_BC:-}" = short ] && { echo "0000000000000000000000000000000000000000 missing"; exit 0; } ;;
+  *" push "*)
+    [ -n "\${WRAP_PUSHFAIL:-}" ] && exit 1 ;;
   *" ls-remote "*)
     [ -n "\${WRAP_LIE:-}" ] && { printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/main\n'; exit 0; } ;;
 esac
@@ -70,7 +73,7 @@ newcase() {
   G -C "$V" add -- README.md; G -C "$V" commit -q -m "init"
   G -C "$V" push -q -u origin main 2>/dev/null
   G -C "$V" remote set-url origin "$GH"
-  rm -f "$TMP/gh.fail" "$TMP/gh.vis"; : >"$GITLOG"; : >"$ENVLOG"; : >"$GHLOG"
+  rm -f "$TMP/gh.fail" "$TMP/gh.vis" "$TMP/tconf"; rm -rf "$TMP/tt"; mkdir -p "$TMP/tt"; : >"$GITLOG"; : >"$ENVLOG"; : >"$GHLOG"
   unset WRAP_BC WRAP_LIE WRAP_AFTER_FETCH SECRET
 }
 commit_file() { # name content [subject]
@@ -81,7 +84,7 @@ refs() { G -C "$R" for-each-ref --format='%(refname) %(objectname)'; }
 remote_main() { G -C "$R" rev-parse main; }
 vault_head() { G -C "$V" rev-parse HEAD; }
 vs() { # sets OUT and RC; extra env via XENV array-free: caller exports before
-  OUT=$(env WRAP_FROM="${WFROM:-$GH}" WRAP_TO="$R" PATH="$TMP/bin:/usr/bin:/bin" "$PY" -B "$SUT" --vault "$V" "$@" 2>&1); RC=$?
+  OUT=$(env WRAP_FROM="$GH" WRAP_TO="$R" TMPDIR="$TMP/tt" PATH="$TMP/bin:/usr/bin:/bin" "$PY" -B "$SUT" --vault "$V" "$@" 2>&1); RC=$?
 }
 has() { grep -qF -- "$1" <<<"$OUT"; }
 refuses() { # name, args: exit 1, remote unchanged, no secret leak (SECRET)
@@ -152,11 +155,14 @@ HEAD0=$(vault_head); old=$(G -C "$V" rev-parse --short=8 origin/main)
 [ "$(remote_main)" = "$HEAD0" ] && ok "remote tip equals the pinned HEAD" || bad "remote tip"
 [ -z "$(G -C "$V" for-each-ref refs/vault-sync)" ] && ok "private base ref is deleted after a push" || bad "base ref left behind"
 pl=$(grep -E '(^| )push( |$)' "$GITLOG")
-[[ "$pl" == *"--no-verify"*"--no-follow-tags"*"--recurse-submodules=no $GH $HEAD0:refs/heads/main" ]] \
-  && ok "push targets the literal verified URL and the pinned oid" || bad "push argv" "$pl"
+[[ "$pl" == *"--git-dir="*"/repo.git"*" push --no-verify --no-follow-tags --recurse-submodules=no $GH refs/vs/head:refs/heads/main" ]] \
+  && ok "push runs from the isolated repo to the canonical URL only" || bad "push argv" "$pl"
+[ "$(grep -cE '(^| )push( |$)' "$GITLOG")" = 1 ] && ok "exactly one push, never through the vault repository" || bad "push count"
 ! grep -E '(^| )push( |$)' "$GITLOG" | grep -E -- '(^| )(--force[^ ]*|-f|\+[^ ]+)( |$)' >/dev/null && ok "no force flag or + refspec on push" || bad "force on push"
-grep -E '(^| )fetch( |$)' "$GITLOG" | grep -q -- "--no-tags" && grep -E '(^| )fetch( |$)' "$GITLOG" | grep -q -- "$GH +refs/heads/main:refs/vault-sync/" \
-  && ok "fetch uses the literal URL into a private ref, no tags" || bad "fetch argv" "$(grep fetch "$GITLOG")"
+fl=$(grep -E '(^| )fetch( |$)' "$GITLOG")
+{ [ "$(wc -l <<<"$fl" | tr -d ' ')" = 2 ] && VP=$(cd "$V" && pwd -P); grep -q -- "--no-tags.* $VP refs/vault-sync/[0-9]*/head:refs/vs/head" <<<"$fl" && grep -q -- "--no-tags.* $GH refs/heads/main:refs/vs/base" <<<"$fl" && ! grep -q -- ' +refs' <<<"$fl"; } \
+  && ok "two fetches into the isolated repo: vault private ref, then the canonical URL" || bad "fetch argv" "$fl"
+[ -z "$(ls "$TMP/tt")" ] && ok "the transport repository is deleted afterwards" || bad "temp repo left" "$(ls "$TMP/tt")"
 grep -q 'FETCH_HEAD' "$GITLOG" && bad "FETCH_HEAD used" || ok "FETCH_HEAD is not used"
 grep -qE '(^| )(pull|merge|rebase|reset)( |$)' "$GITLOG" && bad "script ran pull/merge/rebase/reset" || ok "never pulls, merges, rebases or resets"
 ! grep -vE -- '--no-replace-objects' "$GITLOG" | grep . >/dev/null && ok "every git call passes --no-replace-objects" || bad "replace flag" "$(grep -v -- --no-replace-objects "$GITLOG" | head -3)"
@@ -168,10 +174,10 @@ newcase; commit_file n.md "hello" "n"
 OUT=$(env GIT_SSH_COMMAND="touch $TMP/ssh-ran" GIT_ASKPASS=/bin/false GIT_EXEC_PATH=/nonexistent GIT_DIR="$C/decoy" GIT_WORK_TREE="$C" GIT_INDEX_FILE="$C/idx" \
       GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/nonexistent \
       WRAP_FROM="$GH" WRAP_TO="$R" PATH="$TMP/bin:/usr/bin:/bin" "$PY" -B "$SUT" --vault "$V" push 2>&1); RC=$?
-seen=$(grep -E '^GIT_' "$ENVLOG" | sed 's/=.*//' | sort -u | tr '\n' ' ')
-[ "$seen" = "GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_NO_REPLACE_OBJECTS GIT_TERMINAL_PROMPT " ] || [ "$seen" = "GIT_NO_REPLACE_OBJECTS GIT_TERMINAL_PROMPT " ] \
-  && ok "only GIT_TERMINAL_PROMPT and GIT_NO_REPLACE_OBJECTS reach git (SSH_COMMAND, DIR, CONFIG_* dropped)" || bad "git env" "$seen"
-grep -q '^GIT_TERMINAL_PROMPT=0' "$ENVLOG" && grep -q '^GIT_NO_REPLACE_OBJECTS=1' "$ENVLOG" && ok "GIT_TERMINAL_PROMPT=0 and GIT_NO_REPLACE_OBJECTS=1 are set" || bad "fixed env"
+! grep -qE '^GIT_(SSH_COMMAND|ASKPASS|EXEC_PATH|DIR|WORK_TREE|INDEX_FILE|CONFIG_COUNT|CONFIG_KEY_0|CONFIG_VALUE_0)=' "$ENVLOG" \
+  && ok "inherited GIT_* (SSH_COMMAND, ASKPASS, EXEC_PATH, DIR, CONFIG_COUNT...) never reaches git" || bad "git env" "$(sort -u "$ENVLOG")"
+grep -q '^GIT_TERMINAL_PROMPT=0' "$ENVLOG" && grep -q '^GIT_NO_REPLACE_OBJECTS=1' "$ENVLOG" && grep -q '^GIT_GRAFT_FILE=/dev/null' "$ENVLOG" && ok "GIT_TERMINAL_PROMPT=0, GIT_NO_REPLACE_OBJECTS=1, GIT_GRAFT_FILE=/dev/null are set" || bad "fixed env"
+grep '^GIT_CONFIG_GLOBAL=' "$ENVLOG" | grep -vq "=$HOME/.gitconfig$" && grep -q '^GIT_CONFIG_NOSYSTEM=1' "$ENVLOG" && ok "transport git gets its own GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM=1 from the script" || bad "transport config env"
 { [ $RC = 0 ] && [ "$(remote_main)" = "$(vault_head)" ] && [ ! -e "$TMP/ssh-ran" ]; } && ok "hostile GIT_* does not redirect or run anything" || bad "hostile env" "rc=$RC $OUT"
 
 # finding 1/2/3: destination identity
@@ -187,7 +193,7 @@ refuses "plain http is refused"
 newcase; commit_file n.md "hello" "n"; G -C "$V" remote set-url origin "https://user:pw@github.com/test-owner/vault.git"
 refuses "a URL with embedded credentials is refused"
 newcase; commit_file n.md "hello" "n"; G -C "$V" remote set-url origin "git@github.com:test-owner/vault.git"
-WFROM="git@github.com:test-owner/vault.git" vs push --dry-run; { [ $RC = 0 ] && has "private"; } && ok "scp-form ssh URL is accepted" || bad "scp url" "rc=$RC $OUT"
+vs push --dry-run; { [ $RC = 0 ] && has "private"; } && ok "scp-form ssh URL is accepted" || bad "scp url" "rc=$RC $OUT"
 newcase; commit_file n.md "hello" "n"; G -C "$V" config remote.origin.mirror true
 refuses "a mirror remote is refused"
 newcase; commit_file n.md "hello" "n"; G -C "$V" remote set-url origin "$R"
@@ -247,29 +253,28 @@ export WRAP_AFTER_FETCH="$C/hook.sh"; vs push; unset WRAP_AFTER_FETCH
 
 # ---- scan: credential shapes (built at run time), in file content ------------
 AL="Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv"
-cred() {
+cred() { # name value rule
   newcase; SECRET="$2"
   commit_file notes.md "line one
 carrying $2 inside
 line three" "add note"
   refuses "refuses credential: $1"
-  { has "notes.md:2" && ! has "$2"; } && ok "refusal for $1 names path and line only" || bad "$1 location" "$OUT"
+  { has "notes.md:2 [$3]" && ! has "$2"; } && ok "refusal for $1 names path, line and rule $3 only" || bad "$1 location/rule" "$OUT"
 }
-cred "github ghp"  "gh""p_${AL}"
-cred "github gho"  "gh""o_${AL}"
-cred "github pat"  "github""_pat_${AL}${AL}"
-cred "sk key"      "s""k-${AL}"
-cred "stripe live" "s""k_live_${AL}"
-cred "stripe test" "s""k_test_${AL}"
-cred "slack"       "xo""xb-12345678-${AL}"
-cred "aws"         "AK""IA""ABCD1234EFGH5678"
-cred "pem"         "-----BEGIN RSA ""PRIVATE KEY-----"
-cred "jwt"         "ey""JhbGciOiJIUzI1NiJ9.""ey""JzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r"
-cred "password assignment" "password=""Hunter2Hunter2"
-cred "api key assignment"  "api_key: ""x9y8z7w6v5u4"
-cred "token assignment"    "token = ""AbCdEfGhIjKl"
-cred "bearer"      "Bearer ""${AL}${AL}"
-
+cred "github ghp"  "gh""p_${AL}" "github-token"
+cred "github gho"  "gh""o_${AL}" "github-token"
+cred "github pat"  "github""_pat_${AL}${AL}" "github-token"
+cred "sk key"      "s""k-${AL}" "sk-key"
+cred "stripe live" "s""k_live_${AL}" "stripe-key"
+cred "stripe test" "s""k_test_${AL}" "stripe-key"
+cred "slack"       "xo""xb-12345678-${AL}" "slack-token"
+cred "aws"         "AK""IA""ABCD1234EFGH5678" "aws-access-key"
+cred "pem"         "-----BEGIN RSA ""PRIVATE KEY-----" "private-key-block"
+cred "jwt"         "ey""JhbGciOiJIUzI1NiJ9.""ey""JzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r" "jwt"
+cred "password assignment" "password=""Hunter2Hunter2" "secret-assignment"
+cred "api key assignment"  "api_key: ""x9y8z7w6v5u4" "secret-assignment"
+cred "token assignment"    "token = ""AbCdEfGhIjKl" "secret-assignment"
+cred "bearer"      "Bearer ""${AL}${AL}" "bearer-token"
 newcase; commit_file n.md "token: usage-checkpoint
 the risk-assessment-of-things-in-general is fine
 password: changeme-please" "benign"
@@ -307,7 +312,7 @@ refuses "tab/newline/quote filenames are scanned"; has 'a\x09b"c\x0ad.md:1' && o
 newcase; S2="gh""p_${AL}"; SECRET="$S2"; commit_file "k-$S2.md" "harmless text" "named"
 refuses "a credential in a filename is refused"; { has "credential-in-path" && has "<redacted>"; } && ok "filename credential is redacted in output" || bad "path redaction" "$OUT"
 newcase; SECRET="gh""p_${AL}"; commit_file n.md "harmless" "subject with $SECRET inside"
-refuses "a credential in a commit message is refused"; has "(commit message):1" && ok "message finding names the message and line only" || bad "message finding" "$OUT"
+refuses "a credential in a commit message is refused"; has "(commit object):" && ok "message finding names the commit object and line only" || bad "message finding" "$OUT"
 newcase; SECRET="gh""p_${AL}"; commit_file n.md "harmless" "subj"; G -C "$V" commit -q --amend -m "subj
 
 body line carries $SECRET"
@@ -335,18 +340,13 @@ newcase; commit_file n.md "hello" "n"; export WRAP_BC=short
 refuses "a short or 'missing' batch-check answer refuses"
 unset WRAP_BC
 
-# ---- narrowed --allow-path (finding 14) ---------------------------------------
+# ---- no override exists ------------------------------------------------------
 newcase; commit_file .env "harmless text" "add env"; oid=$(vault_head)
-refuses "--allow-path with the wrong rule does not exempt" --allow-path "$oid:.env:jwt"
-refuses "--allow-path with the wrong commit does not exempt" --allow-path "deadbeef:.env:sensitive-path"
-refuses "--allow-path with the wrong path does not exempt" --allow-path "$oid:other.env:sensitive-path"
-refuses "--allow-path is literal, not a pattern" --allow-path "$oid:.e*:sensitive-path"
 vs push --allow-path "$oid:.env:sensitive-path"
-{ [ $RC = 0 ] && has "allow-path in effect: $oid:.env:sensitive-path" && has "allowed (--allow-path): ${oid:0:8} .env [sensitive-path]" && [ "$(remote_main)" = "$oid" ]; } \
-  && ok "the exact allow pushes and is echoed" || bad "allow" "rc=$RC $OUT"
-newcase; commit_file .env "harmless text" "add env"; commit_file k.pem "x" "pem"; oid=$(G -C "$V" rev-parse HEAD~1)
-refuses "one allow does not cover a second finding" --allow-path "$oid:.env:sensitive-path"
-vs push --allow-path "bad-format"; [ $RC = 2 ] && ok "malformed --allow-path is a usage error (2)" || bad "allow format" "rc=$RC $OUT"
+{ [ $RC = 2 ] && [ "$(remote_main)" != "$oid" ]; } && ok "--allow-path is not an option (exit 2, nothing pushed)" || bad "allow flag" "rc=$RC $OUT"
+grep -q -- 'allow-path\|allow_path' "$SUT" && bad "allow-path code remains in the script" || ok "the script has no allow-path code"
+has "refus" >/dev/null; refuses "a false positive still refuses with no override"
+has "pushes by hand" && ok "refusal tells the owner to review and push by hand" || bad "owner text" "$OUT"
 
 # ---- hooks, submodules, tags (finding 5/10) -----------------------------------
 newcase; commit_file n.md "hello" "n"
@@ -365,8 +365,8 @@ vs push
 
 # ---- finding 17: outcomes ----------------------------------------------------
 newcase; commit_file n.md "hello" "n"
-printf '#!/bin/sh\nexit 1\n' >"$R/hooks/pre-receive"; chmod +x "$R/hooks/pre-receive"; before=$(refs)
-vs push; { [ $RC = 3 ] && has "partially succeeded" && [ "$before" = "$(refs)" ]; } && ok "a rejected push exits 3 with the indeterminate message" || bad "push fail" "rc=$RC $OUT"
+export WRAP_PUSHFAIL=1; before=$(refs)
+vs push; unset WRAP_PUSHFAIL; { [ $RC = 3 ] && has "partially succeeded" && [ "$before" = "$(refs)" ]; } && ok "a rejected push exits 3 with the indeterminate message" || bad "push fail" "rc=$RC $OUT"
 newcase; commit_file n.md "hello" "n"; mv "$R" "$R.moved"
 vs push; { [ $RC = 3 ] && has "fetch failed" && has "nothing was pushed"; } && ok "a failed fetch exits 3 with a fixed category" || bad "fetch fail" "rc=$RC $OUT"
 mv "$R.moved" "$R"
@@ -374,6 +374,112 @@ newcase; commit_file n.md "hello" "n"; export WRAP_LIE=1
 vs push; unset WRAP_LIE
 { [ $RC = 3 ] && has "could not be confirmed"; } && ok "a post-push tip mismatch exits 3" || bad "verify tip" "rc=$RC $OUT"
 echo "$OUT" | grep -q "$R" && bad "stderr or paths relayed" || ok "failure output does not relay paths or stderr"
+
+# ---- round 3: the vault's ambient git configuration never reaches transport ---------
+# (1) a literal-URL remote with a second public pushurl, and a chained insteadOf, in BOTH the vault config
+# and the user's global config, must have no effect: the push target is the canonical URL.
+newcase; commit_file n.md "hello" "n"; HEAD0=$(vault_head)
+G -C "$V" remote set-url origin "git@github.com:test-owner/vault.git"
+PUB="https://github.com/test-owner/public.git"
+for cf in "$V/.git/config" "$HOME/.gitconfig"; do
+  G config -f "$cf" "remote.$GH.pushurl" "$PUB"
+  G config -f "$cf" "url.$PUB.insteadOf" "$GH"
+  G config -f "$cf" "url.$PUB.pushInsteadOf" "$GH"
+done
+vs push
+G config -f "$HOME/.gitconfig" --remove-section "remote.$GH"; G config -f "$HOME/.gitconfig" --remove-section "url.$PUB"
+{ [ $RC = 0 ] && [ "$(remote_main)" = "$HEAD0" ]; } && ok "ambient pushurl/insteadOf in vault and global config have no effect" || bad "ambient config" "rc=$RC $OUT"
+pl=$(grep -E '(^| )push( |$)' "$GITLOG")
+[[ "$pl" == *" $GH refs/vs/head:refs/heads/main" ]] && ok "the push target is the canonical URL in the wrapper log" || bad "canonical target" "$pl"
+grep -q 'ARGS: api repos/test-owner/vault ' "$GHLOG" && ok "visibility was checked for the repo named by the vault URL, not a rewritten one" || bad "gh repo" "$(cat "$GHLOG")"
+! grep -qE 'insteadOf|pushurl|pushInsteadOf|\[remote' "$TMP/tconf" && ok "the transport config has no remotes, insteadOf or pushurl" || bad "tconf" "$(cat "$TMP/tconf")"
+{ grep -q 'hooksPath = /dev/null' "$TMP/tconf" && grep -q 'allow = never' "$TMP/tconf" && grep -q 'fsckObjects = true' "$TMP/tconf" \
+  && grep -qE '^	helper =$' "$TMP/tconf" && grep -q 'auth git-credential' "$TMP/tconf"; } && ok "transport config pins hooks, protocols, fsck and the gh credential helper" || bad "tconf content" "$(cat "$TMP/tconf")"
+
+# (2) core.sshCommand is never invoked; (3) a repo-local credential helper never runs
+newcase; commit_file n.md "hello" "n"; HEAD0=$(vault_head)
+G -C "$V" remote set-url origin "git@github.com:test-owner/vault.git"
+for cf in "$V/.git/config" "$HOME/.gitconfig"; do
+  G config -f "$cf" core.sshCommand "touch $TMP/ssh-marker"
+  G config -f "$cf" credential.helper "!touch $TMP/cred-marker"
+  G config -f "$cf" "credential.https://github.com.helper" "!touch $TMP/cred-marker"
+done
+vs push
+G config -f "$HOME/.gitconfig" --unset core.sshCommand; G config -f "$HOME/.gitconfig" --unset credential.helper
+G config -f "$HOME/.gitconfig" --unset "credential.https://github.com.helper"
+{ [ $RC = 0 ] && [ "$(remote_main)" = "$HEAD0" ]; } && ok "push succeeds with hostile ssh and credential config present" || bad "hostile cfg" "rc=$RC $OUT"
+[ ! -e "$TMP/ssh-marker" ] && ok "core.sshCommand is never invoked" || bad "sshCommand ran"
+[ ! -e "$TMP/cred-marker" ] && ok "a repo-local credential helper never runs" || bad "credential helper ran"
+
+# (4) history-hiding files
+newcase; commit_file n.md "hello" "n"; echo "$(vault_head)" >"$V/.git/info/grafts"
+refuses "a grafts file is refused"; { has "grafts" && ! grep -qE '(^| )(fetch|push)( |$)' "$GITLOG"; } && ok "grafts refusal happens before any fetch" || bad "grafts msg" "$OUT"
+newcase; commit_file n.md "hello" "n"; echo "$(vault_head)" >"$V/.git/shallow"
+refuses "a shallow file is refused"; has "shallow" && ok "shallow refusal names the file" || bad "shallow msg" "$OUT"
+
+# (5) commit headers
+newcase; SECRET="gh""p_${AL}"; commit_file n.md "hello" "n"
+GIT_AUTHOR_NAME="$SECRET" G -C "$V" commit -q --allow-empty -m "empty"
+refuses "a credential in the author name is refused"; has "(commit object):" && has "[github-token]" && ok "header finding is attributed to the commit object" || bad "author finding" "$OUT"
+newcase; SECRET="gh""p_${AL}"; commit_file n.md "hello" "n"
+G -C "$V" cat-file commit HEAD | SECRET="$SECRET" "$PY" -c '
+import os, sys
+t = sys.stdin.read().split("\n")
+i = [k for k, l in enumerate(t) if l.startswith("committer ")][0]
+t[i + 1:i + 1] = ["mergetag object " + "1" * 40, " type commit", " tag t1", " ", " note " + os.environ["SECRET"]]
+sys.stdout.write("\n".join(t))' >"$C/mt.txt"
+NEW=$(G -C "$V" hash-object -t commit -w "$C/mt.txt"); G -C "$V" update-ref refs/heads/main "$NEW"
+G -C "$V" cat-file commit HEAD | grep -q '^mergetag' && ok "fixture: the commit carries a mergetag header" || bad "fixture mergetag"
+refuses "a credential in a mergetag header is refused"
+
+# (6) gitlink paths are checked
+newcase; SECRET="gh""p_${AL}"; commit_file n.md "hello" "n"
+G -C "$V" update-index --add --cacheinfo "160000,$(printf '%040d' 7),k-$SECRET"; G -C "$V" commit -q -m "gitlink"
+refuses "a token-named gitlink is refused"; has "credential-in-path" && ok "gitlink path credential reported" || bad "gitlink cred" "$OUT"
+newcase; SECRET=; commit_file n.md "hello" "n"
+G -C "$V" update-index --add --cacheinfo "160000,$(printf '%040d' 7),.env"; G -C "$V" commit -q -m "gitlink"
+refuses "a .env gitlink is refused"; has "sensitive-path" && ok "gitlink sensitive path reported" || bad "gitlink env" "$OUT"
+
+# (7) LFS content is still credential-scanned, and nothing overrides the refusal
+newcase; SECRET="gh""p_${AL}"; commit_file big.bin "version https://git-lfs.github.com/spec/v1
+oid sha256:$(printf '0%.0s' {1..64})
+note $SECRET" "lfs"
+refuses "an LFS pointer carrying a token is refused"; { has "lfs-pointer" && has "github-token"; } && ok "LFS pointer content is also scanned" || bad "lfs scan" "$OUT"
+
+# (8) branch names are sanitized in status and push
+newcase; SECRET="gh""p_${AL}"; G -C "$V" checkout -q -b "feat-$SECRET" --track origin/main 2>/dev/null; commit_file n.md "hello" "n"
+vs status; { [ $RC = 0 ] && ! has "$SECRET" && has "<redacted>"; } && ok "a token-named branch is redacted in status" || bad "status branch" "rc=$RC $OUT"
+vs push --dry-run; { [ $RC = 0 ] && ! has "$SECRET" && has "<redacted>"; } && ok "a token-named branch is redacted in push" || bad "push branch" "rc=$RC $OUT"
+
+# (9) a broken stdout never changes the outcome
+newcase; commit_file n.md "hello" "n"; HEAD0=$(vault_head)
+env WRAP_FROM="$GH" WRAP_TO="$R" TMPDIR="$TMP/tt" PATH="$TMP/bin:/usr/bin:/bin" "$PY" -B "$SUT" --vault "$V" push | true
+RC=${PIPESTATUS[0]}
+{ [ "$RC" = 0 ] && [ "$(remote_main)" = "$HEAD0" ]; } && ok "BrokenPipe on stdout still exits 0 after a verified push" || bad "broken pipe" "rc=$RC"
+"$PY" -B - "$SUT" <<'PYEOF' && ok "unexpected exceptions exit 2 before sending and 3 after" || bad "exception wrapper"
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("vs", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+def boom(a): raise RuntimeError("boom")
+m.cmd_push = boom
+m.STATE.sent = False
+assert m.main(["--vault", "/nonexistent", "push"]) == 2
+m.STATE.sent = True
+assert m.main(["--vault", "/nonexistent", "push"]) == 3
+PYEOF
+
+# UTF-16 content, and added-lines-only logic
+for enc in utf-16-le utf-16-be; do
+  newcase; SECRET="gh""p_${AL}"
+  F="$V/u.md" SECRET="$SECRET" ENC="$enc" "$PY" -c 'import os;open(os.environ["F"],"wb").write(("note "+os.environ["SECRET"]+"\n").encode(os.environ["ENC"]))'
+  G -C "$V" add -- u.md; G -C "$V" commit -q -m utf
+  refuses "a $enc secret is found"; has "[github-token]" && ok "$enc finding names the rule" || bad "$enc rule" "$OUT"
+done
+newcase; SECRET="gh""p_${AL}"; commit_file old.md "k $SECRET" "old"
+G -C "$V" push -q "$R" HEAD:refs/heads/main; G -C "$V" fetch -q "$R" +refs/heads/main:refs/remotes/origin/main
+echo "an appended benign line" >>"$V/old.md"; G -C "$V" add -- old.md; G -C "$V" commit -q -m append; HEAD0=$(vault_head)
+vs push; { [ $RC = 0 ] && [ "$(remote_main)" = "$HEAD0" ]; } && ok "an already-pushed credential-shaped line is not re-scanned; only added lines are" || bad "added-lines-only" "rc=$RC $OUT"
+newcase; commit_file .env "x" "env"; refuses "refusal leaves no temp repo or private ref behind"
+[ -z "$(ls "$TMP/tt")" ] && [ -z "$(G -C "$V" for-each-ref refs/vault-sync)" ] && ok "cleanup ran after a refusal" || bad "cleanup after refusal"
 
 echo
 echo "$pass passed, $fail failed"
