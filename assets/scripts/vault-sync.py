@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""vault-sync.py - fast-forward push of the private notes vault, with a scope check.
+"""vault-sync.py - fail-closed, fast-forward push of the private notes vault.
 
-  status                 offline: ahead/behind of the last-fetched upstream, ahead commits, dirty counts
-  push [--dry-run]       fetch the one remote branch, refuse unless behind=0 and the remote repo is
-                         private, scan every unpushed commit for credential-shaped lines, sensitive
-                         paths and huge blobs, then `git push <remote> HEAD:refs/heads/<branch>`
+  status                 offline: ahead/behind of the last-fetched upstream (short OIDs only), dirty counts
+  push [--dry-run] [--allow-path OID:PATH:RULE]...
+                         verify the destination, pin HEAD, fetch the one remote branch into a private
+                         ref, refuse unless behind=0, scan every unpushed commit's raw content, then
+                         push exactly the pinned commit to the verified URL and check the remote tip
 
-Exit codes: 0 ok (pushed, or nothing to push), 1 refused (nothing pushed), 2 usage/environment error.
+Exit codes: 0 ok (pushed, or nothing to push), 1 refused before anything was sent, 2 usage or
+environment error, 3 transport failure or indeterminate result (a push may have partly succeeded).
 
-The script never pulls, merges, rebases, resets or forces; a refusal tells the agent to leave the
-commits local and report it. The scope check is a heuristic backstop, not a guarantee.
-Stdlib only. See docs/vault-sync.md.
+The script never pulls, merges, rebases, resets or forces. The scope check is a heuristic backstop,
+not a guarantee. Stdlib only. See docs/vault-sync.md.
 """
 import argparse
 import fnmatch
@@ -22,151 +23,70 @@ import sys
 GIT_TIMEOUT = 60
 NET_TIMEOUT = 120
 MAX_BLOB = 50 * 1024 * 1024
-DROP_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE")
+ZERO = "0" * 40
+HEX = re.compile(r"^[0-9a-f]{40}$")
 
 
-def test_mode():
-    return os.environ.get("VAULT_SYNC_TEST") == "1"
+class Refused(Exception):
+    """Preflight refusal: exit 1, nothing was sent."""
+
+
+class EnvError(Exception):
+    """Usage or environment problem: exit 2."""
+
+
+class Indeterminate(Exception):
+    """Transport failure or unverifiable outcome: exit 3."""
 
 
 def git_env():
-    env = {k: v for k, v in os.environ.items()
-           if k not in DROP_ENV and not k.startswith("GIT_CONFIG")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["LC_ALL"] = "C"
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
     return env
 
 
-def run(cmd, cwd, timeout=GIT_TIMEOUT, env=None):
-    """Return (rc, stdout, stderr) as text; rc 124 on timeout, 127 when the program is missing."""
+def gh_env():
+    """Controlled env for gh: no host, repo, enterprise-token or config-dir overrides."""
+    env = {"GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
+    for k in ("PATH", "HOME", "GH_TOKEN", "GITHUB_TOKEN"):
+        if k in os.environ:
+            env[k] = os.environ[k]
+    return env
+
+
+BASE_GIT = ["git", "--no-replace-objects", "--no-optional-locks",
+            "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+            "-c", "fetch.prune=false", "-c", "fetch.pruneTags=false",
+            "-c", "push.recurseSubmodules=no", "-c", "submodule.recurse=false",
+            "-c", "push.followTags=false"]
+
+
+def run(cmd, cwd, timeout=GIT_TIMEOUT, env=None, data=None):
+    """(rc, stdout bytes). rc 124 on timeout, 127 when the program is missing. stderr is discarded:
+    it can carry URLs or credentials and is never relayed."""
     try:
-        p = subprocess.run(cmd, cwd=cwd, env=env if env is not None else git_env(), stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        p = subprocess.run(cmd, cwd=cwd, env=env if env is not None else git_env(),
+                           input=data, stdin=None if data is not None else subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return 124, "", "timed out after %ss: %s" % (timeout, " ".join(cmd[:3]))
-    except OSError as e:
-        return 127, "", str(e)
-    return (p.returncode, p.stdout.decode("utf-8", errors="replace"),
-            p.stderr.decode("utf-8", errors="replace"))
+        return 124, b""
+    except OSError:
+        return 127, b""
+    return p.returncode, p.stdout
+
+
+def git_raw(vault, *args, timeout=GIT_TIMEOUT, data=None):
+    return run(BASE_GIT + list(args), vault, timeout, data=data)
 
 
 def git(vault, *args, timeout=GIT_TIMEOUT):
-    return run(["git"] + list(args), vault, timeout)
+    rc, out = git_raw(vault, *args, timeout=timeout)
+    return rc, out.decode("utf-8", errors="replace")
 
 
-def die(code, msg):
-    print(msg, file=sys.stderr if code == 2 else sys.stdout)
-    sys.exit(code)
-
-
-class Ctx:
-    pass
-
-
-def resolve(args):
-    vault = args.vault or os.environ.get("CLAUDE_VAULT_DIR") or os.path.expanduser("~/Obsidian/no-it-all")
-    vault = os.path.realpath(os.path.expanduser(vault))
-    if not os.path.isdir(vault):
-        die(2, "ERROR: vault is not a directory: %s" % vault)
-    rc, top, _ = git(vault, "rev-parse", "--show-toplevel")
-    if rc != 0 or os.path.realpath(top.strip()) != vault:
-        die(2, "ERROR: not the top of a git repository: %s" % vault)
-    rc, br, _ = git(vault, "symbolic-ref", "--short", "-q", "HEAD")
-    if rc != 0 or not br.strip():
-        die(2, "ERROR: detached HEAD; check out the vault branch first")
-    c = Ctx()
-    c.vault, c.branch = vault, br.strip()
-    rc, remote, _ = git(vault, "config", "--get", "branch.%s.remote" % c.branch)
-    rc2, merge, _ = git(vault, "config", "--get", "branch.%s.merge" % c.branch)
-    c.remote, merge = remote.strip(), merge.strip()
-    if rc != 0 or rc2 != 0 or not c.remote or c.remote == "." or not merge.startswith("refs/heads/"):
-        die(2, "ERROR: branch %s has no upstream on a remote" % c.branch)
-    c.rbranch = merge[len("refs/heads/"):]
-    return c
-
-
-def ahead_behind(vault, other):
-    rc, out, err = git(vault, "rev-list", "--left-right", "--count", "HEAD...%s" % other)
-    if rc != 0:
-        die(2, "ERROR: cannot compare with %s: %s" % (other, err.strip()))
-    a, b = out.split()
-    return int(a), int(b)
-
-
-def cmd_status(args):
-    c = resolve(args)
-    up = "refs/remotes/%s/%s" % (c.remote, c.rbranch)
-    rc, _, _ = git(c.vault, "rev-parse", "--verify", "-q", up)
-    if rc != 0:
-        die(2, "ERROR: no last-fetched %s/%s (run push, or fetch it by hand)" % (c.remote, c.rbranch))
-    ahead, behind = ahead_behind(c.vault, up)
-    print("branch: %s -> %s/%s" % (c.branch, c.remote, c.rbranch))
-    print("ahead %d behind %d" % (ahead, behind))
-    if ahead:
-        rc, out, _ = git(c.vault, "log", "--format=%h %s", "%s..HEAD" % up)
-        for line in out.splitlines():
-            print("  " + line)
-    rc, out, _ = git(c.vault, "status", "--porcelain=v1", "--untracked-files=normal")
-    mod = unt = 0
-    for line in out.splitlines():
-        if line.startswith("??"):
-            unt += 1
-        elif not line.startswith("!!") and line.strip():
-            mod += 1
-    print("dirty: %d modified, %d untracked" % (mod, unt))
-    return 0
-
-
-# ---- visibility gate -------------------------------------------------------
-
-def parse_slug(url):
-    """owner/name from a github.com remote URL, else None."""
-    url = url.strip()
-    pats = (r"^(?:https?|ssh|git)://(?:[^@/]+@)?github\.com(?::\d+)?/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$",
-            r"^[^@/\s]+@github\.com:([^/\s]+)/([^/\s]+?)(?:\.git)?/?$")
-    for p in pats:
-        m = re.match(p, url)
-        if m:
-            return "%s/%s" % (m.group(1), m.group(2))
-    return None
-
-
-def visibility_gate(c, skip):
-    if skip:
-        if not test_mode():
-            die(2, "ERROR: --skip-visibility-check is only honoured when VAULT_SYNC_TEST=1")
-        print("visibility: SKIPPED (test mode)")
-        return None
-    slug = os.environ.get("VAULT_SYNC_TEST_REPO") if test_mode() else None
-    if not slug:
-        urls = []
-        for extra in ((), ("--push",)):
-            rc, out, _ = git(c.vault, "remote", "get-url", *(extra + (c.remote,)))
-            if rc == 0 and out.strip():
-                urls.append(out.strip())
-        slugs = set(parse_slug(u) for u in urls)
-        if not urls or len(slugs) != 1 or None in slugs:
-            print("REFUSED: cannot tell which GitHub repository remote '%s' is, so privacy cannot be verified" % c.remote)
-            sys.exit(1)
-        slug = slugs.pop()
-    rc, out, err = run(["gh", "repo", "view", slug, "--json", "visibility", "-q", ".visibility"],
-                       c.vault, NET_TIMEOUT, env=dict(os.environ, GH_PROMPT_DISABLED="1"))
-    if rc == 127:
-        print("REFUSED: gh is not available, so repository visibility cannot be verified")
-        sys.exit(1)
-    vis = out.strip().strip('"').upper()
-    if rc != 0 or not vis:
-        print("REFUSED: gh could not report the visibility of %s (exit %d)" % (slug, rc))
-        sys.exit(1)
-    if vis != "PRIVATE":
-        print("REFUSED: %s is %s, not PRIVATE" % (slug, vis))
-        sys.exit(1)
-    print("visibility: %s is PRIVATE" % slug)
-    return slug
-
-
-# ---- scope check -----------------------------------------------------------
+# ---- output hygiene ----------------------------------------------------------
 
 def has_mixed(v):
     return bool(re.search(r"\d", v)) or (bool(re.search(r"[a-z]", v)) and bool(re.search(r"[A-Z]", v)))
@@ -195,14 +115,6 @@ LINE_RULES = [
 PATH_GLOBS = [".env*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*credentials*", "*.p12", "*.keychain*"]
 
 
-def sensitive_path(path):
-    base = path.rsplit("/", 1)[-1].lower()
-    for g in PATH_GLOBS:
-        if fnmatch.fnmatchcase(base, g):
-            return g
-    return None
-
-
 def line_rule(text):
     for name, rx, check in LINE_RULES:
         for m in rx.finditer(text):
@@ -211,143 +123,361 @@ def line_rule(text):
     return None
 
 
-def commit_changes(vault, sha):
-    """[(status, path, new_blob_sha, mode)] for one commit (each parent, for a merge)."""
-    rc, out, err = git(vault, "-c", "core.quotepath=false", "diff-tree", "-r", "-m", "--root", "--no-commit-id",
-                       "--no-renames", "--no-ext-diff", "--raw", "-z", sha, timeout=120)
+def redact(s):
+    for _, rx, check in LINE_RULES:
+        s = rx.sub(lambda m, c=check: "<redacted>" if c is None or c(m) else m.group(0), s)
+    return s
+
+
+def safe(s):
+    """Printable form of an untrusted string: credential-shaped substrings redacted, control chars escaped."""
+    return "".join(c if 0x20 <= ord(c) < 0x7f or ord(c) > 0x9f else "\\x%02x" % ord(c) for c in redact(s))
+
+
+def sensitive_path(path):
+    base = path.rsplit("/", 1)[-1].lower()
+    return any(fnmatch.fnmatchcase(base, g) for g in PATH_GLOBS)
+
+
+# ---- repository resolution ---------------------------------------------------
+
+class Ctx:
+    pass
+
+
+def resolve(args, need_remote):
+    vault = args.vault or os.environ.get("CLAUDE_VAULT_DIR") or os.path.expanduser("~/Obsidian/no-it-all")
+    vault = os.path.realpath(os.path.expanduser(vault))
+    if not os.path.isdir(vault):
+        raise EnvError("vault is not a directory")
+    rc, top = git(vault, "rev-parse", "--show-toplevel")
+    if rc != 0 or os.path.realpath(top.strip()) != vault:
+        raise EnvError("not the top of a git repository")
+    rc, br = git(vault, "symbolic-ref", "--short", "-q", "HEAD")
+    if rc != 0 or not br.strip():
+        raise EnvError("detached HEAD; check out the vault branch first")
+    c = Ctx()
+    c.vault, c.branch = vault, br.strip()
+    rc, up = git(vault, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    c.upstream = up.strip()
+    if rc != 0 or not c.upstream:
+        raise EnvError("branch %s has no upstream" % c.branch)
+    if need_remote:
+        rc, remote = git(vault, "config", "--get", "branch.%s.remote" % c.branch)
+        rc2, merge = git(vault, "config", "--get", "branch.%s.merge" % c.branch)
+        c.remote, merge = remote.strip(), merge.strip()
+        if rc != 0 or rc2 != 0 or not c.remote or c.remote == "." or not merge.startswith("refs/heads/"):
+            raise EnvError("branch %s has no upstream on a remote" % c.branch)
+        c.rbranch = merge[len("refs/heads/"):]
+    return c
+
+
+def counts(vault, left, right):
+    rc, out = git(vault, "rev-list", "--left-right", "--count", "%s...%s" % (left, right))
+    parts = out.split()
+    if rc != 0 or len(parts) != 2 or not all(p.isdigit() for p in parts):
+        raise EnvError("cannot compare with the upstream")
+    return int(parts[0]), int(parts[1])
+
+
+def cmd_status(args):
+    c = resolve(args, need_remote=False)
+    ahead, behind = counts(c.vault, "HEAD", "@{u}")
+    print("branch: %s -> %s" % (c.branch, c.upstream))
+    print("ahead %d behind %d" % (ahead, behind))
+    if ahead:
+        rc, out = git(c.vault, "rev-list", "--abbrev-commit", "--abbrev=8", "@{u}..HEAD")
+        if rc != 0:
+            raise EnvError("cannot list ahead commits")
+        for oid in out.split():
+            print("  " + oid)
+    rc, out = git(c.vault, "status", "--porcelain=v1", "--untracked-files=normal")
     if rc != 0:
-        die(2, "ERROR: cannot list changes of %s: %s" % (sha[:8], err.strip()))
+        raise EnvError("git status failed (exit %d); the vault index or worktree may be damaged" % rc)
+    mod = unt = 0
+    for line in out.splitlines():
+        if line.startswith("??"):
+            unt += 1
+        elif not line.startswith("!!") and line.strip():
+            mod += 1
+    print("dirty: %d modified, %d untracked" % (mod, unt))
+    return 0
+
+
+# ---- destination identity ----------------------------------------------------
+
+NAME = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+URL_FORMS = (
+    re.compile(r"^https://github\.com/(%s)/(%s?)(?:\.git)?/?$" % (NAME, NAME)),
+    re.compile(r"^ssh://git@github\.com/(%s)/(%s?)(?:\.git)?/?$" % (NAME, NAME)),
+    re.compile(r"^git@github\.com:(%s)/(%s?)(?:\.git)?/?$" % (NAME, NAME)),
+)
+
+
+def parse_github(url):
+    """(owner, name) lower-cased for an https or ssh/scp github.com URL, else None."""
+    for rx in URL_FORMS:
+        m = rx.match(url.strip())
+        if m:
+            return (m.group(1).lower(), m.group(2).lower())
+    return None
+
+
+def all_urls(vault, remote, push):
+    args = ["remote", "get-url"] + (["--push"] if push else []) + ["--all", remote]
+    rc, out = git(vault, *args)
+    urls = [u for u in out.splitlines() if u.strip()]
+    if rc != 0:
+        raise Refused("cannot read the %s URLs of remote '%s'" % ("push" if push else "fetch", remote))
+    return urls
+
+
+def freeze_destination(c):
+    rc, mirror = git(c.vault, "config", "--get", "remote.%s.mirror" % c.remote)
+    if rc == 0 and mirror.strip().lower() not in ("false", "no", "off", "0", ""):
+        raise Refused("remote '%s' is a mirror remote" % c.remote)
+    fetch, push = all_urls(c.vault, c.remote, False), all_urls(c.vault, c.remote, True)
+    if len(fetch) != 1 or len(push) != 1:
+        raise Refused("remote '%s' must have exactly one fetch URL and one push URL (found %d and %d)"
+                      % (c.remote, len(fetch), len(push)))
+    sf, sp = parse_github(fetch[0]), parse_github(push[0])
+    if sf is None or sp is None:
+        raise Refused("the fetch and push URLs must be https or ssh github.com URLs, so privacy cannot be verified")
+    if sf != sp:
+        raise Refused("the fetch and push URLs name different repositories")
+    c.fetch_url, c.push_url, c.slug = fetch[0].strip(), push[0].strip(), "%s/%s" % sf
+
+
+def visibility_gate(c):
+    rc, out = run(["gh", "api", "repos/%s" % c.slug, "--hostname", "github.com", "--jq", ".visibility"],
+                  c.vault, NET_TIMEOUT, env=gh_env())
+    if rc == 127:
+        raise Refused("gh is not available, so repository visibility cannot be verified")
+    vis = out.decode("utf-8", errors="replace").strip().strip('"').lower()
+    if rc != 0 or not vis:
+        raise Refused("gh failed (exit %d), so repository visibility cannot be verified" % rc)
+    if vis != "private":
+        raise Refused("%s is %s, not private" % (c.slug, vis))
+    print("visibility: %s is private" % c.slug)
+
+
+# ---- scope check over raw objects -------------------------------------------
+
+def parse_raw(out):
     toks = out.split("\0")
-    res, i = [], 0
+    entries, i = [], 0
     while i < len(toks):
         t = toks[i]
-        if t.startswith(":") and i + 1 < len(toks):
-            f = t[1:].split()
-            res.append((f[4][:1], toks[i + 1], f[3], f[1]))
+        if t == "":
+            i += 1
+        elif t.startswith(":"):
+            f = t[1:].split(" ")
+            if len(f) != 5 or i + 1 >= len(toks):
+                raise Refused("scan could not complete: malformed diff-tree output")
+            entries.append((f[0], f[1], f[2], f[3], f[4][:1], toks[i + 1]))
             i += 2
         else:
-            i += 1
-    return res
+            raise Refused("scan could not complete: unexpected diff-tree output")
+    return entries
 
 
-def commit_added_lines(vault, sha):
-    """[(path, lineno, text)] added lines of one commit."""
-    rc, out, err = git(vault, "-c", "core.quotepath=false", "diff-tree", "-p", "-U0", "-m", "--root", "--no-commit-id",
-                       "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color",
-                       "--src-prefix=a/", "--dst-prefix=b/", sha, timeout=180)
+def commit_meta(vault, oid):
+    rc, out = git_raw(vault, "cat-file", "commit", oid)
     if rc != 0:
-        die(2, "ERROR: cannot diff %s: %s" % (sha[:8], err.strip()))
-    res, path, ln = [], None, 0
-    for line in out.split("\n"):
-        if line.startswith("diff --git "):
-            path, ln = None, 0
-        elif line.startswith("+++ "):
-            p = line[4:].split("\t")[0]
-            path = p[2:] if p.startswith("b/") else None
-        elif line.startswith("@@"):
-            m = re.match(r"@@ -\S+ \+(\d+)", line)
-            ln = int(m.group(1)) if m else 0
-        elif line.startswith("+") and path is not None:
-            res.append((path, ln, line[1:]))
-            ln += 1
+        raise Refused("scan could not complete: cannot read a commit (exit %d)" % rc)
+    text = out.decode("latin-1")
+    head, _, msg = text.partition("\n\n")
+    parents = [l.split(" ", 1)[1].strip() for l in head.split("\n") if l.startswith("parent ")]
+    return parents, text
+
+
+def commit_entries(vault, oid, parents):
+    base = ["diff-tree", "-r", "-z", "--raw", "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-commit-id"]
+    runs = [base + [p, oid] for p in parents] if parents else [base + ["--root", oid]]
+    res = []
+    for a in runs:
+        rc, out = git_raw(vault, *a, timeout=120)
+        if rc != 0:
+            raise Refused("scan could not complete: diff-tree failed (exit %d)" % rc)
+        res.extend(parse_raw(out.decode("utf-8", errors="replace")))
     return res
 
 
 def blob_sizes(vault, shas):
+    shas = sorted(set(shas))
     if not shas:
         return {}
-    try:
-        p = subprocess.run(["git", "cat-file", "--batch-check"], cwd=vault, env=git_env(),
-                           input=("\n".join(shas) + "\n").encode(), stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, timeout=GIT_TIMEOUT)
-    except (subprocess.TimeoutExpired, OSError) as e:
-        die(2, "ERROR: cat-file failed: %s" % e)
-    out = {}
-    for line in p.stdout.decode("utf-8", errors="replace").splitlines():
-        f = line.split()
-        if len(f) == 3 and f[1] == "blob":
-            out[f[0]] = int(f[2])
-    return out
+    rc, out = git_raw(vault, "cat-file", "--batch-check", timeout=120, data=("\n".join(shas) + "\n").encode())
+    lines = out.decode("utf-8", errors="replace").splitlines()
+    if rc != 0 or len(lines) != len(shas):
+        raise Refused("scan could not complete: object sizes could not be read")
+    sizes = {}
+    for sha, line in zip(shas, lines):
+        m = re.match(r"^([0-9a-f]{40}) blob (\d+)$", line)
+        if not m or m.group(1) != sha:
+            raise Refused("scan could not complete: unexpected object size output")
+        sizes[sha] = int(m.group(2))
+    return sizes
 
 
-def scope_check(c, base, allow):
-    rc, out, err = git(c.vault, "rev-list", "--reverse", "%s..HEAD" % base)
+def read_blobs(vault, shas):
+    """{sha: bytes} via one cat-file --batch call (raw content: no textconv, filters or attributes)."""
+    shas = [s for s in dict.fromkeys(shas)]
+    if not shas:
+        return {}
+    rc, out = git_raw(vault, "cat-file", "--batch", timeout=180, data=("\n".join(shas) + "\n").encode())
     if rc != 0:
-        die(2, "ERROR: cannot list commits: %s" % err.strip())
+        raise Refused("scan could not complete: object contents could not be read")
+    res, pos = {}, 0
+    for sha in shas:
+        nl = out.find(b"\n", pos)
+        m = re.match(rb"^([0-9a-f]{40}) blob (\d+)$", out[pos:nl]) if nl >= 0 else None
+        if not m or m.group(1).decode() != sha:
+            raise Refused("scan could not complete: unexpected object content output")
+        size = int(m.group(2))
+        res[sha] = out[nl + 1:nl + 1 + size]
+        if len(res[sha]) != size or out[nl + 1 + size:nl + 2 + size] != b"\n":
+            raise Refused("scan could not complete: truncated object content")
+        pos = nl + 2 + size
+    return res
+
+
+def parse_allow(items):
+    allow = []
+    for a in items:
+        try:
+            oid, rest = a.split(":", 1)
+            path, rule = rest.rsplit(":", 1)
+        except ValueError:
+            raise EnvError("--allow-path takes <commit-oid>:<path>:<rule>")
+        if not re.match(r"^[0-9a-f]{8,40}$", oid) or not path or not rule:
+            raise EnvError("--allow-path takes <commit-oid>:<path>:<rule>")
+        allow.append((oid, path, rule))
+    return allow
+
+
+def scan_range(c, base_oid, head_oid, allow):
+    rc, out = git(c.vault, "rev-list", "--reverse", "%s..%s" % (base_oid, head_oid))
     commits = out.split()
-    findings, allowed, paths, added = [], [], set(), 0
-    limit = MAX_BLOB
-    for sha in commits:
-        short = sha[:8]
-        changes = commit_changes(c.vault, sha)
-        live = [x for x in changes if set(x[2]) != {"0"} and x[3] != "160000"]
-        sizes = blob_sizes(c.vault, [x[2] for x in live])
-        for status, path, blob, mode in changes:
-            paths.add(path)
-        for status, path, blob, mode in live:
-            if status == "A":
-                added += 1
-            rules = []
-            g = sensitive_path(path)
-            if g:
-                rules.append("sensitive-path (%s)" % g)
-            if sizes.get(blob, 0) > limit:
-                rules.append("blob over %d MB (%d bytes)" % (limit // (1024 * 1024), sizes[blob]))
-            for r in rules:
-                (allowed if path in allow else findings).append((short, path, None, r))
-        for path, ln, text in commit_added_lines(c.vault, sha):
-            r = line_rule(text)
+    if rc != 0 or not all(HEX.match(x) for x in commits):
+        raise Refused("scan could not complete: cannot list the unpushed commits")
+    findings, seen, paths, added = [], set(), set(), 0
+
+    def add(oid, path, line, rule):
+        key = (oid, path, line, rule)
+        if key not in seen:
+            seen.add(key)
+            findings.append(key)
+
+    for oid in commits:
+        parents, text = commit_meta(c.vault, oid)
+        msg = text.partition("\n\n")[2]
+        for n, l in enumerate(msg.split("\n"), 1):
+            r = line_rule(l)
             if r:
-                (allowed if path in allow else findings).append((short, path, ln, r))
+                add(oid, "(commit message)", n, r)
+        entries = commit_entries(c.vault, oid, parents)
+        live = [e for e in entries if e[4] != "D" and e[3] != ZERO and e[1] != "160000"]
+        sizes = blob_sizes(c.vault, [e[3] for e in live] +
+                           [e[2] for e in live if e[2] != ZERO and e[0] != "160000"])
+        for om, nm, osha, nsha, st, path in entries:
+            paths.add(path)
+        for om, nm, osha, nsha, st, path in live:
+            if st == "A":
+                added += 1
+            if sensitive_path(path):
+                add(oid, path, None, "sensitive-path")
+            if line_rule(path):
+                add(oid, path, None, "credential-in-path")
+            if sizes[nsha] > MAX_BLOB:
+                add(oid, path, None, "blob-too-large")
+                continue
+            want = [nsha]
+            use_old = osha != ZERO and om != "160000" and sizes.get(osha, 0) <= MAX_BLOB
+            if use_old:
+                want.append(osha)
+            data = read_blobs(c.vault, want)
+            new = data[nsha].decode("latin-1").split("\n")
+            if new and new[0].startswith("version https://git-lfs"):
+                add(oid, path, None, "lfs-pointer")
+                continue
+            old = set(data[osha].decode("latin-1").split("\n")) if use_old else set()
+            for n, l in enumerate(new, 1):
+                if l not in old:
+                    r = line_rule(l)
+                    if r:
+                        add(oid, path, n, r)
     print("scope: %d commits, %d paths, %d files added" % (len(commits), len(paths), added))
-    for short, path, ln, r in allowed:
-        print("allowed (--allow-path): %s %s%s [%s]" % (short, path, ":%d" % ln if ln else "", r))
-    if findings:
-        print("REFUSED: scope check found %d suspected exposure(s); values are not printed:" % len(findings))
-        for short, path, ln, r in findings:
-            print("  %s %s%s [%s]" % (short, path, ":%d" % ln if ln else "", r))
-        print("Leave the commits local and report this refusal to the owner. If a finding is a reviewed "
-              "false positive the owner may re-run with --allow-path <path>.")
-        sys.exit(1)
-    return commits
+    used, blocked = set(), []
+    for oid, path, line, rule in findings:
+        hit = next((a for a in allow if oid.startswith(a[0]) and path == a[1] and rule == a[2]), None)
+        if hit:
+            used.add(hit)
+            print("allowed (--allow-path): %s %s%s [%s]" % (oid[:8], safe(path), ":%d" % line if line else "", rule))
+        else:
+            blocked.append((oid, path, line, rule))
+    for a in allow:
+        if a not in used:
+            print("allow-path unused: %s:%s:%s" % (a[0], safe(a[1]), a[2]))
+    if blocked:
+        print("REFUSED: scope check found %d suspected exposure(s); values are not printed:" % len(blocked))
+        for oid, path, line, rule in blocked:
+            print("  %s %s%s [%s]" % (oid[:8], safe(path), ":%d" % line if line else "", rule))
+        print("Leave the commits local and report this refusal to the owner. For a reviewed false positive "
+              "the owner may re-run with --allow-path <commit-oid>:<path>:<rule>.")
+        raise SystemExit(1)
+    return len(commits)
 
 
 # ---- push ------------------------------------------------------------------
 
 def cmd_push(args):
-    c = resolve(args)
-    for p in args.allow_path:
-        print("allow-path in effect: %s" % p)
-    rc, out, err = git(c.vault, "-c", "fetch.prune=false", "-c", "fetch.pruneTags=false", "fetch", "--no-tags",
-                       "--no-recurse-submodules", c.remote, c.rbranch, timeout=NET_TIMEOUT)
-    if rc != 0:
-        die(2, "ERROR: fetch of %s %s failed: %s" % (c.remote, c.rbranch, err.strip()))
-    rc, tip, _ = git(c.vault, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
-    tip = tip.strip()
-    if rc != 0 or not tip:
-        die(2, "ERROR: cannot resolve the fetched remote tip")
-    ahead, behind = ahead_behind(c.vault, tip)
-    print("branch: %s -> %s/%s  ahead %d behind %d" % (c.branch, c.remote, c.rbranch, ahead, behind))
-    if behind:
-        print("REFUSED: %s the remote. Nothing was pushed. This script never pulls, merges or rebases; "
-              "report it and reconcile by hand with the owner." % ("diverged from" if ahead else "behind"))
-        sys.exit(1)
-    if not ahead:
-        print("nothing to push")
+    allow = parse_allow(args.allow_path)
+    c = resolve(args, need_remote=True)
+    for a in args.allow_path:
+        print("allow-path in effect: %s" % safe(a))
+    freeze_destination(c)
+    rc, head_oid = git(c.vault, "rev-parse", "--verify", "HEAD^{commit}")
+    head_oid = head_oid.strip()
+    if rc != 0 or not HEX.match(head_oid):
+        raise EnvError("cannot resolve HEAD")
+    visibility_gate(c)
+    ref = "refs/vault-sync/%d/base" % os.getpid()
+    try:
+        rc, _ = git(c.vault, "fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+                    c.fetch_url, "+refs/heads/%s:%s" % (c.rbranch, ref), timeout=NET_TIMEOUT)
+        if rc != 0:
+            raise Indeterminate("fetch failed (exit %d); nothing was pushed" % rc)
+        rc, base_oid = git(c.vault, "rev-parse", "--verify", ref + "^{commit}")
+        base_oid = base_oid.strip()
+        if rc != 0 or not HEX.match(base_oid):
+            raise Indeterminate("fetch failed to produce a remote tip; nothing was pushed")
+        ahead, behind = counts(c.vault, head_oid, base_oid)
+        print("branch: %s -> %s  ahead %d behind %d" % (c.branch, c.slug, ahead, behind))
+        if behind:
+            raise Refused("%s the remote. Nothing was pushed. This script never pulls, merges or rebases; "
+                          "report it and reconcile by hand with the owner." % ("diverged from" if ahead else "behind"))
+        if not ahead:
+            print("nothing to push")
+            return 0
+        scan_range(c, base_oid, head_oid, allow)
+        if args.dry_run:
+            print("dry-run: would push %s..%s (%d commits) to %s" % (base_oid[:8], head_oid[:8], ahead, c.slug))
+            return 0
+        rc, _ = git(c.vault, "push", "--no-verify", "--no-follow-tags", "--recurse-submodules=no",
+                    c.push_url, "%s:refs/heads/%s" % (head_oid, c.rbranch), timeout=NET_TIMEOUT)
+        if rc != 0:
+            raise Indeterminate("push failed (exit %d): push may have partially succeeded; "
+                                "run vault-sync.py status after fetching" % rc)
+        rc, out = git(c.vault, "ls-remote", c.fetch_url, "refs/heads/%s" % c.rbranch, timeout=NET_TIMEOUT)
+        tip = out.split()[0] if out.split() else ""
+        if rc != 0 or tip != head_oid:
+            raise Indeterminate("the remote tip could not be confirmed after the push: push may have partially "
+                                "succeeded; run vault-sync.py status after fetching")
+        print("pushed: %s..%s" % (base_oid[:8], head_oid[:8]))
         return 0
-    visibility_gate(c, args.skip_visibility_check)
-    scope_check(c, tip, set(args.allow_path))
-    rc, head, _ = git(c.vault, "rev-parse", "HEAD")
-    head = head.strip()
-    if args.dry_run:
-        print("dry-run: would push %s..%s (%d commits) to %s %s" % (tip[:8], head[:8], ahead, c.remote, c.rbranch))
-        return 0
-    rc, out, err = git(c.vault, "push", c.remote, "HEAD:refs/heads/%s" % c.rbranch, timeout=NET_TIMEOUT)
-    if rc != 0:
-        print("REFUSED: git push failed (exit %d): %s" % (rc, (err or out).strip()))
-        sys.exit(1)
-    print("pushed: %s..%s" % (tip[:8], head[:8]))
-    return 0
+    finally:
+        git(c.vault, "update-ref", "-d", ref)
 
 
 def main(argv=None):
@@ -355,16 +485,25 @@ def main(argv=None):
     ap.add_argument("--vault", help="vault path (default $CLAUDE_VAULT_DIR, else ~/Obsidian/no-it-all)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="offline ahead/behind and dirty counts")
-    p = sub.add_parser("push", help="fast-forward push after the visibility and scope checks")
+    p = sub.add_parser("push", help="fast-forward push after the destination and scope checks")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--allow-path", action="append", default=[], metavar="PATH",
-                   help="literal repo-relative path to exempt from the scope check (owner-reviewed false positive)")
-    p.add_argument("--skip-visibility-check", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--allow-path", action="append", default=[], metavar="OID:PATH:RULE",
+                   help="exempt exactly one reviewed finding (commit oid prefix, literal path, rule name)")
     try:
         args = ap.parse_args(argv)
     except SystemExit as e:
         sys.exit(2 if e.code else 0)
-    return cmd_status(args) if args.cmd == "status" else cmd_push(args)
+    try:
+        return cmd_status(args) if args.cmd == "status" else cmd_push(args)
+    except Refused as e:
+        print("REFUSED: %s" % e)
+        return 1
+    except EnvError as e:
+        print("ERROR: %s" % e, file=sys.stderr)
+        return 2
+    except Indeterminate as e:
+        print("FAILED: %s" % e)
+        return 3
 
 
 if __name__ == "__main__":
