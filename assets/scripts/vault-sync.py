@@ -264,12 +264,17 @@ def all_urls(c, push):
 
 def preflight(c):
     """Everything that can be decided locally, before any network call."""
+    # The grafts and shallow files live in the common dir of a linked worktree.
+    # `--git-path info/grafts` cannot locate them here: this script sets
+    # GIT_GRAFT_FILE=/dev/null on purpose, and --git-path honours that remap.
+    # `config` is never remapped and always lives in the common dir, so its
+    # parent is the common dir. Both it and the per-worktree git dir are checked.
     rc, gd = c.repo.text("rev-parse", "--absolute-git-dir")
-    rc2, cd = c.repo.text("rev-parse", "--git-common-dir")
+    rc2, cfg = c.repo.text("rev-parse", "--git-path", "config")
     if rc != 0 or rc2 != 0:
         raise EnvError("cannot locate the git directory")
-    gitdirs = {gd.strip(), os.path.join(c.vault, cd.strip())}
-    for d in gitdirs:
+    common = os.path.dirname(os.path.join(c.vault, cfg.strip()))
+    for d in {gd.strip(), common}:
         for rel in ("info/grafts", "shallow"):
             if os.path.exists(os.path.join(d, rel)):
                 raise Refused("the vault has %s; history rewrites that hide commits are not supported" % rel)
