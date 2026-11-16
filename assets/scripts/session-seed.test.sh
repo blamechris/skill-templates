@@ -1557,7 +1557,7 @@ FAKE_GIT_LOG="$TMP/m20.log" FAKE_GIT_SLEEP=write-tree CLAUDE_SEED_GIT_TIMEOUT=1 
   || bad "M20 git timeout: UNCOMMITTED, exit 0, seed present" "rc=$rc $(flat "$out") $(flat "$err")"
 
 # M21 the branch moves under EVERY update-ref (plumbing, so the index is not swept in): after
-# the retries it is UNCOMMITTED, the other commits are kept and the shared index is restored
+# the retries it is UNCOMMITTED, the other commits are kept and the shared index was never touched
 new_vault m21
 MOVE="\"\$REAL_GIT\" -C '$TMP/m21/vault' update-ref refs/heads/main \$(\"\$REAL_GIT\" -C '$TMP/m21/vault' commit-tree 'HEAD^{tree}' -p HEAD -m other)"
 FAKE_GIT_LOG="$TMP/m21.log" FAKE_GIT_PRE_SUB=update-ref FAKE_GIT_PRE_CMD="$MOVE" mrun m21
@@ -1841,6 +1841,65 @@ stagedseed=$(V n7 status --porcelain | grep -E '^[ADMRC] +handoffs' | wc -l | tr
 [ "$allok" -eq 1 ] && [ "$deleted" -eq 0 ] && [ "$stagedseed" -eq 0 ] && [ "$committed" -ge 18 ] \
   && ok "N7 8 writers x 3 rounds beside a commit loop: $committed/24 committed, none stale, none deleted or left staged" \
   || bad "N7 8 writers x 3 rounds beside a commit loop: $committed/24 committed, none stale, none deleted or left staged" "allok=$allok$detail deleted=$deleted staged=$stagedseed committed=$committed"
+
+# ============================================================ GROUP P — signals and modes
+echo; echo "P. signals during the locked transaction; archive modes"
+# srun <case> <signal> <pre|during> -> $rc $out $err. Starts the write in the background (exec, so $! is
+# the python process), waits for a marker that proves where it is, sends the signal, then WAITS for it.
+srun() {
+  local c=$1 sig=$2 where=$3
+  local o="$TMP/$c.stdout" e="$TMP/$c.stderr" marker="$TMP/$c.marker"
+  rm -f "$marker"
+  if [ "$where" = pre ]; then          # parked inside the lock, before the CAS: commit-tree sleeps
+    ( cd "$TMP/$c/demo" && exec env PATH="$FAKEBIN:$PATH" FAKE_GIT_LOG="$TMP/$c.log" FAKE_GIT_PRE_SUB=commit-tree \
+        FAKE_GIT_PRE_CMD=": > '$marker'" FAKE_GIT_SLEEP=commit-tree CLAUDE_HANDOFF_DIR="$TMP/$c/vault/handoffs" \
+        "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --now "$STAMP" --picks-up-at 'x (agent Sol)' >"$o" 2>"$e" ) &
+  else                                  # parked inside update-ref: a reference-transaction hook sleeps
+    printf '#!/bin/sh\n[ "$1" = prepared ] && { : > "%s"; sleep 2; }\nexit 0\n' "$marker" > "$TMP/$c/vault/.git/hooks/reference-transaction"
+    chmod +x "$TMP/$c/vault/.git/hooks/reference-transaction"
+    ( cd "$TMP/$c/demo" && exec env CLAUDE_HANDOFF_DIR="$TMP/$c/vault/handoffs" \
+        "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" --now "$STAMP" --picks-up-at 'x (agent Sol)' >"$o" 2>"$e" ) &
+  fi
+  local pid=$! n=0
+  while [ ! -e "$marker" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n+1)); done
+  kill -"$sig" "$pid" 2>/dev/null
+  wait "$pid"; rc=$?
+  out=$(cat "$o"); err=$(cat "$e")
+}
+clean_after() {   # no lock, no index copy, nothing staged or modified
+  [ ! -e "$TMP/$1/vault/.git/index.lock" ] && ! ls "$TMP/$1/vault/.git"/index.seed.* >/dev/null 2>&1 \
+    && [ -z "$(V "$1" status --porcelain | grep -E '^[ADMRC]|^.[DM]')" ]
+}
+for pair in "TERM:143" "INT:130"; do
+  sig=${pair%%:*}; code=${pair##*:}
+  new_vault p_pre_$sig
+  head_before=$(V p_pre_$sig rev-parse HEAD)
+  srun p_pre_$sig "$sig" pre
+  [ "$rc" -eq "$code" ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: interrupted before commit' \
+    && ! printf '%s' "$err" | grep -q Traceback && [ "$(V p_pre_$sig rev-parse HEAD)" = "$head_before" ] \
+    && clean_after p_pre_$sig && [ -f "$TMP/p_pre_$sig/vault/handoffs/NEXT-demo.md" ] \
+    && ok "P SIG$sig before the CAS: exit $code, UNCOMMITTED, no commit, no lock, no copy, status clean" \
+    || bad "P SIG$sig before the CAS: exit $code, UNCOMMITTED, no commit, no lock, no copy, status clean" "rc=$rc $(flat "$out") $(flat "$err") $(V p_pre_$sig status --porcelain | tr '\n' '|')"
+  new_vault p_dur_$sig
+  srun p_dur_$sig "$sig" during
+  [ "$rc" -eq "$code" ] && ! printf '%s' "$err" | grep -q Traceback \
+    && [ "$(V p_dur_$sig show --name-only --format= HEAD)" = "handoffs/NEXT-demo.md" ] && clean_after p_dur_$sig \
+    && printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}$' \
+    && ok "P SIG$sig during update-ref: exit $code, the commit lands AND the index is published, no lock, status clean" \
+    || bad "P SIG$sig during update-ref: exit $code, the commit lands AND the index is published, no lock, status clean" "rc=$rc $(flat "$out") $(flat "$err") $(V p_dur_$sig status --porcelain | tr '\n' '|')"
+done
+
+# P9 an executable incumbent's archive is committed at its own mode, so status stays clean
+new_vault p9
+mkdir -p "$TMP/p9/handoffs"; put_seed p9 NEXT-demo.md other-session "$LOST"
+cp "$TMP/p9/handoffs/NEXT-demo.md" "$TMP/p9/vault/handoffs/NEXT-demo.md"; chmod +x "$TMP/p9/vault/handoffs/NEXT-demo.md"
+V p9 add -- handoffs/NEXT-demo.md; V p9 commit -q -m exec-incumbent
+mrun p9
+arch=$(ls "$TMP/p9/vault/handoffs" | grep -E "$ARCHIVE_RE" | head -1)
+[ "$rc" -eq 0 ] && [ -n "$arch" ] && [ "$(V p9 ls-tree HEAD -- "handoffs/$arch" | cut -c1-6)" = 100755 ] \
+  && [ -z "$(V p9 status --porcelain)" ] \
+  && ok "P9 executable incumbent: its archive is committed 100755 and status is clean" \
+  || bad "P9 executable incumbent: its archive is committed 100755 and status is clean" "rc=$rc arch=$arch $(flat "$out") $(flat "$err") $(V p9 status --porcelain | tr '\n' '|')"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

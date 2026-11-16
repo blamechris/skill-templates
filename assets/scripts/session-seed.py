@@ -98,6 +98,10 @@ THE COMMIT STEP (after the proof, never before it)
   THE COMMIT STEP drops the GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE family and runs
   with LC_ALL=C; scope resolution and `verify` still inherit the caller's
   environment, which is a pre-existing limit and not changed here.
+  SIGNALS: SIGINT/SIGTERM/SIGHUP during the step abort it cleanly before the ref moves
+  (`UNCOMMITTED: interrupted before commit`, lock and copy removed, children killed); from
+  update-ref through the publish nothing is aborted; the signal is re-raised afterwards so the
+  exit status reflects it. SIGKILL is out of scope, as it is for git itself.
   It never pushes, fetches, pulls, rebases, stashes, resets, restores or checks out.
   A failed commit is NEVER a failed write: the seed is already on disk and proved,
   so the step prints `UNCOMMITTED: <reason>` on stderr and the exit stays 0. It is
@@ -965,13 +969,52 @@ def _clean_git_env(extra=None):
     return env
 
 
+# SIGNALS. The commit step records SIGINT/SIGTERM/SIGHUP instead of dying on them,
+# because the process holds git's index.lock and has git children in their own process
+# groups: an uncaught signal would leave the lock and the prepared index copy behind
+# and let an orphaned `update-ref` commit with nobody to publish the index. Until the
+# compare-and-swap starts, a recorded signal aborts cleanly (children killed, lock and
+# copy removed, `UNCOMMITTED: interrupted before commit`). From the start of
+# update-ref through the publish nothing is aborted, so a commit is never left with a
+# stale index. When the step is over the signal is re-raised with its default action,
+# so the exit status still says what killed us. SIGKILL cannot be caught; it is out of
+# scope here exactly as it is for git itself.
+_SIG = {"got": None, "protected": False}
+
+
+def _on_signal(signum, _frame):
+    if _SIG["got"] is None:
+        _SIG["got"] = signum
+
+
+def _check_interrupt():
+    if _SIG["got"] is not None and not _SIG["protected"]:
+        raise Uncommitted("interrupted before commit")
+
+
+def _kill_group(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.communicate()
+    except (OSError, ValueError):
+        pass
+
+
 def _cg(args, cwd, extra_env=None, stdin=None, ok=(0,), literal=True):
     """One git call of the commit step: sanitized env, timeout, tolerant decoding.
 
     Returns (rc, stdout, stderr) when rc is in `ok`; anything else is Uncommitted.
-    The child runs in its OWN process group and a timeout kills the whole group, so
-    a gpg or pinentry child of git cannot outlive it.
+    The child runs in its OWN process group and a timeout (or a recorded signal,
+    before the commit is protected) kills the whole group, so a gpg or pinentry
+    child of git cannot outlive it.
     """
+    _check_interrupt()
     cmd = ["git"] + (["--literal-pathspecs"] if literal else []) + list(args)
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, env=_clean_git_env(extra_env),
@@ -980,24 +1023,27 @@ def _cg(args, cwd, extra_env=None, stdin=None, ok=(0,), literal=True):
                                 start_new_session=True)
     except OSError as e:
         raise Uncommitted("cannot run git (%s)" % e)
-    try:
-        so, se = proc.communicate(input=stdin, timeout=_git_timeout())
-    except subprocess.TimeoutExpired:
+    deadline = time.monotonic() + _git_timeout()
+    first = True
+    while True:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            proc.kill()
-        proc.communicate()
-        raise Uncommitted("git %s timed out after %gs" % (args[0], _git_timeout()))
-    except OSError as e:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
-        proc.communicate()
-        raise Uncommitted("git %s failed (%s)" % (args[0], e))
+            so, se = proc.communicate(input=stdin if first else None,
+                                      timeout=max(0.01, min(0.2, deadline - time.monotonic())))
+            break
+        except subprocess.TimeoutExpired:
+            first = False
+            if _SIG["got"] is not None and not _SIG["protected"]:
+                _kill_group(proc)
+                raise Uncommitted("interrupted before commit")
+            if time.monotonic() >= deadline:
+                _kill_group(proc)
+                raise Uncommitted("git %s timed out after %gs" % (args[0], _git_timeout()))
+        except OSError as e:
+            _kill_group(proc)
+            raise Uncommitted("git %s failed (%s)" % (args[0], e))
     out = so.decode("utf-8", "replace")
     err = se.decode("utf-8", "replace")
+    _check_interrupt()
     if proc.returncode not in ok:
         raise Uncommitted("git %s failed (%s)" % (args[0], (err.strip() or out.strip()
                                                            or "exit %d" % proc.returncode).replace("\n", " | ")))
@@ -1046,6 +1092,7 @@ def _acquire_index_lock(gitdir):
     deadline = time.monotonic() + _lock_wait()
     delay = 0.02
     while True:
+        _check_interrupt()
         try:
             return path, os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
         except FileExistsError:
@@ -1059,8 +1106,8 @@ def _acquire_index_lock(gitdir):
 
 def _check_proof(items):
     """The canonical seed must still be exactly what the writer proved."""
-    canonical_path, proved = items[0]
-    for path, data in items:
+    canonical_path, proved, _mode = items[0]
+    for path, data, _m in items:
         if data is None:
             raise Uncommitted("could not read %s after archiving" % path)
     try:
@@ -1083,7 +1130,7 @@ def _commit_plumbing(scope, sid, directory, items):
         raise
     repo = os.path.realpath(top.strip())
     rels = []
-    for path, _data in items:
+    for path, _data, _m in items:
         full = os.path.join(real_dir, os.path.basename(path))
         if not _is_under(os.path.realpath(full), repo):
             raise Uncommitted("%s is not inside the repository %s" % (full, repo))
@@ -1104,7 +1151,7 @@ def _commit_plumbing(scope, sid, directory, items):
     # attempt, below) is only the tripwire for another writer having replaced it.
     _check_proof(items)
     blobs = {}
-    for (path, data), rel in zip(items, rels):
+    for (path, data, _m), rel in zip(items, rels):
         # --no-filters: a clean filter or autocrlf must not rewrite what was proved.
         _, sha, _ = _cg(["hash-object", "-w", "--no-filters", "--stdin"], repo, stdin=data)
         blobs[rel] = sha.strip()
@@ -1143,10 +1190,11 @@ def _attempt(repo, gitdir, rels, blobs, items, msg, state):
         old = old.strip() if rc == 0 else None      # None: an unborn branch, no parent
 
         heads, intended = {}, {}
-        for rel in rels:
+        for (_path, _data, fmode), rel in zip(items, rels):
             heads[rel] = _tree_entry(repo, old, rel)
-            # An existing path keeps its mode (100755 stays 100755); a new one is 100644.
-            intended[rel] = ((heads[rel][0] if heads[rel] else "100644"), blobs[rel])
+            # An existing path keeps its mode (100755 stays 100755); a NEW path takes
+            # the file's own (an archived executable incumbent stays executable).
+            intended[rel] = ((heads[rel][0] if heads[rel] else fmode), blobs[rel])
         if state["orig"] is None:
             state["orig"] = dict(heads)
         else:
@@ -1195,9 +1243,12 @@ def _attempt(repo, gitdir, rels, blobs, items, msg, state):
         # Compare-and-swap. `""` is "must not exist yet" for an unborn branch.
         # (update-ref runs the reference-transaction hook if one is installed;
         # commit hooks never run.)
+        _check_interrupt()                 # the last safe point: past here nothing is aborted
+        _SIG["protected"] = True
         try:
             _cg(["update-ref", "-m", msg, ref, new, old or ""], repo)
         except Uncommitted as e:
+            _SIG["protected"] = False
             rc, now, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
             if (now.strip() if rc == 0 else None) != old:
                 return None                # the branch moved; the index was never touched
@@ -1249,16 +1300,24 @@ def _attempt(repo, gitdir, rels, blobs, items, msg, state):
 
 
 def commit_own_paths(scope, sid, directory, items):
-    """Commit exactly `items` ([(path, bytes)], canonical seed first) or say why not.
+    """Commit exactly `items` ([(path, bytes, "100644"|"100755")], canonical seed first) or say why not.
 
     Called only after the proof passed, and it never raises or exits: the write has
     already succeeded, and a commit problem must not undo or block it. It is a
     PLUMBING commit — hash-object, a private index, write-tree, commit-tree and a
-    compare-and-swap update-ref — so it never runs commit hooks, never touches the
-    shared index except to move these two entries to the new blob, and never
-    stages anything another session staged. It never pushes, fetches, pulls,
+    compare-and-swap update-ref — so it never runs commit hooks, changes the shared
+    index only by publishing it under git's own lock, and never stages anything
+    another session staged. SIGINT/SIGTERM/SIGHUP are recorded and handled as
+    described at `_SIG`. It never pushes, fetches, pulls,
     rebases, stashes, resets, restores or checks out.
     """
+    _SIG["got"], _SIG["protected"] = None, False
+    saved = {}
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        try:
+            saved[sig] = signal.signal(sig, _on_signal)
+        except (ValueError, OSError):      # not the main thread: no handlers, no protection
+            pass
     try:
         _commit_plumbing(scope, sid, directory, items)
     except Uncommitted as e:
@@ -1267,7 +1326,20 @@ def commit_own_paths(scope, sid, directory, items):
     except Exception as e:                 # OSError, UnicodeError, ... : never fail the write
         print("UNCOMMITTED: unexpected %s (%s). The seed is written and proved; it is NOT "
               "in a commit." % (type(e).__name__, e), file=sys.stderr)
-
+    finally:
+        _SIG["protected"] = False
+        got = _SIG["got"]
+        for sig, prev in saved.items():
+            try:
+                signal.signal(sig, prev if prev is not None else signal.SIG_DFL)
+            except (ValueError, OSError):
+                pass
+        if got is not None:
+            # Re-raise with the default action so the exit status reflects the signal.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            signal.signal(got, signal.SIG_DFL)
+            os.kill(os.getpid(), got)
 
 
 def atomic_write(path, text, mode=None):
@@ -1408,7 +1480,13 @@ def finish_write(a, scope, sid, now, text):
         sys.stderr.write(r.stderr)
         if r.returncode != 0:
             sys.exit(r.returncode)
-        items = [(seed, text.encode("utf-8"))] + ([(archived, archived_bytes)] if archived else [])
+        def git_mode(path):
+            try:
+                return "100755" if os.stat(path).st_mode & 0o111 else "100644"
+            except OSError:
+                return "100644"
+        items = [(seed, text.encode("utf-8"), git_mode(seed))] + (
+            [(archived, archived_bytes, git_mode(archived))] if archived else [])
         commit_step(a, scope, sid, directory, items)
         if not a.refresh_pulse:
             announce_seed(seed)
