@@ -218,6 +218,7 @@ Run in order; skip a step only by saying so with a reason. **Steps 1–3 are the
    A bare `[ -f "$SEED" ]` calls both a pass, and an unresolvable session id is a REFUSE too — otherwise an empty id matches a seed with no `session:` line and the check passes on nothing. There is no commit to make, no branch to push, and no `cat-file` to run: the previous three rounds of this checklist all failed inside that machinery. Whether the vault repo itself is committed and pushed is ordinary vault hygiene, not a precondition — the seed already exists at a stable absolute path that nothing this session does can delete.
 4. **Executive brief** — when a pulse delta crosses a WARN threshold or at package close, run `/visual-brief` into the vault (`$CLAUDE_BRIEF_DIR`) and open it. A warning is a reporting trigger, not a work-stopping gate. Run `/run-report` instead of a bare `/visual-brief` only when this session ran `prime-directive` or `tackle-issues` and that run has stopped or reached package close; otherwise, including a WARN-only or wave-boundary brief mid-run, stay with `/visual-brief`, which never marks the run stopped.
 5. **Capture learnings** — run `/learn` for genuinely novel lessons; "nothing novel" is a valid outcome, stated.
+5a. **Push the vault commits** — after your vault commits (the seed, ledger rows, notes), run `python3 ~/.claude/scripts/vault-sync.py push`; `vault-sync.py status` shows how many commits are still ahead. It is fast-forward only and refuses, before pushing anything, unless the remote repo is private and every unpushed commit passes its credential, sensitive-path and size scan. On a refusal, report it in the status block and leave the commits local; never force, and never reconcile a behind or diverged vault by hand without the owner. The vault is one shared checkout, so the push carries other sessions' local commits too.
 6. **Cleanup** — remove this session's worktrees (leave other sessions' worktrees alone), prune branches only after verifying each had a `MERGED` PR, stop dev daemons/servers started this session, restore any test-env mutations (none; this registry has no product service to stop).
 
    This step is **ungated on purpose**: `git worktree remove --force` deletes untracked files without prompting, and the seed is not in any worktree to be deleted. Anything else durable that got written into a worktree is committed and pushed before removal, or it is lost — so do not write durable things there.
@@ -252,7 +253,7 @@ cp assets/scripts/session-seed.py assets/scripts/session-pulse.py assets/scripts
    assets/scripts/review-result.py assets/scripts/rework-lag.py \
    assets/scripts/session-distill.py assets/scripts/pr-record.py \
    assets/scripts/gate-ledger.py assets/scripts/decision-record.py \
-   assets/scripts/seed-freshness.py ~/.claude/scripts/
+   assets/scripts/seed-freshness.py assets/scripts/vault-sync.py ~/.claude/scripts/
 cp assets/scripts/usage-trend.py assets/scripts/usage_accounting.py \
    ~/.claude/usage-history/
 ```
