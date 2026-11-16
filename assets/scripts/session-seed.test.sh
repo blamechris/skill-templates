@@ -1562,11 +1562,11 @@ new_vault m21
 MOVE="\"\$REAL_GIT\" -C '$TMP/m21/vault' update-ref refs/heads/main \$(\"\$REAL_GIT\" -C '$TMP/m21/vault' commit-tree 'HEAD^{tree}' -p HEAD -m other)"
 FAKE_GIT_LOG="$TMP/m21.log" FAKE_GIT_PRE_SUB=update-ref FAKE_GIT_PRE_CMD="$MOVE" mrun m21
 [ "$rc" -eq 0 ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: branch moved' \
-  && [ "$(V m21 log -1 --format=%s)" = other ] && [ "$(V m21 log --format=%s | grep -c '^other$')" -eq 3 ] \
+  && [ "$(V m21 log -1 --format=%s)" = other ] && [ "$(V m21 log --format=%s | grep -c '^other$')" -eq 5 ] \
   && [ -f "$TMP/m21/vault/handoffs/NEXT-demo.md" ] \
   && [ -z "$(V m21 ls-files -s -- handoffs)" ] && [ -z "$(V m21 status --porcelain | grep -E '^[ADMR]|^.[DM]')" ] \
-  && ok "M21 branch moved on every try: UNCOMMITTED, 3 builds, other commits kept, shared index restored" \
-  || bad "M21 branch moved on every try: UNCOMMITTED, 3 builds, other commits kept, shared index restored" "rc=$rc $(flat "$out") $(flat "$err") $(V m21 log --format=%s | tr '\n' ' ') idx=$(V m21 ls-files -s -- handoffs)"
+  && ok "M21 branch moved on every try: UNCOMMITTED after 5 attempts, other commits kept, shared index untouched" \
+  || bad "M21 branch moved on every try: UNCOMMITTED after 5 attempts, other commits kept, shared index untouched" "rc=$rc $(flat "$out") $(flat "$err") $(V m21 log --format=%s | tr '\n' ' ') idx=$(V m21 ls-files -s -- handoffs)"
 
 # M21b the branch moves once: the build is redone on the new HEAD and commits
 new_vault m21b
@@ -1610,30 +1610,9 @@ V m31 add -- handoffs/NEXT-demo.md; V m31 commit -q -m exec
 mrun m31
 [ "$rc" -eq 0 ] && [ "$(V m31 ls-tree HEAD -- handoffs/NEXT-demo.md | cut -c1-6)" = 100755 ] \
   && [ "$(V m31 ls-files -s -- handoffs/NEXT-demo.md | cut -c1-6)" = 100755 ] && printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}$' \
-  && ok "M31 existing mode (100755) is preserved in the commit and the index" \
-  || bad "M31 existing mode (100755) is preserved in the commit and the index" "rc=$rc $(flat "$out") $(flat "$err")"
-
-# M32 four parallel writers into one vault: all rc 0, every reported commit really holds its seed
-new_vault m32
-for i in 1 2 3 4; do new_repo "$TMP/m32/w$i"; done
-for i in 1 2 3 4; do
-  ( cd "$TMP/m32/w$i" && CLAUDE_HANDOFF_DIR="$TMP/m32/vault/handoffs" "$PY" "$SUT" write "${FILLED[@]}" \
-      --session "$MINE" --now "$STAMP" --picks-up-at 'x (agent Sol)' >"$TMP/m32.$i.out" 2>"$TMP/m32.$i.err"; echo $? > "$TMP/m32.$i.rc" ) &
-done
-wait
-committed=0; allok=1
-for i in 1 2 3 4; do
-  [ "$(cat "$TMP/m32.$i.rc")" -eq 0 ] || allok=0
-  if grep -Eq '^commit: [0-9a-f]{7,}$' "$TMP/m32.$i.out"; then
-    committed=$((committed+1))
-    [ -n "$(V m32 ls-tree HEAD -- "handoffs/NEXT-w$i.md")" ] || allok=0
-  else
-    grep -q '^UNCOMMITTED:' "$TMP/m32.$i.err" || allok=0
-  fi
-done
-[ "$allok" -eq 1 ] && [ "$committed" -ge 3 ] && [ -z "$(V m32 status --porcelain | grep -E '^[ADMR]|^.[DM]')" ] \
-  && ok "M32 four parallel writers: exit 0 each, $committed committed, no stale or staged entries" \
-  || bad "M32 four parallel writers: exit 0 each, $committed committed, no stale or staged entries" "allok=$allok committed=$committed $(V m32 status --porcelain | tr '\n' '|') $(cat "$TMP"/m32.*.err | tr '\n' '|')"
+  && [ -x "$TMP/m31/vault/handoffs/NEXT-demo.md" ] && [ -z "$(V m31 status --porcelain)" ] \
+  && ok "M31 existing mode (100755) is preserved in the commit, the index and the worktree; status is clean" \
+  || bad "M31 existing mode (100755) is preserved in the commit, the index and the worktree; status is clean" "rc=$rc $(flat "$out") $(flat "$err") $(V m31 status --porcelain | tr '\n' '|')"
 
 # M33 a successful --refresh-pulse commits the seed (and the archive of the previous session's)
 new_vault m33
@@ -1696,6 +1675,172 @@ FAKE_GIT_LOG="$TMP/m28.log" mrun m28
   && ! grep -Eq '^read-tree .*(-u|--reset)' "$TMP/m28.log" \
   && ok "M28 invocation log: plumbing only, no push/fetch/pull/reset/stash/checkout/commit/add" \
   || bad "M28 invocation log: plumbing only, no push/fetch/pull/reset/stash/checkout/commit/add" "rc=$rc log=$(cut -d' ' -f1 "$TMP/m28.log" | sort -u | tr '\n' ' ')"
+
+# ============================================================ GROUP N — the lock protocol
+# Deterministic interleavings come from a Python driver that imports the script and
+# injects the OTHER session's action at one exact point (no sleeps, no races to win).
+echo; echo "N. index.lock protocol"
+DRIVER="$TMP/driver.py"
+cat > "$DRIVER" <<'PY'
+import importlib.util, os, subprocess, sys
+spec = importlib.util.spec_from_file_location("ss", os.environ["SUT"])
+ss = importlib.util.module_from_spec(spec); spec.loader.exec_module(ss)
+mode, V, RG = os.environ["DRV_MODE"], os.environ["DRV_VAULT"], os.environ["REAL_GIT"]
+def g(*a, env=None, inp=None):
+    e = dict(os.environ); e.update(env or {})
+    return subprocess.run([RG, "-C", V, *a], capture_output=True, text=True, env=e, input=inp)
+def move(content=None):
+    """Another session moves the branch with plumbing; optionally to a commit holding `content` as the seed."""
+    tree = g("rev-parse", "HEAD^{tree}").stdout.strip()
+    if content is not None:
+        path = os.path.join(V, "handoffs", "NEXT-demo.md")
+        open(path, "w").write(content)
+        blob = g("hash-object", "-w", "--stdin", inp=content).stdout.strip()
+        idx = os.path.join(V, ".git", "drv-index")
+        g("read-tree", "HEAD", env={"GIT_INDEX_FILE": idx})
+        g("update-index", "--add", "--cacheinfo", "100644,%s,handoffs/NEXT-demo.md" % blob, env={"GIT_INDEX_FILE": idx})
+        tree = g("write-tree", env={"GIT_INDEX_FILE": idx}).stdout.strip()
+        os.unlink(idx)
+    new = g("commit-tree", tree, "-p", "HEAD", "-m", "moved").stdout.strip()
+    g("update-ref", "refs/heads/main", new)
+state = {"ur": 0, "acq": 0, "sleep": 0}
+real_cg, real_acq, real_sleep, real_replace = ss._cg, ss._acquire_index_lock, ss.time.sleep, ss.os.replace
+def cg(args, *a, **k):
+    if args[0] == "update-ref":
+        state["ur"] += 1
+        if state["ur"] == 1 and mode in ("plain_between", "newer_seed"):
+            move()
+    return real_cg(args, *a, **k)
+def acq(gitdir):
+    state["acq"] += 1
+    if mode == "plain_between" and state["acq"] == 2:      # between the lost CAS and the retry: lock is free
+        open(os.path.join(V, "other.txt"), "w").write("plain\n")
+        g("add", "other.txt"); g("commit", "-q", "-m", "plain")
+    if mode == "newer_seed" and state["acq"] == 2:         # B writes AND commits a newer seed, with a plain commit
+        open(os.path.join(V, "handoffs", "NEXT-demo.md"), "w").write("seed written by B\n")
+        g("add", "handoffs/NEXT-demo.md"); g("commit", "-q", "-m", "moved")
+    return real_acq(gitdir)
+def sleep(t):
+    state["sleep"] += 1
+    if mode == "staged_backoff" and state["sleep"] == 1:   # B stages the seed while we wait on the lock
+        os.unlink(os.path.join(V, ".git", "index.lock"))
+        blob = g("hash-object", "-w", "--stdin", inp="B staged this\n").stdout.strip()
+        g("update-index", "--add", "--cacheinfo", "100644,%s,handoffs/NEXT-demo.md" % blob)
+    return real_sleep(t)
+def replace(src, dst):
+    if mode == "publish_fail" and str(src).endswith("index.lock"):
+        raise OSError("injected publish failure")
+    return real_replace(src, dst)
+ss._cg, ss._acquire_index_lock, ss.time.sleep, ss.os.replace = cg, acq, sleep, replace
+sys.exit(ss.main(["write"] + sys.argv[1:]))
+PY
+drun() {                # <case> <mode> [args...] -> $out $err $rc
+  local c=$1 m=$2; shift 2
+  (cd "$TMP/$c/demo" && DRV_MODE=$m DRV_VAULT="$TMP/$c/vault" SUT="$SUT" CLAUDE_HANDOFF_DIR="$TMP/$c/vault/handoffs" \
+     "$PY" "$DRIVER" "${FILLED[@]}" --session "$MINE" --now "$STAMP" --picks-up-at 'the next thing (agent Sol)' "$@" \
+     >"$TMP/$c.stdout" 2>"$TMP/$c.stderr"); rc=$?
+  out=$(cat "$TMP/$c.stdout"); err=$(cat "$TMP/$c.stderr")
+}
+staged_or_modified() { V "$1" status --porcelain | grep -E '^[ADMRC]|^.[DM]'; }
+
+# N1 (a) a plain commit lands between the lost CAS and the retry: no staged deletion or revert
+new_vault n1
+drun n1 plain_between
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}$' \
+  && [ "$(V n1 ls-tree HEAD -- handoffs/NEXT-demo.md | wc -l | tr -d ' ')" -eq 1 ] \
+  && [ -n "$(V n1 ls-tree HEAD -- other.txt)" ] && [ -z "$(staged_or_modified n1)" ] \
+  && ok "N1 (a) plain commit between CAS loss and retry: seed and the other commit both in HEAD, nothing staged" \
+  || bad "N1 (a) plain commit between CAS loss and retry: seed and the other commit both in HEAD, nothing staged" "rc=$rc $(flat "$out") $(flat "$err") $(V n1 status --porcelain | tr '\n' '|')"
+
+# N2 while we hold the lock another `git add` fails and leaves the index alone
+new_vault n2
+echo o > "$TMP/n2/vault/other.txt"
+FAKE_GIT_LOG="$TMP/n2.log" FAKE_GIT_PRE_SUB=update-ref \
+  FAKE_GIT_PRE_CMD="\"\$REAL_GIT\" -C '$TMP/n2/vault' add other.txt 2>'$TMP/n2.adderr'; echo \$? > '$TMP/n2.addrc'" mrun n2
+[ "$rc" -eq 0 ] && [ "$(cat "$TMP/n2.addrc")" -ne 0 ] && grep -q 'index.lock' "$TMP/n2.adderr" \
+  && [ -z "$(V n2 diff --cached --name-only | grep other.txt)" ] \
+  && printf '%s' "$out" | grep -Eq '^commit: [0-9a-f]{7,}$' && [ ! -e "$TMP/n2/vault/.git/index.lock" ] \
+  && ok "N2 while we hold index.lock a concurrent git add fails, the index is untouched, the lock is gone after" \
+  || bad "N2 while we hold index.lock a concurrent git add fails, the index is untouched, the lock is gone after" "rc=$rc addrc=$(cat "$TMP/n2.addrc" 2>/dev/null) $(flat "$out") $(flat "$err")"
+
+# N3 (b) B stages the seed while we wait for the lock: UNCOMMITTED and B's entry is intact
+new_vault n3
+: > "$TMP/n3/vault/.git/index.lock"
+blobB=$(printf 'B staged this\n' | git -C "$TMP/n3/vault" hash-object -w --stdin)
+head_before=$(V n3 rev-parse HEAD)
+CLAUDE_SEED_LOCK_WAIT=10 drun n3 staged_backoff
+[ "$rc" -eq 0 ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: handoffs/NEXT-demo.md has separately staged changes' \
+  && [ "$(V n3 ls-files -s -- handoffs/NEXT-demo.md | awk '{print $2}')" = "$blobB" ] && [ "$(V n3 rev-parse HEAD)" = "$head_before" ] \
+  && [ ! -e "$TMP/n3/vault/.git/index.lock" ] \
+  && ok "N3 (b) staged by B during our backoff: UNCOMMITTED, B's entry and HEAD intact, lock released" \
+  || bad "N3 (b) staged by B during our backoff: UNCOMMITTED, B's entry and HEAD intact, lock released" "rc=$rc $(flat "$out") $(flat "$err")"
+
+# N4 (c) B commits a newer seed before our retry: UNCOMMITTED, HEAD is B's, the worktree is B's
+new_vault n4
+drun n4 newer_seed
+[ "$rc" -eq 0 ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: seed changed' \
+  && [ "$(V n4 log -1 --format=%s)" = moved ] && [ "$(V n4 show HEAD:handoffs/NEXT-demo.md)" = "seed written by B" ] \
+  && [ "$(cat "$TMP/n4/vault/handoffs/NEXT-demo.md")" = "seed written by B" ] && [ -z "$(staged_or_modified n4)" ] \
+  && ok "N4 (c) newer seed committed by B: UNCOMMITTED, HEAD and worktree are B's, nothing stale committed" \
+  || bad "N4 (c) newer seed committed by B: UNCOMMITTED, HEAD and worktree are B's, nothing stale committed" "rc=$rc $(flat "$out") $(flat "$err") $(V n4 status --porcelain | tr '\n' '|')"
+
+# N5 publish failure after the CAS: loud message with repair commands, exit 0, lock removed
+new_vault n5
+drun n5 publish_fail
+[ "$rc" -eq 0 ] && printf '%s' "$err" | grep -q '^UNCOMMITTED: committed [0-9a-f]\{7,\} but shared index not refreshed' \
+  && printf '%s' "$err" | grep -q 'update-index --add --cacheinfo 100644,' \
+  && [ "$(V n5 show --name-only --format= HEAD)" = "handoffs/NEXT-demo.md" ] && [ ! -e "$TMP/n5/vault/.git/index.lock" ] \
+  && ok "N5 publish failure after CAS: loud UNCOMMITTED with repair commands, exit 0, lock removed" \
+  || bad "N5 publish failure after CAS: loud UNCOMMITTED with repair commands, exit 0, lock removed" "rc=$rc $(flat "$out") $(flat "$err")"
+
+# N6 split index + index v4 + untracked cache: committed, readable, clean, and a second write works
+new_vault n6
+V n6 config core.splitIndex true; V n6 config index.version 4; V n6 config core.untrackedCache true
+V n6 update-index --split-index; echo more > "$TMP/n6/vault/more.txt"; V n6 add -- more.txt; V n6 commit -q -m more
+mrun n6
+first_rc=$rc; first_out=$out
+(cd "$TMP/n6/demo" && CLAUDE_HANDOFF_DIR="$TMP/n6/vault/handoffs" "$PY" "$SUT" write "${FILLED[@]}" --session "$MINE" \
+   --now 2026-08-12T00:00:00Z --picks-up-at 'the next thing (agent Sol)' >"$TMP/n6.2.out" 2>"$TMP/n6.2.err"); rc2=$?
+[ "$first_rc" -eq 0 ] && printf '%s' "$first_out" | grep -Eq '^commit: [0-9a-f]{7,}$' \
+  && [ "$rc2" -eq 0 ] && grep -Eq '^commit: [0-9a-f]{7,}$' "$TMP/n6.2.out" \
+  && [ "$(V n6 rev-list --count HEAD)" -eq 4 ] && V n6 status --porcelain >/dev/null && [ -z "$(staged_or_modified n6)" ] \
+  && ok "N6 split index, index v4, untracked cache: two writes commit and the index stays readable and clean" \
+  || bad "N6 split index, index v4, untracked cache: two writes commit and the index stays readable and clean" "rc=$first_rc/$rc2 $(flat "$first_out") $(cat "$TMP/n6.2.err" | tr '\n' '|') $(V n6 status --porcelain | tr '\n' '|')"
+
+# N7 organic: 8 parallel writers + a looping `git add; git commit` session, 3 rounds
+new_vault n7
+for i in 1 2 3 4 5 6 7 8; do new_repo "$TMP/n7/w$i"; done
+echo 0 > "$TMP/n7/vault/other.txt"; V n7 add -- other.txt; V n7 commit -q -m other
+( while [ ! -e "$TMP/n7.stop" ]; do echo x >> "$TMP/n7/vault/other.txt"; \
+    git -C "$TMP/n7/vault" add -- other.txt 2>/dev/null && git -C "$TMP/n7/vault" commit -q -m loop 2>/dev/null; done ) &
+looper=$!
+committed=0; allok=1; detail=
+for r in 1 2 3; do
+  pids=
+  for i in 1 2 3 4 5 6 7 8; do
+    ( cd "$TMP/n7/w$i" && CLAUDE_HANDOFF_DIR="$TMP/n7/vault/handoffs" "$PY" "$SUT" write "${FILLED[@]}" \
+        --session "$MINE" --now "2026-08-1${r}T00:00:00Z" --picks-up-at 'x (agent Sol)' \
+        >"$TMP/n7.$r.$i.out" 2>"$TMP/n7.$r.$i.err"; echo $? > "$TMP/n7.$r.$i.rc" ) &
+    pids="$pids $!"
+  done
+  for p in $pids; do wait "$p"; done
+  for i in 1 2 3 4 5 6 7 8; do
+    [ "$(cat "$TMP/n7.$r.$i.rc")" -eq 0 ] || { allok=0; detail="$detail rc($r,$i)"; }
+    if grep -Eq '^commit: [0-9a-f]{7,}$' "$TMP/n7.$r.$i.out"; then
+      committed=$((committed+1))
+      V n7 show "HEAD:handoffs/NEXT-w$i.md" > "$TMP/n7.blob" 2>/dev/null
+      cmp -s "$TMP/n7.blob" "$TMP/n7/vault/handoffs/NEXT-w$i.md" || { allok=0; detail="$detail stale($r,$i)"; }
+    else
+      grep -q '^UNCOMMITTED:' "$TMP/n7.$r.$i.err" || { allok=0; detail="$detail silent($r,$i)"; }
+    fi
+  done
+done
+touch "$TMP/n7.stop"; wait "$looper"
+deleted=$(V n7 log --diff-filter=D --name-only --format= -- handoffs | wc -l | tr -d ' ')
+stagedseed=$(V n7 status --porcelain | grep -E '^[ADMRC] +handoffs' | wc -l | tr -d ' ')
+[ "$allok" -eq 1 ] && [ "$deleted" -eq 0 ] && [ "$stagedseed" -eq 0 ] && [ "$committed" -ge 18 ] \
+  && ok "N7 8 writers x 3 rounds beside a commit loop: $committed/24 committed, none stale, none deleted or left staged" \
+  || bad "N7 8 writers x 3 rounds beside a commit loop: $committed/24 committed, none stale, none deleted or left staged" "allok=$allok$detail deleted=$deleted staged=$stagedseed committed=$committed"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1

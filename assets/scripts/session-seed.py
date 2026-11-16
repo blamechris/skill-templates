@@ -62,30 +62,42 @@ THE COMMIT STEP (after the proof, never before it)
   `git commit`: the bytes the writer proved (and the archive's bytes, read right
   after it was made) are hashed with --no-filters, put into a PRIVATE index read
   from HEAD, written to a tree and committed with commit-tree. An existing path
-  keeps its mode (100755 stays 100755); a new one is 100644. No commit hook runs (a
-  `reference-transaction` hook, if installed, still sees the ref update) and the
-  shared index is never read-tree'd, reset or locked for the BUILD.
-  ORDER, because the shared index must never be left stale under a moved HEAD (that
-  shows as a staged revert the next plain commit would make): (1) pre-check that
-  neither path has a separately staged entry; (2) build the commit; (3) move ONLY
-  those shared-index entries to the new blob, each only while it still equals old
-  HEAD's entry, waiting out a held index.lock for CLAUDE_SEED_LOCK_WAIT seconds
-  (default 5) and committing nothing if it never clears; (4) compare-and-swap the
-  branch with update-ref; (5) if the swap loses, put the entries back to what HEAD
-  then holds (only where they still equal what was written) and, if the branch moved, redo
-  the whole build on the new HEAD, up to two more times, then `UNCOMMITTED: branch
-  moved`. ACCEPTED RESIDUAL WINDOW: another session's plain commit landing between
-  (3) and (4) would include our new seed bytes — which preserves the content and
-  never reverts it. The pre-check in (1) and the refresh in (3) are likewise a
-  check-then-act pair; (3) re-checks each entry first, and cannot be made atomic.
+  keeps its mode (100755 stays 100755, in the commit and in the worktree); a new
+  one is 100644. No commit hook runs (a `reference-transaction` hook, if installed,
+  still sees the ref update).
+  THE LOCK PROTOCOL. The shared index is only ever changed under git's OWN lock,
+  `<git-dir>/index.lock` (per-worktree: --git-dir, not --git-common-dir), taken
+  with O_CREAT|O_EXCL, and is written exactly once, at the end, the way git
+  publishes an index: the new bytes go into the lock file, which is renamed over
+  `index`. In order, per attempt: (1) take the lock, waiting out a holder with
+  jittered backoff for CLAUDE_SEED_LOCK_WAIT seconds (default 5), else
+  `UNCOMMITTED: shared index locked` with nothing changed; (2) under it, read HEAD
+  and the shared-index entries of the owned paths: each must equal HEAD's entry or
+  exactly what this run means to write, else `separately staged changes`; on a
+  retry, a path another commit changed to anything but where we started or what we
+  intend is `seed changed by another commit`; the canonical seed is re-verified
+  against the proved bytes on every attempt; (3) build the tree and the commit;
+  (4) prepare the index's next contents as a COPY beside it; (5) compare-and-swap
+  the branch with update-ref; if it loses, drop the copy and the lock and start
+  over (up to 5 attempts, jittered, then `UNCOMMITTED: branch moved`) — the shared
+  index was never touched, so there is NOTHING to roll back, which is why there is
+  no rollback code: a rollback is a second write that races whatever commit moved
+  the branch; (6) only after the swap wins, publish the copy. If that final step
+  fails the commit exists and stderr says `UNCOMMITTED: committed <sha> but shared
+  index not refreshed` followed by the exact repair commands.
+  COST OF THE LOCK: while we hold index.lock any other git command that needs the
+  index (add, commit, status --refresh...) fails with the usual "index.lock exists"
+  message. The critical section is a handful of local plumbing calls with no network
+  and no prompts. The only unbounded thing in it is a signing hang, because
+  `commit.gpgsign=true` is honoured (commit-tree -S): each git call is bounded by
+  CLAUDE_SEED_GIT_TIMEOUT seconds (default 20) and the whole process group is killed
+  on expiry, so a gpg or pinentry child cannot outlive git; the result is
+  `UNCOMMITTED`, never a failed write.
   If either path has a separately staged entry, HEAD is detached, the seed changed
-  after the proof, a git call exceeds CLAUDE_SEED_GIT_TIMEOUT seconds (default 20;
-  the whole process group is killed, so a gpg or pinentry child cannot outlive git)
-  or anything else fails, nothing is committed. `commit.gpgsign=true` is honoured
-  (commit-tree -S); a signing failure or hang becomes `UNCOMMITTED`, never a failed
-  write. Every git call OF THE COMMIT STEP drops the GIT_DIR / GIT_INDEX_FILE /
-  GIT_WORK_TREE family and runs with LC_ALL=C; scope resolution and `verify` still
-  inherit the caller's environment, which is a pre-existing limit and not changed here.
+  after the proof or anything else fails, nothing is committed. Every git call OF
+  THE COMMIT STEP drops the GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE family and runs
+  with LC_ALL=C; scope resolution and `verify` still inherit the caller's
+  environment, which is a pre-existing limit and not changed here.
   It never pushes, fetches, pulls, rebases, stashes, resets, restores or checks out.
   A failed commit is NEVER a failed write: the seed is already on disk and proved,
   so the step prints `UNCOMMITTED: <reason>` on stderr and the exit stays 0. It is
@@ -98,6 +110,7 @@ import argparse
 import errno
 import json
 import os
+import random
 import re
 import shutil
 import signal
@@ -1021,53 +1034,42 @@ def _lock_wait():
         return 5.0
 
 
-def _set_index_entry(repo, rel, entry):
-    """Point ONE shared-index entry at `entry` ((mode, blob), or None to drop it).
+def _acquire_index_lock(gitdir):
+    """Take git's OWN index lock: create <git-dir>/index.lock with O_CREAT|O_EXCL.
 
-    A held index.lock is retried with a short backoff for CLAUDE_SEED_LOCK_WAIT
-    seconds (default 5); anything else, or a lock that never clears, raises.
+    This is the lock every porcelain command takes before it touches the index, so
+    while we hold it a concurrent `git add` or `git commit` fails instead of racing
+    us. A held lock is retried with jittered backoff for CLAUDE_SEED_LOCK_WAIT
+    seconds (default 5); past that nothing has been changed. Returns (path, fd).
     """
-    if entry is None:
-        args = ["update-index", "--force-remove", "--", rel]
-    else:
-        args = ["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (entry[0], entry[1], rel)]
+    path = os.path.join(gitdir, "index.lock")
     deadline = time.monotonic() + _lock_wait()
-    delay = 0.05
+    delay = 0.02
     while True:
         try:
-            _cg(args, repo)
-            return
-        except Uncommitted as e:
-            if "index.lock" not in str(e):
-                raise
+            return path, os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        except FileExistsError:
             if time.monotonic() >= deadline:
                 raise Uncommitted("shared index locked")
-            time.sleep(delay)
-            delay = min(delay * 2, 0.5)
+            time.sleep(random.uniform(delay / 2, delay))
+            delay = min(delay * 2, 0.4)
+        except OSError as e:
+            raise Uncommitted("cannot take %s (%s)" % (path, e))
 
 
-def _rollback_index(repo, written):
-    """Undo OUR refresh: put each entry back to what HEAD holds NOW, but only where the
-    index still has exactly what we wrote. (HEAD "now" is old HEAD unless the branch
-    moved; if a plain commit swept our blob in, the entry is already right and stays.)"""
-    notes = []
+def _check_proof(items):
+    """The canonical seed must still be exactly what the writer proved."""
+    canonical_path, proved = items[0]
+    for path, data in items:
+        if data is None:
+            raise Uncommitted("could not read %s after archiving" % path)
     try:
-        rc, cur, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
-        cur = cur.strip() if rc == 0 else None
-    except Uncommitted as e:
-        return ["shared index not restored (%s); check `git status`" % e]
-    for rel, entry in written.items():
-        try:
-            if _index_entry(repo, rel) == entry:
-                target = _tree_entry(repo, cur, rel)
-                if target != entry:
-                    _set_index_entry(repo, rel, target)
-            else:
-                notes.append("%s changed in the shared index meanwhile; left alone" % rel)
-        except Uncommitted as e:
-            notes.append("shared index entry for %s could not be restored (%s); run "
-                         "`git restore --staged -- %s` yourself" % (rel, e, rel))
-    return notes
+        with open(canonical_path, "rb") as f:
+            current = f.read()
+    except OSError as e:
+        raise Uncommitted("seed changed after proof (%s)" % e)
+    if current != proved:
+        raise Uncommitted("seed changed after proof")
 
 
 def _commit_plumbing(scope, sid, directory, items):
@@ -1092,20 +1094,15 @@ def _commit_plumbing(scope, sid, directory, items):
         if rc == 0:
             raise Uncommitted("%s is git-ignored in %s, so it is not committed" % (rel, repo))
 
+    # Per-worktree: --git-dir, never --git-common-dir, because index and index.lock
+    # of a linked worktree live in ITS git dir.
+    _, gd, _ = _cg(["rev-parse", "--absolute-git-dir"], repo)
+    gitdir = os.path.realpath(gd.strip())
+
     # Bind to the proof: the bytes committed are the bytes the writer proved, from
-    # memory, never re-read from the file. Re-reading the canonical seed is only the
-    # tripwire for another writer having replaced it since.
-    canonical_path, proved = items[0]
-    for path, data in items:
-        if data is None:
-            raise Uncommitted("could not read %s after archiving" % path)
-    try:
-        with open(canonical_path, "rb") as f:
-            current = f.read()
-    except OSError as e:
-        raise Uncommitted("seed changed after proof (%s)" % e)
-    if current != proved:
-        raise Uncommitted("seed changed after proof")
+    # memory, never re-read from the file. Re-reading the canonical seed (on every
+    # attempt, below) is only the tripwire for another writer having replaced it.
+    _check_proof(items)
     blobs = {}
     for (path, data), rel in zip(items, rels):
         # --no-filters: a clean filter or autocrlf must not rewrite what was proved.
@@ -1113,40 +1110,64 @@ def _commit_plumbing(scope, sid, directory, items):
         blobs[rel] = sha.strip()
 
     msg = "handoffs: seed %s (%s)" % (scope, slug(sid))
-    for _attempt in range(3):              # the build is redone twice if the branch moves
-        if _build_and_swap(repo, rels, blobs, msg) is not None:
+    state = {"orig": None}
+    for attempt in range(5):
+        if attempt:
+            time.sleep(random.uniform(0.02, 0.2))
+        if _attempt(repo, gitdir, rels, blobs, items, msg, state) is not None:
             return
     raise Uncommitted("branch moved")
 
 
-def _build_and_swap(repo, rels, blobs, msg):
-    """One attempt. True/printed on success or unchanged; None if the branch moved (retry)."""
-    rc, ref, _ = _cg(["symbolic-ref", "-q", "HEAD"], repo, ok=(0, 1))
-    if rc != 0:
-        raise Uncommitted("detached HEAD")
-    ref = ref.strip()
-    rc, old, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
-    old = old.strip() if rc == 0 else None          # None: an unborn branch, no parent
+def _attempt(repo, gitdir, rels, blobs, items, msg, state):
+    """One locked attempt. True when finished (committed, unchanged, or published
+    with a loud repair note); None when the branch moved and the caller retries.
 
-    # OWNERSHIP, read-only against the SHARED index: if another session has staged
-    # either path, the shared index holds something this write did not put there, and
-    # committing "our" version would either bury it or lie about it. Commit nothing.
-    heads, entries = {}, {}
-    for rel in rels:
-        heads[rel] = _tree_entry(repo, old, rel)
-        if _index_entry(repo, rel) != heads[rel]:
-            raise Uncommitted("%s has separately staged changes" % rel)
-        # An existing path keeps its mode (a 100755 seed stays 100755); a new one is 100644.
-        entries[rel] = ((heads[rel][0] if heads[rel] else "100644"), blobs[rel])
-
-    tmpd = tempfile.mkdtemp(prefix="seed-index-")
+    EVERYTHING below runs under <git-dir>/index.lock, and the shared index is
+    written exactly once, at the very end, by git's own publish step (write the lock
+    file, rename it over `index`). Until then it is only READ, so a lost
+    compare-and-swap leaves nothing to roll back — which is the point: a rollback
+    is a second write that races whatever commit moved the branch.
+    """
+    lock_path, fd = _acquire_index_lock(gitdir)
+    replaced = False
+    copy = os.path.join(gitdir, "index.seed.%d" % os.getpid())
+    tmpd = None
     try:
-        # A PRIVATE index: the shared one is never read-tree'd, reset or locked for the build.
-        idx = {"GIT_INDEX_FILE": os.path.join(tmpd, "index")}
+        _check_proof(items)
+        rc, ref, _ = _cg(["symbolic-ref", "-q", "HEAD"], repo, ok=(0, 1))
+        if rc != 0:
+            raise Uncommitted("detached HEAD")
+        ref = ref.strip()
+        rc, old, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
+        old = old.strip() if rc == 0 else None      # None: an unborn branch, no parent
+
+        heads, intended = {}, {}
+        for rel in rels:
+            heads[rel] = _tree_entry(repo, old, rel)
+            # An existing path keeps its mode (100755 stays 100755); a new one is 100644.
+            intended[rel] = ((heads[rel][0] if heads[rel] else "100644"), blobs[rel])
+        if state["orig"] is None:
+            state["orig"] = dict(heads)
+        else:
+            # A retry: the branch moved. It may move for anyone's reasons, but not by
+            # changing a path we own to something we did not start from or intend.
+            for rel in rels:
+                if heads[rel] not in (state["orig"][rel], intended[rel]):
+                    raise Uncommitted("seed changed by another commit (%s)" % rel)
+        # OWNERSHIP, read under the lock: the shared index may hold HEAD's entry or
+        # exactly what we mean to write, nothing else. Anything else is another
+        # session's staged work, which this write must neither bury nor adopt.
+        for rel in rels:
+            if _index_entry(repo, rel) not in (heads[rel], intended[rel]):
+                raise Uncommitted("%s has separately staged changes" % rel)
+
+        tmpd = tempfile.mkdtemp(prefix="seed-index-")
+        idx = {"GIT_INDEX_FILE": os.path.join(tmpd, "index")}     # PRIVATE index for the tree
         if old is not None:
             _cg(["read-tree", old], repo, idx)
         for rel in rels:
-            _cg(["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (entries[rel] + (rel,))], repo, idx)
+            _cg(["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (intended[rel] + (rel,))], repo, idx)
         _, tree, _ = _cg(["write-tree"], repo, idx)
         tree = tree.strip()
         if old is not None:
@@ -1157,45 +1178,74 @@ def _build_and_swap(repo, rels, blobs, msg):
         sign = []
         rc, g, _ = _cg(["config", "--bool", "--get", "commit.gpgsign"], repo, ok=(0, 1))
         if rc == 0 and g.strip() == "true":
-            sign = ["-S"]                  # honoured, not overridden; the timeout bounds a hang
+            sign = ["-S"]          # honoured; a hang is bounded by the per-call timeout
         ct = ["commit-tree", tree] + (["-p", old] if old else []) + sign + ["-m", msg]
         _, new, _ = _cg(ct, repo)
         new = new.strip()
-    finally:
-        shutil.rmtree(tmpd, ignore_errors=True)
 
-    # REFRESH the shared index BEFORE the ref moves. Done after, a failed or raced
-    # refresh leaves the index at the old blobs under a HEAD that has the new ones,
-    # which `status` shows as a staged revert that the next plain commit would make.
-    # Each entry moves only while it still equals old HEAD's. A held index.lock is
-    # waited out; if it never clears nothing has been committed.
-    written = {}
-    try:
+        # The shared index's NEXT contents, prepared as a COPY next to it; the real
+        # file is untouched until the branch has moved.
+        index_path = os.path.join(gitdir, "index")
+        if os.path.exists(index_path):
+            shutil.copyfile(index_path, copy)
         for rel in rels:
-            if _index_entry(repo, rel) != heads[rel]:
-                raise Uncommitted("%s has separately staged changes" % rel)
-            _set_index_entry(repo, rel, entries[rel])
-            written[rel] = entries[rel]
-    except Uncommitted:
-        for n in _rollback_index(repo, written):
-            print("note: %s" % n, file=sys.stderr)
-        raise
+            _cg(["update-index", "--add", "--cacheinfo", "%s,%s,%s" % (intended[rel] + (rel,))],
+                repo, {"GIT_INDEX_FILE": copy})
 
-    # Compare-and-swap: only moves the branch if it is still where `old` was. `""`
-    # is "must not exist yet" for an unborn branch. (update-ref runs the
-    # reference-transaction hook if one is installed; commit hooks never run.)
-    try:
-        _cg(["update-ref", "-m", msg, ref, new, old or ""], repo)
-    except Uncommitted as e:
-        for n in _rollback_index(repo, written):
-            print("note: %s" % n, file=sys.stderr)
-        rc, now, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
-        if (now.strip() if rc == 0 else None) != old:
-            return None                    # the branch moved: the caller rebuilds on the new HEAD
-        raise Uncommitted("ref update failed (%s)" % e)
-    _, short, _ = _cg(["rev-parse", "--short", new], repo)
-    print("commit: %s" % (short.strip() or new))
-    return True
+        # Compare-and-swap. `""` is "must not exist yet" for an unborn branch.
+        # (update-ref runs the reference-transaction hook if one is installed;
+        # commit hooks never run.)
+        try:
+            _cg(["update-ref", "-m", msg, ref, new, old or ""], repo)
+        except Uncommitted as e:
+            rc, now, _ = _cg(["rev-parse", "-q", "--verify", "HEAD"], repo, ok=(0, 1))
+            if (now.strip() if rc == 0 else None) != old:
+                return None                # the branch moved; the index was never touched
+            raise Uncommitted("ref update failed (%s)" % e)
+
+        # Publish exactly as git does: the new bytes go into the lock file, which is
+        # then renamed over `index`.
+        try:
+            with open(copy, "rb") as f:
+                data = f.read() if os.path.exists(copy) else b""
+            os.write(fd, data)
+            os.fsync(fd)
+            os.close(fd)
+            fd = None
+            os.replace(lock_path, index_path)
+            replaced = True
+        except OSError as e:
+            repair = "; ".join("git -C %s update-index --add --cacheinfo %s,%s,%s"
+                               % (repo, intended[rel][0], intended[rel][1], rel) for rel in rels)
+            print("UNCOMMITTED: committed %s but shared index not refreshed (%s). The commit "
+                  "exists; until the index is repaired `git status` shows a staged revert of "
+                  "these paths. Repair: %s" % (new[:12], e, repair), file=sys.stderr)
+            return True
+        try:
+            _, short, _ = _cg(["rev-parse", "--short", new], repo)
+            short = short.strip() or new[:7]
+        except Uncommitted:
+            short = new[:7]
+        print("commit: %s" % short)
+        return True
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if not replaced:
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+        for leftover in (copy,):
+            try:
+                os.unlink(leftover)
+            except OSError:
+                pass
+        if tmpd:
+            shutil.rmtree(tmpd, ignore_errors=True)
 
 
 def commit_own_paths(scope, sid, directory, items):
@@ -1220,7 +1270,7 @@ def commit_own_paths(scope, sid, directory, items):
 
 
 
-def atomic_write(path, text):
+def atomic_write(path, text, mode=None):
     """Write via a sibling temp file, so a failure never leaves a truncated seed.
 
     In a read-only handoff dir this fails at the temp file rather than truncating
@@ -1233,6 +1283,8 @@ def atomic_write(path, text):
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)         # a 100755 seed stays executable in the worktree
         os.replace(tmp, path)
     except OSError as e:
         try:
@@ -1320,7 +1372,12 @@ def finish_write(a, scope, sid, now, text):
 
     archived = None
     archived_bytes = None
+    prior_mode = None
     if os.path.exists(seed):
+        try:
+            prior_mode = stat.S_IMODE(os.stat(seed).st_mode)
+        except OSError:
+            prior_mode = None
         prev = incumbent_session(seed)
         if prev != sid:
             archived = archive(seed, scope, directory, now.strftime("%Y%m%dT%H%M%SZ"))
@@ -1332,7 +1389,7 @@ def finish_write(a, scope, sid, now, text):
             except OSError:
                 archived_bytes = None
 
-    atomic_write(seed, text)
+    atomic_write(seed, text, prior_mode)
 
     if archived:
         print("archived: %s" % archived)
