@@ -22,8 +22,8 @@ the subcommand.
 |---|---|
 | 0 | pushed, or nothing to push |
 | 1 | refused; nothing was sent |
-| 2 | usage or environment error (not a git repo, detached HEAD, no upstream, damaged index, unexpected failure before anything was sent) |
-| 3 | transport failure or an outcome that could not be confirmed; a push may have partially succeeded. Run `vault-sync.py status` after fetching. A failed remote fetch also exits 3 and says nothing was pushed. Any unexpected exception after the push began is also 3 |
+| 2 | usage or environment error (not a git repo, detached HEAD, no upstream, damaged index, git older than 2.32, unexpected failure before anything was sent) |
+| 3 | transport failure or an outcome that could not be confirmed; a push may have partially succeeded. Run `vault-sync.py status` after fetching. A failed remote fetch also exits 3, with a message saying nothing was pushed (so exit 3 does not always mean a push began). Any unexpected exception after the push began is also 3 |
 
 **`status`** is offline and read-only (`--no-optional-locks`, no fetch). It resolves the upstream with
 `rev-parse --abbrev-ref --symbolic-full-name @{u}`, checks every return code, and prints
@@ -41,7 +41,7 @@ repository that the script creates and deletes.
    walks). Refuse a mirror remote. `git remote get-url --all` and `--push --all` must each return exactly
    one URL, both naming the same repository on `github.com` in https or ssh/scp form with no embedded
    credentials. Pin `head_oid = HEAD`.
-2. **Destination.** The script builds the canonical URL itself: `https://github.com/<owner>/<repo>.git`.
+2. **Destination.** Design premise: the push is pinned to the repository the vault's own URLs name, and the check is that this repository is private. Any private github.com repository reachable with the user's `gh` token therefore passes; the script does not know which repository the vault *should* be. The script builds the canonical URL itself: `https://github.com/<owner>/<repo>.git`.
    It is https only, even when the vault remote is ssh/scp. The vault's own URL string is never passed to
    transport git. `gh api repos/<owner>/<repo> --hostname github.com --jq .visibility` must print
    `private`, checked before any network git call. `gh` runs with a rebuilt environment: `GH_HOST`,
@@ -66,6 +66,10 @@ repository that the script creates and deletes.
 
 `--dry-run` runs everything up to and including the scan and pushes nothing.
 
+Proxy and CA environment variables (`*_proxy`, `NO_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`) are dropped for transport git, as for `gh`. Git 2.32 or newer is required.
+
+**Signals.** SIGTERM, SIGINT and SIGHUP are only recorded. A signal that arrives before the push begins kills the current child's process group, cleans up (private ref and temporary repository), prints `REFUSED: interrupted, nothing sent` and exits 1; the default signal disposition is not re-raised, so the exit-code contract holds. Once the push has begun, the push and the `ls-remote` verification are allowed to finish (each has a timeout) and the exit is 0 if verified, otherwise 3. Cleanup always runs.
+
 A configured `gh auth git-credential` helper runs during the fetch and push to github.com; that is the one
 helper that can run. If the process is killed with SIGKILL the temporary repository and the private vault
 ref may be left behind; they are harmless and the next run uses a new pid. The script trusts the
@@ -85,7 +89,10 @@ bytes is also decoded as UTF-16 little and big endian. Any finding is a refusal:
   `ghu_`, `ghs_`, `ghr_`, `github_pat_`), `sk-` keys, `sk_live_`/`sk_test_`, Slack `xox[abpr]-`, `AKIA`
   plus 16 characters, a PEM `BEGIN ... PRIVATE KEY` header, JWT-shaped strings, `password`/`secret`/
   `token`/`api_key` assignments whose value is 8 or more characters with a digit or mixed case, and
-  `bearer` plus a long token;
+  `bearer` plus a long token; URL userinfo (`://user:password@`), npm, GitLab (`glpat-`), Hugging Face
+  (`hf_`), Google API (`AIza`) and SendGrid (`SG.`) tokens, an `aws_secret_access_key` assignment and an
+  `Authorization: Basic` header. The generic keyword rule deliberately requires a value of 8 or more
+  characters with a digit or mixed case, so low-entropy values such as `password: changeme-please` pass;
 - a credential-shaped path, or an added or modified path whose basename matches `.env*`, `*.pem`,
   `*.key`, `id_rsa*`, `id_ed25519*`, `*credentials*`, `*.p12` or `*.keychain*`;
 - a blob over 50 MB (refused outright, never partially scanned) or a Git LFS pointer (its payload is not
@@ -95,9 +102,11 @@ bytes is also decoded as UTF-16 little and big endian. Any finding is a refusal:
 
 A refusal prints the short commit OID, the path, the line number and the rule name, and never a matched
 value. Every printed field passes through one sanitizer that replaces credential-shaped substrings with
-`<redacted>` and escapes control characters; this covers paths, branch names and error text. Subprocess
-stderr is discarded. All output goes through one printer that tolerates a closed or broken stdout without
-changing the exit code.
+`<redacted>` and escapes control characters, bidirectional controls (U+200E/F, U+202A-E, U+2066-9) and the
+line and paragraph separators U+2028/9; this covers paths, branch names and error text. Subprocess stderr is
+discarded. All output goes through one printer that tolerates a missing, closed or broken stdout and stderr
+(including `None`): a write failure is swallowed and never changes the exit code. With both closed, a push
+still runs and exits 0 or 3, but its refusal text cannot be seen, so check the exit code.
 
 **There is no override.** A refusal tells the agent to leave the commits as they are and report it; the owner
 reviews the listed commits and, if they are false positives, pushes by hand.

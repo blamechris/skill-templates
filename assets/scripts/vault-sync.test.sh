@@ -21,6 +21,8 @@ export GIT_CONFIG_GLOBAL="$HOME/.gitconfig" GIT_CONFIG_NOSYSTEM=1
 "$REAL_GIT" config --global user.email "author@example.test"
 "$REAL_GIT" config --global init.defaultBranch main
 "$REAL_GIT" config --global commit.gpgsign false
+# behave like a runner with no auto-derived identity: only configured identities work
+"$REAL_GIT" config --global user.useConfigOnly true
 GITLOG="$TMP/git.log"; ENVLOG="$TMP/git.env"; GHLOG="$HOME/gh.log"
 export GITLOG ENVLOG
 GH="https://github.com/test-owner/vault.git"
@@ -30,16 +32,22 @@ for d in bin bin-nogh; do
 #!/bin/bash
 printf '%s\n' "\$*" >>"$GITLOG"
 { env | grep '^GIT_'; echo ---; } >>"$ENVLOG"
+[ -n "\${GIT_CONFIG_GLOBAL:-}" ] && env | grep -iE '(_proxy=|^SSL_CERT|CA_BUNDLE)' >>"$TMP/git.netenv"
 args=()
 for a in "\$@"; do args+=("\${a//\$WRAP_FROM/\$WRAP_TO}"); done
 [ -n "\${GIT_CONFIG_GLOBAL:-}" ] && [ "\$GIT_CONFIG_GLOBAL" != "$HOME/.gitconfig" ] && cp "\$GIT_CONFIG_GLOBAL" "$TMP/tconf" 2>/dev/null
 export GIT_CONFIG_GLOBAL="\${GIT_CONFIG_GLOBAL:-$HOME/.gitconfig}" GIT_CONFIG_NOSYSTEM="\${GIT_CONFIG_NOSYSTEM:-1}"
 case " \$* " in
+  *" --version "*)
+    [ -n "\${WRAP_GITVER:-}" ] && { echo "git version \$WRAP_GITVER"; exit 0; } ;;
+  *" fetch "*)
+    if [ "\${WRAP_TERM:-}" = fetch ]; then kill -TERM \$PPID; sleep 5; exit 1; fi ;;
   *" cat-file --batch-check "*)
     [ "\${WRAP_BC:-}" = fail ] && exit 1
     [ "\${WRAP_BC:-}" = short ] && { echo "0000000000000000000000000000000000000000 missing"; exit 0; } ;;
   *" push "*)
-    [ -n "\${WRAP_PUSHFAIL:-}" ] && exit 1 ;;
+    [ -n "\${WRAP_PUSHFAIL:-}" ] && exit 1
+    if [ "\${WRAP_TERM:-}" = push ]; then kill -TERM \$PPID; sleep 1; fi ;;
   *" ls-remote "*)
     [ -n "\${WRAP_LIE:-}" ] && { printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/main\n'; exit 0; } ;;
 esac
@@ -73,8 +81,8 @@ newcase() {
   G -C "$V" add -- README.md; G -C "$V" commit -q -m "init"
   G -C "$V" push -q -u origin main 2>/dev/null
   G -C "$V" remote set-url origin "$GH"
-  rm -f "$TMP/gh.fail" "$TMP/gh.vis" "$TMP/tconf"; rm -rf "$TMP/tt"; mkdir -p "$TMP/tt"; : >"$GITLOG"; : >"$ENVLOG"; : >"$GHLOG"
-  unset WRAP_BC WRAP_LIE WRAP_AFTER_FETCH SECRET
+  rm -f "$TMP/gh.fail" "$TMP/gh.vis" "$TMP/tconf" "$TMP/git.netenv"; rm -rf "$TMP/tt"; mkdir -p "$TMP/tt"; : >"$GITLOG"; : >"$ENVLOG"; : >"$GHLOG"
+  unset WRAP_BC WRAP_LIE WRAP_AFTER_FETCH WRAP_TERM WRAP_GITVER SECRET
 }
 commit_file() { # name content [subject]
   mkdir -p "$V/$(dirname "$1")"; printf '%s\n' "$2" >"$V/$1"
@@ -165,7 +173,7 @@ fl=$(grep -E '(^| )fetch( |$)' "$GITLOG")
 [ -z "$(ls "$TMP/tt")" ] && ok "the transport repository is deleted afterwards" || bad "temp repo left" "$(ls "$TMP/tt")"
 grep -q 'FETCH_HEAD' "$GITLOG" && bad "FETCH_HEAD used" || ok "FETCH_HEAD is not used"
 grep -qE '(^| )(pull|merge|rebase|reset)( |$)' "$GITLOG" && bad "script ran pull/merge/rebase/reset" || ok "never pulls, merges, rebases or resets"
-! grep -vE -- '--no-replace-objects' "$GITLOG" | grep . >/dev/null && ok "every git call passes --no-replace-objects" || bad "replace flag" "$(grep -v -- --no-replace-objects "$GITLOG" | head -3)"
+! grep -vE -- '--no-replace-objects|^--version$' "$GITLOG" | grep . >/dev/null && ok "every git call passes --no-replace-objects" || bad "replace flag" "$(grep -v -- --no-replace-objects "$GITLOG" | head -3)"
 grep -E '(^| )(fetch|push)( |$)' "$GITLOG" | grep -vq -- '-c core.hooksPath=/dev/null' && bad "hooksPath missing on fetch/push" || ok "fetch and push run with core.hooksPath=/dev/null"
 vs push; { [ $RC = 0 ] && has "nothing to push"; } && ok "nothing to push exits 0" || bad "nothing to push" "$OUT"
 
@@ -244,9 +252,10 @@ S1="gh""p_Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv"
 cat >"$C/hook.sh" <<EOF
 printf 'late %s\n' "$S1" >"$V/late.md"
 $REAL_GIT -C "$V" add -- late.md
-$REAL_GIT -C "$V" commit -q -m late
+$REAL_GIT -c user.name=t -c user.email=t@t -C "$V" commit -q -m late && touch "$C/late-ok"
 EOF
 export WRAP_AFTER_FETCH="$C/hook.sh"; vs push; unset WRAP_AFTER_FETCH
+[ -e "$C/late-ok" ] && ok "fixture: the late commit really landed in the vault" || bad "late commit hook failed"
 { [ $RC = 0 ] && [ "$(remote_main)" = "$HEAD0" ] && [ "$(vault_head)" != "$HEAD0" ]; } \
   && ok "a commit landing after the pin is neither scanned nor pushed" || bad "pinning" "rc=$RC remote=$(remote_main) head0=$HEAD0 $OUT"
 ! G -C "$R" cat-file -e "$(vault_head)" 2>/dev/null && ok "the late commit's objects never reached the remote" || bad "late objects pushed"
@@ -480,6 +489,53 @@ echo "an appended benign line" >>"$V/old.md"; G -C "$V" add -- old.md; G -C "$V"
 vs push; { [ $RC = 0 ] && [ "$(remote_main)" = "$HEAD0" ]; } && ok "an already-pushed credential-shaped line is not re-scanned; only added lines are" || bad "added-lines-only" "rc=$RC $OUT"
 newcase; commit_file .env "x" "env"; refuses "refusal leaves no temp repo or private ref behind"
 [ -z "$(ls "$TMP/tt")" ] && [ -z "$(G -C "$V" for-each-ref refs/vault-sync)" ] && ok "cleanup ran after a refusal" || bad "cleanup after refusal"
+
+# ---- round 4 -----------------------------------------------------------------------
+# 1: proxy and CA variables never reach transport git
+newcase; commit_file n.md "hello" "n"; : >"$TMP/git.netenv"
+OUT=$(env HTTPS_PROXY=http://proxy.invalid ALL_PROXY=x http_proxy=y NO_PROXY=z SSL_CERT_FILE=/x SSL_CERT_DIR=/y CURL_CA_BUNDLE=/z REQUESTS_CA_BUNDLE=/w \
+      WRAP_FROM="$GH" WRAP_TO="$R" TMPDIR="$TMP/tt" PATH="$TMP/bin:/usr/bin:/bin" "$PY" -B "$SUT" --vault "$V" push 2>&1); RC=$?
+{ [ $RC = 0 ] && [ ! -s "$TMP/git.netenv" ]; } && ok "proxy and CA environment variables are dropped for git" || bad "net env" "rc=$RC $(cat "$TMP/git.netenv")"
+
+# 2: closed stdout and stderr
+newcase; commit_file n.md "hello" "n"; HEAD0=$(vault_head)
+env WRAP_FROM="$GH" WRAP_TO="$R" TMPDIR="$TMP/tt" PATH="$TMP/bin:/usr/bin:/bin" "$PY" -B "$SUT" --vault "$V" push --dry-run 1>&-; RC=$?
+{ [ $RC = 0 ] && [ "$(remote_main)" != "$HEAD0" ]; } && ok "push --dry-run with stdout closed exits 0" || bad "closed stdout" "rc=$RC"
+env WRAP_FROM="$GH" WRAP_TO="$R" TMPDIR="$TMP/tt" PATH="$TMP/bin:/usr/bin:/bin" "$PY" -B "$SUT" --vault "$V" push 1>&- 2>&-; RC=$?
+{ { [ $RC = 0 ] || [ $RC = 3 ]; } && [ "$(remote_main)" = "$HEAD0" ]; } && ok "push with stdout and stderr closed still exits 0 and verifies the tip" || bad "closed both" "rc=$RC"
+
+# 3: signals
+newcase; commit_file n.md "hello" "n"; before=$(refs); export WRAP_TERM=fetch
+vs push; unset WRAP_TERM
+{ [ $RC = 1 ] && has "REFUSED: interrupted, nothing sent" && [ "$before" = "$(refs)" ]; } && ok "SIGTERM before the push: exit 1, remote unchanged" || bad "sigterm early" "rc=$RC $OUT"
+{ [ -z "$(G -C "$V" for-each-ref refs/vault-sync)" ] && [ -z "$(ls "$TMP/tt")" ]; } && ok "an interrupted run leaves no private ref or temp repo" || bad "interrupt cleanup" "$(ls "$TMP/tt")"
+! grep -qE '(^| )push( |$)' "$GITLOG" && ok "no push was started after the interrupt" || bad "push after interrupt"
+newcase; commit_file n.md "hello" "n"; HEAD0=$(vault_head); export WRAP_TERM=push
+vs push; unset WRAP_TERM
+{ { [ $RC = 0 ] || [ $RC = 3 ]; } && [ "$(remote_main)" = "$HEAD0" ]; } && ok "SIGTERM during the push: the push and verification finish; exit 0 or 3, never 143" || bad "sigterm late" "rc=$RC $OUT"
+{ [ -z "$(G -C "$V" for-each-ref refs/vault-sync)" ] && [ -z "$(ls "$TMP/tt")" ]; } && ok "cleanup ran after a signalled push" || bad "late cleanup"
+
+# 4: further credential shapes (runtime-built), each with its rule name
+AL4="${AL}abcd"
+cred "url userinfo"     "https://user:""Pa55w0rd@example.test/x" "url-credentials"
+cred "npm"              "np""m_${AL4}" "npm-token"
+cred "gitlab"           "glp""at-${AL}" "gitlab-token"
+cred "huggingface"      "h""f_${AL}" "huggingface-token"
+cred "google api key"   "AI""za${AL}abc" "google-api-key"
+cred "sendgrid"         "S""G.${AL}.${AL}" "sendgrid-key"
+cred "aws secret key"   "aws_secret_""access_key = x" "aws-secret-key"
+cred "basic auth"       "Authorization: Bas""ic dXNlcjpwYXNzd29yZA==" "basic-auth"
+
+# 5: bidi and separator characters are escaped in output
+newcase; SECRET="gh""p_${AL}"
+P=$(printf 'a\xe2\x80\xaeb\xe2\x80\xa8c.md'); commit_file "$P" "k $SECRET" "bidi"
+refuses "a bidi/line-separator filename is scanned"
+BS=$(printf '\\'); { has "${BS}u202e" && has "${BS}u2028" && OUT="$OUT" "$PY" -c 'import os,sys; o=os.environ["OUT"]; sys.exit(1 if any(chr(c) in o for c in (0x202e,0x2028)) else 0)'; } && ok "bidi controls and U+2028 are escaped in output" || bad "bidi escape" "$OUT"
+
+# 6: git version guard
+newcase; commit_file n.md "hello" "n"; export WRAP_GITVER=2.30.0
+vs push; r1=$RC; vs status; r2=$RC; unset WRAP_GITVER
+{ [ $r1 = 2 ] && [ $r2 = 2 ] && ! grep -qE '(^| )(fetch|push)( |$)' "$GITLOG"; } && ok "git older than 2.32 is refused with exit 2" || bad "git version" "$r1 $r2 $OUT"
 
 echo
 echo "$pass passed, $fail failed"

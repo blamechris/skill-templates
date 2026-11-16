@@ -20,15 +20,18 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 GIT_TIMEOUT = 60
 NET_TIMEOUT = 120
 MAX_BLOB = 50 * 1024 * 1024
 ZERO = "0" * 40
 HEX = re.compile(r"^[0-9a-f]{40}$")
+NET_DROP = ("SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE")
 GH_DROP = ("GH_HOST", "GH_REPO", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR")
 
 
@@ -44,8 +47,14 @@ class Indeterminate(Exception):
     """Transport failure or unverifiable outcome: exit 3."""
 
 
+class Interrupted(Exception):
+    """A termination signal arrived before anything was sent: exit 1."""
+
+
 class State:
     sent = False
+    signal = None
+    cleaning = False
 
 
 STATE = State()
@@ -76,6 +85,14 @@ LINE_RULES = [
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*"), None),
     ("secret-assignment", re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key)[\"']?\s*[:=]\s*[\"']?([^\s\"']{8,})"), _assign),
     ("bearer-token", re.compile(r"(?i)\bbearer\s+([A-Za-z0-9._~+/=-]{20,})"), _bearer),
+    ("url-credentials", re.compile(r"://[^/\s:@]+:[^/\s@]{6,}@"), None),
+    ("npm-token", re.compile(r"\bnpm_[A-Za-z0-9]{36}"), None),
+    ("gitlab-token", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}"), None),
+    ("huggingface-token", re.compile(r"\bhf_[A-Za-z0-9]{30,}"), None),
+    ("google-api-key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}"), None),
+    ("sendgrid-key", re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"), None),
+    ("aws-secret-key", re.compile(r"(?i)aws_secret_access_key\s*[:=]"), None),
+    ("basic-auth", re.compile(r"(?i)Authorization:\s*Basic\s+[A-Za-z0-9+/=]{8,}"), None),
 ]
 PATH_GLOBS = [".env*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*credentials*", "*.p12", "*.keychain*"]
 
@@ -88,29 +105,45 @@ def line_rule(text):
     return None
 
 
+_BIDI = set([0x200E, 0x200F, 0x2028, 0x2029] + list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A)))
+
+
+def _esc(c):
+    o = ord(c)
+    if o < 0x20 or o == 0x7f or 0x80 <= o <= 0x9f:
+        return "\\x%02x" % o
+    if o in _BIDI:
+        return "\\u%04x" % o
+    return c
+
+
 def safe(s):
-    """The one sanitizer for every untrusted field: credential-shaped substrings become <redacted>
-    and control characters are escaped."""
+    """The one sanitizer for every untrusted field: credential-shaped substrings become <redacted>;
+    control characters, bidi controls and line/paragraph separators are escaped."""
     for _, rx, check in LINE_RULES:
         s = rx.sub(lambda m, c=check: "<redacted>" if c is None or c(m) else m.group(0), s)
-    return "".join(c if 0x20 <= ord(c) < 0x7f or ord(c) > 0x9f else "\\x%02x" % ord(c) for c in s)
+    return "".join(_esc(c) for c in s)
 
 
 def emit(msg, err=False):
-    """The one printer. A closed or broken stdout/stderr never changes the exit code."""
+    """The one printer. A closed, missing or broken stdout/stderr never changes the exit code."""
     try:
         f = sys.stderr if err else sys.stdout
-        f.write(safe(msg) + "\n")
-        f.flush()
-    except (BrokenPipeError, OSError, ValueError):
+        if f is None:
+            return
         try:
-            devnull = open(os.devnull, "w")
-            if err:
-                sys.stderr = devnull
-            else:
-                sys.stdout = devnull
-        except OSError:
-            pass
+            f.write(safe(msg) + "\n")
+            f.flush()
+        except (BrokenPipeError, OSError, ValueError, AttributeError):
+            try:
+                if err:
+                    sys.stderr = open(os.devnull, "w")
+                else:
+                    sys.stdout = open(os.devnull, "w")
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 # ---- git plumbing --------------------------------------------------------------
@@ -140,17 +173,51 @@ BASE_GIT = ["git", "--no-replace-objects", "--no-optional-locks",
             "-c", "push.followTags=false"]
 
 
+def _kill_group(p):
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        p.communicate(timeout=5)
+    except Exception:
+        pass
+
+
+def check_interrupt():
+    if STATE.signal is not None and not STATE.sent and not STATE.cleaning:
+        raise Interrupted()
+
+
 def run(cmd, cwd, timeout=GIT_TIMEOUT, env=None, data=None):
     """(rc, stdout bytes). rc 124 on timeout, 127 when the program is missing. stderr is discarded:
-    it can carry URLs or credentials and is never relayed."""
+    it can carry URLs or credentials and is never relayed. The child runs in its own process group; a
+    termination signal that arrives before anything was sent kills that group and raises Interrupted."""
+    check_interrupt()
     try:
-        p = subprocess.run(cmd, cwd=cwd, env=env, input=data, stdin=None if data is not None else subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return 124, b""
+        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError:
         return 127, b""
-    return p.returncode, p.stdout
+    deadline, inp = time.monotonic() + timeout, data
+    while True:
+        try:
+            out, _ = p.communicate(input=inp, timeout=0.2)
+            return p.returncode, out
+        except subprocess.TimeoutExpired:
+            inp = None
+            if STATE.signal is not None and not STATE.sent and not STATE.cleaning:
+                _kill_group(p)
+                raise Interrupted()
+            if time.monotonic() > deadline:
+                _kill_group(p)
+                return 124, b""
+
+
+def git_version_ok():
+    rc, out = run(["git", "--version"], None, GIT_TIMEOUT, base_env())
+    m = re.match(r"git version (\d+)\.(\d+)", out.decode("utf-8", errors="replace"))
+    return rc == 0 and m is not None and (int(m.group(1)), int(m.group(2))) >= (2, 32)
 
 
 class Repo:
@@ -179,6 +246,8 @@ def resolve(args, need_remote):
     vault = os.path.realpath(os.path.expanduser(vault))
     if not os.path.isdir(vault):
         raise EnvError("vault is not a directory")
+    if not git_version_ok():
+        raise EnvError("git 2.32 or newer is required (GIT_CONFIG_GLOBAL, --no-write-fetch-head)")
     c = Ctx()
     c.vault, c.repo = vault, Repo(vault, base_env())
     rc, top = c.repo.text("rev-parse", "--show-toplevel")
@@ -341,7 +410,8 @@ def write_transport_config(path, gh):
 
 
 def transport_env(cfg):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in GH_DROP}
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("GIT_") and k not in GH_DROP and k not in NET_DROP and not k.lower().endswith("_proxy")}
     env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": cfg, "GIT_TERMINAL_PROMPT": "0",
                 "LC_ALL": "C", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull})
     return env
@@ -542,6 +612,7 @@ def cmd_push(args):
         if args.dry_run:
             emit("dry-run: would push %s..%s (%d commits) to %s" % (base_oid[:8], head_oid[:8], ahead, c.slug))
             return 0
+        check_interrupt()
         STATE.sent = True
         rc, _ = T.text("push", "--no-verify", "--no-follow-tags", "--recurse-submodules=no",
                        c.canon, "refs/vs/head:refs/heads/%s" % c.rbranch, timeout=NET_TIMEOUT)
@@ -556,6 +627,7 @@ def cmd_push(args):
         emit("pushed: %s..%s" % (base_oid[:8], head_oid[:8]))
         return 0
     finally:
+        STATE.cleaning = True
         if made_ref:
             c.repo.text("update-ref", "-d", vref)
         shutil.rmtree(tdir, ignore_errors=True)
@@ -572,8 +644,14 @@ def main(argv=None):
         args = ap.parse_args(argv)
     except SystemExit as e:
         return 2 if e.code else 0
+    if args.cmd == "push":
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(sig, lambda signum, frame: setattr(STATE, "signal", signum))
     try:
         return cmd_status(args) if args.cmd == "status" else cmd_push(args)
+    except Interrupted:
+        emit("REFUSED: interrupted, nothing sent")
+        return 1
     except Refused as e:
         emit("REFUSED: %s" % e)
         return 1
