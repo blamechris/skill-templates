@@ -738,6 +738,14 @@ jobs:
         # could have caught a bug in what the TEMPLATES emit.
         run: ./assets/scripts/filed-from.test.sh
 
+      - name: vault-sync regression tests
+        # The vault push helper widens agent authority (an automatic push of a private repo), so
+        # its refusals are gated here rather than trusted: behind/diverged, public or unverifiable
+        # remote, each credential shape, each sensitive path, an oversized blob, never a force
+        # push, and no secret value in any refusal. There is no `*.test.sh` glob in this
+        # workflow, so the script needs its own named step. Hermetic: temp remote, fake gh.
+        run: ./assets/scripts/vault-sync.test.sh
+
       - name: review-result regression tests
         # #267: the subagent sidecar carried no result — a review agent's verdict
         # and findings existed only as prose in its final message, and a Workflow's
