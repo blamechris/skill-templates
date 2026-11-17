@@ -248,20 +248,30 @@ together per machine because End step 1 and `/next` use the same installed copie
 
 ```bash
 mkdir -p ~/.claude/scripts ~/.claude/usage-history
+cp assets/scripts/usage_accounting.py ~/.claude/scripts/
+cp assets/scripts/usage_accounting.py ~/.claude/usage-history/
 cp assets/scripts/session-seed.py assets/scripts/session-pulse.py assets/scripts/usage-benchmark-row.py \
-   assets/scripts/usage-checkpoint.py assets/scripts/usage_accounting.py \
+   assets/scripts/usage-checkpoint.py \
    assets/scripts/usage-pace.py assets/scripts/usage-trend.py assets/scripts/filed-from.py \
    assets/scripts/review-result.py assets/scripts/rework-lag.py \
    assets/scripts/session-distill.py assets/scripts/pr-record.py \
    assets/scripts/gate-ledger.py assets/scripts/plan-status.py assets/scripts/decision-record.py \
    assets/scripts/seed-freshness.py assets/scripts/vault-sync.py ~/.claude/scripts/
-cp assets/scripts/usage-trend.py assets/scripts/usage_accounting.py \
-   ~/.claude/usage-history/
+cp assets/scripts/usage-trend.py ~/.claude/usage-history/
 ```
 
-The second copy updates the existing scheduled `~/.claude/usage-history/usage-trend.py`
-path and gives it a sibling shared module. Confirm that schedule before rollout;
-neither copy command is run by installing this repository alone.
+**The engine goes first, to both places.** `usage-benchmark-row.py`, `usage-checkpoint.py`,
+`usage-pace.py` and `usage-trend.py` import `usage_accounting.py` from their own directory,
+and a new caller beside an old engine fails (an `ImportError`, or a `KeyError` at scan time).
+`~/.claude/scripts/usage-trend.py` may be a symlink to the scheduled
+`~/.claude/usage-history/usage-trend.py`, so the callers' copy can write the trend there too;
+that is why both engine copies precede every caller copy. The two copies of
+`usage_accounting.py` must be the same file version: copy both from the same checkout in the
+same pass, and never update one without the other.
+
+The last copy updates the existing scheduled `~/.claude/usage-history/usage-trend.py`
+path beside its shared module. Confirm that schedule before rollout;
+none of these copy commands is run by installing this repository alone.
 
 `session-seed.py` owns artifact ② (scope, session id, archive-on-collide, the write, the proof);
 `session-pulse.py` imports that scope implementation and reports eight offline lines under

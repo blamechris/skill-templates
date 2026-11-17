@@ -602,6 +602,19 @@ jobs:
         # is covered without editing this step.
         run: python3 scripts/check-html-dark.py
 
+      - name: check-bootstrap-order regression tests
+        # Proves the engine-first check flags the pre-#398 block, a late second
+        # engine copy and a caller directory with no engine, detects a new
+        # importer without a name list, and fails closed (exit 2) over zero cases.
+        run: ./scripts/check-bootstrap-order.test.sh
+
+      - name: the machine bootstrap copies the usage engine first (#398)
+        # Every caller of usage_accounting.py is copied only after the engine has
+        # reached every directory a caller goes to, and the template says both
+        # engine copies are the same file version. Importers are found
+        # structurally, so a new usage script is covered without editing this step.
+        run: python3 scripts/check-bootstrap-order.py
+
       - name: this repo's own installed skills lint clean
         run: |
           # #156: the registry was invisible to its own drift detection — nothing ran
