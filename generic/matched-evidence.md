@@ -40,6 +40,8 @@ Report a game or interactive UI change with matched browser evidence: the agreed
 
 Never overwrite. Append `-2`, `-3` on collision. The report links its media by relative path, so the whole folder moves together. Say so when you give the path. Nothing here is written inside a repository working tree.
 
+The frames make a run folder tens of megabytes. When the destination is itself a git repository (a notes vault, for example), check each file with `git check-ignore -q` before committing anything. Commit only the small text files (`index.html`, `provenance.json`, `SHA256SUMS`, `specs/`, each `capture-log.json`) and the GIFs, by explicit path. Keep the PNG and MP4 files and the `logs/` folder on disk only. If the destination's ignore rules would track them, leave them uncommitted and say so; do not edit those rules from this workflow. `SHA256SUMS` still covers every file, so the folder on disk verifies in full. A clone of the committed copy does not: its media links and `shasum -c` fail for the files left on disk. Say that on the report's Downloads section.
+
 ## Boundaries — read before anything runs
 
 - **This workflow never deploys, never pushes, and never triggers CI.** No `git push`, no `gh workflow run`, no `gh pr` writes, no release, no preview deploy, no commit to either revision. If a build command would publish anything (an upload step, a postbuild deploy hook), stop and report it as a blocker rather than run it.
@@ -62,19 +64,26 @@ Write the comparison down before you build anything:
 {
   "id": "s01-wave-start",
   "route": "/play?fixture=wave-start",
+  "expectUrl": "/play",
   "viewport": { "width": 1280, "height": 720 },
   "deviceScaleFactor": 2,
   "colorScheme": "dark",
   "reducedMotion": "no-preference",
   "initialState": { "storage": "empty", "fixture": "wave-start", "seed": 4242 },
-  "input": { "type": "mouse", "sequence": [ { "frame": 10, "op": "click", "target": "[data-testid=start]" } ] },
-  "timing": { "clock": "project-fixture", "startEpochMs": 1767225600000, "stepMs": 50, "frames": 120 },
+  "ready": "[data-testid=start]",
+  "input": { "type": "mouse", "sequence": [
+    { "frame": 10, "op": "click", "target": "[data-testid=start]" },
+    { "frame": 11, "op": "move", "x": 2, "y": 2 }
+  ] },
+  "timing": { "clock": "project-fixture", "startEpochMs": 1767225600000, "stepMs": 50, "frames": 120, "maxReadySteps": 400 },
   "moments": [ { "label": "first-hit", "frame": 40 } ],
   "visible": [ "score counter, top right", "new enemy sprite at spawn" ]
 }
 ```
 
 The scenario list is what was agreed. Do not add a scenario because it photographs well, and do not drop one because the baseline makes it hard.
+
+`ready` is a selector present on both sides once the app can take the first input. `expectUrl` is the path and query the app shows after load; it defaults to `route`, but many apps strip a query parameter once they have read it. After each click, park the pointer at a neutral point (`move` to a corner). A resting synthetic pointer hovers whatever ends up under it, and when the two sides lay out differently it hovers different elements, adding a difference the change did not make.
 
 {{CUSTOMIZE: where agreed scenarios come from in this repo (an issue checklist, a test plan, a fixture directory) and the default viewport and pixel ratio for this product}}
 
@@ -152,13 +161,14 @@ echo $! > "$RUN/$SIDE-server.pgid"   # the leader's PID is the group ID
 
 **One automation install drives both sides.** Use the automation package from the candidate worktree's install (or the baseline's, if only it has one), record its version and browser build in `provenance.json`, and pass that worktree as the automation root. Two automation versions would make the browser itself a difference between the sides. If the browser binary the package expects is not installed, stop and record it as a tooling blocker. Do not install one from this workflow.
 
-After load and before the first input, the driver reads the real values back on each side and records them. A mismatch is a gap, not a rounding error.
+After load and before the first input, the driver reads the real values back on each side and records them. Compare the URL against the spec's `expectUrl` (default `route`). A mismatch is a gap, not a rounding error.
 
 **Timing.** Match moments by frame or by state, never by wall-clock sleep.
 
 - If the project provides a clock or deterministic-state fixture, use it, say which, and cite its source.
 - Otherwise, if the approved automation has a controllable clock, install it **paused** before the page loads, and advance it only by `stepMs` between frames. In Playwright that is `page.clock.install` followed by `page.clock.pauseAt`. An installed clock that is not paused keeps running in real time between steps, and the frames stop matching. Then check in source what the clock does not cover, such as CSS animations, media playback, workers, audio time or a server tick, and say so on the report.
-- With the clock paused, each frame is the app at one known app time on both sides, and no frame can drop. Frames match in app time. Whether the state matches is shown separately, below.
+- Boot does not run purely in app time. Network work, such as fetching data or joining a socket, finishes in wall time while the clock is paused, so the two sides reach the same point in boot after different numbers of steps. Step the clock by `stepMs` until the spec's `ready` selector is visible, record those `readySteps` per side, and start frame 0 there. The report says that frames are aligned from readiness and gives each side's step count.
+- With the clock paused, each frame after readiness is the app at a known app time on each side, and no frame can drop. Frames match in app time from readiness. Whether the state matches is shown separately, below.
 - With no controllable clock, capture in real time. Record each frame's timestamp, the target rate and the dropped frames, and label the moments *approximately matched*.
 
 **Server-authoritative state.** A browser clock does not control the server. When the server owns state:
@@ -183,7 +193,7 @@ const [specPath, baseUrl, out, automationRoot] = process.argv.slice(2);
 const requireFromRoot = createRequire(path.join(automationRoot, 'package.json'));
 const { chromium } = requireFromRoot('{{CUSTOMIZE: approved automation package, e.g. playwright}}');
 const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
-const browser = await chromium.launch();
+const browser = await chromium.launch({{CUSTOMIZE: launch options from the project's Playwright config, as an object with args, or nothing}});
 const ctx = await browser.newContext({ // a new context starts with empty storage
   viewport: spec.viewport, deviceScaleFactor: spec.deviceScaleFactor,
   colorScheme: spec.colorScheme, reducedMotion: spec.reducedMotion,
@@ -193,6 +203,14 @@ const t0 = spec.timing.startEpochMs;
 await page.clock.install({ time: t0 - 1000 }); // or the project's own clock fixture
 await page.clock.pauseAt(t0);                  // from here, time moves only by runFor
 await page.goto(baseUrl + spec.route);
+if (!spec.ready) throw new Error('spec.ready is required: a selector both sides show once the first input can be sent');
+const maxReadySteps = spec.timing.maxReadySteps ?? 400;
+let readySteps = 0; // boot: step app time until the shared ready marker is visible
+while (!(await page.locator(spec.ready).first().isVisible())) {
+  if (readySteps >= maxReadySteps) throw new Error(`not ready after ${readySteps} steps: ${spec.ready}`);
+  await page.clock.runFor(spec.timing.stepMs);
+  readySteps++;
+}
 const readback = await page.evaluate(() => ({
   w: innerWidth, h: innerHeight, dpr: devicePixelRatio,
   dark: matchMedia('(prefers-color-scheme: dark)').matches,
@@ -203,10 +221,12 @@ const act = {
   click: s => page.click(s.target),
   press: s => page.keyboard.press(s.key),
   move: s => page.mouse.move(s.x, s.y),
+  // Pass options as the evaluate argument; the function runs in the page and cannot see `s`.
+  scrollIntoView: s => page.locator(s.target).first().evaluate((el, block) => el.scrollIntoView({ block }), s.block ?? 'start'),
   // {{CUSTOMIZE: any other input ops the agreed scenarios use}}
 };
 fs.mkdirSync(`${out}/frames`, { recursive: true });
-const log = { readback, frames: [] };
+const log = { browser: browser.version(), readback, readySteps, frames: [] };
 for (let f = 0; f < spec.timing.frames; f++) {
   for (const s of spec.input.sequence.filter(s => s.frame === f)) {
     if (!act[s.op]) throw new Error(`unsupported input op "${s.op}" at frame ${f}`);
@@ -214,7 +234,7 @@ for (let f = 0; f < spec.timing.frames; f++) {
   }
   const name = `f_${String(f).padStart(4, '0')}.png`;
   await page.screenshot({ path: `${out}/frames/${name}`, fullPage: false, animations: 'allow', scale: 'device' });
-  log.frames.push({ f, name, appTimeMs: t0 + f * spec.timing.stepMs, digest: await digest() });
+  log.frames.push({ f, name, appTimeMs: t0 + (readySteps + f) * spec.timing.stepMs, digest: await digest() });
   await page.clock.runFor(spec.timing.stepMs);
 }
 fs.writeFileSync(`${out}/capture-log.json`, JSON.stringify(log, null, 2));
@@ -321,7 +341,7 @@ Top to bottom:
 
 1. **Result**: two or three sentences, the baseline and candidate commit pair, and one status chip per scenario (*matched*, *approximately matched*, *gap*, *unavailable*).
 2. **Navigation**: a sticky table of contents linking each scenario's anchor, Provenance, Verification and Open items.
-3. **One section per scenario**: the matched-parameter table with read-back values for both sides, the baseline and candidate stills side by side under each moment, both recordings as separate labelled `<video controls>` elements, the comparison GIF, the state-equality line, the requested-element checks with evidence classes, and any gap or unavailable reason in full.
+3. **One section per scenario**: the matched-parameter table with read-back values and `readySteps` for both sides, the baseline and candidate stills side by side under each moment, both recordings as separate labelled `<video controls>` elements, the comparison GIF, the state-equality line, the requested-element checks with evidence classes, and any gap or unavailable reason in full.
 4. **Provenance**: commits, trees, clean checks, executable and automation versions, lockfile and asset hashes, build commands, fixture changes to served bytes, and media transforms (pacing, scaling, encoding, dropped frames).
 5. **Downloads**: a link with the `download` attribute for every file in `SHA256SUMS`, each with its hash from that file, plus links to `provenance.json` and `SHA256SUMS`. `SHA256SUMS` cannot list itself, so the report says that its hash is given in the final message.
 6. **Verification**: the step 6 results, one row per file.
@@ -343,6 +363,7 @@ nav a{color:var(--accent)} main{max-width:1200px;margin:0 auto;padding:16px}
 @media (max-width:760px){.pair{grid-template-columns:1fr}}
 figcaption,.dim{color:var(--dim);font-size:13px} .chip{border:1px solid var(--line);border-radius:999px;padding:1px 8px}
 table{border-collapse:collapse;width:100%} td,th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left}
+.tw{overflow-x:auto;max-width:100%} .tw table{min-width:520px}
 </style></head><body>
 <nav><a href="#result">Result</a><!-- one link per scenario --><a href="#provenance">Provenance</a><a href="#verification">Verification</a><a href="#open">Open items</a></nav>
 <main>
@@ -356,6 +377,8 @@ table{border-collapse:collapse;width:100%} td,th{border-bottom:1px solid var(--l
 <section id="open"><h2>Open items</h2><!-- physical devices · native fullscreen · accessibility · live integration --></section>
 </main></body></html>
 ```
+
+Wrap every table in `<div class="tw">` so a wide table scrolls inside its own box and the page never scrolls sideways at 390 px.
 
 Write it, then run `shasum -a 256 -c SHA256SUMS` in `$OUT` as the last check. It must pass, because nothing it lists changed. Then open the report (`open` on macOS, `xdg-open` on Linux) unless `--no-open`. Print the absolute path either way.
 
@@ -374,13 +397,18 @@ Report the absolute path of the report folder (it moves as a folder), the `SHA25
 | GIF panels drift apart | built from stills or from real-time video | build it from the two frame sequences |
 | Labels cover the HUD | drawtext on the frame | pad a band outside the viewport, then draw |
 | "Element visible" but not in the still | the claim came from a DOM query | look at the still; report the DOM line separately |
+| Never ready under the paused clock | the ready marker waits on boot timers, or on an input not yet sent | step the clock in the readiness loop; pick a marker present before the first input |
+| Same frame index, different boot progress | frame 0 started at `goto` while network work finished in wall time | start frame 0 at the `ready` marker and record `readySteps` per side |
+| Hover styling on one side only | the synthetic pointer rests over different elements | `move` the pointer to a corner after each click |
+| The renderer fails to boot in the capture browser | launch options from the project's Playwright config were dropped | pass them through the launch-options customization |
+| Read-back URL "mismatch" on both sides | the app strips query parameters after reading them | set `expectUrl` in the spec |
 
 ## Customization Points
 
-- **Approved automation**: the browser automation package and version from the lockfile, and how to run it.
+- **Approved automation**: the browser automation package and version from the lockfile, how to run it, and the launch and context options its own config sets (renderer flags, for example).
 - **Build and serve**: the install, build and serve commands, the files the build writes, and any step to skip because it publishes.
 - **Fixtures and clock**: the project's clock or deterministic-state fixture, the state digest hook, and the connection-only counters with their meaning in source.
 - **Scenario source**: where agreed scenarios live, and the default viewport and pixel ratio.
 - **Assets**: the served binary assets to hash, and whether the repo uses LFS.
 - **Font**: a font file path for the GIF label band.
-- **Output directory**: `--dir`, `$CLAUDE_BRIEF_DIR` or `~/.claude/briefs/`.
+- **Output directory**: `--dir`, `$CLAUDE_BRIEF_DIR` or `~/.claude/briefs/`, and, when it is a git repository, which files its ignore rules keep out of history.
