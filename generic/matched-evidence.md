@@ -41,7 +41,7 @@ Never overwrite. Append `-2`, `-3` on collision. The report links its media by r
 ## Boundaries — read before anything runs
 
 - **This workflow never deploys, never pushes, and never triggers CI.** No `git push`, no `gh workflow run`, no `gh pr` writes, no release, no preview deploy, no commit to either revision. If a build command would publish anything (an upload step, a postbuild deploy hook), stop and report it as a blocker rather than run it.
-- **Isolated and bounded.** Each side runs from its own detached worktree, on its own port, in a fresh browser profile. Every build, server and capture runs under a hard timeout (`timeout -k 30 <s>`; `gtimeout` on stock macOS). Record each process ID you start, and stop exactly those PIDs. Never kill by name or pattern.
+- **Isolated and bounded.** Each side runs from its own detached worktree, on its own port, in a fresh browser profile. Every build, server and capture runs under a hard timeout (`timeout -k 30 <s>`; `gtimeout` on stock macOS). Start each server in its own process group, record the group ID, and stop exactly those groups. Never kill by name or pattern.
 - **Project-approved tooling only.** Drive the browser with the automation the project already depends on (its lockfile pins it), and serve with the project's own command. Add no dependency to either revision. If the project has no approved browser automation, stop and name that as the blocker.
 - **Capture the app surface only.** Screenshots and frames come from the automation's page capture, never from an OS screen recording or a desktop screenshot. The browser profile is fresh and signed out. Use fixture or seed data only, never a real account, real user data or a personal screen. If a scenario seems to need real data, label it a gap.
 
@@ -54,7 +54,7 @@ Never overwrite. Append `-2`, `-3` on collision. The report links its media by r
 Write the comparison down before you build anything:
 
 - **Baseline** and **candidate**: the refs as agreed, and who or what agreed them (the task text, the PR, the owner's words).
-- **Scenarios**: one row each, with an id, the route, the initial state, the input sequence, the matching moments to capture, and the **requested visible elements**, meaning what a reader should be able to see in each still. Those elements are what step 7 checks.
+- **Scenarios**: one row each, with an id, the route, the initial state, the input sequence, the matching moments to capture, and the **requested visible elements**, meaning what a reader should be able to see in each still. Those elements are what step 6 checks.
 
 ```json
 {
@@ -78,16 +78,19 @@ The scenario list is what was agreed. Do not add a scenario because it photograp
 
 ### 2. Provenance, before the first capture
 
-Create one detached worktree per side, from fetched refs:
+Resolve each ref to a full commit ID once, then create one detached worktree per side at that ID:
 
 ```bash
 REPO={{CUSTOMIZE: absolute path to this repo's working copy}}
 RUN="$(mktemp -d)/matched-evidence-$(date -u +%Y%m%dT%H%M%SZ)"
+OUT="<the output folder from Output location>"
 git -C "$REPO" fetch origin
-for SIDE in baseline candidate; do
-  REF_VAR=$([ "$SIDE" = baseline ] && echo "$BASELINE_REF" || echo "$CANDIDATE_REF")
-  git -C "$REPO" worktree add --detach "$RUN/$SIDE" "$REF_VAR"
-done
+# A PR side is not on a branch origin fetches by default. Fetch its head and pin it:
+#   git -C "$REPO" fetch origin "pull/<N>/head" && CANDIDATE_REF=$(git -C "$REPO" rev-parse FETCH_HEAD)
+BASELINE_SHA=$(git -C "$REPO" rev-parse --verify "$BASELINE_REF^{commit}")
+CANDIDATE_SHA=$(git -C "$REPO" rev-parse --verify "$CANDIDATE_REF^{commit}")
+git -C "$REPO" worktree add --detach "$RUN/baseline" "$BASELINE_SHA"
+git -C "$REPO" worktree add --detach "$RUN/candidate" "$CANDIDATE_SHA"
 ```
 
 Then record, per side, into `provenance.json`:
@@ -129,21 +132,26 @@ When the baseline lacks the feature a scenario needs, that pair is **unavailable
 
 Both sides run the **same spec file**, byte for byte, written once to `specs/<scenario>.json`. Only the base URL differs. That is the matching contract: viewport size, device pixel ratio, theme, initial state, route, input type and sequence, and timing are identical because they come from one file.
 
-After load and before the first input, read the real values back on each side and record them. A mismatch is a gap, not a rounding error:
+**Serve each side** from its own worktree on its own free port, in its own process group, so that cleanup can stop the server and every child it spawned:
 
-```js
-await page.evaluate(() => ({
-  w: innerWidth, h: innerHeight, dpr: devicePixelRatio,
-  dark: matchMedia('(prefers-color-scheme: dark)').matches,
-  url: location.pathname + location.search,
-}));
+```bash
+lsof -nP -iTCP:"$PORT" -sTCP:LISTEN && { echo "port $PORT is taken" >&2; exit 1; }
+set -m   # job control: the background job leads its own process group
+( cd "$RUN/$SIDE" && exec gtimeout -k 30 3600 {{CUSTOMIZE: this repo's serve command for a built tree, on "$PORT"}} ) \
+  > "$RUN/$SIDE-server.log" 2>&1 &
+echo $! > "$RUN/$SIDE-server.pgid"   # with job control, the job's PID is its process group ID
 ```
+
+**One automation install drives both sides.** Use the automation package from the candidate worktree's install (or the baseline's, if only it has one), record its version and browser build in `provenance.json`, and pass that worktree as the automation root. Two automation versions would make the browser itself a difference between the sides. If the browser binary the package expects is not installed, stop and record it as a tooling blocker. Do not install one from this workflow.
+
+After load and before the first input, the driver reads the real values back on each side and records them. A mismatch is a gap, not a rounding error.
 
 **Timing.** Match moments by frame or by state, never by wall-clock sleep.
 
-- If the project provides a clock or deterministic-state fixture, use it, say which, and cite its source. Step the clock by `stepMs` and capture one frame per step. Frames are then matched by construction, and none can drop.
-- If it does not, and the approved automation has a clock (Playwright's `page.clock`, for example), check in source that it covers the app's actual timing source (`requestAnimationFrame`, `performance.now`, workers, audio time) before relying on it. Say what it does not cover.
-- Without either, capture in real time. Record each frame's timestamp, the target rate and the dropped frames, and label the moments *approximately matched*.
+- If the project provides a clock or deterministic-state fixture, use it, say which, and cite its source.
+- Otherwise, if the approved automation has a controllable clock, install it **paused** before the page loads, and advance it only by `stepMs` between frames. In Playwright that is `page.clock.install` followed by `page.clock.pauseAt`. An installed clock that is not paused keeps running in real time between steps, and the frames stop matching. Then check in source what the clock does not cover, such as CSS animations, media playback, workers, audio time or a server tick, and say so on the report.
+- With the clock paused, each frame is the app at one known app time on both sides, and no frame can drop. Frames match in app time. Whether the state matches is shown separately, below.
+- With no controllable clock, capture in real time. Record each frame's timestamp, the target rate and the dropped frames, and label the moments *approximately matched*.
 
 **Server-authoritative state.** A browser clock does not control the server. When the server owns state:
 
@@ -151,39 +159,60 @@ await page.evaluate(() => ({
 - At each matching moment, capture an **actual state digest** from the project's state endpoint or test hook, on both sides. Report both digests. Equal digests are how state equality is shown. If no hook exists, say that state equality was not verified.
 - Connection-only counters (sequence numbers, ticks since connect, reconnect counts, session IDs) differ between runs by nature. Keep them in a separate column, and only after verifying in source what each one means (cite it). Exclude a counter whose meaning you did not verify, and never fold one into the digest.
 
-**Show how equality was verified.** For each moment, the report shows the digest pair, or the frame index under the shared clock, and says *equal*, *differs* (with what) or *not verifiable* (with why).
+**Show how equality was verified.** For each moment, the report shows the digest pair, or the frame index and app time under the shared clock, and says *equal*, *differs* (with what) or *not verifiable* (with why).
 
 **When the baseline cannot reproduce a scenario**, stop that scenario and label the gap: what was attempted, where it diverged (the frame, the digest, the missing element) and the evidence. Do not retry until it looks right, do not change the spec for one side, and do not stage substitute screenshots.
 
-A driver sketch, shown for Playwright. Use the project's approved tool and its own fixture hooks:
+A driver sketch, shown for Playwright. It lives in `$RUN`, outside both worktrees, so it resolves the automation package from the automation root instead of importing it by bare name:
 
 ```js
-// capture.mjs <spec.json> <baseUrl> <outDir>
-import { chromium } from '{{CUSTOMIZE: approved automation package}}';
+// node "$RUN/capture.mjs" <spec.json> <baseUrl> <outDir> <automationRoot>
 import fs from 'node:fs';
-const [specPath, baseUrl, out] = process.argv.slice(2);
+import path from 'node:path';
+import { createRequire } from 'node:module';
+const [specPath, baseUrl, out, automationRoot] = process.argv.slice(2);
+const requireFromRoot = createRequire(path.join(automationRoot, 'package.json'));
+const { chromium } = requireFromRoot('{{CUSTOMIZE: approved automation package, e.g. playwright}}');
 const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
 const browser = await chromium.launch();
-const ctx = await browser.newContext({
+const ctx = await browser.newContext({ // a new context starts with empty storage
   viewport: spec.viewport, deviceScaleFactor: spec.deviceScaleFactor,
   colorScheme: spec.colorScheme, reducedMotion: spec.reducedMotion,
-}); // a new context starts with empty storage; seed state only through the spec's fixture
-
+});
 const page = await ctx.newPage();
-await page.clock.install({ time: spec.timing.startEpochMs }); // or the project's own clock fixture
+const t0 = spec.timing.startEpochMs;
+await page.clock.install({ time: t0 - 1000 }); // or the project's own clock fixture
+await page.clock.pauseAt(t0);                  // from here, time moves only by runFor
 await page.goto(baseUrl + spec.route);
+const readback = await page.evaluate(() => ({
+  w: innerWidth, h: innerHeight, dpr: devicePixelRatio,
+  dark: matchMedia('(prefers-color-scheme: dark)').matches,
+  url: location.pathname + location.search,
+}));
+const digest = {{CUSTOMIZE: the state digest, e.g. () => page.evaluate(() => window.__stateDigest()), or () => null when there is no hook}};
+const act = {
+  click: s => page.click(s.target),
+  press: s => page.keyboard.press(s.key),
+  move: s => page.mouse.move(s.x, s.y),
+  // {{CUSTOMIZE: any other input ops the agreed scenarios use}}
+};
 fs.mkdirSync(`${out}/frames`, { recursive: true });
-const log = { readback: await page.evaluate(() => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio })), frames: [] };
+const log = { readback, frames: [] };
 for (let f = 0; f < spec.timing.frames; f++) {
-  for (const step of spec.input.sequence.filter(s => s.frame === f)) await page.click(step.target);
+  for (const s of spec.input.sequence.filter(s => s.frame === f)) {
+    if (!act[s.op]) throw new Error(`unsupported input op "${s.op}" at frame ${f}`);
+    await act[s.op](s);
+  }
   const name = `f_${String(f).padStart(4, '0')}.png`;
   await page.screenshot({ path: `${out}/frames/${name}`, fullPage: false, animations: 'allow', scale: 'device' });
-  log.frames.push({ f, name, digest: await page.evaluate(() => window.{{CUSTOMIZE: state digest hook, or remove}}?.()) });
+  log.frames.push({ f, name, appTimeMs: t0 + f * spec.timing.stepMs, digest: await digest() });
   await page.clock.runFor(spec.timing.stepMs);
 }
 fs.writeFileSync(`${out}/capture-log.json`, JSON.stringify(log, null, 2));
 await browser.close();
 ```
+
+Run it under a hard timeout, once per side, with the same spec and automation root. If an action times out while the clock is paused, the wait for the element to settle is the likely cause. Click the centre of `locator.boundingBox()` with `page.mouse` on both sides, and record that change.
 
 Record the input type honestly. Automation clicks and key presses are **synthetic events**, not a finger, a gamepad or a real keyboard.
 
@@ -194,13 +223,13 @@ Record the input type honestly. Automation clicks and key presses are **syntheti
 From the frames, per side and scenario:
 
 - **Stills.** Each matching moment's frame, copied unedited to `moment-<label>.png`. These are full-viewport PNGs at viewport × pixel ratio, with no crop, scale, annotation or recompression. A still is the raw capture or it is not in the report.
-- **Recordings.** One per side, encoded from that side's own frames and labelled by file name and by container title, never by drawing on the app's pixels:
+- **Recordings.** One per side, encoded from that side's own frames and labelled by file name and by container title, never by drawing on the app's pixels. H.264 with `yuv420p` needs even dimensions, so pad (never scale) an odd edge by one pixel and record it:
   ```bash
   ffmpeg -v error -framerate "$FPS" -i "$SIDE_DIR/frames/f_%04d.png" \
-    -metadata title="$SIDE $SHORT $SCENARIO" -c:v libx264 -pix_fmt yuv420p -crf 18 \
-    "$SIDE_DIR/recording.mp4"
+    -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" -metadata title="$SIDE $SHORT $SCENARIO" \
+    -c:v libx264 -pix_fmt yuv420p -crf 18 "$SIDE_DIR/recording.mp4"
   ```
-- **Side-by-side GIF.** Built from the two recorded frame sequences, not from the stills. Each label goes in a band added **outside** the app viewport (padding above the frame). The app pixels are never drawn on:
+- **Side-by-side GIF.** Built from the two recorded frame sequences, not from the stills. Each label goes in a band added **outside** the app viewport (padding above the frame). The app pixels are never drawn on. First check that this ffmpeg has the `drawtext` filter (`ffmpeg -hide_banner -filters | grep -w drawtext`). If it does not, render each label to a PNG with an approved tool and `overlay` it in the band, or record the missing filter as a tooling blocker. Never move the label onto the app pixels instead.
   ```bash
   L='pad=iw+8:ih+40:0:40:color=0x111111,drawtext=fontfile={{CUSTOMIZE: font path}}:fontcolor=white:fontsize=22:x=10:y=9:text'
   ffmpeg -v error -framerate "$FPS" -i "$B/frames/f_%04d.png" -framerate "$FPS" -i "$C/frames/f_%04d.png" \
@@ -208,30 +237,28 @@ From the frames, per side and scenario:
     "$SCEN_DIR/compare.gif"
   ```
 
-Record every transform in `provenance.json` and on the report: capture step and playback rate (the **pacing**, such as "50 ms of app time per frame, played at 20 fps, so real time"), any scaling (the GIF's width against the native width), the encoding (codec, CRF, palette, dither) and the **dropped frames** (expected against recorded, with the indexes). Derived media (recordings and the GIF) are labelled *derived*. Stills are labelled *unedited capture*.
+Record every transform in `provenance.json` and on the report:
 
-### 6. Hash everything
+- **Pacing**: the capture step and the playback rate, for example "50 ms of app time per frame, played at 20 fps, so real time".
+- **Scaling**: the GIF's width against the native width, and any padding.
+- **Encoding**: the codec, CRF, palette and dither.
+- **Dropped frames**: expected against recorded, with the indexes.
 
-```bash
-cd "$OUT" && find . -type f ! -name SHA256SUMS ! -name index.html -print0 | sort -z \
-  | xargs -0 shasum -a 256 > SHA256SUMS
-```
+Derived media (recordings and the GIF) are labelled *derived*. Stills are labelled *unedited capture*.
 
-The report shows each file's hash next to its download link, from this file.
-
-### 7. Verify the media before you write a word about it
+### 6. Verify the media before you write a word about it
 
 Each check is run, not assumed, and its result goes in the report:
 
 - **Decodes.** `ffmpeg -v error -i <file> -f null -` exits 0 and prints nothing, for every PNG, MP4 and GIF.
-- **Dimensions.** Each still is exactly viewport × pixel ratio (`ffprobe -v error -show_entries stream=width,height -of csv=p=0`). Each recording's frame count matches its frames directory.
-- **Labelled correctly.** The side and short SHA in each file name and label match `provenance.json`, and the GIF's left panel is the baseline.
-- **Hashes match.** `shasum -a 256 -c SHA256SUMS` passes after the report is written.
+- **Dimensions.** Each still is exactly viewport × pixel ratio (`ffprobe -v error -show_entries stream=width,height -of csv=p=0 <png>`).
+- **Frame counts.** Each recording's decoded count (`ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 recording.mp4`) equals the number of files in its `frames/`. The GIF's count matches the frame total resampled from `$FPS` to `$GIF_FPS`. Record both numbers.
+- **Labelled correctly.** The side and short SHA in each file name, container title and label band match `provenance.json`. For the GIF, extract its first frame (`ffmpeg -v error -i compare.gif -frames:v 1 gif-first.png`, written to `$RUN`) and look at it: the left band must read BASELINE with the baseline's short SHA.
 - **Requested elements are visible.** Open each still and look at it. For each element in the scenario's `visible` list, state *visible*, *not visible* or *unclear*. A DOM query that finds the element is a separate, weaker line ("in the DOM, 24×24 at 1210,18"). It is never the visual check.
 
 A failed check is reported as failed. Re-capture only by rerunning the same spec on both sides, never by editing a file.
 
-### 8. Classify every claim by evidence
+### 7. Classify every claim by evidence
 
 Every statement the report makes carries one class:
 
@@ -245,7 +272,39 @@ Every statement the report makes carries one class:
 
 DOM observations and automated input are never presented as visual or device evidence. If no physical device was used, the device row says so.
 
-### 9. Write the report
+### 8. Clean up, before the report is written
+
+```bash
+for SIDE in baseline candidate; do
+  PGID=$(cat "$RUN/$SIDE-server.pgid")
+  kill -TERM -- "-$PGID" 2>/dev/null || true
+done
+sleep 5
+lsof -nP -iTCP:"$BASELINE_PORT" -iTCP:"$CANDIDATE_PORT" -sTCP:LISTEN   # want: no output
+```
+
+Stop only the process groups you recorded. Never kill by name or pattern. Then confirm both ports are free, copy the build and server logs into `$OUT/logs/` (after checking they hold no secrets or personal data), remove the temporary browser profiles, and remove both worktrees:
+
+```bash
+git -C "$REPO" worktree remove --force "$RUN/baseline"
+git -C "$REPO" worktree remove --force "$RUN/candidate"
+```
+
+`--force` deletes untracked files without asking, which is why nothing durable is written inside either worktree. Record the outcome of each step in `provenance.json` under `cleanup`, including anything that could not be cleaned, such as a port still bound, a locked worktree or a permission denied. Do not work around a permission prompt the owner declined. Record it as a blocker.
+
+### 9. Hash everything
+
+`provenance.json` is final once cleanup is recorded. Then hash every file in the output folder except `SHA256SUMS` itself and `index.html`, which shows those hashes:
+
+```bash
+cd "$OUT" && find . -type f ! -name SHA256SUMS ! -name index.html -print0 | sort -z \
+  | xargs -0 shasum -a 256 > SHA256SUMS
+shasum -a 256 SHA256SUMS   # give this value in the final message
+```
+
+Nothing in the folder changes after this step except `index.html`.
+
+### 10. Write the report
 
 A self-contained HTML page (inline `<style>` and no external requests). It is dark by default with `:root{color-scheme:dark;…}`, a dark palette and `<meta name="color-scheme" content="dark">`, and has no `prefers-color-scheme` switch and no `light dark` value. Keep every colour behind a CSS variable.
 
@@ -254,11 +313,11 @@ Top to bottom:
 1. **Result**: two or three sentences, the baseline and candidate commit pair, and one status chip per scenario (*matched*, *approximately matched*, *gap*, *unavailable*).
 2. **Navigation**: a sticky table of contents linking each scenario's anchor, Provenance, Verification and Open items.
 3. **One section per scenario**: the matched-parameter table with read-back values for both sides, the baseline and candidate stills side by side under each moment, both recordings as separate labelled `<video controls>` elements, the comparison GIF, the state-equality line, the requested-element checks with evidence classes, and any gap or unavailable reason in full.
-4. **Provenance**: commits, trees, clean checks, executable versions, lockfile and asset hashes, build commands, fixture changes to served bytes, and media transforms (pacing, scaling, encoding, dropped frames).
-5. **Downloads**: a link with the `download` attribute for every media file, `provenance.json` and `SHA256SUMS`, each with its hash.
-6. **Verification**: the step 7 results, one row per file.
+4. **Provenance**: commits, trees, clean checks, executable and automation versions, lockfile and asset hashes, build commands, fixture changes to served bytes, and media transforms (pacing, scaling, encoding, dropped frames).
+5. **Downloads**: a link with the `download` attribute for every file in `SHA256SUMS`, each with its hash from that file, plus links to `provenance.json` and `SHA256SUMS`. `SHA256SUMS` cannot list itself, so the report says that its hash is given in the final message.
+6. **Verification**: the step 6 results, one row per file.
 7. **Open items**: exactly what this report does not establish, always present. Name each check that was outside the requested scope or could not run. At minimum, address **physical devices**, **native fullscreen**, **accessibility** and **live integration** (real servers, real accounts, networked play). For each, say *not in scope*, *not run (why)* or *covered (where)*.
-8. **Cleanup and blockers**: what was stopped and removed, what could not be, and every permission or tooling blocker hit.
+8. **Cleanup and blockers**: from `provenance.json`'s `cleanup`, what was stopped and removed, what could not be, and every permission or tooling blocker hit.
 
 ```html
 <!DOCTYPE html>
@@ -289,19 +348,11 @@ table{border-collapse:collapse;width:100%} td,th{border-bottom:1px solid var(--l
 </main></body></html>
 ```
 
-Write it, run the step 7 hash check again, then open it (`open` on macOS, `xdg-open` on Linux) unless `--no-open`. Print the absolute path either way.
+Write it, then run `shasum -a 256 -c SHA256SUMS` in `$OUT` as the last check. It must pass, because nothing it lists changed. Then open the report (`open` on macOS, `xdg-open` on Linux) unless `--no-open`. Print the absolute path either way.
 
-### 10. Clean up, then report back
+### 11. Report back
 
-```bash
-kill "$BASELINE_SERVER_PID" "$CANDIDATE_SERVER_PID" 2>/dev/null || true
-git -C "$REPO" worktree remove --force "$RUN/baseline"
-git -C "$REPO" worktree remove --force "$RUN/candidate"
-```
-
-Stop only the PIDs you recorded. Confirm each is gone, remove the temporary browser profiles, and drop the run directory once the media is copied out. `--force` deletes untracked files without asking, which is why nothing durable is written inside either worktree. Record in the report what was cleaned and anything that could not be, such as a port still bound, a worktree locked or a permission denied. Do not work around a permission prompt the owner declined. Record it as a blocker.
-
-Report the absolute path of the report folder (it moves as a folder), the scenario chips, every gap and unavailable pair, and the open items. End the message, and the final message of any subagent this skill spawns, with the mechanical `**Status:**` block from the global `~/.claude/CLAUDE.md` ("End-of-message summary"), with four slots in order, `none` when empty and the 🔄 slot enumerated.
+Report the absolute path of the report folder (it moves as a folder), the `SHA256SUMS` hash, the scenario chips, every gap and unavailable pair, the cleanup blockers and the open items. End the message, and the final message of any subagent this skill spawns, with the mechanical `**Status:**` block from the global `~/.claude/CLAUDE.md` ("End-of-message summary"), with four slots in order, `none` when empty and the 🔄 slot enumerated.
 
 ## Failure modes
 
