@@ -32,8 +32,10 @@ Report a game or interactive UI change with matched browser evidence: the agreed
   media/<scenario>/baseline-<short>/moment-<label>.png
   media/<scenario>/baseline-<short>/frames/f_NNNN.png
   media/<scenario>/baseline-<short>/recording.mp4
+  media/<scenario>/baseline-<short>/capture-log.json ← read-back, app times, digests
   media/<scenario>/candidate-<short>/…         ← same names, candidate side
   media/<scenario>/compare.gif
+  logs/                                        ← build and server logs, checked for secrets
 ```
 
 Never overwrite. Append `-2`, `-3` on collision. The report links its media by relative path, so the whole folder moves together. Say so when you give the path. Nothing here is written inside a repository working tree.
@@ -83,7 +85,8 @@ Resolve each ref to a full commit ID once, then create one detached worktree per
 ```bash
 REPO={{CUSTOMIZE: absolute path to this repo's working copy}}
 RUN="$(mktemp -d)/matched-evidence-$(date -u +%Y%m%dT%H%M%SZ)"
-OUT="<the output folder from Output location>"
+DIR={{CUSTOMIZE: the output directory, resolved as in Output location}}
+OUT="$DIR/matched-evidence-$SLUG-$(date -u +%Y-%m-%d)"   # add -2, -3 if it exists
 git -C "$REPO" fetch origin
 # A PR side is not on a branch origin fetches by default. Fetch its head and pin it:
 #   git -C "$REPO" fetch origin "pull/<N>/head" && CANDIDATE_REF=$(git -C "$REPO" rev-parse FETCH_HEAD)
@@ -135,11 +138,15 @@ Both sides run the **same spec file**, byte for byte, written once to `specs/<sc
 **Serve each side** from its own worktree on its own free port, in its own process group, so that cleanup can stop the server and every child it spawned:
 
 ```bash
+BASELINE_PORT={{CUSTOMIZE: a free port}}; CANDIDATE_PORT={{CUSTOMIZE: another free port}}
+SIDE=baseline; PORT=$BASELINE_PORT   # then again with SIDE=candidate; PORT=$CANDIDATE_PORT
 lsof -nP -iTCP:"$PORT" -sTCP:LISTEN && { echo "port $PORT is taken" >&2; exit 1; }
-set -m   # job control: the background job leads its own process group
-( cd "$RUN/$SIDE" && exec gtimeout -k 30 3600 {{CUSTOMIZE: this repo's serve command for a built tree, on "$PORT"}} ) \
+# os.setpgrp makes the server lead a new process group. It works the same in bash and
+# non-interactive zsh, where `set -m` aborts the shell.
+( cd "$RUN/$SIDE" && exec python3 -c 'import os,sys; os.setpgrp(); os.execvp(sys.argv[1], sys.argv[1:])' \
+    gtimeout -k 30 3600 {{CUSTOMIZE: this repo's serve command for a built tree, on "$PORT"}} ) \
   > "$RUN/$SIDE-server.log" 2>&1 &
-echo $! > "$RUN/$SIDE-server.pgid"   # with job control, the job's PID is its process group ID
+echo $! > "$RUN/$SIDE-server.pgid"   # the leader's PID is the group ID
 ```
 
 **One automation install drives both sides.** Use the automation package from the candidate worktree's install (or the baseline's, if only it has one), record its version and browser build in `provenance.json`, and pass that worktree as the automation root. Two automation versions would make the browser itself a difference between the sides. If the browser binary the package expects is not installed, stop and record it as a tooling blocker. Do not install one from this workflow.
@@ -166,7 +173,8 @@ After load and before the first input, the driver reads the real values back on 
 A driver sketch, shown for Playwright. It lives in `$RUN`, outside both worktrees, so it resolves the automation package from the automation root instead of importing it by bare name:
 
 ```js
-// node "$RUN/capture.mjs" <spec.json> <baseUrl> <outDir> <automationRoot>
+// node "$RUN/capture.mjs" <spec.json> <baseUrl> <outDir> <absolute automationRoot>
+// createRequire needs an absolute path, so pass the worktree's absolute path.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -252,7 +260,7 @@ Each check is run, not assumed, and its result goes in the report:
 
 - **Decodes.** `ffmpeg -v error -i <file> -f null -` exits 0 and prints nothing, for every PNG, MP4 and GIF.
 - **Dimensions.** Each still is exactly viewport × pixel ratio (`ffprobe -v error -show_entries stream=width,height -of csv=p=0 <png>`).
-- **Frame counts.** Each recording's decoded count (`ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 recording.mp4`) equals the number of files in its `frames/`. The GIF's count matches the frame total resampled from `$FPS` to `$GIF_FPS`. Record both numbers.
+- **Frame counts.** Each recording's decoded count (`ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 recording.mp4`) equals the number of files in its `frames/`. The GIF's count is the frame total resampled from `$FPS` to `$GIF_FPS`, which is roughly `N × GIF_FPS / FPS` and can be off by one from rounding. Record the expected and the actual count, and treat a difference above one as a failed check.
 - **Labelled correctly.** The side and short SHA in each file name, container title and label band match `provenance.json`. For the GIF, extract its first frame (`ffmpeg -v error -i compare.gif -frames:v 1 gif-first.png`, written to `$RUN`) and look at it: the left band must read BASELINE with the baseline's short SHA.
 - **Requested elements are visible.** Open each still and look at it. For each element in the scenario's `visible` list, state *visible*, *not visible* or *unclear*. A DOM query that finds the element is a separate, weaker line ("in the DOM, 24×24 at 1210,18"). It is never the visual check.
 
