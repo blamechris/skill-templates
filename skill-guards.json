@@ -3310,5 +3310,72 @@
         "Section 5 holds the per-PR table the root rule asks for\\."
       ]
     }
+  ],
+  "matched-evidence": [
+    {
+      "label": "never-deploys-or-triggers-ci",
+      "anyOf": [
+        "[Tt]his (?:workflow|skill) never deploys, never pushes, and never triggers CI",
+        "[Tt]his (?:workflow|skill) never deploys[^\\n]{0,40}never triggers CI"
+      ],
+      "note": "Binds the Boundaries bullet, not the opening description's restatement (`It never deploys, pushes or triggers CI`), which the alternates deliberately do not match."
+    },
+    {
+      "label": "no-substitute-screenshots",
+      "anyOf": [
+        "[Dd]o not stage substitute screenshots",
+        "[Nn]ever stage (?:a )?substitute screenshots?"
+      ],
+      "note": "Stated twice on purpose, in the unavailable-pair rule (step 3) and the gap rule (step 4). Deleting both turns the guard red."
+    },
+    {
+      "label": "one-spec-both-sides",
+      "anyOf": [
+        "[Bb]oth sides run the \\*{0,2}same spec file\\*{0,2}, byte for byte",
+        "[Bb]oth (?:sides|revisions) run the same spec file"
+      ]
+    },
+    {
+      "label": "clean-tree-before-capture",
+      "anyOf": [
+        "[Aa] dirty tree before the build is a stop, not a note"
+      ]
+    },
+    {
+      "label": "labels-outside-viewport",
+      "anyOf": [
+        "[Ee]ach label goes in a band added \\*{0,2}outside\\*{0,2} the app viewport",
+        "[Ll]abels? (?:go|goes|sit|sits) outside the app viewport"
+      ],
+      "note": "The failure-modes row (`pad a band outside the viewport`) is not an alternate."
+    },
+    {
+      "label": "evidence-classes-not-conflated",
+      "anyOf": [
+        "DOM observations and automated input are never presented as visual or device evidence"
+      ]
+    },
+    {
+      "label": "open-items-named",
+      "anyOf": [
+        "physical devices\\*{0,2}, \\*{0,2}native fullscreen\\*{0,2}, \\*{0,2}accessibility\\*{0,2},? and \\*{0,2}live integration"
+      ],
+      "note": "The HTML skeleton's `physical devices · native fullscreen · …` comment uses middle dots and is deliberately not matched."
+    },
+    {
+      "label": "app-surface-only-no-personal-data",
+      "anyOf": [
+        "never from an OS screen recording or a desktop screenshot",
+        "never a real account, real user data or a personal screen"
+      ]
+    },
+    {
+      "label": "stop-recorded-pids-only",
+      "anyOf": [
+        "Never kill by name or pattern",
+        "[Ss]top only the PIDs you recorded"
+      ],
+      "note": "Two rule sentences (Boundaries and step 10) state the same rule; deleting both turns the guard red. A pattern kill once took down a production daemon and runners."
+    }
   ]
 }
