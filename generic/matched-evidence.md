@@ -86,6 +86,7 @@ Resolve each ref to a full commit ID once, then create one detached worktree per
 REPO={{CUSTOMIZE: absolute path to this repo's working copy}}
 RUN="$(mktemp -d)/matched-evidence-$(date -u +%Y%m%dT%H%M%SZ)"
 DIR={{CUSTOMIZE: the output directory, resolved as in Output location}}
+SLUG={{CUSTOMIZE: a short kebab-case name for this comparison, e.g. the PR or feature}}
 OUT="$DIR/matched-evidence-$SLUG-$(date -u +%Y-%m-%d)"   # add -2, -3 if it exists
 git -C "$REPO" fetch origin
 # A PR side is not on a branch origin fetches by default. Fetch its head and pin it:
