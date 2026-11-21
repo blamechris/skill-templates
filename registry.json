@@ -1,7 +1,7 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "001d46f",
-  "skillCount": 45,
+  "generatedFromCommit": "f59d61c",
+  "skillCount": 46,
   "skills": [
     {
       "name": "agent-review",
@@ -1319,6 +1319,79 @@
       ]
     },
     {
+      "name": "matched-evidence",
+      "hash": "f59d61c",
+      "lines": 326,
+      "description": "Report a game or interactive UI change with matched browser evidence: the agreed baseline and candidate are built from clean, recorded revisions, every agreed scenario is captured on both sides under identical conditions, and the report shows full-viewport stills, labelled recordings and a side-by-side GIF, with provenance, hashes and every gap stated. It uses the project's own build, fixture and test commands, and it reports. It never deploys, pushes or triggers CI.",
+      "guards": [
+        {
+          "label": "never-deploys-or-triggers-ci",
+          "anyOf": [
+            "[Tt]his (?:workflow|skill) never deploys, never pushes, and never triggers CI",
+            "[Tt]his (?:workflow|skill) never deploys[^\\n]{0,40}never triggers CI"
+          ],
+          "note": "Binds the Boundaries bullet, not the opening description's restatement (`It never deploys, pushes or triggers CI`), which the alternates deliberately do not match."
+        },
+        {
+          "label": "no-substitute-screenshots",
+          "anyOf": [
+            "[Dd]o not stage substitute screenshots",
+            "[Nn]ever stage (?:a )?substitute screenshots?"
+          ],
+          "note": "Stated twice on purpose, in the unavailable-pair rule (step 3) and the gap rule (step 4). Deleting both turns the guard red."
+        },
+        {
+          "label": "one-spec-both-sides",
+          "anyOf": [
+            "[Bb]oth sides run the \\*{0,2}same spec file\\*{0,2}, byte for byte",
+            "[Bb]oth (?:sides|revisions) run the same spec file"
+          ]
+        },
+        {
+          "label": "clean-tree-before-capture",
+          "anyOf": [
+            "[Aa] dirty tree before the build is a stop, not a note"
+          ]
+        },
+        {
+          "label": "labels-outside-viewport",
+          "anyOf": [
+            "[Ee]ach label goes in a band added \\*{0,2}outside\\*{0,2} the app viewport",
+            "[Ll]abels? (?:go|goes|sit|sits) outside the app viewport"
+          ],
+          "note": "The failure-modes row (`pad a band outside the viewport`) is not an alternate."
+        },
+        {
+          "label": "evidence-classes-not-conflated",
+          "anyOf": [
+            "DOM observations and automated input are never presented as visual or device evidence"
+          ]
+        },
+        {
+          "label": "open-items-named",
+          "anyOf": [
+            "physical devices\\*{0,2}, \\*{0,2}native fullscreen\\*{0,2}, \\*{0,2}accessibility\\*{0,2},? and \\*{0,2}live integration"
+          ],
+          "note": "The HTML skeleton's `physical devices · native fullscreen · …` comment uses middle dots and is deliberately not matched."
+        },
+        {
+          "label": "app-surface-only-no-personal-data",
+          "anyOf": [
+            "never from an OS screen recording or a desktop screenshot",
+            "never a real account, real user data or a personal screen"
+          ]
+        },
+        {
+          "label": "stop-recorded-pids-only",
+          "anyOf": [
+            "Never kill by name or pattern",
+            "[Ss]top only the PIDs you recorded"
+          ],
+          "note": "Two rule sentences (Boundaries and step 10) state the same rule; deleting both turns the guard red. A pattern kill once took down a production daemon and runners."
+        }
+      ]
+    },
+    {
       "name": "merge-gate",
       "hash": "37866a5",
       "lines": 38,
@@ -2598,7 +2671,7 @@
     },
     {
       "name": "session-lifecycle",
-      "hash": "001d46f",
+      "hash": "ec22a67",
       "lines": 355,
       "description": "The session bookends, codified — one skill that makes every repo start, run, and end sessions the same way. It bundles the Resume protocol (session start), the during-session reporting conventions, the end-of-session checklist, and the follow-on protocol into a single installable unit, composing the component skills (`/catchup`, `/learn`, `/visual-brief`, `/create-issue`, `/decide`, `/pulse`) by reference. Natural-language cues like *\"resume\"*, *\"let's start\"*, *\"wrap up\"*, or *\"close out the session\"* should route here.",
       "guards": [
