@@ -40,7 +40,7 @@ Report a game or interactive UI change with matched browser evidence: the agreed
 
 Never overwrite. Append `-2`, `-3` on collision. The report links its media by relative path, so the whole folder moves together. Say so when you give the path. Nothing here is written inside a repository working tree.
 
-The frames make a run folder tens of megabytes. When the destination is itself a git repository (a notes vault, for example), check each file with `git check-ignore -q` before committing anything. Commit only the small text files (`index.html`, `provenance.json`, `SHA256SUMS`, `specs/`, `capture-log.json`) and the GIFs, by explicit path. Keep PNG, MP4 and log files on disk only. If the destination's ignore rules would track them, leave them uncommitted and say so; do not edit those rules from this workflow. `SHA256SUMS` still covers every file.
+The frames make a run folder tens of megabytes. When the destination is itself a git repository (a notes vault, for example), check each file with `git check-ignore -q` before committing anything. Commit only the small text files (`index.html`, `provenance.json`, `SHA256SUMS`, `specs/`, each `capture-log.json`) and the GIFs, by explicit path. Keep the PNG and MP4 files and the `logs/` folder on disk only. If the destination's ignore rules would track them, leave them uncommitted and say so; do not edit those rules from this workflow. `SHA256SUMS` still covers every file, so the folder on disk verifies in full. A clone of the committed copy does not: its media links and `shasum -c` fail for the files left on disk. Say that on the report's Downloads section.
 
 ## Boundaries — read before anything runs
 
@@ -203,9 +203,11 @@ const t0 = spec.timing.startEpochMs;
 await page.clock.install({ time: t0 - 1000 }); // or the project's own clock fixture
 await page.clock.pauseAt(t0);                  // from here, time moves only by runFor
 await page.goto(baseUrl + spec.route);
+if (!spec.ready) throw new Error('spec.ready is required: a selector both sides show once the first input can be sent');
+const maxReadySteps = spec.timing.maxReadySteps ?? 400;
 let readySteps = 0; // boot: step app time until the shared ready marker is visible
 while (!(await page.locator(spec.ready).first().isVisible())) {
-  if (readySteps >= spec.timing.maxReadySteps) throw new Error(`not ready after ${readySteps} steps: ${spec.ready}`);
+  if (readySteps >= maxReadySteps) throw new Error(`not ready after ${readySteps} steps: ${spec.ready}`);
   await page.clock.runFor(spec.timing.stepMs);
   readySteps++;
 }
@@ -339,7 +341,7 @@ Top to bottom:
 
 1. **Result**: two or three sentences, the baseline and candidate commit pair, and one status chip per scenario (*matched*, *approximately matched*, *gap*, *unavailable*).
 2. **Navigation**: a sticky table of contents linking each scenario's anchor, Provenance, Verification and Open items.
-3. **One section per scenario**: the matched-parameter table with read-back values for both sides, the baseline and candidate stills side by side under each moment, both recordings as separate labelled `<video controls>` elements, the comparison GIF, the state-equality line, the requested-element checks with evidence classes, and any gap or unavailable reason in full.
+3. **One section per scenario**: the matched-parameter table with read-back values and `readySteps` for both sides, the baseline and candidate stills side by side under each moment, both recordings as separate labelled `<video controls>` elements, the comparison GIF, the state-equality line, the requested-element checks with evidence classes, and any gap or unavailable reason in full.
 4. **Provenance**: commits, trees, clean checks, executable and automation versions, lockfile and asset hashes, build commands, fixture changes to served bytes, and media transforms (pacing, scaling, encoding, dropped frames).
 5. **Downloads**: a link with the `download` attribute for every file in `SHA256SUMS`, each with its hash from that file, plus links to `provenance.json` and `SHA256SUMS`. `SHA256SUMS` cannot list itself, so the report says that its hash is given in the final message.
 6. **Verification**: the step 6 results, one row per file.
@@ -376,7 +378,7 @@ table{border-collapse:collapse;width:100%} td,th{border-bottom:1px solid var(--l
 </main></body></html>
 ```
 
-Wrap every table in `<div class="tw">` so a wide table scrolls inside its own box and the page never scrolls sideways at 390 px. If you check the page in a browser, switch `loading="lazy"` images to eager first, or a wait for every image to load never ends.
+Wrap every table in `<div class="tw">` so a wide table scrolls inside its own box and the page never scrolls sideways at 390 px.
 
 Write it, then run `shasum -a 256 -c SHA256SUMS` in `$OUT` as the last check. It must pass, because nothing it lists changed. Then open the report (`open` on macOS, `xdg-open` on Linux) unless `--no-open`. Print the absolute path either way.
 
