@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "48076dd",
+  "generatedFromCommit": "a8cacc2",
   "skillCount": 46,
   "skills": [
     {
@@ -1320,7 +1320,7 @@
     },
     {
       "name": "matched-evidence",
-      "hash": "48076dd",
+      "hash": "a8cacc2",
       "lines": 414,
       "description": "Report a game or interactive UI change with matched browser evidence: the agreed baseline and candidate are built from clean, recorded revisions, every agreed scenario is captured on both sides under identical conditions, and the report shows full-viewport stills, labelled recordings and a side-by-side GIF, with provenance, hashes and every gap stated. It uses the project's own build, fixture and test commands, and it reports. It never deploys, pushes or triggers CI.",
       "guards": [
