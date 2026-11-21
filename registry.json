@@ -1,6 +1,6 @@
 {
   "registry": "blamechris/skill-templates",
-  "generatedFromCommit": "f3e567a",
+  "generatedFromCommit": "d2c58dc",
   "skillCount": 46,
   "skills": [
     {
@@ -1320,8 +1320,8 @@
     },
     {
       "name": "matched-evidence",
-      "hash": "f3e567a",
-      "lines": 377,
+      "hash": "d2c58dc",
+      "lines": 385,
       "description": "Report a game or interactive UI change with matched browser evidence: the agreed baseline and candidate are built from clean, recorded revisions, every agreed scenario is captured on both sides under identical conditions, and the report shows full-viewport stills, labelled recordings and a side-by-side GIF, with provenance, hashes and every gap stated. It uses the project's own build, fixture and test commands, and it reports. It never deploys, pushes or triggers CI.",
       "guards": [
         {
@@ -1389,10 +1389,16 @@
         {
           "label": "stop-recorded-process-groups-only",
           "anyOf": [
-            "Never kill by name or pattern",
-            "[Ss]top only the (?:PIDs|process groups) you recorded"
+            "[Ss]tart each server in its own process group, record the group ID, and stop exactly those groups"
           ],
-          "note": "Two rule sentences (Boundaries and step 10) state the same rule; deleting both turns the guard red. A pattern kill once took down a production daemon and runners."
+          "note": "Binds the Boundaries sentence. Step 8's `Stop only the process groups you recorded` is a restatement and deliberately not an alternate, and a PID-only wording is not accepted: a PID kill leaves the server's children bound to the port."
+        },
+        {
+          "label": "never-pattern-kill",
+          "anyOf": [
+            "Never kill by name or pattern"
+          ],
+          "note": "Stated twice on purpose (Boundaries and step 8). Deleting both turns the guard red. A pattern kill once took down a production daemon and runners."
         }
       ]
     },
