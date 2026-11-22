@@ -454,8 +454,8 @@ remain public review or upgrade work.
 Before any repo report, write the finding, location, reproduction and fix as a
 `.md` note in `~/Obsidian/no-it-all/security/`, named for repo and UTC time, not
 the flaw. Non-note files go in sibling `security-evidence/`, named likewise.
-Frontmatter: bare `scope:` (repo or `fleet`), keys `[a-z0-9_]`, values with `: `
-double-quoted, bare `status: closed` only once unexploitable. Never include a
+Frontmatter: top-level `scope:` (repo or `fleet`), keys `[a-z0-9_]`, values
+with `: ` double-quoted, bare `status: closed` only once unexploitable. Never include a
 secret value; identify a credential by commit/path and tell Chris to revoke it
 first. Subagents finish other work with the finding omitted and return
 `PRIVATE-FINDING <vault-path>` first with certainty; they do not file. The

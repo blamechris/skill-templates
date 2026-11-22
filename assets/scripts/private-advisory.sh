@@ -68,10 +68,12 @@ fi
 [ -n "$summary" ] && [ -n "$ecosystem" ] && [ -n "$package" ] || refuse 'summary, ecosystem and package are required'
 case "$severity" in low|medium|high|critical) ;; *) refuse 'invalid severity' ;; esac
 case "$finding_file" in /*) ;; *) refuse 'finding file must be absolute' ;; esac
-# Notes are .md under security/; evidence lives under security-evidence/.
-case "$finding_file" in *.md) ;; *) refuse 'finding file must be a .md note; evidence belongs in security-evidence/' ;; esac
+# Fast fail only; the resolved-path check below is authoritative. Notes are
+# .md under security/; evidence lives in the sibling security-evidence/.
+case "$finding_file" in *.md) ;; *) refuse 'finding file must end in .md (notes only; evidence goes in security-evidence/)' ;; esac
 [ -r "$finding_file" ] && [ -f "$finding_file" ] || refuse 'finding file is not readable'
-python3 - "$finding_file" "$HOME/Obsidian/no-it-all/security" <<'PY' || refuse 'finding file must remain a .md note beneath the security vault after resolving symlinks'
+# Print the resolved note so jq reads the validated target, not a re-resolved link.
+resolved=$(python3 - "$finding_file" "$HOME/Obsidian/no-it-all/security" <<'PY'
 from pathlib import Path
 import sys
 try:
@@ -79,12 +81,14 @@ try:
     if not vault.is_dir() or not finding.is_file() or vault not in finding.parents \
             or finding.suffix != '.md':
         sys.exit(1)
+    sys.stdout.write(str(finding))
 except (OSError, RuntimeError):
     sys.exit(1)
 PY
+) || refuse 'finding file must remain a .md note beneath the security vault after resolving symlinks'
 
 # The body and POST run in this invocation; failure to build never reaches gh.
-body=$(jq -n --arg summary "$summary" --rawfile description "$finding_file" \
+body=$(jq -n --arg summary "$summary" --rawfile description "$resolved" \
   --arg severity "$severity" --arg ecosystem "$ecosystem" --arg name "$package" \
   '{summary: $summary, description: $description, severity: $severity,
     vulnerabilities: [{package: {ecosystem: $ecosystem, name: $name}}]}') || refuse 'could not build advisory body'
