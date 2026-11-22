@@ -107,5 +107,18 @@ new_case symlink_inside
 mv "$FINDING_FIXTURE" "$CASE/home/Obsidian/no-it-all/security/real.md"
 ln -s "$CASE/home/Obsidian/no-it-all/security/real.md" "$FINDING_FIXTURE"; create
 [ "$rc" -eq 0 ] && [ "$(count)" -eq 1 ] && ok 'symlink staying inside vault can POST' || bad 'symlink staying inside vault can POST'
+new_case evidence_file
+printf '{"synthetic": true}\n' > "$CASE/home/Obsidian/no-it-all/security/receipt.json"
+FINDING_FIXTURE="$CASE/home/Obsidian/no-it-all/security/receipt.json"; create
+[ "$rc" -eq 2 ] && [ "$(count)" -eq 0 ] && ok 'non-note file cannot POST' || bad 'non-note file cannot POST'
+new_case evidence_folder
+mkdir -p "$CASE/home/Obsidian/no-it-all/security-evidence"
+printf 'synthetic evidence\n' > "$CASE/home/Obsidian/no-it-all/security-evidence/note.md"
+FINDING_FIXTURE="$CASE/home/Obsidian/no-it-all/security-evidence/note.md"; create
+[ "$rc" -eq 2 ] && [ "$(count)" -eq 0 ] && ok 'evidence folder file cannot POST' || bad 'evidence folder file cannot POST'
+new_case symlink_to_non_note
+printf 'synthetic text\n' > "$CASE/home/Obsidian/no-it-all/security/real.txt"
+rm "$FINDING_FIXTURE"; ln -s "$CASE/home/Obsidian/no-it-all/security/real.txt" "$FINDING_FIXTURE"; create
+[ "$rc" -eq 2 ] && [ "$(count)" -eq 0 ] && ok 'symlink to non-note cannot POST' || bad 'symlink to non-note cannot POST'
 printf '%s passed; %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -17,7 +17,7 @@ usage() {
 Usage: private-advisory.sh --repo OWNER/REPO
        private-advisory.sh --repo OWNER/REPO --reuse GHSA-ID
        private-advisory.sh --repo OWNER/REPO --create --reviewed-list SHA256
-         --finding-file /absolute/vault/file --summary SUMMARY
+         --finding-file /absolute/vault/security/note.md --summary SUMMARY
          --severity low|medium|high|critical --ecosystem ECOSYSTEM --package NAME
 
 Run list-only first and inspect the summaries. If one covers the finding, use
@@ -68,13 +68,16 @@ fi
 [ -n "$summary" ] && [ -n "$ecosystem" ] && [ -n "$package" ] || refuse 'summary, ecosystem and package are required'
 case "$severity" in low|medium|high|critical) ;; *) refuse 'invalid severity' ;; esac
 case "$finding_file" in /*) ;; *) refuse 'finding file must be absolute' ;; esac
+# Notes are .md under security/; evidence lives under security-evidence/.
+case "$finding_file" in *.md) ;; *) refuse 'finding file must be a .md note; evidence belongs in security-evidence/' ;; esac
 [ -r "$finding_file" ] && [ -f "$finding_file" ] || refuse 'finding file is not readable'
-python3 - "$finding_file" "$HOME/Obsidian/no-it-all/security" <<'PY' || refuse 'finding file must remain beneath the security vault after resolving symlinks'
+python3 - "$finding_file" "$HOME/Obsidian/no-it-all/security" <<'PY' || refuse 'finding file must remain a .md note beneath the security vault after resolving symlinks'
 from pathlib import Path
 import sys
 try:
     finding, vault = (Path(p).resolve(strict=True) for p in sys.argv[1:])
-    if not vault.is_dir() or not finding.is_file() or vault not in finding.parents:
+    if not vault.is_dir() or not finding.is_file() or vault not in finding.parents \
+            or finding.suffix != '.md':
         sys.exit(1)
 except (OSError, RuntimeError):
     sys.exit(1)
