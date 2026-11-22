@@ -451,24 +451,25 @@ today. Consult `SECURITY.md` or the threat model. Ordinary bugs,
 nonexploitable hardening, unmerged-only flaws and published dependency advisories
 remain public review or upgrade work.
 
-Before any repo report, write the finding, location, reproduction and fix under
-`~/Obsidian/no-it-all/security/`, named for the repo and UTC time rather than the
-flaw. Never include a secret value; identify a credential by commit/path and
-tell Chris to revoke it first. Subagents finish other work with the finding omitted and return
-`PRIVATE-FINDING <vault-path>` first
-with certainty; they do not file. The coordinator reads it and strips
-marker/path from public relays and files.
+Before any repo report, write the finding, location, reproduction and fix as a
+`.md` note in `~/Obsidian/no-it-all/security/`, named for repo and UTC time, not
+the flaw. Non-note files go in sibling `security-evidence/`, named likewise.
+Frontmatter: top-level `scope:` (repo or `fleet`), keys `[a-z0-9_]`, values
+with `: ` double-quoted, bare `status: closed` only once unexploitable. Never include a
+secret value; identify a credential by commit/path and tell Chris to revoke it
+first. Subagents finish other work with the finding omitted and return
+`PRIVATE-FINDING <vault-path>` first with certainty; they do not file. The
+coordinator reads it and strips marker/path from public relays and files.
 Brief auditors likewise. If unsure, publish nothing, put the question in DECISION
 and the seed, and continue other work.
 
-Locate the fetched registry checkout and invoke its `assets/scripts/private-advisory.sh`
-by absolute path with `--repo OWNER/REPO` to list advisories first. Read the result; use `--reuse GHSA-ID` for a matching advisory and create
-nothing. Only after semantic review finds no match, create one draft with
-a neutral summary, vault description, severity, ecosystem and package, using the
-`--create --reviewed-list` digest and explicit finding/metadata arguments. The script relists before creation, builds with
-`jq --rawfile` and POSTs in the same call only if the body builds. Never create a
-test draft; drafts have close, not delete. Use `--repo` to target another repo. A 422
-gets at most one retry after relisting; a match stops creation and a changed list
+Run the fetched registry's `assets/scripts/private-advisory.sh` by absolute
+path with `--repo OWNER/REPO` to list advisories first. Use `--reuse GHSA-ID`
+for a matching advisory and create nothing. Only after semantic review finds no
+match, create one draft with a neutral summary, vault description, severity,
+ecosystem and package, using the `--create --reviewed-list` digest and explicit
+finding/metadata arguments. Never create a test draft; drafts have close, not
+delete. A 422 gets at most one retry after relisting; a match stops creation and a changed list
 requires renewed review. Every other failure is final. If Chris is not a repo
 administrator, stop at the vault file.
 

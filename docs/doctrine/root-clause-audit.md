@@ -13,7 +13,7 @@ This audit checks operative behavior in the root before and after the prose corr
 | `restart-triggers` | Never invent a relaunch command or schedule. Verify an accepted task/session identifier; preserve emitted benchmark values. |
 | `fable-paced` | The objective is to saturate the week; argue against reinstating a weekly dollar ceiling. |
 | `risk-tiered-review` | Every HIGH change outside the covered security/permissions exception, including doctrine, keeps the panel. Keep emitted benchmark values and never hand-type them. |
-| `private-advisory-for-exploitable-findings` | List and review existing advisories before creation, stop/reuse on a match, build the description from the vault file, and allow only one 422 retry after relisting. Never test-create. The named script implements commands and is tested with fake `gh`. |
+| `private-advisory-for-exploitable-findings` | List and review existing advisories before creation, stop/reuse on a match, build the description from the vault note, and allow only one 422 retry after relisting. Never test-create. The named script implements commands, relists before creation, builds the body with `jq --rawfile` before its one POST, and is tested with fake `gh`; it accepts only a `.md` note beneath `security/`. Non-note evidence goes to `security-evidence/`; notes carry `scope:` and a bare `status: closed` only once no longer exploitable. |
 | `ci-watcher-by-default` | Turn on `set_monitor` with `auto_fix: true` where available and always arm one bounded `run_in_background` watcher; recheck final-head gates after settlement. |
 
 ## Additional operative details checked
