@@ -70,7 +70,7 @@ def report(paths):
     No cross-session sum: supplied files cannot prove whether parent/fork/child
     counters overlap, or whether other files and sessions are missing.
     """
-    diagnostics, sessions, seen_paths = [], {}, set()
+    diagnostics, sessions, session_sources, seen_paths = [], {}, {}, set()
     duplicate_paths = ignored = 0
 
     def problem(code, path, line=0):
@@ -126,6 +126,7 @@ def report(paths):
             problem("ambiguous_session_identity" if identities else "missing_session_identity", path)
             continue
         sid = next(iter(identities))
+        session_sources.setdefault(sid, str(path))
         sessions.setdefault(sid, []).extend(observations)
 
     results = []
@@ -133,13 +134,19 @@ def report(paths):
         observations.sort(key=lambda item: (item[0], item[2], item[3]))
         vectors = {tuple(u[k] for k in COUNTERS) for _, u, _, _ in observations}
         ambiguous = False
+        last_known = {}
+        for _, usage, source, line in observations:
+            # Missing fields stay unknown, but do not erase an earlier measured
+            # value: 40 -> missing -> 30 is still a counter regression.
+            if any(v is not None and key in last_known and v < last_known[key]
+                   for key, v in usage.items()):
+                problem("counter_regression", source, line)
+                ambiguous = True
+            last_known.update((key, v) for key, v in usage.items() if v is not None)
         for old, new in zip(observations, observations[1:]):
             a, b = old[1], new[1]
             if old[0] == new[0] and a != b:
                 problem("conflicting_observation_timestamp", new[2], new[3])
-                ambiguous = True
-            elif any(a[k] is not None and b[k] is not None and b[k] < a[k] for k in COUNTERS):
-                problem("counter_regression", new[2], new[3])
                 ambiguous = True
         candidates = [u for _, u, _, _ in observations
                       if all(_dominates(u, other) for _, other, _, _ in observations)]
@@ -147,7 +154,7 @@ def report(paths):
         if observations and not candidates:
             problem("incomparable_cumulative_usage", observations[-1][2], observations[-1][3])
         if not observations:
-            problem("no_measured_usage", sid)
+            problem("no_measured_usage", session_sources[sid])
         results.append({
             "session_id": sid,
             "observation_count": len(observations),

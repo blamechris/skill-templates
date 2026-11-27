@@ -3113,6 +3113,30 @@ class CodexFixtureUsageTests(unittest.TestCase):
         result = codex_usage.report([self.fixture("no-offset.jsonl", rows=[row])])
         self.assertIn("invalid_observation_timestamp", [d["code"] for d in result["diagnostics"]])
 
+    def test_optional_regression_survives_omission_and_later_recovery(self):
+        for field, values in [("cached_input_tokens", [40, None, 30, 50]),
+                              ("reasoning_output_tokens", [5, None, 3, 8])]:
+            with self.subTest(field=field):
+                rows = [self.observation(n + 1, incoming=100 + n * 20, output=20 + n * 5)
+                        for n in range(4)]
+                for row, value in zip(rows, values):
+                    usage = row["payload"]["info"]["total_token_usage"]
+                    if value is None:
+                        del usage[field]
+                    else:
+                        usage[field] = value
+                path = self.fixture("gap-regression.jsonl", rows=rows)
+                result = codex_usage.report([path])
+                self.assertIsNone(result["sessions"][0]["observed_cumulative_usage"])
+                self.assertIn({"code": "counter_regression", "source": str(path), "line": 4},
+                              result["diagnostics"])
+
+    def test_no_measurement_diagnostic_identifies_its_file(self):
+        path = self.fixture("no-measurement.jsonl")
+        result = codex_usage.report([path])
+        self.assertEqual(result["diagnostics"], [{"code": "no_measured_usage",
+                         "source": str(path), "line": 0}])
+
     def test_unknown_identity_and_last_only_never_make_totals(self):
         path = self.root / "no-identity.jsonl"
         path.write_text(json.dumps(self.observation(1)))
