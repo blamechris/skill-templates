@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// Unit tests for deriveDescription (assets/compile-skill-targets.mjs).
+// Tests for assets/compile-skill-targets.mjs.
 // Run: node assets/compile-skill-targets.test.mjs
 // Focus: twitch-status-updater#737 — the sentence split must not cut at the
 // period inside common abbreviations ("e.g.", "i.e.", …) or inside a still-open
 // "(…" parenthetical.
 import { strict as assert } from 'node:assert'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { lstatSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   deriveDescription,
   detectUncompiledAgents,
@@ -238,6 +240,214 @@ t('never flags codex — it is repo-tracked here, so ~/.codex proves nothing', (
 t('returns nothing when no agent home dirs exist', () => {
   withHome([], (home) => {
     assert.deepEqual(detectUncompiledAgents(['claude'], home), [])
+  })
+})
+
+// --- CLI artifact checks ---------------------------------------------------
+
+const compiler = fileURLToPath(new URL('./compile-skill-targets.mjs', import.meta.url))
+const fixtureSource = '.claude/commands/sample.md'
+const claudeArtifact = '.claude/skills/sample/SKILL.md'
+const geminiArtifact = '.gemini/commands/sample.toml'
+
+function withCompilerFixture(fn) {
+  const root = mkdtempSync(join(tmpdir(), 'skill-check-'))
+  const repo = join(root, 'repo')
+  const home = join(root, 'home')
+  const put = (path, contents) => {
+    const dest = join(repo, path)
+    mkdirSync(dirname(dest), { recursive: true })
+    writeFileSync(dest, contents)
+  }
+  const run = (...args) => {
+    const result = spawnSync(process.execPath, [compiler, ...args], {
+      cwd: repo,
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      encoding: 'utf8',
+    })
+    assert.ifError(result.error)
+    assert.equal(result.signal, null)
+    return result
+  }
+  try {
+    mkdirSync(home)
+    put(fixtureSource, 'An invented skill.\n')
+    fn({ root, repo, home, put, run })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+function fixtureSnapshot(path) {
+  const stat = lstatSync(path, { bigint: true })
+  const { mtimeNs, ctimeNs, ino } = stat
+  if (stat.isSymbolicLink()) return { mtimeNs, ctimeNs, ino, link: readlinkSync(path) }
+  if (stat.isDirectory()) {
+    const entries = readdirSync(path).sort().map((name) => [name, fixtureSnapshot(join(path, name))])
+    return { mtimeNs, ctimeNs, ino, entries }
+  }
+  return { mtimeNs, ctimeNs, ino, bytes: readFileSync(path) }
+}
+
+function assertExit(result, expected) {
+  assert.equal(result.status, expected, `${result.stdout}\n${result.stderr}`)
+}
+
+t('--check reports missing profile targets without creating dirs, while --dry-run previews', () => {
+  withCompilerFixture(({ root, home, put, run }) => {
+    put('.claude/skill-profile.md', 'targets: [claude, gemini, codex]\n')
+    mkdirSync(join(home, '.pi'))
+    const before = fixtureSnapshot(root)
+    const checked = run('--check')
+    assertExit(checked, 1)
+    assert.match(checked.stderr, /\[claude\] MISSING \.claude\/skills\/sample\/SKILL\.md/)
+    assert.match(checked.stderr, /\[gemini\] MISSING \.gemini\/commands\/sample\.toml/)
+    assert.match(checked.stderr, /\[codex\] MISSING \.codex\/skills\/sample\/SKILL\.md/)
+    assert.doesNotMatch(checked.stdout, /pi looks installed/)
+    assert.deepEqual(fixtureSnapshot(root), before)
+
+    const preview = run('--dry-run')
+    assertExit(preview, 0)
+    assert.match(preview.stdout, /\(dry-run\)/)
+    assert.doesNotMatch(preview.stdout, /MISSING/)
+    assert.deepEqual(fixtureSnapshot(root), before)
+  })
+})
+
+t('--check reports current artifacts without touching the generated files', () => {
+  withCompilerFixture(({ root, run }) => {
+    assertExit(run('--targets', 'claude,gemini,codex'), 0)
+    const before = fixtureSnapshot(root)
+    const checked = run('--check', '--targets', 'claude,gemini,codex')
+    assertExit(checked, 0)
+    for (const target of ['claude', 'gemini', 'codex']) {
+      assert.ok(checked.stdout.includes(`[${target}] CURRENT`), checked.stdout)
+    }
+    assert.deepEqual(fixtureSnapshot(root), before)
+  })
+})
+
+t('--check compares exact bytes even if a stale file decodes to the same text', () => {
+  withCompilerFixture(({ root, repo, put, run }) => {
+    put(fixtureSource, 'An invented skill. \uFFFD\n')
+    assertExit(run(), 0)
+    const current = readFileSync(join(repo, claudeArtifact))
+    const marker = Buffer.from('\uFFFD')
+    const offset = current.indexOf(marker)
+    assert.ok(offset >= 0)
+    const stale = Buffer.concat([
+      current.subarray(0, offset), Buffer.from([0xff]), current.subarray(offset + marker.length),
+    ])
+    assert.equal(stale.toString('utf8'), current.toString('utf8'))
+    put(claudeArtifact, stale)
+    const before = fixtureSnapshot(root)
+    const checked = run('--check')
+    assertExit(checked, 1)
+    assert.match(checked.stderr, /\[claude\] STALE \.claude\/skills\/sample\/SKILL\.md/)
+    assert.deepEqual(fixtureSnapshot(root), before)
+  })
+})
+
+t('--check scopes by name and target and reports an explicitly requested missing source', () => {
+  withCompilerFixture(({ root, put, run }) => {
+    put('.claude/skill-profile.md', 'targets: [claude, gemini]\n')
+    put('.claude/commands/other.md', 'Another invented skill.\n')
+    put('.claude/skills/removed/SKILL.md', 'An artifact with no source.\n')
+    assertExit(run('--name', 'sample', '--targets', 'claude'), 0)
+    const before = fixtureSnapshot(root)
+    const scoped = run('--check', '--name', 'sample', '--targets', 'claude')
+    assertExit(scoped, 0)
+    assert.match(scoped.stdout, /\[claude\] CURRENT/)
+    assert.doesNotMatch(scoped.stdout, /\[gemini\]|\/other|\/removed/)
+    const missing = run('--check', '--name', 'removed')
+    assertExit(missing, 1)
+    assert.match(missing.stderr, /removed: SOURCE MISSING/)
+    assert.deepEqual(fixtureSnapshot(root), before)
+  })
+})
+
+t('--check flags an existing unsafe Gemini artifact and succeeds when it is absent', () => {
+  withCompilerFixture(({ root, repo, put, run }) => {
+    assertExit(run('--targets', 'gemini'), 0)
+    put(fixtureSource, 'An invented skill with {{TITLE}}.\n')
+    let before = fixtureSnapshot(root)
+    const unsafe = run('--check', '--targets', 'gemini')
+    assertExit(unsafe, 1)
+    assert.match(unsafe.stderr, /\[gemini\] UNSAFE .*artifact should be absent/)
+    assert.deepEqual(fixtureSnapshot(root), before)
+
+    const preview = run('--dry-run', '--targets', 'gemini')
+    assertExit(preview, 0)
+    assert.match(preview.stdout, /\[gemini\] SKIPPED/)
+    assert.deepEqual(fixtureSnapshot(root), before)
+
+    const compiled = run('--targets', 'gemini')
+    assertExit(compiled, 0)
+    assert.match(compiled.stdout, /removed stale artifact/)
+    assert.throws(() => lstatSync(join(repo, geminiArtifact)), { code: 'ENOENT' })
+    before = fixtureSnapshot(root)
+    const absent = run('--check', '--targets', 'gemini')
+    assertExit(absent, 0)
+    assert.match(absent.stdout, /\[gemini\] SKIPPED .*expected absent/)
+    assert.deepEqual(fixtureSnapshot(root), before)
+  })
+})
+
+t('invalid compiler arguments fail before any output is written', () => {
+  withCompilerFixture(({ root, run }) => {
+    const before = fixtureSnapshot(root)
+    const refusals = [
+      [['--check', '--dry-run'], /Use either --dry-run or --check/],
+      [['--name', '--check'], /Missing value for --name/],
+      [['--check', '--name', '../sample'], /Unsafe skill name/],
+      [['--check', '--targets', 'claude,invented'], /Unknown target/],
+      [['--check', '--targets', ','], /Specify at least one target/],
+      [['--chek'], /Unknown option --chek/],
+    ]
+    for (const [args, message] of refusals) {
+      const result = run(...args)
+      assertExit(result, 1)
+      assert.match(result.stderr, message)
+      assert.deepEqual(fixtureSnapshot(root), before)
+    }
+  })
+})
+
+t('--check refuses a linked source, artifact, or artifact directory', () => {
+  withCompilerFixture(({ root, repo, home, run }) => {
+    symlinkSync(join(repo, fixtureSource), join(repo, '.claude/commands/linked.md'))
+    symlinkSync(home, join(repo, '.codex'), 'dir')
+    mkdirSync(join(repo, dirname(geminiArtifact)), { recursive: true })
+    symlinkSync(join(root, 'absent'), join(repo, geminiArtifact))
+    const before = fixtureSnapshot(root)
+
+    const artifact = run('--check', '--name', 'sample', '--targets', 'codex,gemini')
+    assertExit(artifact, 1)
+    assert.match(artifact.stderr, /\[codex\] ERROR .*Unsafe path .*\.codex: expected a directory/)
+    assert.match(artifact.stderr, /\[gemini\] ERROR .*Unsafe path .*sample\.toml: expected a regular file/)
+    const source = run('--check', '--name', 'linked')
+    assertExit(source, 1)
+    assert.match(source.stderr, /linked: ERROR: Unsafe path .*linked\.md: expected a regular file/)
+    assert.deepEqual(fixtureSnapshot(root), before)
+  })
+})
+
+t('--check includes the Pi artifact in the fixture home when Pi is selected', () => {
+  withCompilerFixture(({ root, home, run }) => {
+    const args = ['--name', 'sample', '--targets', 'pi']
+    let before = fixtureSnapshot(root)
+    const missing = run('--check', ...args)
+    assertExit(missing, 1)
+    const path = join(home, '.pi/agent/skills/sample/SKILL.md')
+    assert.ok(missing.stderr.includes(`[pi] MISSING ${path}`), missing.stderr)
+    assert.deepEqual(fixtureSnapshot(root), before)
+
+    assertExit(run(...args), 0)
+    before = fixtureSnapshot(root)
+    const current = run('--check', ...args)
+    assertExit(current, 0)
+    assert.ok(current.stdout.includes(`[pi] CURRENT ${path}`), current.stdout)
+    assert.deepEqual(fixtureSnapshot(root), before)
   })
 })
 

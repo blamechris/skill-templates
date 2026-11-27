@@ -21,6 +21,7 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import usage_accounting
+import codex_usage
 from usage_accounting import RATE_CARD_VERSION, Responses, price_usage
 
 
@@ -3030,6 +3031,123 @@ class SessionFolderParityTests(SessionFixture):
         self.assertEqual(rr_view[0], ua_view[0])
         self.assertEqual([os.path.basename(p) for p in rr_view[1]], ["agent-a1.jsonl"])
         self.assertEqual([os.path.basename(p) for p in ua_view[1]], ["agent-a1.jsonl", "agent-d4.jsonl"])
+
+
+class CodexFixtureUsageTests(unittest.TestCase):
+    """Invented counter records only; no Codex home or real sessions are read."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="codex-invented-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def fixture(self, name, sid="invented-root", rows=None):
+        path = self.root / name
+        records = [{"type": "session_meta", "payload": {"id": sid}}] + (rows or [])
+        path.write_text("\n".join(json.dumps(x) for x in records) + "\n")
+        return path
+
+    def observation(self, minute, incoming=100, output=20, cached=40, reasoning=5):
+        total = {"input_tokens": incoming, "output_tokens": output,
+                 "total_tokens": incoming + output,
+                 "cached_input_tokens": cached, "reasoning_output_tokens": reasoning}
+        return {"type": "event_msg", "timestamp": f"2030-01-02T03:{minute:02}:00Z",
+                "payload": {"type": "token_count", "info": {
+                    "total_token_usage": total, "last_token_usage": dict(total)}}}
+
+    def test_cumulative_replays_and_subsets_are_not_added_twice(self):
+        a = self.observation(1)
+        b = self.observation(2, incoming=150, output=30, cached=60, reasoning=8)
+        first = self.fixture("first.jsonl", rows=[a, a, b])
+        replay = self.fixture("replay.jsonl", rows=[a, b])
+        before = {p: p.read_bytes() for p in (first, replay)}
+        result = codex_usage.report([first, replay, first])
+        self.assertEqual(result["diagnostics"], [])
+        self.assertEqual(result["duplicate_input_paths"], 1)
+        session = result["sessions"][0]
+        self.assertEqual(session["observed_cumulative_usage"]["total_tokens"], 180)
+        self.assertEqual(sum(session["disjoint_usage"].values()), 180)
+        self.assertEqual(session["repeated_counter_observations"], 3)
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        self.assertEqual(set(self.root.iterdir()), set(before))
+
+    def test_distinct_root_and_child_observations_have_no_grand_total(self):
+        root = self.fixture("root.jsonl", rows=[self.observation(1)])
+        child = self.fixture("child.jsonl", sid="invented-child", rows=[self.observation(1)])
+        result = codex_usage.report([root, child])
+        self.assertEqual(len(result["sessions"]), 2)
+        self.assertIsNone(result["aggregate_usage"])
+        self.assertFalse(result["coverage_complete"])
+        self.assertEqual(result["hierarchy_coverage"], "unknown")
+        self.assertEqual(result["pricing_coverage"], "unknown")
+        self.assertTrue(all(s["cost_usd"] is None for s in result["sessions"]))
+
+    def test_absent_subset_is_unknown_not_zero(self):
+        row = self.observation(1)
+        del row["payload"]["info"]["total_token_usage"]["cached_input_tokens"]
+        result = codex_usage.report([self.fixture("missing-subset.jsonl", rows=[row])])
+        session = result["sessions"][0]
+        self.assertIsNone(session["disjoint_usage"]["uncached_input_tokens"])
+        self.assertEqual(session["unknown_counter_fields"], ["cached_input_tokens"])
+
+    def test_regressions_and_same_time_conflicts_are_not_guessed(self):
+        for rows, expected in [([self.observation(1), self.observation(2, incoming=50)], "counter_regression"),
+                               ([self.observation(1), self.observation(1, incoming=150)], "conflicting_observation_timestamp")]:
+            with self.subTest(expected=expected):
+                result = codex_usage.report([self.fixture("ambiguous.jsonl", rows=rows)])
+                self.assertIsNone(result["sessions"][0]["observed_cumulative_usage"])
+                self.assertIn(expected, [d["code"] for d in result["diagnostics"]])
+
+    def test_invalid_counters_and_timestamps_are_not_zeroed(self):
+        for key, value in [("input_tokens", True), ("output_tokens", -1),
+                           ("cached_input_tokens", 101), ("reasoning_output_tokens", 21),
+                           ("total_tokens", 999), ("input_tokens", float("nan"))]:
+            with self.subTest(key=key, value=value):
+                row = self.observation(1)
+                row["payload"]["info"]["total_token_usage"][key] = value
+                result = codex_usage.report([self.fixture("invalid.jsonl", rows=[row])])
+                self.assertTrue(result["diagnostics"])
+                self.assertIsNone(result["sessions"][0]["observed_cumulative_usage"])
+        row = self.observation(1)
+        row["timestamp"] = "2030-01-02T03:01:00"
+        result = codex_usage.report([self.fixture("no-offset.jsonl", rows=[row])])
+        self.assertIn("invalid_observation_timestamp", [d["code"] for d in result["diagnostics"]])
+
+    def test_unknown_identity_and_last_only_never_make_totals(self):
+        path = self.root / "no-identity.jsonl"
+        path.write_text(json.dumps(self.observation(1)))
+        result = codex_usage.report([path])
+        self.assertEqual(result["sessions"], [])
+        self.assertIn("missing_session_identity", [d["code"] for d in result["diagnostics"]])
+        row = self.observation(1)
+        del row["payload"]["info"]["total_token_usage"]
+        result = codex_usage.report([self.fixture("last-only.jsonl", rows=[row])])
+        self.assertIsNone(result["sessions"][0]["observed_cumulative_usage"])
+
+    def test_diagnostics_do_not_copy_record_text_and_cli_never_discovers_home(self):
+        path = self.fixture("bad.jsonl")
+        with path.open("a") as stream:
+            stream.write('{"invented_prompt":"DO_NOT_COPY_FIXTURE_TEXT"\n')
+        result = codex_usage.report([path, self.root / "absent.jsonl"])
+        self.assertNotIn("DO_NOT_COPY_FIXTURE_TEXT", json.dumps(result))
+        scratch_cwd = self.root / "scratch-cwd"
+        scratch_cwd.mkdir()
+        with mock.patch.object(Path, "home", side_effect=AssertionError("home discovery forbidden")):
+            codex_usage.report([path])
+        run = subprocess.run([sys.executable, "-I", "-B", str(HERE / "codex_usage.py"), str(path)],
+                             cwd=scratch_cwd, text=True, capture_output=True)
+        self.assertEqual(run.returncode, 1)
+        self.assertFalse(list(scratch_cwd.iterdir()))
+        self.assertFalse(json.loads(run.stdout)["coverage_complete"])
+
+    def test_conflicting_file_identities_and_unreadable_sources_are_visible(self):
+        row = self.observation(1)
+        path = self.fixture("conflicting.jsonl", rows=[row, {
+            "type": "session_meta", "payload": {"id": "invented-other"}}])
+        result = codex_usage.report([path, self.root / "absent.jsonl"])
+        self.assertEqual(result["sessions"], [])
+        self.assertEqual({d["code"] for d in result["diagnostics"]},
+                         {"ambiguous_session_identity", "unreadable_source"})
 
 
 if __name__ == "__main__":

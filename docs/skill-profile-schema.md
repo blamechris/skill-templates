@@ -120,6 +120,15 @@ the skill's exact name plus the literal ` Customizations` suffix.>
   machine.
   The compiler notices `~/.pi` and prints the flag to add; it never adds the target itself.
 
+Run `node scripts/compile-skill-targets.mjs --check` to compare the selected generated
+artifacts byte for byte without writing files or creating directories. `--name` scopes the
+check to one source, and `--targets` overrides the profile selection. The check exits nonzero
+for a missing requested source, a missing or stale artifact, an unsafe path, or an existing
+Gemini artifact that the compiler would skip. An absent artifact for a skipped Gemini target
+passes. Pi checks its user-global artifact when selected. The check covers artifacts derived
+from the selected sources. Audit orphan artifacts separately. Use `--dry-run` to preview
+compilation. The two flags are mutually exclusive.
+
 ## Profiles composed before the first install (`/skill-profile --planned`)
 
 A repo created by `/project-genesis` gets its profile **before** any `skill add`: `/skill-profile --planned "<set>" --plan <plan.json>` composes it from the genesis plan, so the posture pins and merge-strategy lines are in place when the posture-pinned skills install. Such a profile also carries sections for skills that are pinned but not yet installed (`unattended-merge` while the posture is withheld), and a machine-read `## project-genesis Customizations` section that `genesis-verify.py` parses. It holds `standard`, `visibility`, `overlays`, `modules`, `app-id`, `credits-paths`, `deferred-skills` (names only) and `waivers`. That section is written from the plan and changed only through `/project-genesis --add`. A plain `/skill-profile` refresh keeps it, and the posture pins, verbatim.
