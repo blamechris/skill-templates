@@ -21,11 +21,12 @@
 //
 // Usage:
 //   node scripts/compile-skill-targets.mjs [--name <name>] [--targets claude,gemini,codex,pi]
-//        [--repo <root>] [--dry-run]
+//        [--repo <root>] [--dry-run | --check]
 //
-// Exit non-zero on emit failure so /skill and CI can gate on it.
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+// --dry-run previews emits. --check compares generated output with disk without writes.
+// Exit non-zero on emit failure or a check mismatch so /skill and CI can gate on it.
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, lstatSync, rmSync } from 'node:fs'
+import { join, dirname, relative, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 
@@ -58,30 +59,52 @@ export function detectUncompiledAgents(targets, home = homedir()) {
 }
 
 function parseArgs(argv) {
-  const out = { repo: process.cwd(), dryRun: false }
-  // Require a value after a value-taking flag, with a clear error instead of an
-  // `undefined.split` stack trace.
+  const out = { repo: process.cwd(), mode: 'write' }
   const need = (i, flag) => {
-    if (i + 1 >= argv.length) {
-      console.error(`Missing value for ${flag}`)
-      process.exit(1)
-    }
-    return argv[i + 1]
+    const value = argv[i + 1]
+    if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`)
+    return value
   }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--name') out.name = need(i++, a)
     else if (a === '--targets') out.targets = need(i++, a).split(',').map((s) => s.trim()).filter(Boolean)
     else if (a === '--repo') out.repo = need(i++, a)
-    else if (a === '--dry-run') out.dryRun = true
+    else if (a === '--dry-run' || a === '--check') {
+      const mode = a.slice(2)
+      if (out.mode !== 'write' && out.mode !== mode) {
+        throw new Error('Use either --dry-run or --check')
+      }
+      out.mode = mode
+    } else {
+      throw new Error(`Unknown option ${a}`)
+    }
   }
+  if (out.targets?.length === 0) throw new Error('Specify at least one target for --targets')
   return out
 }
 
+// Treat the requested repo or home as the root for these paths. Refuse symlinks
+// and special files below it so a check stays within the selected targets.
+function checkPathExists(root, path, type = 'file') {
+  const parts = relative(root, path).split(sep)
+  let current = root
+  for (const [index, part] of parts.entries()) {
+    current = join(current, part)
+    const stat = lstatSync(current, { throwIfNoEntry: false })
+    if (!stat) return false
+    const directory = index < parts.length - 1 || type === 'directory'
+    if (directory ? !stat.isDirectory() : !stat.isFile()) {
+      throw new Error(`Unsafe path ${current}: expected ${directory ? 'a directory' : 'a regular file'}`)
+    }
+  }
+  return true
+}
+
 // Read `targets:` from the repo's skill-profile (the profile-driven default).
-function targetsFromProfile(repo) {
+function targetsFromProfile(repo, checking) {
   const p = join(repo, '.claude/skill-profile.md')
-  if (!existsSync(p)) return null
+  if (!(checking ? checkPathExists(repo, p) : existsSync(p))) return null
   const m = readFileSync(p, 'utf8').match(/^\s*targets:\s*(.+)$/m)
   if (!m) return null
   // Drop unfilled template placeholders (`<comma-separated agents…>`) so a profile
@@ -267,8 +290,18 @@ export function emitPi(name, body, description) {
 
 const EMITTERS = { claude: emitClaude, gemini: emitGemini, codex: emitCodex, pi: emitPi }
 
-function compileOne(name, srcPath, targets, repo, dryRun) {
-  const raw = readFileSync(srcPath, 'utf8')
+function checkArtifact(root, path, content, skip) {
+  try {
+    if (!checkPathExists(root, path)) return { state: skip ? 'SKIPPED' : 'MISSING' }
+    if (skip) return { state: 'UNSAFE' }
+    const matches = readFileSync(path).equals(Buffer.from(content))
+    return { state: matches ? 'CURRENT' : 'STALE' }
+  } catch (err) {
+    return { state: 'ERROR', error: err.message }
+  }
+}
+
+function compileOne(name, raw, targets, repo, mode) {
   const body = stripStamp(raw)
   const description = deriveDescription(body, name)
   const results = []
@@ -279,18 +312,23 @@ function compileOne(name, srcPath, targets, repo, dryRun) {
       continue
     }
     const { path, content, warn, note, skip } = emit(name, body, description, repo)
+    if (mode === 'check') {
+      const root = t === 'pi' ? homedir() : repo
+      results.push({ target: t, path, warn, skip, ...checkArtifact(root, path, content, skip) })
+      continue
+    }
     if (skip) {
       // Remove any artifact left by a previous compile so a now-unsafe skill
       // can't keep loading a stale/broken native command.
       let removedStale = false
-      if (!dryRun && path && existsSync(path)) {
+      if (mode === 'write' && path && existsSync(path)) {
         rmSync(path)
         removedStale = true
       }
       results.push({ target: t, skip, removedStale })
       continue
     }
-    if (!dryRun) {
+    if (mode === 'write') {
       mkdirSync(dirname(path), { recursive: true })
       writeFileSync(path, content)
     }
@@ -302,12 +340,13 @@ function compileOne(name, srcPath, targets, repo, dryRun) {
 function main() {
   const args = parseArgs(process.argv.slice(2))
   const repo = args.repo
+  const checking = args.mode === 'check'
   const cmdDir = join(repo, '.claude/commands')
-  if (!existsSync(cmdDir)) {
+  if (!(checking ? checkPathExists(repo, cmdDir, 'directory') : existsSync(cmdDir))) {
     console.error(`No .claude/commands/ in ${repo}`)
     process.exit(1)
   }
-  let targets = args.targets || targetsFromProfile(repo) || ['claude']
+  const targets = args.targets || targetsFromProfile(repo, checking) || ['claude']
   const bad = targets.filter((t) => !ALL_TARGETS.includes(t))
   if (bad.length) {
     console.error(`Unknown target(s): ${bad.join(', ')}. Known: ${ALL_TARGETS.join(', ')}`)
@@ -317,25 +356,48 @@ function main() {
   const names = args.name ? [args.name] : readdirSync(cmdDir).filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, ''))
   // `--name` is user-facing; a name with a path separator or `..` would let the
   // emitters write outside the intended dirs (incl. ~/.pi). Reject up front.
-  const unsafe = names.filter((n) => /[/\\]/.test(n) || n.split(/[/\\]/).includes('..') || n.includes('..'))
+  const unsafe = names.filter((n) => !n || n === '.' || /[/\\]/.test(n) || n.includes('..'))
   if (unsafe.length) {
-    console.error(`Unsafe skill name(s): ${unsafe.join(', ')} — names must not contain "/", "\\", or "..".`)
+    console.error(`Unsafe skill name(s): ${unsafe.map((n) => JSON.stringify(n)).join(', ')}`)
     process.exit(1)
   }
   let failed = 0
   let skipped = 0
-  console.log(`Compiling ${names.length} skill(s) -> [${targets.join(', ')}]${args.dryRun ? ' (dry-run)' : ''}\n`)
+  const action = checking ? 'Checking' : 'Compiling'
+  console.log(`${action} ${names.length} skill(s) -> [${targets.join(', ')}]${args.mode === 'dry-run' ? ' (dry-run)' : ''}\n`)
   for (const name of names) {
     const srcPath = join(cmdDir, `${name}.md`)
-    if (!existsSync(srcPath)) {
-      console.error(`  ${name}: SOURCE MISSING (${srcPath})`)
+    let raw
+    try {
+      if (!(checking ? checkPathExists(repo, srcPath) : existsSync(srcPath))) {
+        console.error(`  ${name}: SOURCE MISSING (${srcPath})`)
+        failed++
+        continue
+      }
+      raw = readFileSync(srcPath, 'utf8')
+    } catch (err) {
+      if (!checking) throw err
+      console.error(`  ${name}: ERROR: ${err.message}`)
       failed++
       continue
     }
-    const { description, results } = compileOne(name, srcPath, targets, repo, args.dryRun)
-    console.log(`  /${name} — ${description.slice(0, 70)}${description.length > 70 ? '…' : ''}`)
+    const { description, results } = compileOne(name, raw, targets, repo, args.mode)
+    console.log(checking ? `  /${name}` : `  /${name} — ${description.slice(0, 70)}${description.length > 70 ? '…' : ''}`)
     for (const r of results) {
-      if (r.error) {
+      if (r.state) {
+        const location = r.target === 'pi' ? r.path : relative(repo, r.path)
+        let detail = r.error
+        if (r.state === 'SKIPPED') detail = `expected absent. ${r.skip}`
+        if (r.state === 'UNSAFE') detail = `artifact should be absent. ${r.skip}`
+        const message = `      [${r.target}] ${r.state} ${location}${detail ? ` — ${detail}` : ''}`
+        if (r.state === 'CURRENT' || r.state === 'SKIPPED') {
+          console.log(message)
+        } else {
+          console.error(message)
+          failed++
+        }
+        if (r.warn) console.log(`         ! ${r.warn}`)
+      } else if (r.error) {
         console.error(`      [${r.target}] ERROR: ${r.error}`)
         failed++
       } else if (r.skip) {
@@ -350,8 +412,12 @@ function main() {
     }
   }
   if (failed) {
-    console.error(`\n${failed} emit(s) failed.`)
+    console.error(`\n${failed} ${checking ? 'check(s)' : 'emit(s)'} failed.`)
     process.exit(1)
+  }
+  if (checking) {
+    console.log('\nDone. Selected skill targets match their sources.')
+    return
   }
   console.log(`\nDone.${skipped ? ` ${skipped} target(s) skipped (logged above — not emitted).` : ''}`)
   // Hint only — never auto-add the target: that would write into a home dir the
@@ -366,5 +432,10 @@ function main() {
 // Run the CLI only when executed directly — importing this module (e.g. the unit
 // test pulling in deriveDescription) must not trigger a compile.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main()
+  try {
+    main()
+  } catch (err) {
+    console.error(`ERROR: ${err.message}`)
+    process.exitCode = 1
+  }
 }
